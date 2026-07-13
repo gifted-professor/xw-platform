@@ -1,0 +1,13 @@
+.env
+config/local.psd1
+data/*
+!data/.gitkeep
+*.png
+*.jpg
+*.jpeg
+*.xml
+*.csv
+*.log
+.idea/
+.vscode/
+

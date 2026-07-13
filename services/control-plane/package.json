@@ -1,0 +1,14 @@
+{
+  "name": "xhs-device-agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ADB-first multi-device inventory with optional cloud vision and Feishu Base sync",
+  "type": "module",
+  "scripts": {
+    "check": "node --check scripts/cloud-vision.mjs && node --check scripts/greenarrow-api.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
+
