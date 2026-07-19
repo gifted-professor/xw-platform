@@ -1,0 +1,564 @@
+// fast-operator.mjs — AI 员工高速运营旁路（Slice 1 核心）
+//
+// 长驻进程，不经过网关：每台设备一条持久 `adb shell` 会话，命令走 stdin、
+// stdout 用 sentinel 分帧。砍掉每个 primitive 的 adb 客户端启动 + 网关 3 进程
+// spawn + 每个 primitive 的 WS 握手。hierarchy 一次 dump 服务同卡多动作。
+//
+// 本批原语（全部非互动 / 零封号风险，用于验证吞吐架构）：
+//   currentFocus / dump / observeFeed / scrollDown / scrollUp / scrollNThenDump / tap
+// 互动原语（like/favorite/comment/profile）在 Slice 1 后续按需追加，需最小真实
+// 互动验收，单独管控。
+//
+// 安全边界：
+//   - 仅 loopback HTTP（127.0.0.1），不对外。
+//   - 拟人限速层 pace()：动作间随机间隔，默认 800-2500ms，可调。
+//   - 不碰私信。不自动发送评论（Slice 2 才拆围栏）。
+//
+// 用法：
+//   node fast-operator.mjs --adb "<adb.exe>" --serial <serial> serve [--port 17895]
+//   node fast-operator.mjs --adb "<adb.exe>" --serial <serial> demo-scroll <N>
+
+import { spawn } from "node:child_process";
+import { createServer } from "node:http";
+import { randomUUID } from "node:crypto";
+
+// ---------- uiautomator XML 解析（自包含，不依赖原文件） ----------
+
+function parseBounds(s) {
+  if (typeof s !== "string") return null;
+  const m = s.match(/^\[(\d+),(\d+)\]\[(\d+),(\d+)\]$/);
+  if (!m) return null;
+  return [Number(m[1]), Number(m[2]), Number(m[3]), Number(m[4])];
+}
+
+function centerOf(b) {
+  if (!b) return null;
+  return [((b[0] + b[2]) / 2) | 0, ((b[1] + b[3]) / 2) | 0];
+}
+
+function decodeAttr(value) {
+  if (typeof value !== "string") return value;
+  // uiautomator 转义: " & ' < >
+  return value
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
+}
+
+function parseUiAutomatorXml(xml) {
+  const nodes = [];
+  const re = /<node\b([^>]*?)(?:\/>|>\s*<\/node>)/g;
+  let m;
+  const attrRe = /(\b[a-zA-Z:_][a-zA-Z0-9:_-]*)\s*=\s*"([^"]*)"/g;
+  while ((m = re.exec(xml)) !== null) {
+    const body = m[1];
+    const a = {};
+    let am;
+    attrRe.lastIndex = 0;
+    while ((am = attrRe.exec(body)) !== null) a[am[1]] = am[2];
+    nodes.push({
+      index: a.index ?? "",
+      text: decodeAttr(a.text ?? ""),
+      contentDesc: decodeAttr(a["content-desc"] ?? ""),
+      resourceDesc: decodeAttr(a["resource-desc"] ?? ""),
+      className: a.class ?? "",
+      resourceId: a["resource-id"] ?? "",
+      package: a.package ?? "",
+      bounds: parseBounds(a.bounds ?? ""),
+      clickable: a.clickable === "true",
+      focused: a.focused === "true",
+      focusable: a.focusable === "true",
+      scrollable: a.scrollable === "true",
+      enabled: a.enabled !== "false",
+    });
+  }
+  return { nodes };
+}
+
+// ---------- 持久 adb shell 会话 ----------
+
+class AdbShellSession {
+  constructor(adbPath, serial) {
+    this.adbPath = adbPath;
+    this.serial = serial;
+    this.proc = null;
+    this.buf = "";
+    this.waiters = [];
+    this.cmdSeq = 0;
+  }
+
+  async start() {
+    this.proc = spawn(this.adbPath, ["-s", this.serial, "shell"], { stdio: ["pipe", "pipe", "pipe"] });
+    this.proc.stdout.setEncoding("utf8");
+    this.proc.stdout.on("data", (chunk) => {
+      this.buf += chunk;
+      this.drain();
+    });
+    this.proc.stderr.setEncoding("utf8");
+    this.proc.stderr.on("data", () => {});
+    await this.exec("echo fastop-ready"); // warm up
+    return this;
+  }
+
+  drain() {
+    while (this.waiters.length > 0) {
+      const w = this.waiters[0];
+      const idx = this.buf.indexOf(w.marker);
+      if (idx < 0) break;
+      const end = idx + w.marker.length;
+      const out = this.buf.slice(0, idx).replace(/\r$/g, "");
+      this.buf = this.buf.slice(end);
+      this.waiters.shift();
+      w.resolve(out);
+    }
+  }
+
+  exec(cmd, timeoutMs = 30000) {
+    if (!this.proc) throw new Error("adb shell session not started");
+    const marker = `__FO_END_${this.cmdSeq++}__`;
+    return new Promise((resolve, reject) => {
+      const t = setTimeout(() => {
+        const i = this.waiters.findIndex((w) => w.marker === marker);
+        if (i >= 0) this.waiters.splice(i, 1);
+        reject(new Error(`adb shell timeout (${timeoutMs}ms): ${cmd.slice(0, 80)}`));
+      }, timeoutMs);
+      this.waiters.push({
+        marker,
+        resolve: (out) => { clearTimeout(t); resolve(out); },
+      });
+      this.proc.stdin.write(`${cmd}; echo ${marker}\n`);
+    });
+  }
+
+  // exec-out 风格：拿二进制/大文本不走持久 shell（用一次性 adb，避免分帧冲突）
+  async execOut(args, timeoutMs = 30000) {
+    return new Promise((resolve, reject) => {
+      const p = spawn(this.adbPath, ["-s", this.serial, "exec-out", ...args], { stdio: ["ignore", "pipe", "pipe"] });
+      const chunks = [];
+      let done = false;
+      const t = setTimeout(() => { try { p.kill(); } catch {} reject(new Error(`exec-out timeout ${timeoutMs}ms`)); }, timeoutMs);
+      p.stdout.on("data", (c) => chunks.push(c));
+      p.on("error", (e) => { clearTimeout(t); reject(e); });
+      p.on("close", () => { if (done) return; done = true; clearTimeout(t); resolve(Buffer.concat(chunks)); });
+    });
+  }
+
+  async close() {
+    try { this.proc?.stdin?.end(); } catch {}
+    try { this.proc?.kill(); } catch {}
+  }
+}
+
+// ---------- 拟人限速层 ----------
+
+class Pacer {
+  constructor({ minMs = 800, maxMs = 2500, seed = 1234 } = {}) {
+    this.minMs = minMs;
+    this.maxMs = maxMs;
+    // 简单确定性伪随机（不依赖 Math.random，便于复现）
+    this.s = seed >>> 0;
+  }
+  next() {
+    this.s = (this.s * 1664525 + 1013904223) >>> 0;
+    return this.s / 0xffffffff;
+  }
+  async pace({ minMs = this.minMs, maxMs = this.maxMs } = {}) {
+    const d = minMs + this.next() * (maxMs - minMs);
+    await new Promise((r) => setTimeout(r, d));
+    return d;
+  }
+}
+
+// ---------- fast-operator 主体 ----------
+
+export class FastOperator {
+  constructor({ adbPath, serial, pacer } = {}) {
+    this.adbPath = adbPath;
+    this.serial = serial;
+    this.session = new AdbShellSession(adbPath, serial);
+    this.pacer = pacer ?? new Pacer();
+    this.metrics = { actions: 0, dumps: 0, scrolls: 0, taps: 0, totalDumpMs: 0, totalScrollMs: 0 };
+  }
+
+  async start() { await this.session.start(); return this; }
+  async close() { await this.session.close(); }
+
+  async currentFocus() {
+    const out = await this.session.exec("dumpsys window 2>/dev/null | grep -E mCurrentFocus", 10000);
+    const m = out.match(/mCurrentFocus=Window\{[^}]+ ([^/}\s]+)\/([^}\s]+)/);
+    return m ? { package: m[1], activity: m[2], raw: out } : { package: null, activity: null, raw: out };
+  }
+
+  // hierarchy dump：exec-out uiautomator dump /dev/tty（一次性，避免持久 shell 分帧）
+  // 注：详情页 like/收藏/评论按钮 content-desc 为空（xhs 图标按钮无 label），resource-id
+  // 被混淆，所以靠位置+class+clickability 解析，不依赖文本。解码用 utf-8。
+  async dump({ label } = {}) {
+    const t0 = Date.now();
+    let buf;
+    try {
+      buf = await this.session.execOut(["uiautomator", "dump", "/dev/tty"], 15000);
+    } catch (e) {
+      // 退路：写到 /sdcard 再 cat
+      await this.session.exec("uiautomator dump /sdcard/fo-dump.xml 2>/dev/null", 15000);
+      buf = await this.session.execOut(["cat", "/sdcard/fo-dump.xml"], 10000);
+    }
+    const xml = buf.toString("utf8");
+    const start = xml.indexOf("<hierarchy");
+    const end = xml.indexOf("</hierarchy>", start);
+    if (start < 0 || end < 0) throw new Error("hierarchy dump incomplete");
+    const doc = parseUiAutomatorXml(xml.slice(start, end + "</hierarchy>".length));
+    this.metrics.dumps += 1;
+    this.metrics.totalDumpMs += Date.now() - t0;
+    doc._dumpMs = Date.now() - t0;
+    doc._label = label;
+    return doc;
+  }
+
+  // feed 滚屏：连续 N 次 input swipe，只在末次后 dump 一次。
+  // startX/Y 控制方向（默认下滚）。返回最后一次 dump。
+  async scrollN({ n = 1, down = true, settleMs = 350, label } = {}) {
+    const t0 = Date.now();
+    const w = 1080, h = 2400; // 01 物理尺寸；如需可读 wm size
+    const startY = down ? Math.round(h * 0.7) : Math.round(h * 0.3);
+    const endY = down ? Math.round(h * 0.3) : Math.round(h * 0.7);
+    const x = Math.round(w / 2);
+    for (let i = 0; i < n; i += 1) {
+      await this.session.exec(`input swipe ${x} ${startY} ${x} ${endY} 300`, 8000);
+      if (i < n - 1) await new Promise((r) => setTimeout(r, settleMs));
+    }
+    await new Promise((r) => setTimeout(r, settleMs));
+    this.metrics.scrolls += n;
+    this.metrics.totalScrollMs += Date.now() - t0;
+    const doc = await this.dump({ label: label ?? `scroll-${n}` });
+    return doc;
+  }
+
+  async scrollDown(n = 1, label) { return this.scrollN({ n, down: true, label }); }
+  async scrollUp(n = 1, label) { return this.scrollN({ n, down: false, label }); }
+
+  async tap(x, y) {
+    this.metrics.taps += 1;
+    return this.session.exec(`input tap ${x} ${y}`, 8000);
+  }
+
+  // 从 feed document 提取可见卡片。按结构 + 坐标解析，不依赖中文文本（dump 为
+  // GBK 乱码时仍稳）。返回每张卡的封面（进详情）、点赞按钮（不进正文点赞）、
+  // 头像/作者区（进主页）。bounds 与 center 已预算。
+  feedCards(doc) {
+    const cards = [];
+    // 封面：大 ImageView（click=false、高>500、在 feed 区）。点它进详情。
+    const covers = doc.nodes.filter((n) =>
+      n.className === "android.widget.ImageView" && n.bounds && !n.clickable
+      && (n.bounds[3] - n.bounds[1]) > 500 && (n.bounds[2] - n.bounds[0]) > 400
+      && n.bounds[1] > 300 && n.bounds[3] < 2200);
+    // 数值 TextView：accept 纯数字 + "1.2万/3.4亿" 风格（之前 regex 拒了万/亿）
+    const numRe = /^[\d.]+[万千亿]?$/u;
+    const nums = doc.nodes.filter((n) => n.clickable && n.bounds && numRe.test(n.text));
+    // 点赞按钮：clickable ImageView + 紧邻右侧数值 TextView（同 y 中心）
+    const likeBtns = [];
+    for (const n of doc.nodes) {
+      if (n.className !== "android.widget.ImageView" || !n.clickable || !n.bounds) continue;
+      const num = nums.find((m) => Math.abs((m.bounds[1] + m.bounds[3]) / 2 - (n.bounds[1] + n.bounds[3]) / 2) < 60
+        && m.bounds[0] >= n.bounds[2] - 20 && m.bounds[0] - n.bounds[2] < 120);
+      if (num) likeBtns.push({ bounds: n.bounds, center: centerOf(n.bounds), countText: num.text });
+    }
+    for (const c of covers) {
+      const cover = { bounds: c.bounds, center: centerOf(c.bounds) };
+      // 该卡片的点赞按钮：x 落在 cover 同列 + y 在封面正上方 header 区
+      const like = likeBtns.find((b) =>
+        b.center[0] >= c.bounds[0] - 20 && b.center[0] <= c.bounds[2] + 20
+        && b.bounds[3] <= c.bounds[1] + 60 && c.bounds[1] - b.bounds[1] < 320);
+      // 作者行（与 like 同 y，cover 上方）：头像 71×71 click=0 在最左；作者名 TextView 非数字在头像与 like 之间
+      let avatar = null, authorName = null;
+      if (like) {
+        const rowY = like.center[1];
+        const likeCx = like.center[0];
+        // 头像候选：非 clickable ImageView，尺寸 55-90，同 y，x 在 like 左侧
+        const avatarCands = doc.nodes.filter((n) =>
+          n.className === "android.widget.ImageView" && !n.clickable && n.bounds
+          && (n.bounds[2] - n.bounds[0]) >= 55 && (n.bounds[2] - n.bounds[0]) <= 90
+          && Math.abs(centerOf(n.bounds)[1] - rowY) < 60
+          && centerOf(n.bounds)[0] < likeCx - 40
+          && centerOf(n.bounds)[0] >= c.bounds[0] - 40 && centerOf(n.bounds)[0] <= c.bounds[2] + 40)
+          .sort((a, b) => centerOf(a.bounds)[0] - centerOf(b.bounds)[0]);
+        avatar = avatarCands[0] ? { bounds: avatarCands[0].bounds, center: centerOf(avatarCands[0].bounds) } : null;
+        // 作者名：TextView，非数字非空，同 y，在头像右与 like 左之间
+        const nameCands = doc.nodes.filter((n) =>
+          n.className === "android.widget.TextView" && n.bounds && n.text && !/^\d/u.test(n.text)
+          && Math.abs(centerOf(n.bounds)[1] - rowY) < 60
+          && (avatar ? centerOf(n.bounds)[0] > avatar.center[0] + 20 : true)
+          && centerOf(n.bounds)[0] < likeCx - 20);
+        authorName = nameCands[0]?.text ?? null;
+      }
+      cards.push({ cover, likeButton: like ?? null, avatar, authorName });
+    }
+    return cards;
+  }
+
+  // 把 "1.2万" 风格计数转成数值，用于点赞前后 delta 判断
+  static countValue(text) {
+    if (!text) return null;
+    const m = text.match(/^([\d.]+)([万千亿]?)$/u);
+    if (!m) return null;
+    let v = parseFloat(m[1]);
+    if (m[2] === "万") v *= 1e4; else if (m[2] === "亿") v *= 1e8;
+    return Math.round(v);
+  }
+
+  // 进详情：tap 封面中心，等待并确认进入 NoteDetailActivity。
+  async openCard(card) {
+    if (!card?.cover?.center) throw new Error("card cover not resolved");
+    await this.tap(card.cover.center[0], card.cover.center[1]);
+    await new Promise((r) => setTimeout(r, 900));
+    const f = await this.currentFocus();
+    return { opened: (f.activity || "").includes("NoteDetail"), activity: f.activity };
+  }
+
+  // 返回 feed：BACK 直到回到 IndexActivityV2，最多 maxBack 次。
+  async backToFeed(maxBack = 3) {
+    for (let i = 0; i < maxBack; i += 1) {
+      await this.session.exec("input keyevent KEYCODE_BACK", 5000);
+      await new Promise((r) => setTimeout(r, 700));
+      const f = await this.currentFocus();
+      if ((f.activity || "").includes("IndexActivityV2")) return { back: i + 1, activity: f.activity };
+    }
+    return { back: maxBack, activity: (await this.currentFocus()).activity };
+  }
+
+  // 进作者主页。01 这版 xhs：feed 头像/名字 tap 都只开笔记，主页不是独立 activity，
+  // 而是 NoteDetail 上的浮层（focus 仍 NoteDetail，但出现 profile 节点：clickable 头像
+  // desc="头像,xxx" + 粉丝/获赞统计 + 关注/私信按钮 + 笔记网格）。
+  // 流程：feed 卡片 → openCard 进笔记 → tap 详情头部作者头像 → 主页浮层。
+  // 主页浮层信号：clickable ImageView + content-desc（浮层头像），y<600。
+  async openProfile(card) {
+    if (!card?.cover?.center) throw new Error("card cover not resolved");
+    const opened = await this.openCard(card);
+    if (!opened.opened) return { opened: false, activity: opened.activity, reason: "openCard failed" };
+    const det = await this.dump({ label: "detail-for-profile" });
+    // 详情头部作者头像：大 ImageView(>=120×120) click=0，x<250 y<300（back 按钮在 x~54 但 27×49 太小被排除）
+    const av = det.nodes.find((n) =>
+      n.className === "android.widget.ImageView" && !n.clickable && n.bounds
+      && (n.bounds[2] - n.bounds[0]) >= 120 && (n.bounds[3] - n.bounds[1]) >= 120
+      && centerOf(n.bounds)[0] < 250 && centerOf(n.bounds)[1] < 300);
+    if (!av) return { opened: false, activity: (await this.currentFocus()).activity, reason: "no detail header avatar" };
+    const [ax, ay] = centerOf(av.bounds);
+    await this.tap(ax, ay);
+    await new Promise((r) => setTimeout(r, 1300));
+    const prof = await this.dump({ label: "profile-overlay" });
+    const detected = prof.nodes.some((n) =>
+      n.className === "android.widget.ImageView" && n.clickable && n.bounds && n.contentDesc
+      && centerOf(n.bounds)[1] < 600);
+    return { opened: detected, activity: (await this.currentFocus()).activity, authorName: card.authorName, tapped: [ax, ay] };
+  }
+
+  // 主页浮层笔记网格封面：大 ImageView click=0，宽 250-600、高 250-1000（排除内容容器 543x1964 那种过高 frame），y>800。
+  // 点其中一张进该笔记（视频笔记会自动播放）。
+  profileGridCovers(doc) {
+    return doc.nodes.filter((n) =>
+      n.className === "android.widget.ImageView" && !n.clickable && n.bounds
+      && (n.bounds[2] - n.bounds[0]) >= 250 && (n.bounds[2] - n.bounds[0]) <= 600
+      && (n.bounds[3] - n.bounds[1]) >= 250 && (n.bounds[3] - n.bounds[1]) <= 1000
+      && centerOf(n.bounds)[1] > 800)
+      .map((n) => ({ bounds: n.bounds, center: centerOf(n.bounds) }))
+      .sort((a, b) => a.center[1] - b.center[1] || a.center[0] - b.center[0]);
+  }
+
+  // 主页滚屏：复用 scrollN（纯刷屏 N 次后 dump 一次）。主页浮层是 RecyclerView，swipe 通用。
+  async scrollProfile(n = 1, label) { return this.scrollN({ n, down: true, label: label ?? `profile-scroll-${n}` }); }
+
+  // 刷主页视频：tap 主页网格的某张封面 → 开该笔记。视频笔记(DetailFeedActivity)自动播放，
+  // 图文笔记(NoteDetailActivity)仅展示。需先 openProfile 打开主页浮层。返回 {opened, isVideo, activity}。
+  // 调用方按 isVideo 决定停留观看或跳过。点完用 backFromNote 回到主页浮层。
+  async playProfileVideo(doc, idx = 0) {
+    const grid = this.profileGridCovers(doc);
+    const g = grid[idx];
+    if (!g) return { opened: false, reason: "no grid cover at idx " + idx, gridCount: grid.length };
+    await this.tap(g.center[0], g.center[1]);
+    await new Promise((r) => setTimeout(r, 1500));
+    const f = await this.currentFocus();
+    const isVideo = /DetailFeedActivity/.test(f.activity || "");
+    return { opened: true, isVideo, activity: f.activity, tapped: g.center, gridCount: grid.length };
+  }
+
+  // 从笔记返回主页浮层：1 次 BACK（笔记→主页浮层）。若想直接回 feed 用 backFromProfile。
+  async backFromNote() {
+    await this.session.exec("input keyevent KEYCODE_BACK", 5000);
+    await new Promise((r) => setTimeout(r, 800));
+    return { activity: (await this.currentFocus()).activity };
+  }
+
+  // 从主页返回 feed：BACK 直到 IndexActivityV2（主页浮层→笔记→feed，最多 maxBack 次）。
+  async backFromProfile(maxBack = 4) { return this.backToFeed(maxBack); }
+
+  // 不进正文点赞：tap feed 卡片的 like 按钮。返回 tapped 坐标。
+  // 注意：这会在真实账号上对陌生人帖子产生一次点赞——调用方负责 like-then-unlike
+  // 验收或运营意图授权。
+  async likeCard(card) {
+    if (!card?.likeButton?.center) throw new Error("card like-button not resolved");
+    const [x, y] = card.likeButton.center;
+    await this.tap(x, y);
+    return { tapped: [x, y], countBefore: card.likeButton.countText };
+  }
+
+  // 详情页互动栏解析。两类笔记布局不同但规律一致：
+  //   图文(NoteDetailActivity)：底部条 [评论框][点赞][收藏][分享]
+  //   视频(DetailFeedActivity) ：分享在右上角；底部条 [评论框][点赞][收藏][评论]
+  // 底部大图标(≥70×70)按 x 排序 → groups[0]=点赞, groups[1]=收藏, groups[2]=评论/分享。
+  // 小图标(44×44 等)是 nav(返回/更多/搜索/音乐)，按尺寸过滤掉。
+  // 图文笔记收藏未收藏时 label 显示"收藏"文字(非数字)，已收藏显示数字——可视锚点。
+  // 注：dump 文本为 GBK 乱码，但不依赖文本字符串匹配，只靠位置+class+尺寸+是否数字。
+  detailEngagementBar(doc) {
+    const isVideo = doc.nodes.some((n) => /VideoSeekBar|TextureView|SurfaceView/i.test(n.className));
+    const stripY = 2150;
+    const inStrip = (b) => b && (b[1] + b[3]) / 2 > stripY;
+    const icons = doc.nodes.filter((n) =>
+      n.className === "android.widget.ImageView" && inStrip(n.bounds)
+      && (n.bounds[2] - n.bounds[0]) >= 70 && (n.bounds[3] - n.bounds[1]) >= 70);
+    const texts = doc.nodes.filter((n) =>
+      n.className === "android.widget.TextView" && inStrip(n.bounds) && (n.text || n.contentDesc));
+    // 计数判定：以数字开头且短（≤8 字符）。不依赖万/千/亿后缀——dump 文本经
+    // GBK→UTF8 乱码后"万"会变"涓?"等，硬匹配后缀会漏。label（"收藏"/"说点什么"）
+    // 以中文开头不匹配。大计数(如"10万")tap+1 仍显示"10万"，delta 验证不可用，
+    // 但按钮解析靠位置不靠计数，tap 仍正确。
+    const isCountText = (t) => !!t && /^\d/u.test(t) && t.length <= 8;
+    const groups = [];
+    for (const ic of icons) {
+      const [ix, iy] = centerOf(ic.bounds);
+      // 右侧相邻 TextView（计数或 label），同 y
+      const txt = texts.find((t) => {
+        const [tx, ty] = centerOf(t.bounds);
+        return tx >= ix - 20 && tx - ix < 220 && Math.abs(ty - iy) < 60;
+      });
+      groups.push({
+        icon: { bounds: ic.bounds, center: centerOf(ic.bounds) },
+        label: txt?.text ?? null,
+        labelCenter: txt ? centerOf(txt.bounds) : null,
+        isNumeric: txt ? isCountText(txt.text) : false,
+        countValue: txt ? FastOperator.countValue(txt.text) : null,
+      });
+    }
+    groups.sort((a, b) => a.icon.center[0] - b.icon.center[0]);
+    // 右上角分享（视频笔记）：y<300 的 clickable ImageView + content-desc 非空，
+    // 取最右侧那个（返回/搜索/更多都在更左；desc 乱码无法串匹配，靠 max-x 定位）。
+    let topShare = null;
+    for (const n of doc.nodes) {
+      if (n.className !== "android.widget.ImageView" || !n.clickable || !n.bounds || !n.contentDesc) continue;
+      if ((n.bounds[1] + n.bounds[3]) / 2 >= 300) continue;
+      const cx = (n.bounds[0] + n.bounds[2]) / 2;
+      if (!topShare || cx > topShare.cx) topShare = { bounds: n.bounds, contentDesc: n.contentDesc, cx };
+    }
+    return {
+      type: isVideo ? "video" : "image",
+      groups,
+      like: groups[0] ?? null,
+      favorite: groups[1] ?? null,
+      third: groups[2] ?? null,
+      topShare: topShare ? { bounds: topShare.bounds, center: centerOf(topShare.bounds), desc: topShare.contentDesc } : null,
+    };
+  }
+
+  // 详情页点赞：tap groups[0] 图标。countBefore 来自解析的计数（无计数返回 null）。
+  async likeDetail(bar) {
+    if (!bar?.like?.icon?.center) throw new Error("detail like button not resolved");
+    const [x, y] = bar.like.icon.center;
+    await this.tap(x, y);
+    return { tapped: [x, y], countBefore: bar.like.countValue, labelBefore: bar.like.label };
+  }
+
+  // 详情页收藏：tap groups[1] 图标。labelBefore 用于判断收藏态（"收藏"=未收藏, 数字=已收藏）。
+  async favoriteDetail(bar) {
+    if (!bar?.favorite?.icon?.center) throw new Error("detail favorite button not resolved");
+    const [x, y] = bar.favorite.icon.center;
+    await this.tap(x, y);
+    return { tapped: [x, y], countBefore: bar.favorite.countValue, labelBefore: bar.favorite.label, wasNumeric: bar.favorite.isNumeric };
+  }
+
+  metricsSummary() {
+    const m = this.metrics;
+    return {
+      ...m,
+      avgDumpMs: m.dumps ? Math.round(m.totalDumpMs / m.dumps) : 0,
+      avgScrollMs: m.scrolls ? Math.round(m.totalScrollMs / m.scrolls) : 0,
+    };
+  }
+}
+
+// ---------- CLI / HTTP ----------
+
+function arg(name, fallback) {
+  const i = process.argv.indexOf(name);
+  return i >= 0 ? process.argv[i + 1] : fallback;
+}
+
+async function demoScroll(N) {
+  const adb = arg("--adb");
+  const serial = arg("--serial");
+  if (!adb || !serial) throw new Error("usage: --adb <path> --serial <serial> demo-scroll <N>");
+  const op = await new FastOperator({ adbPath: adb, serial }).start();
+  const t0 = Date.now();
+  console.log(JSON.stringify({ phase: "start", focus: await op.currentFocus() }));
+  for (let i = 0; i < N; i += 1) {
+    const ts = Date.now();
+    const doc = await op.scrollDown(1, `card-${i}`);
+    const cards = op.observeFeed(doc);
+    console.log(JSON.stringify({ i, ms: Date.now() - ts, dumpMs: doc._dumpMs, likeButtons: cards.length }));
+  }
+  console.log(JSON.stringify({ phase: "done", totalMs: Date.now() - t0, perScrollMs: Math.round((Date.now() - t0) / N), metrics: op.metricsSummary() }));
+  await op.close();
+}
+
+function serve(port) {
+  const adb = arg("--adb");
+  const serial = arg("--serial");
+  if (!adb || !serial) throw new Error("usage: --adb <path> --serial <serial> serve [--port N]");
+  const opP = new FastOperator({ adbPath: adb, serial }).start();
+  const server = createServer(async (req, res) => {
+    if (req.method !== "POST") { res.writeHead(405); return res.end("405"); }
+    let body = "";
+    for await (const c of req) body += c;
+    let q;
+    try { q = JSON.parse(body || "{}"); } catch { res.writeHead(400); return res.end("bad json"); }
+    const op = await opP;
+    try {
+      let out;
+      switch (q.action) {
+        case "focus": out = await op.currentFocus(); break;
+        case "dump": out = await op.dump({ label: q.label }); break;
+        case "scrollDown": out = await op.scrollDown(q.n ?? 1, q.label); break;
+        case "scrollUp": out = await op.scrollUp(q.n ?? 1, q.label); break;
+        case "scrollN": out = await op.scrollN({ n: q.n ?? 1, down: q.down !== false, label: q.label }); break;
+        case "tap": out = await op.tap(q.x, q.y); break;
+        case "feedCards": { const d = await op.dump({ label: q.label }); out = { cards: op.feedCards(d), dumpMs: d._dumpMs }; break; }
+        case "openCard": { const d = await op.dump({ label: "open" }); const cards = op.feedCards(d); const c = cards[q.idx ?? 0]; out = await op.openCard(c); break; }
+        case "backToFeed": out = await op.backToFeed(q.maxBack ?? 3); break;
+        case "likeCard": { const d = await op.dump({ label: "like" }); const cards = op.feedCards(d); const c = cards[q.idx ?? 0]; out = { resolved: !!c?.likeButton, card: c, tapped: c?.likeButton ? await op.likeCard(c) : null }; break; }
+        case "detailBar": { const d = await op.dump({ label: "detailBar" }); out = { bar: op.detailEngagementBar(d), dumpMs: d._dumpMs }; break; }
+        case "likeDetail": { const d = await op.dump({ label: "likeDetail" }); const bar = op.detailEngagementBar(d); out = { resolved: !!bar?.like?.icon?.center, bar, tapped: bar?.like?.icon?.center ? await op.likeDetail(bar) : null }; break; }
+        case "favoriteDetail": { const d = await op.dump({ label: "favoriteDetail" }); const bar = op.detailEngagementBar(d); out = { resolved: !!bar?.favorite?.icon?.center, bar, tapped: bar?.favorite?.icon?.center ? await op.favoriteDetail(bar) : null }; break; }
+        case "openProfile": { const d = await op.dump({ label: "openProfile" }); const cards = op.feedCards(d); const c = cards[q.idx ?? 0]; out = { resolved: !!c?.cover?.center, card: c, opened: c?.cover?.center ? await op.openProfile(c) : null }; break; }
+        case "scrollProfile": out = await op.scrollProfile(q.n ?? 1, q.label); break;
+        case "profileGrid": { const d = await op.dump({ label: "profileGrid" }); out = { covers: op.profileGridCovers(d), dumpMs: d._dumpMs }; break; }
+        case "playProfileVideo": { const d = await op.dump({ label: "playProfileVideo" }); out = await op.playProfileVideo(d, q.idx ?? 0); break; }
+        case "backFromNote": out = await op.backFromNote(); break;
+        case "metrics": out = op.metricsSummary(); break;
+        default: res.writeHead(400); return res.end(JSON.stringify({ error: "unknown action" }));
+      }
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true, result: out, metrics: op.metricsSummary() }));
+    } catch (e) {
+      res.writeHead(500, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: false, error: e.message, metrics: op.metricsSummary() }));
+    }
+  });
+  server.listen(port, "127.0.0.1", () => console.log(JSON.stringify({ phase: "serving", port, serial })));
+}
+
+const cmd = process.argv.find((a) => a === "serve" || a === "demo-scroll");
+if (cmd === "serve") serve(Number(arg("--port", "17895")));
+else if (cmd === "demo-scroll") demoScroll(Number(process.argv[process.argv.indexOf("demo-scroll") + 1] ?? 10));
+else if (process.argv[1] && process.argv[1].endsWith("fast-operator.mjs")) {
+  console.error("usage: fast-operator.mjs --adb <path> --serial <serial> (serve|demo-scroll <N>) [--port 17895]");
+  process.exit(2);
+}
