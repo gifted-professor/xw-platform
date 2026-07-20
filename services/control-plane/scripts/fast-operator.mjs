@@ -77,6 +77,24 @@ function parseUiAutomatorXml(xml) {
   return { nodes };
 }
 
+// child bounds 是否完全落在 parent bounds 内（带 2px 容差），用于评论 item 子树归属判定
+function isDescendantBounds(child, parent) {
+  if (!child || !parent) return false;
+  return child[0] >= parent[0] - 2 && child[1] >= parent[1] - 2
+    && child[2] <= parent[2] + 2 && child[3] <= parent[3] + 2;
+}
+
+// 通用 JSON POST（Node 24 全局 fetch），用于 LLM 改写调用
+async function httpPostJson(url, body, headers = {}) {
+  const r = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...headers },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error(`HTTP ${r.status} ${url}`);
+  return r.json();
+}
+
 // ---------- 持久 adb shell 会话 ----------
 
 class AdbShellSession {
@@ -180,6 +198,12 @@ export class FastOperator {
     this.session = new AdbShellSession(adbPath, serial);
     this.pacer = pacer ?? new Pacer();
     this.metrics = { actions: 0, dumps: 0, scrolls: 0, taps: 0, totalDumpMs: 0, totalScrollMs: 0 };
+    // Slice 2 评论自主配置（由 CLI flag 注入，见 serve()/demoScroll 末尾）
+    this.xwWs = null;            // ws://127.0.0.1:22222/
+    this.xwBridgeIme = null;     // com.android.xwkeyboard/.XwIME
+    this.llmEndpoint = null;     // http://100.84.194.46:8317/v1/chat/completions
+    this.llmKey = null;
+    this.llmModel = null;
   }
 
   async start() { await this.session.start(); return this; }
@@ -475,6 +499,302 @@ export class FastOperator {
     return { tapped: [x, y], countBefore: bar.favorite.countValue, labelBefore: bar.favorite.label, wasNumeric: bar.favorite.isNumeric };
   }
 
+  // ===== Slice 2：评论自主 =====
+  // 详情页底部评论入口框（content-desc="评论框"/"说点什么"占位）。UTF-8 desc 稳定锚点；
+  // 退路：底部条(y>2150)最左 clickable TextView。
+  commentBox(doc) {
+    const box = doc.nodes.find((n) =>
+      n.className === "android.widget.TextView" && n.clickable && n.contentDesc
+      && /评论框|说点什么|写评论/.test(n.contentDesc));
+    if (box) return { center: centerOf(box.bounds), bounds: box.bounds, desc: box.contentDesc };
+    const stripY = 2150;
+    const cands = doc.nodes.filter((n) =>
+      n.className === "android.widget.TextView" && n.clickable && n.bounds
+      && (n.bounds[1] + n.bounds[3]) / 2 > stripY)
+      .sort((a, b) => centerOf(a.bounds)[0] - centerOf(b.bounds)[0]);
+    const c = cands[0];
+    return c ? { center: centerOf(c.bounds), bounds: c.bounds, desc: c.contentDesc || c.text } : null;
+  }
+
+  // 滚到评论区：图文笔记评论在内容下方，下滚直到 dump 出现评论 item。
+  async scrollToComments({ maxScrolls = 6, settleMs = 600 } = {}) {
+    let doc = await this.dump({ label: "detail-before-comments" });
+    for (let i = 0; i < maxScrolls; i += 1) {
+      if (this.parseComments(doc).length > 0) return { doc, scrolls: i, found: true };
+      await this.scrollDown(1, `to-comments-${i}`);
+      doc = await this.dump({ label: `comments-${i}` });
+    }
+    return { doc, scrolls: maxScrolls, found: this.parseComments(doc).length > 0 };
+  }
+
+  // 解析可见评论。这版 xhs 评论区不是 LinearLayout 容器，而是按行排列：
+  //   每行 = 可点 username TextView(锚) + 下方非可点 text TextView + 右侧 likeCount TextView(空格=0赞)
+  //   + 时间戳 TextView("…天前 … 回复") + 可选"作者"badge(同行右侧)。
+  // 用几何锚定 username，按 y 偏移收 text/likeCount，不依赖 LinearLayout 子树。
+  // isAuthor=同行右侧有 text/content-desc=="作者" 的 TextView（博主本人评论，必须过滤）。
+  parseComments(doc) {
+    const ns = doc.nodes;
+    const isNum = (t) => !!t && /^[\d.]+[万千亿]?$/u.test(t) && /^\d/u.test(t) && t.length <= 8;
+    const isMeta = (t) => !t
+      || /^(回复|展开|关注|删除|作者|分享|收藏|点赞|说点什么)$/.test(t)
+      || (/回复\s*$/.test(t) && t.length < 28)
+      || /展开\s*\d+\s*条回复/.test(t)
+      || /共\s*\d+\s*条评论/.test(t)
+      || /快来评论|有话要说|有话却说/.test(t);
+    // username 锚：可点 TextView，2-20 字，非数字非 meta，且不是评论框(content-desc 含"评论框/说点什么")
+    const users = ns.filter((n) =>
+      n.className === "android.widget.TextView" && n.clickable && n.bounds
+      && !isMeta(n.text) && !isNum(n.text)
+      && (n.text || "").length >= 2 && (n.text || "").length <= 20
+      && !/评论框|说点什么|写评论/.test(n.contentDesc || ""));
+    const items = [];
+    for (const u of users) {
+      const ub = u.bounds;
+      const uy = (ub[1] + ub[3]) / 2;
+      const uBottom = ub[3];
+      // isAuthor：右侧同行有"作者"badge
+      const isAuthor = ns.some((n) =>
+        n.className === "android.widget.TextView" && n.bounds
+        && (n.text === "作者" || n.contentDesc === "作者")
+        && Math.abs(((n.bounds[1] + n.bounds[3]) / 2) - uy) < 70
+        && n.bounds[0] > ub[2] - 40);
+      // 评论正文：username 正下方非可点 TextView，左半区(x<600)、宽(右沿>500)、非时间戳非数字
+      let text = null;
+      for (const n of ns) {
+        if (n.className !== "android.widget.TextView" || n.clickable || !n.bounds) continue;
+        const b = n.bounds;
+        const cy = (b[1] + b[3]) / 2;
+        if (cy < uBottom - 5 || cy > uBottom + 120) continue;
+        if (b[0] > 600) continue;
+        const t = (n.text || "").trim();
+        if (!t || isMeta(t)) continue;
+        if (/^\d/.test(t) && t.length <= 8) continue; // 纯数字当点赞数，不当正文
+        if (!text || t.length > text.length) text = t;
+      }
+      // 时间戳行：含"前"+结尾"回复"的非可点 TextView，y 在 username 下方 15-130，x<800。
+      // 用它的 y 锚定 likeCount，避免误抓底部互动条(note 评论总数)。
+      let tsCy = null;
+      for (const n of ns) {
+        if (n.className !== "android.widget.TextView" || n.clickable || !n.bounds) continue;
+        const b = n.bounds;
+        const cy = (b[1] + b[3]) / 2;
+        if (cy < uBottom + 15 || cy > uBottom + 130) continue;
+        if ((b[0] + b[2]) / 2 > 800) continue;
+        const t = (n.text || "").trim();
+        if (/前.*回复\s*$/.test(t)) { tsCy = cy; break; }
+      }
+      // 点赞数：右半区(x>880)、窄(宽≤80)、y 紧贴时间戳行(|cy-tsCy|<45)；
+      // 无时间戳时回退 [uBottom+30,uBottom+130] 且 y<2230（避开底部互动条 y≈2256）
+      let likeText = null;
+      for (const n of ns) {
+        if (n.className !== "android.widget.TextView" || n.clickable || !n.bounds) continue;
+        const b = n.bounds;
+        const cx = (b[0] + b[2]) / 2;
+        const cy = (b[1] + b[3]) / 2;
+        if (cx < 880 || (b[2] - b[0]) > 80) continue;
+        if (tsCy != null) {
+          if (Math.abs(cy - tsCy) > 45) continue;
+        } else {
+          if (cy < uBottom + 30 || cy > uBottom + 130 || cy > 2229) continue;
+        }
+        const t = (n.text || "").trim();
+        if (!t) { if (likeText === null) likeText = "0"; continue; } // 空格 = 0 赞
+        if (isNum(t)) likeText = t;
+      }
+      if (!text && likeText === null) continue; // 既无正文也无点赞数 → 不是评论行
+      const likeCount = likeText != null ? (FastOperator.countValue(likeText) ?? (likeText === "0" ? 0 : null)) : null;
+      items.push({
+        username: u.text, text, likeText, likeCount,
+        isAuthor, bounds: ub, center: centerOf(ub),
+      });
+    }
+    return items;
+  }
+
+  // 选非作者评论里点赞最高的。空时回退 null（调用方用兜底文案）。
+  topComment(comments) {
+    const cands = comments.filter((c) => !c.isAuthor && c.likeCount != null && c.text);
+    if (!cands.length) return null;
+    return cands.sort((a, b) => (b.likeCount || 0) - (a.likeCount || 0))[0];
+  }
+
+  // 评论输入编辑器（开"说点什么"后）：focused EditText。
+  commentEditor(doc) {
+    const ed = doc.nodes.find((n) => n.className === "android.widget.EditText" || n.focused);
+    return ed ? { center: centerOf(ed.bounds), bounds: ed.bounds, text: ed.text } : null;
+  }
+
+  // 编辑器"发送"按钮：TextView text="发送" click=true。UTF-8 锚点。
+  sendButton(doc) {
+    const b = doc.nodes.find((n) =>
+      n.className === "android.widget.TextView" && n.clickable && (n.text === "发送" || /发送|发\s*布/.test(n.text || "")));
+    return b ? { center: centerOf(b.bounds), bounds: b.bounds, text: b.text } : null;
+  }
+
+  // xiaowei WS 网关单请求（ws://127.0.0.1:22222/）。一连接一请求，首条消息即响应；code===10000=SUCCESS。
+  async xiaoweiInvoke(action, data, timeoutMs = 12000) {
+    const url = this.xwWs || "ws://127.0.0.1:22222/";
+    const req = { action, devices: this.serial };
+    if (data != null) req.data = data;
+    return new Promise((resolve, reject) => {
+      const ws = new WebSocket(url);
+      let settled = false;
+      const finish = (fn, v) => { if (settled) return; settled = true; clearTimeout(t); try { ws.close(); } catch {} fn(v); };
+      const t = setTimeout(() => finish(reject, new Error(`xiaowei WS timeout (${timeoutMs}ms) action=${action}`)), timeoutMs);
+      ws.addEventListener("open", () => { try { ws.send(JSON.stringify(req)); } catch (e) { finish(reject, e); } });
+      ws.addEventListener("message", (e) => {
+        let r; try { r = JSON.parse(String(e.data)); } catch { return finish(reject, new Error("xiaowei WS malformed response")); }
+        finish(resolve, r);
+      });
+      ws.addEventListener("error", () => finish(reject, new Error(`xiaowei WS connection failed action=${action}`)));
+    });
+  }
+
+  async currentIme() {
+    const out = await this.session.exec("settings get secure default_input_method", 8000);
+    return out.trim();
+  }
+
+  async setIme(ime) {
+    const r = await this.xiaoweiInvoke("selectIme", { ime });
+    if (r.code !== 10000) throw new Error(`selectIme failed: ${r.message || JSON.stringify(r)}`);
+    for (let i = 0; i < 8; i += 1) {
+      await new Promise((r) => setTimeout(r, 200));
+      if ((await this.currentIme()) === ime) return true;
+    }
+    return false;
+  }
+
+  // 经 xiaowei 网关输中文：selectIme→bridge → 有界清空(MOVE_END + DEL×48，编辑器空时可跳) → inputText。
+  // deferRestore=true 时不立即还原 IME（还原会令编辑器失焦关闭），返回 restore() 让调用方在【发送之后】再还原。
+  async inputTextViaXiaowei(text, { bridgeIme, priorIme, clearFirst = true, deferRestore = false } = {}) {
+    bridgeIme = bridgeIme || this.xwBridgeIme || "com.android.xwkeyboard/.XwIME";
+    priorIme = priorIme || (await this.currentIme());
+    const audit = { priorIme, bridgeIme, selected: false, cleared: false, inputAccepted: false, restored: false };
+    const restore = async () => {
+      try {
+        if ((await this.currentIme()) !== priorIme) { await this.setIme(priorIme); audit.restored = true; }
+        else audit.restored = true;
+      } catch { audit.restoreError = true; }
+      return audit;
+    };
+    try {
+      if ((await this.currentIme()) !== bridgeIme) {
+        if (!(await this.setIme(bridgeIme))) throw new Error("bridge IME select failed");
+      }
+      audit.selected = true;
+      await new Promise((r) => setTimeout(r, 400));
+      if (clearFirst) {
+        await this.session.exec("input keyevent KEYCODE_MOVE_END " + Array(48).fill("KEYCODE_DEL").join(" "), 8000);
+        await new Promise((r) => setTimeout(r, 150));
+        audit.cleared = true;
+      }
+      const r = await this.xiaoweiInvoke("inputText", { content: String(text) });
+      if (r.code !== 10000) throw new Error(`inputText failed: ${r.message || JSON.stringify(r)}`);
+      audit.inputAccepted = true;
+    } catch (e) {
+      // 失败时立即还原（不留编辑器在 bridge IME）
+      await restore();
+      throw e;
+    }
+    if (deferRestore) return { audit, restore };
+    await restore();
+    return audit;
+  }
+
+  // 改写评论为非雷同自然变体。有 LLM endpoint 走 LLM，否则规则兜底（剥尾 emoji + 加一个温和 emoji）。
+  async rewriteComment(text, { llmEndpoint, llmKey, llmModel } = {}) {
+    const src = String(text || "").trim();
+    if (!src) return src;
+    const ep = llmEndpoint || this.llmEndpoint;
+    const key = llmKey || this.llmKey;
+    const model = llmModel || this.llmModel || "gpt-4o-mini";
+    if (ep && key) {
+      try {
+        const r = await httpPostJson(ep, {
+          model, max_tokens: 120, temperature: 0.9,
+          messages: [
+            { role: "system", content: "你把用户给的评论改写成自然、不与原句雷同的变体，保持语义和语气，可加1个emoji，20-40字，只输出改写后的评论本身，不要引号不要解释。" },
+            { role: "user", content: src },
+          ],
+        }, { Authorization: `Bearer ${key}` });
+        const out = r?.choices?.[0]?.message?.content?.trim();
+        if (out && out.length <= 80 && !/点赞|关注|私信|发布|删除|自动|批量/.test(out)) return out;
+      } catch { /* 退规则 */ }
+    }
+    const emojis = ["[doge]", "[偷笑R]", "[笑哭R]", "[飞吻R]", "[害羞R]"];
+    const cleaned = src.replace(/\[[^\]]+R?\]\s*$/, "").trim();
+    return `${cleaned} ${emojis[cleaned.length % emojis.length]}`;
+  }
+
+  fallbackComment() {
+    const pool = ["好内容，学到了[doge]", "这波操作可以", "看着就舒服[偷笑R]", "记录一下，太真实了", "会一直关注[飞吻R]"];
+    return pool[(this.metrics.actions || 0) % pool.length];
+  }
+
+  // 评论全流程（对已打开的 NoteDetail）：滚到评论 → 取 top 非作者 → 改写 → 开编辑器 → 输入 → 发送 → 早退验证 → 回首页。
+  // text 直传则跳过抓 top+改写。全程 pace 拟人限速（评论用更长间隔）。
+  async commentOnOpenNote({ text, maxScrolls = 6, log: logArg, t0: t0Arg } = {}) {
+    const t0 = t0Arg ?? Date.now();
+    const log = logArg ?? [];
+    const push = (k, v) => log.push([k, v]);
+    // 1. 滚到评论区
+    const sc = await this.scrollToComments({ maxScrolls });
+    push("scrollToComments", { found: sc.found, scrolls: sc.scrolls });
+    let finalText = text;
+    if (!finalText) {
+      const comments = this.parseComments(sc.doc);
+      const top = this.topComment(comments);
+      push("topComment", top ? { username: top.username, likeCount: top.likeCount, isAuthor: top.isAuthor, text: (top.text || "").slice(0, 30) } : null);
+      push("commentsParsed", comments.length);
+      const base = top?.text || this.fallbackComment();
+      finalText = await this.rewriteComment(base);
+      push("rewriteComment", { from: base.slice(0, 20), to: finalText.slice(0, 30) });
+    }
+    await this.pacer.pace({ minMs: 1500, maxMs: 3500 });
+    // 2. 开编辑器（tap 评论框）。评论框在底部条，滚屏后仍在底部。
+    const det = await this.dump({ label: "before-comment-box" });
+    const box = this.commentBox(det);
+    if (!box) return { ok: false, step: "commentBox", text: finalText, log, ms: Date.now() - t0, activity: (await this.currentFocus()).activity };
+    await this.tap(box.center[0], box.center[1]);
+    await new Promise((r) => setTimeout(r, 1500));
+    push("openedEditor", (await this.currentFocus()).activity);
+    // 3. 输入中文（经 xiaowei 网关，延迟还原 IME——还原会让编辑器失焦关闭，必须在发送之后）
+    const { audit, restore } = await this.inputTextViaXiaowei(finalText, { deferRestore: true });
+    push("inputText", audit);
+    if (!audit.inputAccepted) { await restore(); return { ok: false, step: "inputText", text: finalText, log, ms: Date.now() - t0 }; }
+    await this.pacer.pace({ minMs: 800, maxMs: 2000 });
+    // 4. 发送（此时编辑器仍在 bridge IME，未失焦）
+    const ed = await this.dump({ label: "editor-before-send" });
+    const send = this.sendButton(ed);
+    if (!send) { await restore(); return { ok: false, step: "sendButton", text: finalText, log, ms: Date.now() - t0, focus: (await this.currentFocus()).activity }; }
+    await this.tap(send.center[0], send.center[1]);
+    await new Promise((r) => setTimeout(r, 1200));
+    // 5. 还原 IME（发送完成，编辑器即将关闭，安全还原）
+    await restore();
+    // 6. 早退验证：编辑器应关闭（focus 离开 comment.input；或回到 NoteDetail）
+    const f = await this.currentFocus();
+    const sent = !/comment\.input/.test(f.activity || "");
+    push("sent", { sent, activity: f.activity });
+    // 7. 回首页
+    const back = await this.backToFeed(5);
+    push("backToFeed", back);
+    return { ok: sent, text: finalText, log, ms: Date.now() - t0, metrics: this.metricsSummary() };
+  }
+
+  // 评论全流程（从 feed 开笔记起）：openCard → commentOnOpenNote。
+  async commentTransaction(card, { text, idx = 0, maxScrolls = 6 } = {}) {
+    const t0 = Date.now();
+    const log = [];
+    const push = (k, v) => log.push([k, v]);
+    this.metrics.actions += 1;
+    const opened = await this.openCard(card);
+    push("openCard", opened);
+    if (!opened.opened) return { ok: false, step: "openCard", log, ms: Date.now() - t0 };
+    await this.pacer.pace({ minMs: 1200, maxMs: 2800 });
+    return this.commentOnOpenNote({ text, maxScrolls, log, t0 });
+  }
+
   metricsSummary() {
     const m = this.metrics;
     return {
@@ -509,11 +829,23 @@ async function demoScroll(N) {
   await op.close();
 }
 
+function applyCommentFlags(opP) {
+  // Slice 2 评论自主配置（可选 flag；缺省走默认/兜底）
+  return opP.then((op) => {
+    op.xwWs = arg("--xw-ws", "ws://127.0.0.1:22222/");
+    op.xwBridgeIme = arg("--xw-bridge-ime", "com.android.xwkeyboard/.XwIME");
+    op.llmEndpoint = arg("--llm-endpoint", null);
+    op.llmKey = arg("--llm-key", null);
+    op.llmModel = arg("--llm-model", "gpt-4o-mini");
+    return op;
+  });
+}
+
 function serve(port) {
   const adb = arg("--adb");
   const serial = arg("--serial");
   if (!adb || !serial) throw new Error("usage: --adb <path> --serial <serial> serve [--port N]");
-  const opP = new FastOperator({ adbPath: adb, serial }).start();
+  const opP = applyCommentFlags(new FastOperator({ adbPath: adb, serial }).start());
   const server = createServer(async (req, res) => {
     if (req.method !== "POST") { res.writeHead(405); return res.end("405"); }
     let body = "";
@@ -542,6 +874,59 @@ function serve(port) {
         case "profileGrid": { const d = await op.dump({ label: "profileGrid" }); out = { covers: op.profileGridCovers(d), dumpMs: d._dumpMs }; break; }
         case "playProfileVideo": { const d = await op.dump({ label: "playProfileVideo" }); out = await op.playProfileVideo(d, q.idx ?? 0); break; }
         case "backFromNote": out = await op.backFromNote(); break;
+        case "backFromProfile": out = await op.backFromProfile(q.maxBack ?? 4); break;
+        case "openCommentSection": {
+          const d = await op.dump({ label: "openCommentSection" });
+          const cards = op.feedCards(d);
+          const c = cards[q.idx ?? 0];
+          if (!c?.cover?.center) { out = { ok: false, step: "noCard" }; break; }
+          const opened = await op.openCard(c);
+          const sc = await op.scrollToComments({ maxScrolls: q.maxScrolls ?? 6 });
+          out = { opened, found: sc.found, scrolls: sc.scrolls, comments: op.parseComments(sc.doc) };
+          break;
+        }
+        case "parseComments": {
+          const d = await op.dump({ label: "parseComments" });
+          const comments = op.parseComments(d);
+          out = { comments, topNonAuthor: op.topComment(comments) };
+          break;
+        }
+        case "rewriteComment": {
+          out = { rewritten: await op.rewriteComment(q.text) };
+          break;
+        }
+        case "commentBox": { const d = await op.dump({ label: "commentBox" }); out = { box: op.commentBox(d), editor: op.commentEditor(d), send: op.sendButton(d), dumpMs: d._dumpMs }; break; }
+        case "inputTextDryRun": {
+          // 零发送 dry-run：tap 评论框 → 输入 → 不按发送 → BACK 清掉，留零痕迹。
+          const d0 = await op.dump({ label: "inputTextDryRun-open" });
+          const box = op.commentBox(d0);
+          if (!box) { out = { ok: false, step: "commentBox" }; break; }
+          await op.tap(box.center[0], box.center[1]);
+          await new Promise((r) => setTimeout(r, 1500));
+          const audit = await op.inputTextViaXiaowei(q.text || "测试输入");
+          // 验证编辑器有中文，再 BACK 清掉
+          const d1 = await op.dump({ label: "inputTextDryRun-verify" });
+          const ed = op.commentEditor(d1);
+          await op.session.exec("input keyevent KEYCODE_BACK", 6000);
+          await new Promise((r) => setTimeout(r, 600));
+          out = { audit, editorText: ed?.text || null };
+          break;
+        }
+        case "commentTransaction": {
+          const d = await op.dump({ label: "commentTransaction-open" });
+          const cards = op.feedCards(d);
+          const c = cards[q.idx ?? 0];
+          if (!c?.cover?.center) { out = { ok: false, step: "noCard" }; break; }
+          out = await op.commentTransaction(c, { text: q.text, idx: q.idx ?? 0, maxScrolls: q.maxScrolls ?? 6 });
+          break;
+        }
+        case "commentOnOpenNote": {
+          // 对当前已打开的 NoteDetail 跑评论流程（设备由人驱动到目标笔记时用）
+          const f = await op.currentFocus();
+          if (!/NoteDetail|DetailFeed/.test(f.activity || "")) { out = { ok: false, step: "notOnNote", activity: f.activity }; break; }
+          out = await op.commentOnOpenNote({ text: q.text, maxScrolls: q.maxScrolls ?? 6 });
+          break;
+        }
         case "metrics": out = op.metricsSummary(); break;
         default: res.writeHead(400); return res.end(JSON.stringify({ error: "unknown action" }));
       }
