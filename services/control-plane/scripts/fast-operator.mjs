@@ -558,16 +558,21 @@ export class FastOperator {
 
   // ===== Slice 2：评论自主 =====
   // 详情页底部评论入口框（content-desc="评论框"/"说点什么"占位）。UTF-8 desc 稳定锚点；
-  // 退路：底部条(y>2150)最左 clickable TextView。
+  // 退路：底部条(y>2150)最左 clickable TextView——但须排除商品/带货入口，见下。
   commentBox(doc) {
     const box = doc.nodes.find((n) =>
       n.className === "android.widget.TextView" && n.clickable && n.contentDesc
       && /评论框|说点什么|写评论/.test(n.contentDesc));
     if (box) return { center: centerOf(box.bounds), bounds: box.bounds, desc: box.contentDesc };
+    // 退路：底部条最左 clickable TextView。DetailFeed 带货笔记底部条是商品入口
+    // (识图搜同款/款式/图片/立即购买/加入购物车...)，误点会进商品页/加购=外发动作。
+    // 排除这些商品/带货关键词，宁可返回 null(调用方跳过) 也不误点商品入口。
+    const goodsRe = /识图搜同款|款式|图片|立即购买|加入购物车|逛逛|选品|同款|店铺|客服|咨询|领券|优惠券/;
     const stripY = 2150;
     const cands = doc.nodes.filter((n) =>
       n.className === "android.widget.TextView" && n.clickable && n.bounds
-      && (n.bounds[1] + n.bounds[3]) / 2 > stripY)
+      && (n.bounds[1] + n.bounds[3]) / 2 > stripY
+      && !goodsRe.test(n.text || "") && !goodsRe.test(n.contentDesc || ""))
       .sort((a, b) => centerOf(a.bounds)[0] - centerOf(b.bounds)[0]);
     const c = cands[0];
     return c ? { center: centerOf(c.bounds), bounds: c.bounds, desc: c.contentDesc || c.text } : null;
@@ -857,6 +862,14 @@ export class FastOperator {
     const t0 = t0Arg ?? Date.now();
     const log = logArg ?? [];
     const push = (k, v) => log.push([k, v]);
+    // 0. 视频笔记(DetailFeed)评论 UI 是 overlay/底部条，元素多非可点且布局异构
+    //    (带货笔记底部是商品入口、图文 carousel 有识图搜同款/款式 tab)。commentBox 无法稳定锚定，
+    //    硬上会误点商品入口(外发动作)。Slice 2 仅支持图文笔记(NoteDetail)评论，DetailFeed 显式
+    //    fast-fail，让 operator 跳到下一张，不滚不点不冒险。
+    const preFocus = await this.currentFocus();
+    if ((preFocus.activity || "").includes("DetailFeed")) {
+      return { ok: false, step: "detailfeedUnsupported", reason: "video/carousel note comment UI not supported in Slice 2", text, log, ms: Date.now() - t0, activity: preFocus.activity };
+    }
     // 1. 滚到评论区
     const sc = await this.scrollToComments({ maxScrolls });
     push("scrollToComments", { found: sc.found, scrolls: sc.scrolls });
@@ -1202,10 +1215,12 @@ function serve(port) {
           break;
         }
         case "commentOnOpenNote": {
-          // 对当前已打开的 NoteDetail/DetailFeed 跑评论流程（设备由人驱动到目标笔记时用）。视频笔记先暂停。
+          // 对当前已打开的 NoteDetail/DetailFeed 跑评论流程（设备由人驱动到目标笔记时用）。
           const f = await op.currentFocus();
           if (!/NoteDetail|DetailFeed/.test(f.activity || "")) { out = { ok: false, step: "notOnNote", activity: f.activity }; break; }
-          if ((f.activity || "").includes("DetailFeed")) await op.pauseIfVideoNote();
+          // DetailFeed(视频/carousel/带货)评论 UI 异构且无稳定可点入口，Slice 2 不支持——fast-fail，
+          // 不 pauseIfVideoNote、不滚不点，让 operator 跳下一张。
+          if ((f.activity || "").includes("DetailFeed")) { out = { ok: false, step: "detailfeedUnsupported", reason: "video/carousel note comment UI not supported in Slice 2", activity: f.activity }; break; }
           out = await op.commentOnOpenNote({ text: q.text, maxScrolls: q.maxScrolls ?? 6 });
           break;
         }
