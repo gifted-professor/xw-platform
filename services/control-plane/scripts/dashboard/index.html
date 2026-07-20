@@ -8,54 +8,36 @@
 <style>
   :root {
     --ease: cubic-bezier(0.32, 0.72, 0, 1);
-    --r-card: 18px;
-    --r-pill: 999px;
-    --r-ctrl: 11px;
-    --r-inset: 12px;
+    --r-card: 18px; --r-pill: 999px; --r-ctrl: 11px; --r-inset: 12px;
     --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", system-ui, "SF Pro Rounded", "PingFang SC", "Segoe UI", Roboto, sans-serif;
     --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
     --blue:#007aff; --green:#34c759; --orange:#ff9500; --red:#ff3b30; --indigo:#5856d6;
     --bp:#0a84ff; --gp:#30d158; --op:#ff9f0a; --rp:#ff453a; --ip:#5e5ce6;
   }
   @media (prefers-color-scheme: light){
-    :root{
-      --bg:#f2f2f7; --card:#ffffff; --card-2:#ffffff;
-      --toolbar:rgba(242,242,247,0.72);
+    :root{ --bg:#f2f2f7; --card:#ffffff; --card-2:#ffffff; --toolbar:rgba(242,242,247,0.72);
       --hair:rgba(60,60,67,0.18); --hair-soft:rgba(60,60,67,0.08);
       --label:#1c1c1e; --l2:#3c3c43; --l3:#8e8e93; --l4:#aeaeb2;
-      --shadow:0 1px 1px rgba(0,0,0,0.03),0 6px 20px rgba(0,0,0,0.05);
-      --inset:rgba(120,120,128,0.08);
-    }
+      --shadow:0 1px 1px rgba(0,0,0,0.03),0 6px 20px rgba(0,0,0,0.05); --inset:rgba(120,120,128,0.08); }
   }
   @media (prefers-color-scheme: dark){
-    :root{
-      --bg:#000; --card:#1c1c1e; --card-2:#2c2c2e;
-      --toolbar:rgba(22,22,23,0.72);
+    :root{ --bg:#000; --card:#1c1c1e; --card-2:#2c2c2e; --toolbar:rgba(22,22,23,0.72);
       --hair:rgba(255,255,255,0.16); --hair-soft:rgba(255,255,255,0.08);
       --label:#fff; --l2:#ebebf5; --l3:#98989f; --l4:#636366;
-      --shadow:0 1px 2px rgba(0,0,0,0.4),0 10px 30px rgba(0,0,0,0.5);
-      --inset:rgba(120,120,128,0.24);
-    }
+      --shadow:0 1px 2px rgba(0,0,0,0.4),0 10px 30px rgba(0,0,0,0.5); --inset:rgba(120,120,128,0.24); }
   }
   @media (prefers-reduced-transparency: reduce){ :root{ --toolbar:var(--bg); } }
 
   *{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
   html,body{ margin:0; }
-  body{
-    background:var(--bg); color:var(--label); font-family:var(--font);
+  body{ background:var(--bg); color:var(--label); font-family:var(--font);
     font-size:15px; line-height:1.4; letter-spacing:0.01em;
     -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
-    padding-bottom:env(safe-area-inset-bottom);
-  }
+    padding-bottom:env(safe-area-inset-bottom); }
 
-  .toolbar{
-    position:sticky; top:0; z-index:20;
-    background:var(--toolbar);
-    -webkit-backdrop-filter:blur(20px) saturate(180%);
-    backdrop-filter:blur(20px) saturate(180%);
-    border-bottom:0.5px solid var(--hair-soft);
-    padding:max(12px,env(safe-area-inset-top)) 16px 12px;
-  }
+  .toolbar{ position:sticky; top:0; z-index:20; background:var(--toolbar);
+    -webkit-backdrop-filter:blur(20px) saturate(180%); backdrop-filter:blur(20px) saturate(180%);
+    border-bottom:0.5px solid var(--hair-soft); padding:max(12px,env(safe-area-inset-top)) 16px 12px; }
   .trow{ display:flex; align-items:baseline; gap:8px; }
   .title{ font-size:28px; font-weight:700; letter-spacing:-0.022em; font-optical-sizing:auto; }
   .sub{ font-size:15px; color:var(--l3); letter-spacing:-0.01em; }
@@ -64,29 +46,19 @@
   @keyframes p{ 0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--green) 50%,transparent)} 70%{box-shadow:0 0 0 8px transparent} 100%{box-shadow:0 0 0 0 transparent} }
   .actions{ display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; }
 
-  .btn{
-    appearance:none; border:0.5px solid var(--hair); margin:0;
-    background:var(--card); color:var(--label);
-    padding:8px 15px; border-radius:var(--r-pill);
-    font:inherit; font-size:14px; font-weight:500; letter-spacing:-0.006em;
+  .btn{ appearance:none; border:0.5px solid var(--hair); margin:0; background:var(--card); color:var(--label);
+    padding:8px 15px; border-radius:var(--r-pill); font:inherit; font-size:14px; font-weight:500; letter-spacing:-0.006em;
     cursor:pointer; user-select:none;
-    transition:transform 120ms var(--ease),background 160ms var(--ease),border-color 160ms var(--ease),opacity 160ms var(--ease);
-  }
+    transition:transform 120ms var(--ease),background 160ms var(--ease),border-color 160ms var(--ease),opacity 160ms var(--ease); }
   .btn:active{ transform:scale(0.96); }
-  .btn.primary{ background:var(--blue); color:#fff; border-color:transparent; }
-  .btn.primary:active{ background:var(--bp); }
-  .btn.danger{ background:var(--red); color:#fff; border-color:transparent; }
-  .btn.danger:active{ background:var(--rp); }
-  .btn.warn{ background:var(--orange); color:#fff; border-color:transparent; }
-  .btn.warn:active{ background:var(--op); }
+  .btn.primary{ background:var(--blue); color:#fff; border-color:transparent; } .btn.primary:active{ background:var(--bp); }
+  .btn.danger{ background:var(--red); color:#fff; border-color:transparent; } .btn.danger:active{ background:var(--rp); }
+  .btn.warn{ background:var(--orange); color:#fff; border-color:transparent; } .btn.warn:active{ background:var(--op); }
   .btn.ghost{ background:transparent; }
 
   .grid{ display:grid; gap:14px; padding:16px; grid-template-columns:repeat(auto-fill,minmax(min(100%,360px),1fr)); max-width:1100px; margin:0 auto; }
-  .card{
-    background:var(--card); border:0.5px solid var(--hair-soft);
-    border-radius:var(--r-card); box-shadow:var(--shadow);
-    overflow:hidden; transition:box-shadow 240ms var(--ease);
-  }
+  .card{ background:var(--card); border:0.5px solid var(--hair-soft); border-radius:var(--r-card); box-shadow:var(--shadow);
+    overflow:hidden; transition:box-shadow 240ms var(--ease); }
   .head{ display:flex; align-items:center; gap:10px; padding:15px 17px 12px; }
   .ser{ font-family:var(--mono); font-size:13px; font-weight:600; letter-spacing:-0.01em; color:var(--l2); }
   .port{ font-family:var(--mono); font-size:11px; color:var(--l4); }
@@ -96,7 +68,6 @@
   .pill.down{ color:var(--red); background:color-mix(in srgb,var(--red) 12%,transparent); } .pill.down .d{ background:var(--red); }
 
   .body{ padding:4px 17px 14px; }
-
   .row{ display:flex; align-items:baseline; gap:12px; padding:9px 0; }
   .row + .row, .row:first-child{ border-top:0.5px solid var(--hair-soft); }
   .k{ color:var(--l3); width:56px; flex-shrink:0; font-size:13px; letter-spacing:0.01em; }
@@ -112,23 +83,33 @@
   .rt{ display:flex; align-items:baseline; gap:8px; }
   .rn{ font-size:18px; font-weight:600; letter-spacing:-0.02em; }
   .rcap{ font-size:11px; font-weight:600; color:var(--indigo); background:color-mix(in srgb,var(--indigo) 18%,transparent); padding:2px 8px; border-radius:var(--r-pill); }
-  .rph{ margin-left:auto; font-size:12px; color:var(--l3); }
+  .rph{ margin-left:auto; font-size:12px; color:var(--l3); font-variant-numeric:tabular-nums; }
   .rl{ font-size:13px; color:var(--l2); margin-top:5px; font-variant-numeric:tabular-nums; }
   .bar{ height:6px; border-radius:3px; background:var(--inset); margin:9px 0 7px; overflow:hidden; }
   .bar > i{ display:block; height:100%; border-radius:3px; background:var(--indigo); transition:width 360ms var(--ease); }
   .rs{ display:flex; gap:16px; font-size:13px; color:var(--l3); font-variant-numeric:tabular-nums; }
   .rs b{ color:var(--l2); font-weight:600; }
   .rerr{ font-size:12px; color:var(--red); margin-top:8px; word-break:break-word; }
+  .qline{ font-size:12px; color:var(--l3); margin-top:9px; word-break:break-word; line-height:1.5; }
+  .qline b{ color:var(--l2); font-weight:600; }
+  .qline .cur{ color:var(--indigo); font-weight:600; }
+  .qline .done{ color:var(--l4); text-decoration:line-through; }
 
-  .controls{ display:grid; grid-template-columns:1fr auto auto; gap:10px 10px; padding:12px 17px; border-top:0.5px solid var(--hair-soft); background:color-mix(in srgb,var(--bg) 40%,transparent); align-items:end; }
-  .field{ display:flex; flex-direction:column; gap:4px; min-width:0; }
-  .field label{ font-size:11px; color:var(--l4); letter-spacing:0.02em; font-weight:500; }
+  /* 队列编辑器 */
+  .qedit{ padding:4px 0 2px; }
+  .qrow{ display:grid; grid-template-columns:1fr 56px 50px 30px; gap:7px; align-items:center; padding:5px 0; }
+  .qrow + .qrow{ border-top:0.5px solid var(--hair-soft); }
+  .qdu{ font-size:11px; color:var(--l4); text-align:left; padding-left:1px; }
   select,input{ appearance:none; -webkit-appearance:none; background:var(--card-2); color:var(--label); border:0.5px solid var(--hair); border-radius:var(--r-ctrl); padding:7px 9px; font:inherit; font-size:14px; width:100%; transition:border-color 160ms var(--ease),box-shadow 160ms var(--ease); }
-  select{ padding-right:22px; background-image:linear-gradient(45deg,transparent 50%,var(--l3) 50%),linear-gradient(135deg,var(--l3) 50%,transparent 50%); background-position:calc(100% - 13px) 56%,calc(100% - 8px) 56%; background-size:5px 5px,5px 5px; background-repeat:no-repeat; }
+  select{ padding-right:20px; background-image:linear-gradient(45deg,transparent 50%,var(--l3) 50%),linear-gradient(135deg,var(--l3) 50%,transparent 50%); background-position:calc(100% - 12px) 56%,calc(100% - 8px) 56%; background-size:5px 5px,5px 5px; background-repeat:no-repeat; }
   input:focus,select:focus{ outline:none; border-color:var(--blue); box-shadow:0 0 0 3px color-mix(in srgb,var(--blue) 22%,transparent); }
-  .num{ width:58px; text-align:center; font-variant-numeric:tabular-nums; }
-  .btns{ grid-column:1/-1; display:flex; gap:8px; margin-top:2px; }
-  .btns .btn{ flex:1; padding:9px; }
+  .num{ text-align:center; font-variant-numeric:tabular-nums; padding-left:5px; padding-right:5px; }
+  .qx{ appearance:none; border:0.5px solid var(--hair); background:transparent; color:var(--l3); border-radius:var(--r-ctrl); font-size:14px; padding:6px 0; cursor:pointer; transition:color 120ms var(--ease),background 120ms var(--ease); }
+  .qx:hover{ color:var(--red); background:color-mix(in srgb,var(--red) 12%,transparent); }
+  .qadd{ width:100%; margin-top:7px; padding:7px; font-size:13px; }
+
+  .controls{ display:flex; gap:8px; padding:12px 17px; border-top:0.5px solid var(--hair-soft); background:color-mix(in srgb,var(--bg) 40%,transparent); }
+  .controls .btn{ flex:1; padding:9px; }
 
   footer{ text-align:center; color:var(--l4); font-size:12px; padding:8px 16px 28px; letter-spacing:0.01em; }
 
@@ -147,14 +128,15 @@
     <span class="live"><i></i><span id="ts">--:--:--</span></span>
   </div>
   <div class="actions">
-    <button class="btn primary" onclick="allStart('养号',2,1)">齐跑养号 · 2圈</button>
-    <button class="btn primary" onclick="allStart('涨粉',2,1)">齐跑涨粉 · 2圈</button>
+    <button class="btn primary" onclick="presetAll([['养号',30,1]])">齐跑养号 · 30分</button>
+    <button class="btn primary" onclick="presetAll([['涨粉',30,1]])">齐跑涨粉 · 30分</button>
+    <button class="btn primary" onclick="presetAll([['养号',20,1],['涨粉',10,1]])">养号20分 + 涨粉10分</button>
     <button class="btn warn" onclick="allHome()">全回首页</button>
     <button class="btn danger" onclick="allStop()">全部停止</button>
   </div>
 </header>
 <main class="grid" id="grid"></main>
-<footer>每 3 秒刷新 · 跑批期间该卡跳过前台探测 · 停止优雅退出(当前圈跑完才退)</footer>
+<footer>按时长跑 · 队列依次到点优雅停(当前圈跑完) · 3 秒刷新 · 0 分=手动停 · 停止=清整个队列</footer>
 
 <script>
 const DEVS=["REPLACE_SERIAL_01","REPLACE_SERIAL_03","REPLACE_SERIAL_02","REPLACE_SERIAL_04"];
@@ -184,6 +166,56 @@ function humanIme(ime){
   const m=ime.match(/([\w.]+)\//);
   return {label: m? m[1].split(".").pop() : ime, cls:"warn"};
 }
+function fmtMs(ms){ if(ms==null) return "—"; ms=Math.max(0,ms|0); const m=(ms/60000)|0, s=((ms%60000)/1000)|0; return (m<10?"0":"")+m+":"+(s<10?"0":"")+s; }
+
+function rowHTML(s,i,item){
+  const sel = (tasks.length?tasks:["养号","涨粉","自主","互动","纯刷"])
+    .map(t=>`<option value="${t}" ${item.task===t?"selected":""}>${t}</option>`).join("");
+  return `<div class="qrow" id="q-${s}-${i}">
+    <select class="qt">${sel}</select>
+    <input class="qd num" type="number" value="${item.durationMin}" min="0" max="600" inputmode="numeric" title="时长(分),0=手动停">
+    <input class="qc num" type="number" value="${item.cap}" min="0" max="20" inputmode="numeric" title="每圈评论上限">
+    <button class="qx" onclick="delRow('${s}',${i})" title="删该任务">✕</button>
+  </div>`;
+}
+function editorHTML(s){
+  // 每台默认一个养号 30 分 cap1 行;用 data 持久化每台的队列
+  const q = queues[s] && queues[s].length ? queues[s] : [{task:"养号",durationMin:30,cap:1}];
+  queues[s] = q;
+  return `<div class="qedit">${q.map((it,i)=>rowHTML(s,i,it)).join("")}
+    <button class="btn ghost qadd" onclick="addRow('${s}')">+ 加任务</button></div>`;
+}
+
+const queues={}; // serial -> [{task,durationMin,cap}]
+function syncEditor(s){
+  const box=document.getElementById("q-"+s) || document.querySelector(`[id^="q-${s}-"]`);
+  if(!box){ return queues[s]||[]; } // 运行时编辑器不渲染,回退内存
+  const root=box.closest(".qedit");
+  const rows=root.querySelectorAll(".qrow");
+  const out=[];
+  rows.forEach((r)=>{
+    const t=r.querySelector(".qt").value;
+    const d=Number(r.querySelector(".qd").value)||0;
+    const c=Number(r.querySelector(".qc").value)||0;
+    out.push({task:t,durationMin:d,cap:c});
+  });
+  queues[s]=out;
+  return out;
+}
+function addRow(s){ syncEditor(s); queues[s].push({task:"养号",durationMin:30,cap:1}); render(); }
+function delRow(s,i){ syncEditor(s); queues[s].splice(i,1); if(!queues[s].length) queues[s].push({task:"养号",durationMin:30,cap:1}); render(); }
+function setQueue(s,items){ queues[s]=items.map(x=>({task:x[0],durationMin:Number(x[1])||0,cap:Number(x[2])||0})); }
+
+function queueLine(d){
+  if(!d.queue||!d.queue.length) return "";
+  const cur=d.task?d.task.idx-1:-1;
+  return d.queue.map((q,i)=>{
+    const t=q.task+" "+q.durationMin+"分";
+    if(i<cur) return `<span class="done">${t}</span>`;
+    if(i===cur) return `<span class="cur">${t}</span>`;
+    return t;
+  }).join(" → ");
+}
 
 function render(){
   const grid=document.getElementById("grid");
@@ -193,12 +225,14 @@ function render(){
     const ok=d.serve==="ok";
     let body;
     if(d.task){
-      const r=d.task, pct=r.loops?Math.min(100,(r.loop||0)/r.loops*100):0;
+      const r=d.task, dur=r.durationMin||0, el=r.elapsedMs||0;
+      const pct = dur>0 ? Math.min(100, el/(dur*60000)*100) : 0;
       body=`<div class="running">
-        <div class="rt"><span class="rn">${f(r.name)}</span>${r.cap!=null?`<span class="rcap">cap ${r.cap}</span>`:""}<span class="rph">${f(r.phase)}</span></div>
-        <div class="rl">第 ${r.loop||0} 圈 / 共 ${f(r.loops,"∞")}</div>
-        <div class="bar"><i style="width:${pct}%"></i></div>
+        <div class="rt"><span class="rn">${f(r.name)}</span><span class="rcap">${r.idx}/${r.total}</span><span class="rph">${dur>0?("剩 "+fmtMs(r.remainingMs)):"手动停"}</span></div>
+        <div class="rl">第 ${r.loop||0} 圈 · ${f(r.phase)}</div>
+        ${dur>0?`<div class="bar"><i style="width:${pct}%"></i></div>`:`<div class="bar"><i style="width:100%;opacity:0.35"></i></div>`}
         <div class="rs"><span><b>${f(r.ok,0)}</b> ok</span><span><b>${f(r.skip,0)}</b> skip</span><span><b>${f(r.comments,0)}</b> 评论</span></div>
+        <div class="qline"><b>队列</b> ${queueLine(d)}</div>
         ${r.lastErr?`<div class="rerr">${r.lastErr}</div>`:""}
       </div>`;
     } else {
@@ -206,21 +240,16 @@ function render(){
       body=`
         <div class="row"><span class="k">前台</span><span class="v"><span class="lab ${A.cls}">${A.label}</span><div class="raw">${A.raw||d.activity||""}</div></span></div>
         <div class="row"><span class="k">输入法</span><span class="v"><span class="lab ${I.cls}">${I.label}</span><div class="raw">${d.ime||""}</div></span></div>
-        ${lt?`<div class="row"><span class="k">末次</span><span class="v"><span class="lab">${f(lt.name)}</span><div class="meta">ok <b>${f(lt.ok,0)}</b> · skip <b>${f(lt.skip,0)}</b> · 评 <b>${f(lt.comments,0)}</b> · exit ${f(lt.exitCode,"-")}${lt.lastErr?` · <span style="color:var(--red)">${lt.lastErr}</span>`:""}</div></span></div>`:""}
+        ${lt?`<div class="row"><span class="k">末次</span><span class="v"><span class="lab">${lt.total>1?(f(lt.idx,"-")+"/"+lt.total+" · "):""}${f(lt.queue&&lt.queue[0]&&lt.queue[0].task||"-")}</span><div class="meta">ok <b>${f(lt.ok,0)}</b> · skip <b>${f(lt.skip,0)}</b> · 评 <b>${f(lt.comments,0)}</b> · ${lt.total>1?"圈 "+f(lt.loopsDone,0):"圈 "+f(lt.loopsDone,0)} · exit ${f(lt.exitCode,"-")}${lt.lastErr?` · <span style="color:var(--red)">${lt.lastErr}</span>`:""}</div></span></div>`:""}
         ${d.metrics?`<div class="row"><span class="k">活动量</span><span class="v"><span class="meta">dump <b>${f(d.metrics.dumps,0)}</b> · tap <b>${f(d.metrics.taps,0)}</b>${d.metrics.avgDumpMs?` · 均时 <b>${Math.round(d.metrics.avgDumpMs)}</b>ms`:""}</span></span></div>`:""}`;
     }
     return `<article class="card">
       <div class="head"><span class="ser">${s}</span><span class="port">:${d.port||""}</span><span class="pill ${ok?"ok":"down"}"><span class="d"></span>${ok?"在线":"离线"}</span></div>
-      <div class="body">${body}</div>
+      <div class="body">${d.running?"":`<div style="padding:4px 0 8px"><div style="font-size:11px;color:var(--l4);font-weight:500;letter-spacing:0.02em;margin-bottom:2px">任务队列(按时长,依次跑)</div>${editorHTML(s)}</div>`}${body}</div>
       <div class="controls">
-        <div class="field"><label>任务</label><select id="t-${s}">${tasks.map(t=>`<option value="${t}">${t}</option>`).join("")}</select></div>
-        <div class="field"><label>圈</label><input id="l-${s}" class="num" type="number" value="2" min="1" max="200" inputmode="numeric"></div>
-        <div class="field"><label>cap</label><input id="c-${s}" class="num" type="number" value="1" min="0" max="20" inputmode="numeric"></div>
-        <div class="btns">
-          <button class="btn primary" onclick="startOne('${s}')">启动</button>
-          <button class="btn warn" onclick="homeOne('${s}')">回首页</button>
-          <button class="btn danger" onclick="stopOne('${s}')">停止</button>
-        </div>
+        <button class="btn primary" onclick="startOne('${s}')">启动</button>
+        <button class="btn warn" onclick="homeOne('${s}')">回首页</button>
+        <button class="btn danger" onclick="stopOne('${s}')">停止</button>
       </div>
     </article>`;
   }).join("");
@@ -229,10 +258,10 @@ function render(){
 async function poll(){ state=await api("/status"); render(); }
 async function loadTasks(){ const t=await api("/tasks"); tasks=t.tasks||[]; if(!tasks.length) tasks=["养号","涨粉","自主","互动","纯刷"]; render(); }
 function jb(o){ return {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(o)}; }
-function startOne(s){ const task=document.getElementById("t-"+s).value,loops=document.getElementById("l-"+s).value,cap=document.getElementById("c-"+s).value; api("/task",jb({serial:s,action:"start",task,loops,cap})).then(poll); }
+function startOne(s){ const q=syncEditor(s); if(!q.length){return;} api("/task",jb({serial:s,action:"start",queue:q})).then(poll); }
 function stopOne(s){ api("/task",jb({serial:s,action:"stop"})).then(()=>setTimeout(poll,300)); }
 function homeOne(s){ api("/home",jb({serial:s})).then(poll); }
-function allStart(task,loops,cap){ DEVS.forEach(s=>api("/task",jb({serial:s,action:"start",task,loops,cap}))); setTimeout(poll,500); }
+function presetAll(items){ DEVS.forEach(s=>setQueue(s,items)); render(); DEVS.forEach(s=>api("/task",jb({serial:s,action:"start",queue:items.map(x=>({task:x[0],durationMin:Number(x[1])||0,cap:Number(x[2])||0}))}))); setTimeout(poll,500); }
 function allStop(){ DEVS.forEach(stopOne); }
 function allHome(){ DEVS.forEach(homeOne); }
 loadTasks(); poll(); setInterval(poll,3000);

@@ -1,9 +1,14 @@
 // xhs-device-agent 操作面板后端
 // 原生 node:http,零依赖。聚合 4 个 fast-operator serve(17895-98)+ adb one-shot,
-// spawn task-runner.mjs 子进程跑预设任务并实时捕获进度。绑 0.0.0.0 供 Tailscale Serve 反代。
+// spawn task-runner.mjs 子进程跑【任务队列】并实时捕获进度。绑 0.0.0.0 供 Tailscale Serve 反代。
 //
 // 路由:GET /  静态页 | GET /status 4 台聚合 | GET /tasks 任务列表
-//       POST /task {serial,task,loops?,commentCap?,action}  POST /home {serial}
+//       POST /task {serial, action:start|stop, queue|task, durationMin, cap}  POST /home {serial}
+//
+// 队列模型:每台一个 [(task,durationMin,cap), ...],依次跑。每项到点 SIGINT 优雅停
+// (task-runner 当前圈跑完才退),再接下一项;队列空或用户停 → done。
+// task-runner 不动:用大 --loops 安全上限 + dashboard 计时 SIGINT + 30s SIGKILL 兜底。
+// durationMin=0 表示该项手动停(无到点)。
 //
 // 设计原则:不改 fast-operator.mjs / task-runner.mjs / 4 个 serve / task 模板(零侵入)。
 // task-runner 跑批时与该 serial serve 各持一条持久 adb shell,故活跃任务期间跳过 focus/IME 轮询降扰。
@@ -28,6 +33,10 @@ const NODE = "D:\\Program Files\\Node\\node.exe";
 const LLM_ENDPOINT = "http://100.84.194.46:8317/v1/chat/completions";
 const LLM_KEY = "cliproxy-codexapp";
 const LLM_MODEL = "grok-4.20-0309-non-reasoning";
+
+// 安全上限:dashboard 计时 SIGINT 是主停法,这只是 SIGINT 失效时的兜底,正常远不会触达。
+const LOOPS_SAFETY = 100000;
+const KILL_GRACE_MS = 30000; // SIGINT 后 30s 仍不退则 SIGKILL 兜底
 
 const PORT = Number(process.env.DASH_PORT || 17900);
 
@@ -91,24 +100,74 @@ function launchXhs(serial) {
   return /Events injected/i.test(v) ? "ok" : v.slice(-120);
 }
 
-// ---- 任务子进程 ----
-function startTask(serial, taskName, loops, cap) {
+// ---- 任务队列子进程 ----
+// 队列项归一:{task, durationMin, cap}
+function normItem(x) {
+  const task = String(x.task || "").trim();
+  const durationMin = Math.max(0, Number(x.durationMin) || 0);
+  const cap = Math.max(0, Number(x.cap ?? x.commentCap ?? 0));
+  return { task, durationMin, cap };
+}
+
+function startQueue(serial, queueRaw) {
   const prev = running.get(serial);
-  if (prev && prev.child) { try { prev.child.kill("SIGINT"); } catch {} }
-  const taskFile = join(TASKS_DIR, taskName + ".json");
-  if (!existsSync(taskFile)) throw new Error("task not found: " + taskName);
-  const args = [TASK_RUNNER, "--adb", ADB, "--serial", serial, "--task", taskFile];
-  if (loops) args.push("--loops", String(loops));
-  if (cap) args.push("--comment-cap", String(cap));
-  args.push("--llm-endpoint", LLM_ENDPOINT, "--llm-key", LLM_KEY, "--llm-model", LLM_MODEL);
-  const child = spawn(NODE, args, { stdio: ["ignore", "pipe", "pipe"] });
+  if (prev && prev.child) killRec(prev);
+  const queue = queueRaw.map(normItem).filter((q) => q.task);
+  if (!queue.length) throw new Error("empty queue");
+  // 校验 task 文件存在
+  for (const q of queue) {
+    if (!existsSync(join(TASKS_DIR, q.task + ".json"))) throw new Error("task not found: " + q.task);
+  }
   const rec = {
-    child, task: taskName, loops: loops || null, cap: cap || null,
-    startedAt: Date.now(), loop: 0, loopsDone: 0, ok: 0, skip: 0, comments: 0,
-    lastErr: null, phase: "start", exitCode: null,
+    queue,
+    idx: 0,
+    child: null,
+    itemStartedAt: null,
+    timer: null,
+    killTimer: null,
+    stopRequested: false,
+    // 队列累计
+    ok: 0, skip: 0, comments: 0, loopsDone: 0,
+    // 当前项实时
+    loop: 0,
+    phase: "start",
+    lastErr: null,
+    startedAt: Date.now(),
+    endedAt: null, exitCode: null,
   };
   running.set(serial, rec);
-  log("startTask", serial, taskName, "loops", loops, "cap", cap, "pid", child.pid);
+  log("startQueue", serial, queue.length, "items:", queue.map((q) => q.task + "@" + q.durationMin + "m").join(" → "));
+  runItem(serial, rec, 0);
+  return rec;
+}
+
+function runItem(serial, rec, idx) {
+  if (rec.stopRequested) return finishRec(rec);
+  if (idx >= rec.queue.length) return finishRec(rec);
+  const item = rec.queue[idx];
+  rec.idx = idx;
+  rec.loop = 0;
+  const args = [
+    TASK_RUNNER, "--adb", ADB, "--serial", serial,
+    "--task", join(TASKS_DIR, item.task + ".json"),
+    "--loops", String(LOOPS_SAFETY),
+    "--comment-cap", String(item.cap),
+    "--llm-endpoint", LLM_ENDPOINT, "--llm-key", LLM_KEY, "--llm-model", LLM_MODEL,
+  ];
+  const child = spawn(NODE, args, { stdio: ["ignore", "pipe", "pipe"] });
+  rec.child = child;
+  rec.itemStartedAt = Date.now();
+  rec.phase = "running";
+  log("startItem", serial, (idx + 1) + "/" + rec.queue.length, item.task, item.durationMin + "min", "cap", item.cap, "pid", child.pid);
+
+  // 到点优雅停(SIGINT,task-runner 当前圈跑完才退)
+  if (item.durationMin > 0) {
+    rec.timer = setTimeout(() => {
+      log("itemTimeUp", serial, idx, item.task, item.durationMin + "min 到点 → SIGINT");
+      stopChild(rec);
+    }, item.durationMin * 60000);
+  }
+
   let buf = "";
   child.stdout.on("data", (d) => {
     buf += d.toString();
@@ -116,34 +175,59 @@ function startTask(serial, taskName, loops, cap) {
     while ((i = buf.indexOf("\n")) >= 0) {
       const line = buf.slice(0, i).trim();
       buf = buf.slice(i + 1);
-      if (line) handleLine(serial, rec, line);
+      if (line) handleLine(rec, line);
     }
   });
   let ebuf = "";
   child.stderr.on("data", (d) => { ebuf += d.toString(); });
   child.on("exit", (code) => {
-    rec.phase = "done";
-    rec.exitCode = code;
-    rec.endedAt = Date.now();
-    log("task exit", serial, taskName, "code", code, "loopsDone", rec.loopsDone, "ok", rec.ok, "skip", rec.skip, "comments", rec.comments);
-    if (ebuf.trim()) log("task stderr", serial, ebuf.trim().slice(-500));
+    if (rec.timer) clearTimeout(rec.timer);
+    if (rec.killTimer) { clearTimeout(rec.killTimer); rec.killTimer = null; }
+    log("itemExit", serial, idx, item.task, "code", code, "loops", rec.loopsDone, "ok", rec.ok, "skip", rec.skip, "comments", rec.comments);
+    rec.child = null;
+    if (ebuf.trim()) log("itemStderr", serial, ebuf.trim().slice(-500));
+    if (rec.stopRequested) return finishRec(rec, code);
+    if (idx + 1 < rec.queue.length) runItem(serial, rec, idx + 1);
+    else finishRec(rec, code);
   });
-  return rec;
 }
 
-function handleLine(serial, rec, line) {
+function stopChild(rec) {
+  if (!rec.child) return;
+  rec.phase = "stopping";
+  try { rec.child.kill("SIGINT"); } catch {}
+  // SIGINT 30s 仍不退则 SIGKILL 兜底(防止某圈卡死)
+  rec.killTimer = setTimeout(() => {
+    if (rec.child) { try { rec.child.kill("SIGKILL"); } catch {} }
+  }, KILL_GRACE_MS);
+}
+
+function killRec(rec) {
+  // 异常清理(进程退出/被新队列顶替):立即停,不等当前圈
+  if (rec.timer) clearTimeout(rec.timer);
+  if (rec.killTimer) { clearTimeout(rec.killTimer); rec.killTimer = null; }
+  rec.stopRequested = true;
+  if (rec.child) { try { rec.child.kill("SIGKILL"); } catch {} }
+}
+
+function finishRec(rec, code) {
+  rec.phase = "done";
+  rec.endedAt = Date.now();
+  if (code != null) rec.exitCode = code;
+  log("queueDone", "loops", rec.loopsDone, "ok", rec.ok, "skip", rec.skip, "comments", rec.comments);
+}
+
+function handleLine(rec, line) {
   let j;
   try { j = JSON.parse(line); } catch { return; } // 非 JSON 行忽略
   if (j.phase === "loopDone") {
     rec.loop = j.loop ?? rec.loop;
     rec.loopsDone = (rec.loopsDone || 0) + 1;
-    // loopDone 里 ok/skip/comments 是当圈计数,累加
     rec.ok += Number(j.ok) || 0;
     rec.skip += Number(j.skip) || 0;
     rec.comments += Number(j.comments) || 0;
     rec.phase = "running";
   } else if (j.phase === "done" || j.phase === "summary") {
-    // 末尾 summary 若带累计,覆盖(更准)
     if (typeof j.okSteps === "number") rec.ok = j.okSteps;
     if (typeof j.skipSteps === "number") rec.skip = j.skipSteps;
     if (typeof j.comments === "number") rec.comments = j.comments;
@@ -157,27 +241,33 @@ function handleLine(serial, rec, line) {
 function stopTask(serial) {
   const rec = running.get(serial);
   if (!rec || !rec.child) return { stopped: false, reason: "not running" };
-  try { rec.child.kill("SIGINT"); } catch {}
-  rec.phase = "stopping";
-  return { stopped: true, pid: rec.child.pid };
+  rec.stopRequested = true;
+  stopChild(rec);
+  log("stopQueue", serial, "idx", rec.idx, "remaining", rec.queue.length - rec.idx);
+  return { stopped: true, pid: rec.child.pid, remainingItems: rec.queue.length - rec.idx };
 }
 
 // ---- /status 聚合 ----
 async function buildStatus() {
   const out = [];
   for (const d of DEVICES) {
-    const rec = running.get(serialKey(d.serial));
+    const rec = running.get(d.serial);
     const isRunning = rec && rec.child && rec.phase !== "done";
-    const st = { serial: d.serial, port: d.port, running: !!isRunning, task: null, progress: null };
+    const st = { serial: d.serial, port: d.port, running: !!isRunning, task: null, queue: null };
     if (isRunning) {
-      // 跑批期间跳过 focus/IME 降扰(避免与持久 shell 抢 adb),只回任务进度
+      const item = rec.queue[rec.idx];
+      const elapsed = Date.now() - rec.itemStartedAt;
+      const remaining = item && item.durationMin > 0 ? Math.max(0, item.durationMin * 60000 - elapsed) : null;
       st.task = {
-        name: rec.task, loops: rec.loops, cap: rec.cap,
+        name: item ? item.task : null,
+        idx: rec.idx + 1, total: rec.queue.length,
+        durationMin: item ? item.durationMin : 0,
+        elapsedMs: elapsed, remainingMs: remaining,
         loop: rec.loopsDone, phase: rec.phase,
         ok: rec.ok, skip: rec.skip, comments: rec.comments,
         startedAt: rec.startedAt, lastErr: rec.lastErr,
       };
-      // serve 健康仍探(metrics 轻量)
+      st.queue = rec.queue.map((q) => ({ task: q.task, durationMin: q.durationMin, cap: q.cap }));
       const m = await serveCall(d.port, "metrics");
       st.serve = m.ok ? "ok" : "down";
       st.activity = "(running task)";
@@ -188,9 +278,9 @@ async function buildStatus() {
       st.activity = activityOf(d.serial); // one-shot adb,不走 serve 持久 shell
       st.ime = imeOf(d.serial);
       st.metrics = metrics.ok ? metrics.result : null;
-      // 末次任务结果(已结束)
       if (rec) st.lastTask = {
-        name: rec.task, loops: rec.loops, loop: rec.loopsDone,
+        queue: rec.queue.map((q) => ({ task: q.task, durationMin: q.durationMin })),
+        idx: rec.idx, total: rec.queue.length, loopsDone: rec.loopsDone,
         ok: rec.ok, skip: rec.skip, comments: rec.comments,
         exitCode: rec.exitCode, lastErr: rec.lastErr, endedAt: rec.endedAt,
       };
@@ -199,9 +289,6 @@ async function buildStatus() {
   }
   return { devices: out, ts: Date.now() };
 }
-
-// 便利:Map key 用 serial
-function serialKey(serial) { return serial; }
 
 // ---- 任务列表 ----
 function listTasks() {
@@ -258,8 +345,12 @@ const server = http.createServer(async (req, res) => {
     if (b.action === "stop") return send(res, 200, stopTask(b.serial));
     if (b.action === "start") {
       try {
-        const rec = startTask(b.serial, b.task, Number(b.loops) || null, Number(b.commentCap) || null);
-        return send(res, 200, { ok: true, pid: rec.child.pid, task: rec.task });
+        let queue;
+        if (Array.isArray(b.queue) && b.queue.length) queue = b.queue;
+        else if (b.task) queue = [{ task: b.task, durationMin: Number(b.durationMin ?? b.minutes) || 0, cap: b.cap ?? b.commentCap ?? 0 }];
+        else return send(res, 400, { error: "no queue/task" });
+        const rec = startQueue(b.serial, queue);
+        return send(res, 200, { ok: true, pid: rec.child ? rec.child.pid : null, items: rec.queue.length });
       } catch (e) {
         return send(res, 400, { error: e.message });
       }
@@ -271,14 +362,12 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, "0.0.0.0", () => log("dashboard serving on 0.0.0.0:" + PORT));
 
-// dashboard 退出时杀掉所有运行中的任务子进程,避免手机上无人值守继续跑
+// dashboard 退出时强杀所有运行中的任务子进程,避免手机上无人值守继续跑
 function cleanup() {
-  for (const [s, rec] of running) {
-    if (rec.child) { try { rec.child.kill("SIGINT"); } catch {} }
-  }
+  for (const [s, rec] of running) killRec(rec);
   process.exit(0);
 }
 process.on("SIGINT", cleanup);
 process.on("SIGTERM", cleanup);
 
-export { DEVICES, startTask, stopTask };
+export { DEVICES, startQueue, stopTask };
