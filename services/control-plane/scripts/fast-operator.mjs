@@ -748,7 +748,10 @@ export class FastOperator {
 
   // 经 xiaowei 网关输中文：selectIme→bridge → 有界清空(MOVE_END + DEL×48，编辑器空时可跳) → inputText。
   // deferRestore=true 时不立即还原 IME（还原会令编辑器失焦关闭），返回 restore() 让调用方在【发送之后】再还原。
-  async inputTextViaXiaowei(text, { bridgeIme, priorIme, clearFirst = true, deferRestore = false } = {}) {
+  // clearFirst 默认 false：评论编辑器(图文/视频笔记均开 NoteCommentActivity 独立 activity，或底部 sheet)新开即空，
+  // 无需清空。clearFirst 的 48x KEYCODE_DEL 在独立 NoteCommentActivity 的空 EditText 上会触发 dismiss(回上一屏)，
+  // 导致 editorLostAfterInput——这是 xhs UI 改用独立 activity 后的回归点。底部 sheet 对 DEL 容忍但也不需要清。
+  async inputTextViaXiaowei(text, { bridgeIme, priorIme, clearFirst = false, deferRestore = false } = {}) {
     bridgeIme = bridgeIme || this.xwBridgeIme || "com.android.xwkeyboard/.XwIME";
     priorIme = priorIme || (await this.currentIme());
     this._priorIme = priorIme; // 记原始 IME，供 imeSticky 批后 restoreImeToPrior() 还原
@@ -856,19 +859,149 @@ export class FastOperator {
     return { verified: false, method: "none", beforeCount, afterCount };
   }
 
+  // 视频笔记(DetailFeed)评论入口：底部"说点什么..."占位 TextView（非 clickable、无 desc），
+  // tap 它开 NoteCommentActivity 评论编辑器（EditText 已 focused + 发送 按钮）。
+  // 与 commentBox 不同：视频笔记底部评论元素均非 clickable，靠 text 锚定而非 clickable/desc。
+  // 带货笔记底部是商品入口（识图搜同款/款式...），goodsRe 排除，宁 null 不误点商品页（外发动作）。
+  videoNoteCommentBox(doc) {
+    const goodsRe = /识图搜同款|款式|图片|立即购买|加入购物车|逛逛|选品|同款|店铺|客服|咨询|领券|优惠券/;
+    const stripY = 2200;
+    const ph = doc.nodes.find((n) =>
+      n.className === "android.widget.TextView" && n.bounds
+      && (n.bounds[1] + n.bounds[3]) / 2 > stripY
+      && /说点什么|写评论|有话要说|发条评论/.test(n.text || "")
+      && !goodsRe.test(n.text || ""));
+    if (ph) return { center: centerOf(ph.bounds), bounds: ph.bounds, desc: ph.text, via: "placeholder" };
+    return null;
+  }
+
+  // 视频笔记(DetailFeed)底部 engagement bar 评论计数 = 最右带 numeric label 的图标组。
+  // 顺序：点赞/收藏/评论，评论在最右；用 detailEngagementBar 的 groups，取最后一个 isNumeric。
+  videoNoteCommentCount(doc) {
+    const bar = this.detailEngagementBar(doc);
+    const numeric = (bar.groups || []).filter((g) => g.isNumeric);
+    return numeric.length ? numeric[numeric.length - 1].countValue : null;
+  }
+
+  // 视频笔记(DetailFeed)评论全流程：tap 底部"说点什么..." → NoteCommentActivity 编辑器
+  // (EditText 已 focused + 发送) → 输入 → 发送 → 回 DetailFeed 读 countDelta 验证 → 回 feed。
+  // 不需 scrollToComments / commentBox 狩猎：编辑器直接开、EditText 已聚焦，比图文笔记链路更短更快。
+  // dryRun=true 时不点发送、BACK 丢弃，仅验证输入落地（zero-send 真机测试用）。
+  // 调用方需保证视频已暂停（openCard 已 pauseIfVideoNote；HTTP 直驱由 case 补 pause）。
+  async commentOnVideoNote({ text, log: logArg, t0: t0Arg, dryRun = false } = {}) {
+    const t0 = t0Arg ?? Date.now();
+    const log = logArg ?? [];
+    const push = (k, v) => log.push([k, v]);
+    // 0. 读底部评论计数（beforeCount，发送后 delta 验证用）
+    const d0 = await this.dump({ label: "video-bar" });
+    const beforeCount = this.videoNoteCommentCount(d0);
+    push("beforeCount", beforeCount);
+    // 1. 找"说点什么..."入口并 tap → NoteCommentActivity
+    const box = this.videoNoteCommentBox(d0);
+    push("videoNoteCommentBox", box ? { via: box.via, center: box.center } : null);
+    if (!box) {
+      return { ok: false, step: "detailfeedUnsupported", reason: "no comment placeholder (likely 带货/carousel note)", text, log, ms: Date.now() - t0, activity: "DetailFeed" };
+    }
+    await this.tap(box.center[0], box.center[1]);
+    await new Promise((r) => setTimeout(r, this.paceFast ? 700 : 1200));
+    const f = await this.currentFocus();
+    push("openedEditor", f.activity);
+    if (!/NoteComment|comment\.input/.test(f.activity || "")) {
+      return { ok: false, step: "openEditor", text, log, ms: Date.now() - t0, activity: f.activity };
+    }
+    // 2. EditText 已 focused，直接输入（无 commentBox 狩猎、无 scrollToComments）
+    let finalText = text;
+    if (!finalText) {
+      finalText = await this.rewriteComment(this.fallbackComment());
+      push("rewriteComment", { to: finalText.slice(0, 30) });
+    }
+    // NoteCommentActivity 编辑器新开即空，clearFirst 的 48x DEL 在独立 activity 空 EditText 上会触发
+    // dismiss（回 DetailFeed），故 clearFirst:false。NoteDetail 底部 sheet 不受影响仍用默认 true。
+    const { audit, restore } = await this.inputTextViaXiaowei(finalText, { deferRestore: true, clearFirst: false });
+    push("inputText", audit);
+    if (!audit.inputAccepted) {
+      if (!this.imeSticky) await restore();
+      await this.backToFeed(3);
+      return { ok: false, step: "inputText", text: finalText, log, ms: Date.now() - t0 };
+    }
+    // 3. dryRun：验证输入落地后 BACK 丢弃，不发送
+    if (dryRun) {
+      await new Promise((r) => setTimeout(r, 400));
+      const fPre = await this.currentFocus();
+      const ed = await this.dump({ label: "video-dryrun-verify" });
+      const editor = this.commentEditor(ed);
+      const edits = (ed.nodes || []).filter((n) => n.className === "android.widget.EditText");
+      push("dryRunDiag", { focus: fPre.activity, nodeCount: (ed.nodes || []).length, editorCount: edits.length, edits: edits.map((n) => ({ text: (n.text || "").slice(0, 40), focus: !!n.focused, center: centerOf(n.bounds) })) });
+      if (!this.imeSticky) await restore();
+      await this.session.exec("input keyevent KEYCODE_BACK", 6000);
+      await new Promise((r) => setTimeout(r, 600));
+      await this.backToFeed(3);
+      push("dryRunEditor", editor ? { text: (editor.text || "").slice(0, 30) } : null);
+      return { ok: !!editor, step: editor ? "dryRunOk" : "editorLostAfterInput", text: finalText, log, ms: Date.now() - t0, activity: (await this.currentFocus()).activity };
+    }
+    // 4. 发送：确认编辑器在、点 发送
+    const ed = await this.dump({ label: "video-editor-before-send" });
+    if (!this.commentEditor(ed)) {
+      if (!this.imeSticky) await restore();
+      await this.backToFeed(3);
+      return { ok: false, step: "editorLostAfterInput", text: finalText, log, ms: Date.now() - t0, focus: (await this.currentFocus()).activity };
+    }
+    const send = this.sendButton(ed);
+    if (!send) {
+      if (!this.imeSticky) await restore();
+      await this.backToFeed(3);
+      return { ok: false, step: "sendButton", text: finalText, log, ms: Date.now() - t0, focus: (await this.currentFocus()).activity };
+    }
+    await this.tap(send.center[0], send.center[1]);
+    await new Promise((r) => setTimeout(r, 1200));
+    if (!this.imeSticky) await restore();
+    // 5. 发送后：回 DetailFeed 读评论计数 delta 验证
+    const f2 = await this.currentFocus();
+    const sent = !/comment\.input|NoteComment/.test(f2.activity || "");
+    push("sent", { sent, activity: f2.activity });
+    // 发送后通常自动回 DetailFeed；若仍在 NoteComment 则 BACK
+    if (/NoteComment|comment\.input/.test(f2.activity || "")) {
+      await this.session.exec("input keyevent KEYCODE_BACK", 6000);
+      await new Promise((r) => setTimeout(r, 700));
+    }
+    const fd = await this.currentFocus();
+    let afterCount = null;
+    if (fd.activity && fd.activity.includes("DetailFeed")) {
+      const dd = await this.dump({ label: "video-after-count" });
+      afterCount = this.videoNoteCommentCount(dd);
+    }
+    push("afterCount", afterCount);
+    const verified = beforeCount != null && afterCount != null && afterCount - beforeCount >= 1;
+    push("verifyCountDelta", { verified, beforeCount, afterCount });
+    // 6. 回 feed
+    const back = await this.backToFeed(5);
+    push("backToFeed", back);
+    return {
+      ok: sent,
+      verified,
+      verifyMethod: verified ? "countDelta" : "none",
+      beforeCount,
+      afterCount,
+      imeSticky: this.imeSticky,
+      verifyMode: this.verifyMode,
+      text: finalText, log, ms: Date.now() - t0, metrics: this.metricsSummary(),
+    };
+  }
+
   // 评论全流程（对已打开的 NoteDetail）：滚到评论 → 取 top 非作者 → 改写 → 开编辑器 → 输入 → 发送 → 早退验证 → 回首页。
   // text 直传则跳过抓 top+改写。全程 pace 拟人限速（评论用更长间隔）。
   async commentOnOpenNote({ text, maxScrolls = 6, log: logArg, t0: t0Arg } = {}) {
     const t0 = t0Arg ?? Date.now();
     const log = logArg ?? [];
     const push = (k, v) => log.push([k, v]);
-    // 0. 视频笔记(DetailFeed)评论 UI 是 overlay/底部条，元素多非可点且布局异构
-    //    (带货笔记底部是商品入口、图文 carousel 有识图搜同款/款式 tab)。commentBox 无法稳定锚定，
-    //    硬上会误点商品入口(外发动作)。Slice 2 仅支持图文笔记(NoteDetail)评论，DetailFeed 显式
-    //    fast-fail，让 operator 跳到下一张，不滚不点不冒险。
+    // 0. 视频笔记(DetailFeed)走专用流程：tap 底部"说点什么..." → NoteCommentActivity 编辑器
+    //    (EditText 已 focused + 发送 按钮) → 输入 → 发送 → countDelta 验证。
+    //    Slice 3：视频笔记评论入口是底部"说点什么..."占位条(非 clickable，靠 text 锚定)，
+    //    tap 开独立评论 activity，复用 commentEditor/sendButton 检测，无需 scrollToComments/commentBox 狩猎。
+    //    带货笔记底部是商品入口(goodsRe 排除)，找不到占位条仍 fast-fail 跳过，不误点商品页。
     const preFocus = await this.currentFocus();
     if ((preFocus.activity || "").includes("DetailFeed")) {
-      return { ok: false, step: "detailfeedUnsupported", reason: "video/carousel note comment UI not supported in Slice 2", text, log, ms: Date.now() - t0, activity: preFocus.activity };
+      return this.commentOnVideoNote({ text, log, t0 });
     }
     // 1. 滚到评论区
     const sc = await this.scrollToComments({ maxScrolls });
@@ -1216,12 +1349,20 @@ function serve(port) {
         }
         case "commentOnOpenNote": {
           // 对当前已打开的 NoteDetail/DetailFeed 跑评论流程（设备由人驱动到目标笔记时用）。
+          // DetailFeed 走 Slice 3 视频笔记流程(commentOnVideoNote)；直驱时先 pauseIfVideoNote
+          // (openCard→commentTransaction 路径已在 openCard 暂停，不经此 case，不会双 toggle)。
           const f = await op.currentFocus();
           if (!/NoteDetail|DetailFeed/.test(f.activity || "")) { out = { ok: false, step: "notOnNote", activity: f.activity }; break; }
-          // DetailFeed(视频/carousel/带货)评论 UI 异构且无稳定可点入口，Slice 2 不支持——fast-fail，
-          // 不 pauseIfVideoNote、不滚不点，让 operator 跳下一张。
-          if ((f.activity || "").includes("DetailFeed")) { out = { ok: false, step: "detailfeedUnsupported", reason: "video/carousel note comment UI not supported in Slice 2", activity: f.activity }; break; }
+          if ((f.activity || "").includes("DetailFeed")) await op.pauseIfVideoNote();
           out = await op.commentOnOpenNote({ text: q.text, maxScrolls: q.maxScrolls ?? 6 });
+          break;
+        }
+        case "videoNoteDryRun": {
+          // zero-send 真机测试：对当前 DetailFeed 视频笔记跑评论流程到 inputText，不点发送、BACK 丢弃。
+          const f = await op.currentFocus();
+          if (!/DetailFeed/.test(f.activity || "")) { out = { ok: false, step: "notOnVideoNote", activity: f.activity }; break; }
+          await op.pauseIfVideoNote();
+          out = await op.commentOnVideoNote({ text: q.text, dryRun: true });
           break;
         }
         case "commentBenchmark": {
