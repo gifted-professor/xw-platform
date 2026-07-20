@@ -4,7 +4,9 @@
 
 ## 决策（已与用户确认）
 
-- **自主范围：全自主 + 拟人限速**。含评论/回复评论。拆掉 `ai-role-runner.mjs` 的 `FORBIDDEN_OUTPUT_PATTERN` 与 `comment_assistant` 人类触发围栏，新增运营风控层（随机间隔、每日上限、不连发、模拟阅读停留）。
+> **2026-07-20 修订：** 下文"拆 `ai-role-runner.mjs` 围栏"已废弃。最终决策为**围栏不动**——fast-operator 自带 LLM 改写（直调 CPA）是独立旁路、自带内容生成，不需要拆围栏，比原计划更干净、零回归。下文保留原措辞仅作历史记录。**评论约束亦修订：** 非作者最高赞评论直接自动发送，无需人类确认（首次亦然）；`isAuthor` badge 过滤是唯一硬约束。发送后由 `verifyCommentSent` 实证校验（评论数 +1 delta / 文案扫描）。
+
+- **自主范围：全自主 + 拟人限速**。含评论/回复评论。~~拆掉 `ai-role-runner.mjs` 的 `FORBIDDEN_OUTPUT_PATTERN` 与 `comment_assistant` 人类触发围栏~~（**已修订：围栏不动**），新增运营风控层（随机间隔、每日上限、不连发、模拟阅读停留）。
 - **部署：新建 fast-operator 旁路，不动现有链路**。现有 `xiaowei-device-read.mjs` / `xhs-remote-gateway.mjs` / `composite-workflow` 原样保留，现有 571 测试零回归。旁路独立验收。
 
 ## 瓶颈结构（三份分析坐实）

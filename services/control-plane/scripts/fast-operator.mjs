@@ -732,6 +732,36 @@ export class FastOperator {
     return pool[(this.metrics.actions || 0) % pool.length];
   }
 
+  // 笔记评论总数：扫 "共N条评论" 标题 TextView。无则 null（大计数/无评论时回退文案扫描）。
+  // 用作发送前 beforeCount / 发送后 afterCount 的 delta 实证校验来源。
+  noteCommentCount(doc) {
+    for (const n of doc.nodes) {
+      const t = (n.text || "").trim();
+      const m = t.match(/共\s*(\d+)\s*条评论/);
+      if (m) return Number(m[1]);
+    }
+    return null;
+  }
+
+  // 发送后实证校验：评论数 +1 delta（主）→ 文案扫描（回退）→ 都做不到则明确未验证。
+  // 调用前需仍在 NoteDetail（未回首页）。beforeCount 由 commentOnOpenNote 在发送前抓取。
+  // 不撒谎：countDelta 不可验且文案没扫到时返回 verified:false，让调用方知道"疑似发出但未实证"。
+  async verifyCommentSent({ beforeCount, sentText, maxScrolls = 4 } = {}) {
+    const sc = await this.scrollToComments({ maxScrolls });
+    const afterCount = this.noteCommentCount(sc.doc);
+    if (beforeCount != null && afterCount != null && afterCount - beforeCount >= 1) {
+      return { verified: true, method: "countDelta", beforeCount, afterCount, delta: afterCount - beforeCount };
+    }
+    // 大计数(如"10万+")delta 舍入为 0、或计数缺失 → 扫刚发的文案（新评论非作者、文本==sentText）
+    if (sentText) {
+      const comments = this.parseComments(sc.doc);
+      const hit = comments.find((c) => !c.isAuthor && c.text
+        && (c.text === sentText || c.text.includes(sentText) || sentText.includes(c.text)));
+      if (hit) return { verified: true, method: "textScan", beforeCount, afterCount, matched: (hit.text || "").slice(0, 40) };
+    }
+    return { verified: false, method: "none", beforeCount, afterCount };
+  }
+
   // 评论全流程（对已打开的 NoteDetail）：滚到评论 → 取 top 非作者 → 改写 → 开编辑器 → 输入 → 发送 → 早退验证 → 回首页。
   // text 直传则跳过抓 top+改写。全程 pace 拟人限速（评论用更长间隔）。
   async commentOnOpenNote({ text, maxScrolls = 6, log: logArg, t0: t0Arg } = {}) {
@@ -741,6 +771,13 @@ export class FastOperator {
     // 1. 滚到评论区
     const sc = await this.scrollToComments({ maxScrolls });
     push("scrollToComments", { found: sc.found, scrolls: sc.scrolls });
+    // 1b. 发送前评论总数（发送后 delta 实证校验用）。header 可能滚出视口，回滚一次再取。
+    let beforeCount = this.noteCommentCount(sc.doc);
+    if (beforeCount == null && sc.found) {
+      await this.scrollUp(1, "count-rewind");
+      beforeCount = this.noteCommentCount(await this.dump({ label: "count-before" }));
+    }
+    push("beforeCount", beforeCount);
     let finalText = text;
     if (!finalText) {
       const comments = this.parseComments(sc.doc);
@@ -764,8 +801,13 @@ export class FastOperator {
     push("inputText", audit);
     if (!audit.inputAccepted) { await restore(); return { ok: false, step: "inputText", text: finalText, log, ms: Date.now() - t0 }; }
     await this.pacer.pace({ minMs: 800, maxMs: 2000 });
-    // 4. 发送（此时编辑器仍在 bridge IME，未失焦）
+    // 4. 发送前守卫：编辑器必须在岗（EditText 存在）。若已失焦关闭 → editorLostAfterInput，
+    //    区别于"编辑器在但找不到发送按钮"的 sendButton——这是 IME 还原时机坑的明确失败码。
     const ed = await this.dump({ label: "editor-before-send" });
+    if (!this.commentEditor(ed)) {
+      await restore();
+      return { ok: false, step: "editorLostAfterInput", text: finalText, log, ms: Date.now() - t0, focus: (await this.currentFocus()).activity };
+    }
     const send = this.sendButton(ed);
     if (!send) { await restore(); return { ok: false, step: "sendButton", text: finalText, log, ms: Date.now() - t0, focus: (await this.currentFocus()).activity }; }
     await this.tap(send.center[0], send.center[1]);
@@ -776,10 +818,20 @@ export class FastOperator {
     const f = await this.currentFocus();
     const sent = !/comment\.input/.test(f.activity || "");
     push("sent", { sent, activity: f.activity });
+    // 6b. 发送后实证校验：评论数 +1 delta / 文案扫描。仍在 NoteDetail，未回首页。
+    const verify = await this.verifyCommentSent({ beforeCount, sentText: finalText, maxScrolls: 4 });
+    push("verifyCommentSent", verify);
     // 7. 回首页
     const back = await this.backToFeed(5);
     push("backToFeed", back);
-    return { ok: sent, text: finalText, log, ms: Date.now() - t0, metrics: this.metricsSummary() };
+    return {
+      ok: sent,
+      verified: verify.verified,
+      verifyMethod: verify.method,
+      beforeCount: verify.beforeCount,
+      afterCount: verify.afterCount,
+      text: finalText, log, ms: Date.now() - t0, metrics: this.metricsSummary(),
+    };
   }
 
   // 评论全流程（从 feed 开笔记起）：openCard → commentOnOpenNote。

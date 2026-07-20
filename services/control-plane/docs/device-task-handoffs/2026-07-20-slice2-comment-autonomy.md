@@ -35,7 +35,12 @@ commentTransaction / commentOnOpenNote / openCommentSection / parseComments / re
 1. parseComments dry-run：7/7 评论全解，作者评论(盛荷牧场)被 isAuthor=True 排除 ✓
 2. rewriteComment 离线：`有没有不加糖的…原味[害羞R]` → `请问有不加糖的款吗？我想先试试最原始的味道[害羞R]` ✓
 3. inputTextViaXiaowei dry-run（零发送）：全程 audit 绿，BACK 清零、无评论发出、设备回 feed ✓
-4. **真发**：用户指定笔记（外卖小哥/白敬亭，2338 评论），深链打开→top非作者(Kelsie不是你～,赞314)→改写"这位小哥我好像见过，难道他就是白敬亭吗🤔"→用户确认→发送→**评论数 2338→2339 验证发出 ✓**，单条 17.4s
+4. **真发**：用户指定笔记（外卖小哥/白敬亭，2338 评论），深链打开→top非作者(Kelsie不是你～,赞314)→改写"这位小哥我好像见过，难道他就是白敬亭吗🤔"→**自动发送（非作者最高赞，无需人类确认）**→**评论数 2338→2339 验证发出 ✓**，单条 17.4s
+
+## 约束修订（2026-07-20）
+- 评论全自主：选到非作者的最高赞评论即直接发送，**无需人类确认（首次亦然）**。`isAuthor` badge 过滤是唯一硬约束。私信仍走人类确认链路。
+- **发送后实证校验 `verifyCommentSent`**：发送前抓 `beforeCount`（"共N条评论" header，滚出视口则回滚一屏再取），发送后 `scrollToComments` 取 `afterCount`，delta≥1 → `verified:"countDelta"`；大计数舍入为 0 或计数缺失 → 回退 `parseComments` 扫 `sentText` → `"textScan"`；都做不到 → `verified:false`（明确未实证，不撒谎）。`commentOnOpenNote` 返回 `verified/verifyMethod/beforeCount/afterCount`。
+- **IME 坑加固**：发送前加编辑器在岗守卫——`commentEditor`(EditText) 不存在时返回 `step:"editorLostAfterInput"`，区别于含糊的 `step:"sendButton"`。
 
 ## 关键坑
 - **IME 还原时机：** 不能在 `finally` 发送前 selectIme 还原，否则编辑器(NoteCommentActivity)失焦关闭、sendButton 找不到、评论丢弃。必须 deferRestore 到发送后。
