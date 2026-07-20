@@ -116,9 +116,9 @@ const PLAYBOOKS = [
     steps: [
       { call: "POST /agent/takeover", params: { id: "<你的id>", kind: "<claude|codex|...>" }, expect: "active=true,人页绿灯亮" },
       { call: "GET /status", expect: "devices[4] 各含 serve/activity/ime/running;agent.active=true" },
-      { call: "POST /agent/heartbeat", params: { id: "<你的id>" }, expect: "ok;之后每≤15s 重复一次,>30s 不发自动释放" },
+      { call: "POST /agent/heartbeat", params: { id: "<你的id>" }, expect: "ok;仅当长时间不操作时才需重复" },
     ],
-    note: "全程必须每≤15s 发一次 heartbeat;操作中途也要发。干完 POST /agent/release。",
+    note: "心跳续命有两条路:① 每次 /primitive|/task|/home 调用里带你的 id → 隐式续命(正在操控时推荐,不必另起心跳循环);② 长时间不操作(>15s 无调用)才显式 POST /agent/heartbeat。>30s 既无心跳又无带 id 调用 → 自动释放。干完 POST /agent/release。",
   },
   {
     name: "1 · 读首页卡片(侦察)", goal: "看 4 台各自首页有哪些卡片,决定点哪张",
@@ -257,6 +257,17 @@ function agentState() {
     timeoutMs: HEARTBEAT_TIMEOUT_MS,
   };
 }
+// 隐式心跳:agent 在 /primitive /task /home 调用里带自己的 id,即视为一次心跳续命。
+// 这样正在操控的 agent 不必另起后台心跳循环(对经 Hermes 跑、不能起 daemon 的 agent 是命门)。
+// 规则:id 匹配当前接管 agent(哪怕刚超时)就刷新 lastHeartbeat;人类或不带 id 的调用不续命
+// ——agent 死了 30s 该释放就释放,人点 dashboard 按钮不该给死 agent 续绿灯(死检不被旁路)。
+function touchAgent(id) {
+  if (id && agent.id && String(id) === agent.id) {
+    agent.lastHeartbeat = Date.now();
+    return true;
+  }
+  return false;
+}
 
 // ---- manifest(给 agent 的机器可读说明书)----
 async function buildManifest() {
@@ -278,20 +289,20 @@ async function buildManifest() {
       { method: "GET", path: "/agent/manifest", desc: "本说明书(JSON)" },
       { method: "GET", path: "/agent", desc: "人可读 agent 控制面(HTML)" },
       { method: "GET", path: "/agent/state", desc: "agent 接管态 + 事件日志(轮询)" },
-      { method: "POST", path: "/task", body: { serial: "str", action: "start|stop", queue: "[{task,durationMin,cap}]" }, desc: "起/停任务队列;旧单任务 {task,durationMin,cap} 仍兼容" },
-      { method: "POST", path: "/home", body: { serial: "str" }, desc: "回首页(force-stop+重启,深页也重置到 IndexActivityV2)" },
-      { method: "POST", path: "/primitive", body: { serial: "str", action: "原语名", "...": "原语参数" }, desc: "代理到该台 serve 的 31 个原语之一(精确控制);超时 90s,长流程(commentBenchmark/commentOnOpenNote)够用" },
+      { method: "POST", path: "/task", body: { serial: "str", action: "start|stop", queue: "[{task,durationMin,cap}]", id: "(可选)接管 agent id" }, desc: "起/停任务队列;旧单任务 {task,durationMin,cap} 仍兼容;带 id 则隐式续命" },
+      { method: "POST", path: "/home", body: { serial: "str", id: "(可选)接管 agent id" }, desc: "回首页(force-stop+重启,深页也重置到 IndexActivityV2);带 id 则隐式续命" },
+      { method: "POST", path: "/primitive", body: { serial: "str", action: "原语名", id: "(可选)接管 agent id", "...": "原语参数" }, desc: "代理到该台 serve 的 31 个原语之一(精确控制);超时 90s;带 id 则隐式续命,正在操控时无需另起心跳循环" },
       { method: "POST", path: "/agent/takeover", body: { id: "str", kind: "str" }, desc: "接管 → 绿灯亮" },
-      { method: "POST", path: "/agent/heartbeat", body: { id: "str" }, desc: `保活,每≤${HEARTBEAT_INTERVAL_S}s 一次;>30s 无心跳自动释放` },
+      { method: "POST", path: "/agent/heartbeat", body: { id: "str" }, desc: `显式保活,每≤${HEARTBEAT_INTERVAL_S}s 一次;>30s 无心跳自动释放。注:正在调 /primitive /task /home 时只要带 id 即隐式续命,不必单独发 heartbeat` },
       { method: "POST", path: "/agent/release", body: { id: "str" }, desc: "主动释放" },
     ],
     constraints: CONSTRAINTS,
     playbooks: PLAYBOOKS,
-    first_steps: "接管后照 PLAYBOOKS[0] 走;批量操作用剧本10起预设任务;精确单步用剧本1-9;收工用剧本12。全程每≤15s heartbeat。",
+    first_steps: "接管后照 PLAYBOOKS[0] 走;批量操作用剧本10起预设任务;精确单步用剧本1-9;收工用剧本12。正在调 /primitive /task /home 时带你的 id 即隐式续命,不必另起心跳循环;只在长时间不操作(>15s 无调用)时才需显式 /agent/heartbeat。",
     takeover: {
       heartbeat_interval_s: HEARTBEAT_INTERVAL_S,
       timeout_s: HEARTBEAT_TIMEOUT_MS / 1000,
-      how: "POST /agent/takeover {id,kind} → POST /agent/heartbeat {id} 每≤15s → POST /agent/release {id};>30s 无心跳自动释放,绿灯灭",
+      how: "POST /agent/takeover {id,kind} → 操控时每次 /primitive|/task|/home 带 {id} 即隐式续命;长时间不操作才 POST /agent/heartbeat {id} 每≤15s → POST /agent/release {id};>30s 无心跳+无带 id 调用自动释放,绿灯灭",
       green_light: "人页 /status.agent.active=true 时顶栏显示绿灯徽章(只标不锁,人仍可介入)",
     },
     current_state: st,
@@ -582,12 +593,14 @@ const server = http.createServer(async (req, res) => {
   }
   if (req.method === "POST" && path === "/home") {
     const b = await readBody(req);
+    touchAgent(b.id);
     const d = DEVICES.find((x) => x.serial === b.serial);
     if (!d) return send(res, 400, { error: "bad serial" });
     return send(res, 200, { serial: b.serial, result: launchXhs(b.serial) });
   }
   if (req.method === "POST" && path === "/task") {
     const b = await readBody(req);
+    touchAgent(b.id);
     const d = DEVICES.find((x) => x.serial === b.serial);
     if (!d) return send(res, 400, { error: "bad serial" });
     if (b.action === "stop") return send(res, 200, stopTask(b.serial));
@@ -648,9 +661,10 @@ const server = http.createServer(async (req, res) => {
   }
   if (req.method === "POST" && path === "/primitive") {
     const b = await readBody(req);
+    touchAgent(b.id);
     const d = DEVICES.find((x) => x.serial === b.serial);
     if (!d) return send(res, 400, { error: "bad serial" });
-    const { serial, action, ...params } = b;
+    const { serial, action, id, ...params } = b;
     if (!action) return send(res, 400, { error: "no action" });
     const who = agentActive() ? agent.id : "human";
     aLog("primitive", `${who} → ${serial} ${action}${Object.keys(params).length ? " " + JSON.stringify(params) : ""}`);
