@@ -280,7 +280,7 @@ async function buildManifest() {
       { method: "GET", path: "/agent/state", desc: "agent 接管态 + 事件日志(轮询)" },
       { method: "POST", path: "/task", body: { serial: "str", action: "start|stop", queue: "[{task,durationMin,cap}]" }, desc: "起/停任务队列;旧单任务 {task,durationMin,cap} 仍兼容" },
       { method: "POST", path: "/home", body: { serial: "str" }, desc: "回首页(force-stop+重启,深页也重置到 IndexActivityV2)" },
-      { method: "POST", path: "/primitive", body: { serial: "str", action: "原语名", "...": "原语参数" }, desc: "代理到该台 serve 的 31 个原语之一(精确控制)" },
+      { method: "POST", path: "/primitive", body: { serial: "str", action: "原语名", "...": "原语参数" }, desc: "代理到该台 serve 的 31 个原语之一(精确控制);超时 90s,长流程(commentBenchmark/commentOnOpenNote)够用" },
       { method: "POST", path: "/agent/takeover", body: { id: "str", kind: "str" }, desc: "接管 → 绿灯亮" },
       { method: "POST", path: "/agent/heartbeat", body: { id: "str" }, desc: `保活,每≤${HEARTBEAT_INTERVAL_S}s 一次;>30s 无心跳自动释放` },
       { method: "POST", path: "/agent/release", body: { id: "str" }, desc: "主动释放" },
@@ -299,13 +299,15 @@ async function buildManifest() {
 }
 
 // ---- serve HTTP 调用 ----
-async function serveCall(port, action, extra = {}) {
+// timeoutMs:探针用 5s;/primitive 代理可能跑开卡+评论流程(15-40s),用长超时避免
+// agent 误判超时重试 → 真评论双发。
+async function serveCall(port, action, extra = {}, timeoutMs = 5000) {
   try {
     const r = await fetch(`http://127.0.0.1:${port}/`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action, ...extra }),
-      signal: AbortSignal.timeout(5000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     return await r.json();
   } catch (e) {
@@ -652,7 +654,7 @@ const server = http.createServer(async (req, res) => {
     if (!action) return send(res, 400, { error: "no action" });
     const who = agentActive() ? agent.id : "human";
     aLog("primitive", `${who} → ${serial} ${action}${Object.keys(params).length ? " " + JSON.stringify(params) : ""}`);
-    const r = await serveCall(d.port, action, params);
+    const r = await serveCall(d.port, action, params, 90000);
     return send(res, 200, r);
   }
   send(res, 404, { error: "not found", path });
