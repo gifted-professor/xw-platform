@@ -859,9 +859,11 @@ export class FastOperator {
     return pool[(this.metrics.actions || 0) % pool.length];
   }
 
-  // 笔记评论总数：扫 "共N条评论" 标题 TextView。无则回退到底部 engagement bar 最右 numeric 组
-  // （评论计数；图文/视频笔记底部条都有 like/favorite/comment 计数，评论在最右）——覆盖
-  // "共N条评论" header 滚出视口、大计数("10万+"舍入)等 beforeCount:null 导致 verified:false 的偶发场景。
+  // 图文笔记评论总数：只信 "共N条评论" header TextView。找不到返回 null。
+  // 不再 fallback 到 videoNoteCommentCount——"底部 engagement bar 最右 numeric=评论计数"
+  // 假设只在视频笔记 DetailFeed 成立，图文笔记底部条 like/favorite/comment 顺序里最右 numeric
+  // 不一定是评论计数（实测取到 1 这种非评论值），会导致 countDelta 假阴性(发成功却 verified:false)。
+  // 取不到时由 commentOnOpenNote 判 countUnavailable 退出该笔记找下一篇，不发出无法实证的评论。
   // 用作发送前 beforeCount / 发送后 afterCount 的 delta 实证校验来源。
   noteCommentCount(doc) {
     for (const n of doc.nodes) {
@@ -869,7 +871,7 @@ export class FastOperator {
       const m = t.match(/共\s*(\d+)\s*条评论/);
       if (m) return Number(m[1]);
     }
-    return this.videoNoteCommentCount(doc);
+    return null;
   }
 
   // 发送后实证校验：评论数 +1 delta（主）→ 文案扫描（回退）→ 都做不到则明确未验证。
@@ -1080,6 +1082,14 @@ export class FastOperator {
       beforeCount = this.noteCommentCount(boxDoc);
     }
     push("beforeCount", beforeCount);
+    // 1c. count 取不到（header 缺失且无可靠 fallback）→ 不发、退出该笔记找下一篇。
+    // 避免发出无法实证的评论：countDelta 假阴性会让 ok:true 但 verified:false 的不确定态，
+    // 不如干脆退出找下一篇。上层 task-runner/自主层把 countUnavailable 当 skip。
+    if (beforeCount == null) {
+      const back = await this.backToFeed(5);
+      push("backToFeed", back);
+      return { ok: false, step: "countUnavailable", text, log, ms: Date.now() - t0, activity: (await this.currentFocus()).activity };
+    }
     let finalText = text;
     if (!finalText) {
       const comments = this.parseComments(sc.doc);

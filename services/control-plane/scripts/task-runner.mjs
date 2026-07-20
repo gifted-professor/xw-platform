@@ -51,6 +51,7 @@ const COMMENT_ACTIONS = new Set(["commentOnOpenNote", "commentTransaction"]);
 const SKIP_STEPS = new Set([
   "detailfeedUnsupported", // 带货/carousel 无评论占位条
   "editorLostAfterInput", "commentBox", "sendButton", "inputText", // 评论链路偶发
+  "countUnavailable", // 图文笔记 "共N条评论" header 缺失，count 无法实证 → 退出找下一篇
 ]);
 
 async function dispatchStep(op, step, ctx) {
