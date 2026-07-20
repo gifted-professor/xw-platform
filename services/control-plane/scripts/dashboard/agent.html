@@ -83,7 +83,7 @@
   <div class="card">
     <div class="h">接管协议</div>
     <p class="muted" id="tkhow"></p>
-    <div class="cmd">POST /agent/takeover  {"id":"claude-1","kind":"claude"}
+    <div class="cmd">POST /agent/takeover  {"id":"claude-1","kind":"claude"}    # 已有活跃 agent 时返 409,需先 release 或等 30s 超时
 # 操控时:每次调用带上 id 即隐式续命,不必另起心跳循环 ↓
 POST /primitive      {"id":"claude-1","serial":"REPLACE_SERIAL_01","action":"feedCards"}
 POST /task           {"id":"claude-1","serial":"REPLACE_SERIAL_01","action":"start","queue":[{"task":"养号","durationMin":30,"cap":1}]}

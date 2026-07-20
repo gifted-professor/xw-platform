@@ -118,7 +118,7 @@ const PLAYBOOKS = [
       { call: "GET /status", expect: "devices[4] 各含 serve/activity/ime/running;agent.active=true" },
       { call: "POST /agent/heartbeat", params: { id: "<你的id>" }, expect: "ok;仅当长时间不操作时才需重复" },
     ],
-    note: "心跳续命有两条路:① 每次 /primitive|/task|/home 调用里带你的 id → 隐式续命(正在操控时推荐,不必另起心跳循环);② 长时间不操作(>15s 无调用)才显式 POST /agent/heartbeat。>30s 既无心跳又无带 id 调用 → 自动释放。干完 POST /agent/release。",
+    note: "心跳续命有两条路:① 每次 /primitive|/task|/home 调用里带你的 id → 隐式续命(正在操控时推荐,不必另起心跳循环);② 长时间不操作(>15s 无调用)才显式 POST /agent/heartbeat。>30s 既无心跳又无带 id 调用 → 自动释放。takeover 时若已有别的活跃 agent 会返 409(不静默抢占),需先 release 或等其超时。干完 POST /agent/release。",
   },
   {
     name: "1 · 读首页卡片(侦察)", goal: "看 4 台各自首页有哪些卡片,决定点哪张",
@@ -292,7 +292,7 @@ async function buildManifest() {
       { method: "POST", path: "/task", body: { serial: "str", action: "start|stop", queue: "[{task,durationMin,cap}]", id: "(可选)接管 agent id" }, desc: "起/停任务队列;旧单任务 {task,durationMin,cap} 仍兼容;带 id 则隐式续命" },
       { method: "POST", path: "/home", body: { serial: "str", id: "(可选)接管 agent id" }, desc: "回首页(force-stop+重启,深页也重置到 IndexActivityV2);带 id 则隐式续命" },
       { method: "POST", path: "/primitive", body: { serial: "str", action: "原语名", id: "(可选)接管 agent id", "...": "原语参数" }, desc: "代理到该台 serve 的 31 个原语之一(精确控制);超时 90s;带 id 则隐式续命,正在操控时无需另起心跳循环" },
-      { method: "POST", path: "/agent/takeover", body: { id: "str", kind: "str" }, desc: "接管 → 绿灯亮" },
+      { method: "POST", path: "/agent/takeover", body: { id: "str", kind: "str" }, desc: "接管 → 绿灯亮;已有别的活跃 agent 时返 409(不静默抢占),需先 release 或等其 30s 超时" },
       { method: "POST", path: "/agent/heartbeat", body: { id: "str" }, desc: `显式保活,每≤${HEARTBEAT_INTERVAL_S}s 一次;>30s 无心跳自动释放。注:正在调 /primitive /task /home 时只要带 id 即隐式续命,不必单独发 heartbeat` },
       { method: "POST", path: "/agent/release", body: { id: "str" }, desc: "主动释放" },
     ],
@@ -302,7 +302,7 @@ async function buildManifest() {
     takeover: {
       heartbeat_interval_s: HEARTBEAT_INTERVAL_S,
       timeout_s: HEARTBEAT_TIMEOUT_MS / 1000,
-      how: "POST /agent/takeover {id,kind} → 操控时每次 /primitive|/task|/home 带 {id} 即隐式续命;长时间不操作才 POST /agent/heartbeat {id} 每≤15s → POST /agent/release {id};>30s 无心跳+无带 id 调用自动释放,绿灯灭",
+      how: "POST /agent/takeover {id,kind} → 操控时每次 /primitive|/task|/home 带 {id} 即隐式续命;长时间不操作才 POST /agent/heartbeat {id} 每≤15s → POST /agent/release {id};>30s 无心跳+无带 id 调用自动释放,绿灯灭。已有别的活跃 agent 时 takeover 返 409(不静默抢占),需先 release 或等其超时",
       green_light: "人页 /status.agent.active=true 时顶栏显示绿灯徽章(只标不锁,人仍可介入)",
     },
     current_state: st,
@@ -635,7 +635,15 @@ const server = http.createServer(async (req, res) => {
   }
   if (req.method === "POST" && path === "/agent/takeover") {
     const b = await readBody(req);
-    agent.id = String(b.id || "agent");
+    const id = String(b.id || "agent");
+    // 冲突保护:已有别的 agent 活跃接管时,禁止静默抢占——否则两个 agent 都以为自己在控,
+    // 绿灯语义崩,且旧 agent 的带 id 调用会因 id 不匹配悄悄不再续命而死(它还以为自己握着锁)。
+    // 已超时的旧 agent(agentActive()=false)允许被顶替;同 id 重新 takeover 视为续接(idempotent)。
+    if (agent.id && agent.id !== id && agentActive()) {
+      aLog("takeover-denied", `${id} tried, ${agent.id} active`);
+      return send(res, 409, { ok: false, error: "another agent active", current: agent.id });
+    }
+    agent.id = id;
     agent.kind = String(b.kind || "unknown");
     agent.takenAt = Date.now();
     agent.lastHeartbeat = Date.now();
