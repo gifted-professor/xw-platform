@@ -21,6 +21,29 @@
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
+import { writeFileSync, unlinkSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+// 跨进程文件锁串行化小薇 WS 访问：xiaowei 单实例 WS accept 串行，多设备并发建连会持续 connection failed
+// （非瞬时，retry 无效）。4 个 task-runner 进程抢同一 lock 文件，O_EXCL 互斥，每次只 1 路连 22222。
+// 陈旧检测：持锁进程崩溃残留 lock，30s 后强删（xiaoweiInvoke 最坏 3×12s<36s，留余量）。
+const XW_LOCK = join(tmpdir(), "xw-ws-22222.lock");
+async function withXwLock(fn) {
+  for (let attempt = 0; ; attempt += 1) {
+    try { writeFileSync(XW_LOCK, String(process.pid), { flag: "wx" }); break; }
+    catch (e) {
+      if (e.code === "EEXIST") {
+        try { const st = statSync(XW_LOCK); if (Date.now() - st.mtimeMs > 30000) { try { unlinkSync(XW_LOCK); } catch {} } } catch {}
+        await new Promise((r) => setTimeout(r, 50 + (attempt % 8) * 30));
+        continue;
+      }
+      throw e;
+    }
+  }
+  try { return await fn(); }
+  finally { try { unlinkSync(XW_LOCK); } catch {} }
+}
 
 // ---------- uiautomator XML 解析（自包含，不依赖原文件） ----------
 
@@ -704,24 +727,39 @@ export class FastOperator {
   }
 
   // xiaowei WS 网关单请求（ws://127.0.0.1:22222/）。一连接一请求，首条消息即响应；code===10000=SUCCESS。
+  // xiaowei WS 网关单请求（ws://127.0.0.1:22222/）。一连接一请求，首条消息即响应；code===10000=SUCCESS。
+  // 多设备并发时 4 路同时建 WS 会偶发 connection failed（xiaowei 单实例 accept 串行），
+  // 故对连接失败/超时做最多 3 次重试（间隔 400ms），malformed 响应不重试（协议级错误）。
   async xiaoweiInvoke(action, data, timeoutMs = 12000) {
     const url = this.xwWs || "ws://127.0.0.1:22222/";
     const req = { action, devices: this.serial };
     if (data != null) req.data = data;
-    return new Promise((resolve, reject) => {
-      const ws = new WebSocket(url);
-      let settled = false;
-      const finish = (fn, v) => { if (settled) return; settled = true; clearTimeout(t); try { ws.close(); } catch {} fn(v); };
-      const t = setTimeout(() => finish(reject, new Error(`xiaowei WS timeout (${timeoutMs}ms) action=${action}`)), timeoutMs);
-      ws.addEventListener("open", () => { try { ws.send(JSON.stringify(req)); } catch (e) { finish(reject, e); } });
-      ws.addEventListener("message", (e) => {
-        let r; try { r = JSON.parse(String(e.data)); } catch { return finish(reject, new Error("xiaowei WS malformed response")); }
-        finish(resolve, r);
-      });
-      ws.addEventListener("error", () => finish(reject, new Error(`xiaowei WS connection failed action=${action}`)));
-    });
+    // 多设备并发时 4 路同时建 WS 会偶发 connection failed（xiaowei 单实例 accept 串行）。
+    // withXwLock 串行化建连（每次只 1 路连 22222）；对连接失败/超时做最多 3 次重试，
+    // 锁外随机退避错开多进程；malformed 响应是协议级错误不重试。
+    let lastErr;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        return await withXwLock(() => new Promise((resolve, reject) => {
+          const ws = new WebSocket(url);
+          let settled = false;
+          const finish = (fn, v) => { if (settled) return; settled = true; clearTimeout(t); try { ws.close(); } catch {} fn(v); };
+          const t = setTimeout(() => finish(reject, new Error(`xiaowei WS timeout (${timeoutMs}ms) action=${action}`)), timeoutMs);
+          ws.addEventListener("open", () => { try { ws.send(JSON.stringify(req)); } catch (e) { finish(reject, e); } });
+          ws.addEventListener("message", (e) => {
+            let r; try { r = JSON.parse(String(e.data)); } catch { return finish(reject, new Error("xiaowei WS malformed response")); }
+            finish(resolve, r);
+          });
+          ws.addEventListener("error", () => finish(reject, new Error(`xiaowei WS connection failed action=${action}`)));
+        }));
+      } catch (e) {
+        lastErr = e;
+        if (e.message.includes("malformed")) throw e;
+        if (attempt < 2) await new Promise((r) => setTimeout(r, 400 + Math.floor(Math.random() * 400)));
+      }
+    }
+    throw lastErr;
   }
-
   async currentIme() {
     const out = await this.session.exec("settings get secure default_input_method", 8000);
     return out.trim();
