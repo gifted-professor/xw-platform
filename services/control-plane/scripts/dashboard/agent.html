@@ -50,6 +50,19 @@
   .grid2{ display:grid; grid-template-columns:1fr 1fr; gap:8px 14px; }
   @media (max-width:640px){ .grid2{ grid-template-columns:1fr; } }
   .kv{ display:flex; gap:8px; font-size:13px; padding:4px 0; } .kv .k{ color:var(--l3); width:64px; flex-shrink:0; } .kv .v{ color:var(--l2); font-variant-numeric:tabular-nums; word-break:break-all; }
+  .pb{ border:0.5px solid var(--hair-soft); border-radius:var(--r-ctrl); padding:12px 14px; margin:8px 0; background:color-mix(in srgb,var(--bg) 30%,transparent); }
+  .pb .pn{ font-size:15px; font-weight:600; letter-spacing:-0.01em; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .pb .pg{ color:var(--l3); font-size:12px; margin:3px 0 8px; }
+  .pb .ps{ font-size:12px; line-height:1.6; counter-reset:s; }
+  .pb .ps .step{ position:relative; padding:5px 0 5px 26px; border-top:0.5px solid var(--hair-soft); counter-increment:s; }
+  .pb .ps .step:first-child{ border-top:0; }
+  .pb .ps .step::before{ content:counter(s); position:absolute; left:0; top:5px; width:18px; height:18px; text-align:center; line-height:18px; font-size:11px; font-weight:600; color:var(--l3); background:var(--inset); border-radius:50%; }
+  .pb .ps .sc{ font-family:var(--mono); font-size:12px; color:var(--indigo); font-weight:600; }
+  .pb .ps .sp{ font-family:var(--mono); font-size:11px; color:var(--l2); background:var(--term); color:#d8d8d8; padding:1px 6px; border-radius:5px; word-break:break-all; }
+  .pb .ps .se{ color:var(--green); font-size:12px; }
+  .pb .ps .sn{ color:var(--l3); font-size:12px; }
+  .pb .pbnote{ font-size:12px; color:var(--orange); margin-top:7px; padding-top:7px; border-top:0.5px dashed var(--hair-soft); }
+  .tag{ font-size:10px; font-weight:600; padding:1px 6px; border-radius:var(--r-pill); color:var(--l3); background:var(--inset); }
   @media (prefers-reduced-motion: reduce){ .badge.on i{ animation:none; } }
 </style>
 </head>
@@ -77,6 +90,12 @@ GET  /agent/manifest                        # 本说明书(JSON)
 POST /primitive       {"serial":"REPLACE_SERIAL_01","action":"feedCards"}
 POST /task           {"serial":"REPLACE_SERIAL_01","action":"start","queue":[{"task":"养号","durationMin":30,"cap":1}]}
 POST /home           {"serial":"REPLACE_SERIAL_01"}</div>
+  </div>
+
+  <div class="card">
+    <div class="h">操作剧本(agent 照着走)</div>
+    <p class="muted" id="firststeps"></p>
+    <div id="playbooks"></div>
   </div>
 
   <div class="card">
@@ -126,6 +145,19 @@ function renderManifest(m){
     <td><code>${p.name}</code></td><td><span class="muted">${Object.keys(p.params).length?Object.entries(p.params).map(([k,v])=>k+":"+v).join(", "):"—"}</span></td>
     <td>${riskBadge(p.risk)}</td><td><span class="muted">${p.desc}</span>${p.irreversible?' <span class="risk high">不可逆</span>':""}</td></tr>`).join("");
   document.getElementById("cons").innerHTML = m.constraints.map(c=>`<li>${c}</li>`).join("");
+  document.getElementById("firststeps").textContent = m.first_steps || "";
+  const riskTag = (r)=> r==="high" ? '<span class="risk high">不可逆</span>' : (r==="none"?'<span class="tag">只读</span>':`<span class="risk ${r}">${r}</span>`);
+  document.getElementById("playbooks").innerHTML = (m.playbooks||[]).map(pb=>`<div class="pb">
+    <div class="pn">${pb.name} ${riskTag(pb.risk)}</div>
+    <div class="pg">目标:${pb.goal}</div>
+    <div class="ps">${pb.steps.map(s=>`<div class="step">
+      <span class="sc">${s.call}</span> <span class="sp">${s.params?JSON.stringify(s.params):""}</span>
+      ${s.expect?`<div class="se">→ ${s.expect}</div>`:""}
+      ${s.note?`<div class="sn">注:${s.note}</div>`:""}
+      ${s.if?`<div class="sn">条件:${s.if}</div>`:""}
+    </div>`).join("")}</div>
+    ${pb.note?`<div class="pbnote">${pb.note}</div>`:""}
+  </div>`).join("");
 }
 
 let logSeen = 0;

@@ -103,6 +103,138 @@ const CONSTRAINTS = [
   "4 台可并发,各自独立 adb shell + serve,互不串台",
   "durationMin=0 = 该项手动停(无到点);停止 = 清整个队列",
   "到点优雅停:当前圈跑完才退,实际时长会略多于设定",
+  "openCard/likeCard/openProfile/openCommentSection 都吃 {idx} 自动从首页 feed 解析,不用先 feedCards",
+  "视频笔记的 activity 是 DetailFeed,图文是 NoteDetail;评论优先图文(skipVideo 思路),视频先 pauseIfVideoNote(serve 内置)",
+];
+
+// 操作剧本:agent 一接管照着走,从"接管第一步"到各类精确操作。
+// call 用端点名;primitive 步骤用 POST /primitive {serial, action, ...}。
+const PLAYBOOKS = [
+  {
+    name: "0 · 接管第一步(必做)", goal: "接管并看清 4 台当前态,后续每步都基于此",
+    risk: "none", reversible: true,
+    steps: [
+      { call: "POST /agent/takeover", params: { id: "<你的id>", kind: "<claude|codex|...>" }, expect: "active=true,人页绿灯亮" },
+      { call: "GET /status", expect: "devices[4] 各含 serve/activity/ime/running;agent.active=true" },
+      { call: "POST /agent/heartbeat", params: { id: "<你的id>" }, expect: "ok;之后每≤15s 重复一次,>30s 不发自动释放" },
+    ],
+    note: "全程必须每≤15s 发一次 heartbeat;操作中途也要发。干完 POST /agent/release。",
+  },
+  {
+    name: "1 · 读首页卡片(侦察)", goal: "看 4 台各自首页有哪些卡片,决定点哪张",
+    risk: "none", reversible: true,
+    steps: [
+      { call: "POST /home", params: { serial: "<s>" }, expect: "IndexActivityV2(深页也重置)", if: "该台不在首页" },
+      { call: "POST /primitive", params: { serial: "<s>", action: "feedCards" }, expect: "{cards:[{authorName,title,cover:{center:[x,y]}}]}" },
+    ],
+    note: "idx 会随滚动变化;每次操作前重新 feedCards 或直接用带 idx 的原语(它会自己 dump)。",
+  },
+  {
+    name: "2 · 给第 N 张卡点赞(不进详情)", goal: "首页上直接给某张卡点赞",
+    risk: "low", reversible: true,
+    steps: [
+      { call: "POST /primitive", params: { serial: "<s>", action: "likeCard", idx: 0 }, expect: "{resolved:true,card,tapped:...}" },
+    ],
+    note: "idx 从 0 起。resolved=false 说明该卡无 likeButton(可能已赞过/布局异常),换 idx。",
+  },
+  {
+    name: "3 · 打开第 N 张卡看详情+评论", goal: "进笔记详情,读评论",
+    risk: "low", reversible: true,
+    steps: [
+      { call: "POST /primitive", params: { serial: "<s>", action: "openCard", idx: 1 }, expect: "落到 NoteDetail(图文)或 DetailFeed(视频)" },
+      { call: "POST /primitive", params: { serial: "<s>", action: "parseComments" }, expect: "{comments,topNonAuthor}" },
+      { call: "POST /primitive", params: { serial: "<s>", action: "backFromNote" }, expect: "回首页" },
+    ],
+    note: "图文=NoteDetail 可评论;视频=DetailFeed 评论前 serve 会自动暂停。backFromNote 回首页。",
+  },
+  {
+    name: "4 · 给当前笔记详情点赞/收藏", goal: "在已打开的笔记详情页点赞或收藏",
+    risk: "low", reversible: true,
+    steps: [
+      { call: "POST /primitive", params: { serial: "<s>", action: "openCard", idx: 0 }, expect: "NoteDetail|DetailFeed" },
+      { call: "POST /primitive", params: { serial: "<s>", action: "likeDetail" }, expect: "{resolved:true,tapped:...}" },
+      { call: "POST /primitive", params: { serial: "<s>", action: "favoriteDetail" }, expect: "收藏(可选)", optional: true },
+    ],
+    note: "必须在笔记详情页(notOnNote 会 resolved:false)。先 openCard 再 likeDetail。",
+  },
+  {
+    name: "5 · 给第 N 张图文笔记发评论(不可逆!)", goal: "对图文笔记发一条真评论",
+    risk: "high", irreversible: true,
+    steps: [
+      { call: "POST /home", params: { serial: "<s>" }, expect: "IndexActivityV2" },
+      { call: "POST /primitive", params: { serial: "<s>", action: "openCard", idx: 1 }, expect: "NoteDetail(图文)" },
+      { call: "判 focus", params: { call: "GET /status 看 activity" }, expect: "NoteDetail=图文可评;DetailFeed=视频换 idx", branch: true },
+      { call: "POST /primitive", params: { serial: "<s>", action: "commentOnOpenNote", maxScrolls: 6, text: "<可选,不传则 serve 用 LLM 生成>" }, expect: "{ok:true,...} 评论真实发出,公开不可逆" },
+      { call: "POST /primitive", params: { serial: "<s>", action: "parseComments" }, expect: "看到自己的评论(验证)", verify: true },
+      { call: "POST /home", params: { serial: "<s>" }, expect: "回首页收尾" },
+    ],
+    note: "评论 = 真实公开不可逆!每圈最多 1 条(cap)。优先图文;视频别评。先 commentBenchmark(零发送)练手。",
+  },
+  {
+    name: "6 · 评论基准(零发送,练手/测耗时)", goal: "走完整评论流程但不真发,零痕迹",
+    risk: "none", reversible: true,
+    steps: [
+      { call: "POST /primitive", params: { serial: "<s>", action: "commentBenchmark", idx: 0 }, expect: "{ok:true,各步 ms} 不发送" },
+    ],
+    note: "首次接管想试评论流程又不敢真发,先跑这个。inputTextDryRun{text} 也可单测输入。",
+  },
+  {
+    name: "7 · 进某作者主页浏览", goal: "打开卡片作者的主页,看作品网格",
+    risk: "low", reversible: true,
+    steps: [
+      { call: "POST /primitive", params: { serial: "<s>", action: "openProfile", idx: 0 }, expect: "{resolved,opened}" },
+      { call: "POST /primitive", params: { serial: "<s>", action: "profileGrid" }, expect: "{covers:[...]}" },
+      { call: "POST /primitive", params: { serial: "<s>", action: "scrollProfile", n: 2 }, expect: "主页下滑" },
+      { call: "POST /primitive", params: { serial: "<s>", action: "backFromProfile" }, expect: "回首页" },
+    ],
+  },
+  {
+    name: "8 · 刷 N 屏养活跃度", goal: "纯滚动不点不评,养账号活跃",
+    risk: "low", reversible: true,
+    steps: [
+      { call: "POST /primitive", params: { serial: "<s>", action: "scrollN", n: 3, down: true }, expect: "刷 3 屏" },
+    ],
+    note: "down=true=往下翻内容。批量养号直接用剧本 10 起预设任务,别手摇滚动。",
+  },
+  {
+    name: "9 · 输入法检查/恢复", goal: "确保是 SogouIME(被 xwkeyboard 顶替会打不出中文)",
+    risk: "low", reversible: true,
+    steps: [
+      { call: "GET /status", expect: "devices[].ime 含 sogou=正常;含 xwkeyboard=异常" },
+      { call: "POST /primitive", params: { serial: "<s>", action: "restoreIme" }, expect: "恢复 SogouIME", if: "ime 异常" },
+    ],
+  },
+  {
+    name: "10 · 起预设任务跑 X 分钟(推荐批量)", goal: "让某台自动跑养号/涨粉/纯刷等预设任务,按时长",
+    risk: "见任务", reversible: "见任务",
+    steps: [
+      { call: "POST /task", params: { serial: "<s>", action: "start", queue: [{ task: "养号", durationMin: 30, cap: 1 }] }, expect: "{ok,pid,items}" },
+      { call: "GET /status", expect: "该台 task.idx/total/remainingMs/ok/skip/comments 实时滚动" },
+      { call: "POST /task", params: { serial: "<s>", action: "stop" }, expect: "清整个队列,优雅停(当前圈跑完)", if: "要中途停" },
+    ],
+    note: "队列可多项:[{task:养号,durationMin:30,cap:1},{task:涨粉,durationMin:20,cap:1}] 依次跑。各台可不同任务同时跑(4 台并发)。这是省事的主路径,精确单步用剧本 1-9。",
+  },
+  {
+    name: "11 · 自由组合(4 台各干各的)", goal: "同时:A 跑养号队列 / B 精确给第3张点赞 / C 读某作者主页 / D 静默",
+    risk: "混合", reversible: "混合",
+    steps: [
+      { call: "POST /task", params: { serial: "REPLACE_SERIAL_01", action: "start", queue: [{ task: "养号", durationMin: 30, cap: 1 }] } },
+      { call: "POST /primitive", params: { serial: "REPLACE_SERIAL_03", action: "likeCard", idx: 2 } },
+      { call: "POST /primitive", params: { serial: "REPLACE_SERIAL_02", action: "openProfile", idx: 0 } },
+      { call: "POST /agent/heartbeat", params: { id: "<你的id>" }, note: "并发操作期间心跳别停" },
+    ],
+    note: "4 台 serve + adb 独立,可同时调;只有小薇 22222 是共享(评论时串行,serve 内部已排队)。",
+  },
+  {
+    name: "12 · 收工释放", goal: "停所有任务、回首页、释放接管",
+    risk: "none", reversible: true,
+    steps: [
+      { call: "POST /task", params: { serial: "<每台>", action: "stop" }, expect: "全停" },
+      { call: "POST /home", params: { serial: "<每台>" }, expect: "全 IndexActivityV2" },
+      { call: "POST /agent/release", params: { id: "<你的id>" }, expect: "绿灯灭" },
+    ],
+    note: "别留任务在跑(手机无人值守)。释放后若 30s 内想再接管,重新 takeover。",
+  },
 ];
 
 function log(...a) { console.log(new Date().toISOString(), ...a); }
@@ -154,6 +286,8 @@ async function buildManifest() {
       { method: "POST", path: "/agent/release", body: { id: "str" }, desc: "主动释放" },
     ],
     constraints: CONSTRAINTS,
+    playbooks: PLAYBOOKS,
+    first_steps: "接管后照 PLAYBOOKS[0] 走;批量操作用剧本10起预设任务;精确单步用剧本1-9;收工用剧本12。全程每≤15s heartbeat。",
     takeover: {
       heartbeat_interval_s: HEARTBEAT_INTERVAL_S,
       timeout_s: HEARTBEAT_TIMEOUT_MS / 1000,
