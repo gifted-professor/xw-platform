@@ -43,6 +43,11 @@
   .sub{ font-size:15px; color:var(--l3); letter-spacing:-0.01em; }
   .live{ margin-left:auto; display:flex; align-items:center; gap:7px; font-size:13px; color:var(--l3); font-variant-numeric:tabular-nums; }
   .live i{ width:8px; height:8px; border-radius:50%; background:var(--green); animation:p 2.4s var(--ease) infinite; }
+  .agbadge{ display:inline-flex; align-items:center; gap:7px; font-size:13px; font-weight:600; padding:4px 11px 4px 8px; border-radius:var(--r-pill); margin-left:8px; font-variant-numeric:tabular-nums; transition:background 240ms var(--ease); }
+  .agbadge .agd{ width:9px; height:9px; border-radius:50%; background:var(--l4); }
+  .agbadge.on{ color:var(--green); background:color-mix(in srgb,var(--green) 14%,transparent); }
+  .agbadge.on .agd{ background:var(--green); box-shadow:0 0 8px color-mix(in srgb,var(--green) 70%,transparent); animation:p 2s var(--ease) infinite; }
+  .agbadge.off{ color:var(--l3); background:var(--inset); }
   @keyframes p{ 0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--green) 50%,transparent)} 70%{box-shadow:0 0 0 8px transparent} 100%{box-shadow:0 0 0 0 transparent} }
   .actions{ display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; }
 
@@ -126,6 +131,7 @@
     <span class="title">4 台</span>
     <span class="sub">小红书控制台</span>
     <span class="live"><i></i><span id="ts">--:--:--</span></span>
+    <span class="agbadge" id="agbadge" title="agent 接管态(只标不锁)"><span class="agd"></span><span id="agtxt">无 agent</span></span>
   </div>
   <div class="actions">
     <button class="btn primary" onclick="presetAll([['养号',30,1]])">齐跑养号 · 30分</button>
@@ -255,7 +261,13 @@ function render(){
   }).join("");
   document.getElementById("ts").textContent=new Date().toLocaleTimeString("zh-CN",{hour12:false});
 }
-async function poll(){ state=await api("/status"); render(); }
+async function poll(){ state=await api("/status"); render(); updateAgent(); }
+function updateAgent(){
+  const a = state.agent, b=document.getElementById("agbadge"), t=document.getElementById("agtxt");
+  if(!a||!b) return;
+  if(a.active){ b.className="agbadge on"; t.textContent = "agent · "+(a.id||"?"); }
+  else { b.className="agbadge off"; t.textContent = a&&a.id ? "agent 超时" : "无 agent"; }
+}
 async function loadTasks(){ const t=await api("/tasks"); tasks=t.tasks||[]; if(!tasks.length) tasks=["养号","涨粉","自主","互动","纯刷"]; render(); }
 function jb(o){ return {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(o)}; }
 function startOne(s){ const q=syncEditor(s); if(!q.length){return;} api("/task",jb({serial:s,action:"start",queue:q})).then(poll); }

@@ -50,7 +50,119 @@ const DEVICES = [
 // serial -> 运行态记录
 const running = new Map();
 
+// ---- agent 接管说明书(机器可读 manifest 的静态部分)----
+const TASKS_INFO = [
+  { name: "养号", risk: "low", reversible: true, cap: "无评论,cap 忽略", steps: ["scrollN 3", "likeCard idx0", "likeCard idx1"], desc: "纯点赞养账号权重,零不可逆动作" },
+  { name: "涨粉", risk: "medium", reversible: false, cap: "comment-cap 1 每圈(防风控)", steps: ["scrollN 3", "likeCard idx0", "commentOnOpenNote idx1(只评图文,跳视频)"], desc: "点赞+真评论吸回关;评论真实公开不可逆" },
+  { name: "互动", risk: "medium", reversible: false, cap: "comment-cap 1 每圈", steps: ["scrollN 2", "commentOnOpenNote idx0", "commentOnOpenNote idx1(视频也评)"], desc: "纯评论任务" },
+  { name: "纯刷", risk: "low", reversible: true, cap: "无评论", steps: ["scrollN 5"], desc: "只刷不点不评,最轻量养活跃度" },
+  { name: "自主", risk: "medium", reversible: false, cap: "comment-cap 1 每圈", steps: ["LLM 每张卡自主决策 like/comment/skip"], desc: "AI 自主决策层,带 UNSAFE 过滤" },
+];
+
+// 31 个 serve 原语:curated 给常用原语标参数,rare 的只列名(POST /primitive {...params} 透传,未知参数 serve 忽略)
+const PRIMITIVES_CURATED = [
+  { name: "focus", params: {}, desc: "取当前前台 activity(包名/类名)", risk: "none" },
+  { name: "dump", params: {}, desc: "dump 屏幕节点层级(定位元素)", risk: "none" },
+  { name: "metrics", params: {}, desc: "serve 进程内累计计数 + 存活探针", risk: "none" },
+  { name: "feedCards", params: {}, desc: "取首页可见卡片(idx/author/title)", risk: "none" },
+  { name: "tap", params: { x: "int", y: "int" }, desc: "点屏幕坐标", risk: "low" },
+  { name: "scrollUp", params: {}, desc: "向上滚(往下翻内容)", risk: "low" },
+  { name: "scrollDown", params: {}, desc: "向下滚(往上翻)", risk: "low" },
+  { name: "scrollN", params: { n: "int" }, desc: "刷 n 屏", risk: "low" },
+  { name: "openCard", params: { idx: "int" }, desc: "打开首页第 idx 张卡进笔记详情", risk: "low" },
+  { name: "likeCard", params: { idx: "int" }, desc: "不打开笔记,直接给首页第 idx 张卡点赞", risk: "low" },
+  { name: "likeDetail", params: {}, desc: "给当前打开的笔记详情点赞", risk: "low" },
+  { name: "commentOnOpenNote", params: { idx: "int", skipVideo: "bool", maxScrolls: "int" }, desc: "打开第 idx 张图文笔记发真评论(不可逆!)", risk: "high", irreversible: true },
+  { name: "openCommentSection", params: {}, desc: "打开当前笔记评论区", risk: "low" },
+  { name: "parseComments", params: {}, desc: "解析当前笔记评论列表", risk: "none" },
+  { name: "openProfile", params: {}, desc: "打开作者主页", risk: "low" },
+  { name: "profileGrid", params: {}, desc: "取主页笔记网格", risk: "none" },
+  { name: "scrollProfile", params: {}, desc: "滚主页", risk: "low" },
+  { name: "playProfileVideo", params: {}, desc: "播主页视频笔记", risk: "low" },
+  { name: "backToFeed", params: {}, desc: "回首页流", risk: "low" },
+  { name: "backFromNote", params: {}, desc: "从笔记详情返回", risk: "low" },
+  { name: "backFromProfile", params: {}, desc: "从主页返回", risk: "low" },
+  { name: "restoreIme", params: {}, desc: "恢复 SogouIME(若被 xwkeyboard 顶替)", risk: "low" },
+  { name: "inputTextDryRun", params: { text: "string" }, desc: "走 IME 桥试输入文本(不发送)", risk: "low" },
+  { name: "videoNoteDryRun", params: {}, desc: "视频笔记输入试运行", risk: "low" },
+  { name: "commentBox", params: {}, desc: "打开评论输入框", risk: "low" },
+  { name: "detailBar", params: {}, desc: "取笔记详情底栏", risk: "none" },
+  { name: "favoriteDetail", params: {}, desc: "收藏当前笔记", risk: "low" },
+  { name: "rewriteComment", params: {}, desc: "让 LLM 重写评论", risk: "low" },
+  { name: "commentBenchmark", params: {}, desc: "评论基准(零发,只测计数)", risk: "none" },
+  { name: "noteBenchmark", params: {}, desc: "笔记基准", risk: "none" },
+  { name: "commentTransaction", params: {}, desc: "评论事务(计 countDelta 实证)", risk: "high" },
+];
+
+const CONSTRAINTS = [
+  "comment-cap 1 每圈,多了触发小红书风控",
+  "回首页 POST /home 已内置 force-stop 清栈再重启;别只 monkey LAUNCHER(深页不重置)",
+  "别直连 ws://127.0.0.1:22222(共享中文输入桥,跨进程锁);输入走 inputTextDryRun / commentOnOpenNote",
+  "某台跑批期间别抢该台 adb(/status 在该台 running 时已自动跳过 focus/IME,直接 focus 会 10s 超时)",
+  "评论(commentOnOpenNote/commentTransaction)是真实公开不可逆;点赞/刷屏低风险",
+  "4 台可并发,各自独立 adb shell + serve,互不串台",
+  "durationMin=0 = 该项手动停(无到点);停止 = 清整个队列",
+  "到点优雅停:当前圈跑完才退,实际时长会略多于设定",
+];
+
 function log(...a) { console.log(new Date().toISOString(), ...a); }
+
+// ---- agent 接管(心跳保活,30s 无心跳自动释放)----
+const HEARTBEAT_TIMEOUT_MS = 30000;
+const HEARTBEAT_INTERVAL_S = 15; // 推荐 agent 每 ≤15s 一次
+const agent = { id: null, kind: null, takenAt: null, lastHeartbeat: null };
+const agentLog = [];
+function aLog(type, detail) { agentLog.push({ ts: Date.now(), type, detail }); if (agentLog.length > 300) agentLog.shift(); }
+function agentActive() {
+  return !!(agent.id && agent.lastHeartbeat && Date.now() - agent.lastHeartbeat < HEARTBEAT_TIMEOUT_MS);
+}
+function agentState() {
+  return {
+    active: agentActive(),
+    id: agent.id, kind: agent.kind,
+    takenAt: agent.takenAt,
+    lastHeartbeatAgo: agent.lastHeartbeat ? Date.now() - agent.lastHeartbeat : null,
+    timeoutMs: HEARTBEAT_TIMEOUT_MS,
+  };
+}
+
+// ---- manifest(给 agent 的机器可读说明书)----
+async function buildManifest() {
+  const st = await buildStatus();
+  return {
+    project: "xhs-device-agent — 4 真机小红书自动化控制台",
+    purpose: "4 台 Android 真机各跑一个账号,经 fast-operator 旁路高速操作小红书(刷/赞/评论)。dashboard 聚合 4 个 serve + task-runner,可启停预设任务队列、调原语、回首页。本 manifest 供 AI agent 冷接管。",
+    base_url: "http://<this-host>:17900",
+    devices: DEVICES.map((d) => ({ serial: d.serial, serve_port: d.port })),
+    tasks: TASKS_INFO,
+    primitives: {
+      curated: PRIMITIVES_CURATED,
+      count: PRIMITIVES_CURATED.length,
+      usage: "POST /primitive {serial, action, ...params} 代理到该台 serve;未知参数被 serve 忽略;权威参数见 fast-operator.mjs",
+    },
+    api: [
+      { method: "GET", path: "/status", desc: "4 台聚合状态 + agent 接管态" },
+      { method: "GET", path: "/tasks", desc: "任务名列表" },
+      { method: "GET", path: "/agent/manifest", desc: "本说明书(JSON)" },
+      { method: "GET", path: "/agent", desc: "人可读 agent 控制面(HTML)" },
+      { method: "GET", path: "/agent/state", desc: "agent 接管态 + 事件日志(轮询)" },
+      { method: "POST", path: "/task", body: { serial: "str", action: "start|stop", queue: "[{task,durationMin,cap}]" }, desc: "起/停任务队列;旧单任务 {task,durationMin,cap} 仍兼容" },
+      { method: "POST", path: "/home", body: { serial: "str" }, desc: "回首页(force-stop+重启,深页也重置到 IndexActivityV2)" },
+      { method: "POST", path: "/primitive", body: { serial: "str", action: "原语名", "...": "原语参数" }, desc: "代理到该台 serve 的 31 个原语之一(精确控制)" },
+      { method: "POST", path: "/agent/takeover", body: { id: "str", kind: "str" }, desc: "接管 → 绿灯亮" },
+      { method: "POST", path: "/agent/heartbeat", body: { id: "str" }, desc: `保活,每≤${HEARTBEAT_INTERVAL_S}s 一次;>30s 无心跳自动释放` },
+      { method: "POST", path: "/agent/release", body: { id: "str" }, desc: "主动释放" },
+    ],
+    constraints: CONSTRAINTS,
+    takeover: {
+      heartbeat_interval_s: HEARTBEAT_INTERVAL_S,
+      timeout_s: HEARTBEAT_TIMEOUT_MS / 1000,
+      how: "POST /agent/takeover {id,kind} → POST /agent/heartbeat {id} 每≤15s → POST /agent/release {id};>30s 无心跳自动释放,绿灯灭",
+      green_light: "人页 /status.agent.active=true 时顶栏显示绿灯徽章(只标不锁,人仍可介入)",
+    },
+    current_state: st,
+  };
+}
 
 // ---- serve HTTP 调用 ----
 async function serveCall(port, action, extra = {}) {
@@ -287,7 +399,7 @@ async function buildStatus() {
     }
     out.push(st);
   }
-  return { devices: out, ts: Date.now() };
+  return { devices: out, ts: Date.now(), agent: agentState() };
 }
 
 // ---- 任务列表 ----
@@ -356,6 +468,58 @@ const server = http.createServer(async (req, res) => {
       }
     }
     return send(res, 400, { error: "bad action" });
+  }
+  // ---- agent 控制面 ----
+  if (req.method === "GET" && path === "/agent") {
+    try {
+      const html = await readFile(join(STATIC_DIR, "agent.html"));
+      return send(res, 200, html, "text/html");
+    } catch {
+      return send(res, 404, { error: "agent.html not found" });
+    }
+  }
+  if (req.method === "GET" && path === "/agent/manifest") {
+    return send(res, 200, await buildManifest());
+  }
+  if (req.method === "GET" && path === "/agent/state") {
+    return send(res, 200, { agent: agentState(), log: agentLog.slice(-80) });
+  }
+  if (req.method === "POST" && path === "/agent/takeover") {
+    const b = await readBody(req);
+    agent.id = String(b.id || "agent");
+    agent.kind = String(b.kind || "unknown");
+    agent.takenAt = Date.now();
+    agent.lastHeartbeat = Date.now();
+    aLog("takeover", `${agent.id} (${agent.kind})`);
+    log("agent takeover", agent.id, agent.kind);
+    return send(res, 200, { ok: true, ...agentState() });
+  }
+  if (req.method === "POST" && path === "/agent/heartbeat") {
+    const b = await readBody(req);
+    if (!agent.id) return send(res, 200, { ok: false, error: "no active takeover" });
+    if (b.id && b.id !== agent.id) return send(res, 409, { ok: false, error: "another agent active", current: agent.id });
+    agent.lastHeartbeat = Date.now();
+    aLog("heartbeat", agent.id);
+    return send(res, 200, { ok: true, ...agentState() });
+  }
+  if (req.method === "POST" && path === "/agent/release") {
+    const b = await readBody(req);
+    if (b.id && b.id !== agent.id) return send(res, 409, { ok: false, error: "id mismatch", current: agent.id });
+    aLog("release", agent.id || "(none)");
+    log("agent release", agent.id);
+    agent.id = null; agent.kind = null; agent.takenAt = null; agent.lastHeartbeat = null;
+    return send(res, 200, { ok: true });
+  }
+  if (req.method === "POST" && path === "/primitive") {
+    const b = await readBody(req);
+    const d = DEVICES.find((x) => x.serial === b.serial);
+    if (!d) return send(res, 400, { error: "bad serial" });
+    const { serial, action, ...params } = b;
+    if (!action) return send(res, 400, { error: "no action" });
+    const who = agentActive() ? agent.id : "human";
+    aLog("primitive", `${who} → ${serial} ${action}${Object.keys(params).length ? " " + JSON.stringify(params) : ""}`);
+    const r = await serveCall(d.port, action, params);
+    return send(res, 200, r);
   }
   send(res, 404, { error: "not found", path });
 });
