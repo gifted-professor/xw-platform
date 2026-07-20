@@ -1,0 +1,11 @@
+{
+  "name": "涨粉",
+  "loops": 20,
+  "restBetweenLoops": { "minMs": 10000, "maxMs": 25000 },
+  "onError": "skip",
+  "steps": [
+    { "action": "scrollN", "n": 3 },
+    { "action": "likeCard", "idx": 0 },
+    { "action": "commentOnOpenNote", "idx": 1, "skipVideo": true, "maxScrolls": 6 }
+  ]
+}

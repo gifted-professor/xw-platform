@@ -1,0 +1,9 @@
+{
+  "name": "纯刷",
+  "loops": 30,
+  "restBetweenLoops": { "minMs": 4000, "maxMs": 10000 },
+  "onError": "skip",
+  "steps": [
+    { "action": "scrollN", "n": 5 }
+  ]
+}
