@@ -71,6 +71,10 @@
   .pill .d{ width:7px; height:7px; border-radius:50%; }
   .pill.ok{ color:var(--green); background:color-mix(in srgb,var(--green) 12%,transparent); } .pill.ok .d{ background:var(--green); }
   .pill.down{ color:var(--red); background:color-mix(in srgb,var(--red) 12%,transparent); } .pill.down .d{ background:var(--red); }
+  .pill.loading{ color:var(--l3); background:var(--inset); } .pill.loading .d{ background:var(--l4); animation:none; }
+  .agentbar{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-top:10px; padding:9px 13px; border-radius:12px; background:color-mix(in srgb,var(--indigo) 10%,transparent); border:0.5px solid color-mix(in srgb,var(--indigo) 22%,transparent); font-size:13px; }
+  .agentbar .ai{ font-size:15px; } .agentbar .lnk{ color:var(--indigo); font-weight:600; text-decoration:none; } .agentbar .lnk:hover{ text-decoration:underline; }
+  .agentbar code{ font-family:var(--mono); font-size:11px; } .agentbar .sep{ color:var(--l4); }
 
   .body{ padding:4px 17px 14px; }
   .row{ display:flex; align-items:baseline; gap:12px; padding:9px 0; }
@@ -139,6 +143,16 @@
     <button class="btn primary" onclick="presetAll([['养号',20,1],['涨粉',10,1]])">养号20分 + 涨粉10分</button>
     <button class="btn warn" onclick="allHome()">全回首页</button>
     <button class="btn danger" onclick="allStop()">全部停止</button>
+  </div>
+  <div class="agentbar">
+    <span class="ai">🤖</span>
+    <span>AI agent 接管?</span>
+    <a class="lnk" href="/agent" target="_blank">机器控制面 /agent</a>
+    <span class="sep">·</span>
+    <span>说明书 <code>GET /agent/manifest</code></span>
+    <span class="sep">·</span>
+    <span>接管 <code>POST /agent/takeover {"id":"…","kind":"…"}</code> + 每≤15s heartbeat</span>
+    <span id="agbarstate" class="sep"></span>
   </div>
 </header>
 <main class="grid" id="grid"></main>
@@ -227,8 +241,10 @@ function render(){
   const grid=document.getElementById("grid");
   const dm={}; (state.devices||[]).forEach(d=>dm[d.serial]=d);
   grid.innerHTML=DEVS.map(s=>{
-    const d=dm[s]||{serial:s,serve:"down",running:false};
+    const d=dm[s]||{serial:s,serve:"loading",running:false};
     const ok=d.serve==="ok";
+    const pcls = ok?"ok":(d.serve==="loading"?"loading":"down");
+    const ptxt = ok?"在线":(d.serve==="loading"?"加载中":"离线");
     let body;
     if(d.task){
       const r=d.task, dur=r.durationMin||0, el=r.elapsedMs||0;
@@ -250,7 +266,7 @@ function render(){
         ${d.metrics?`<div class="row"><span class="k">活动量</span><span class="v"><span class="meta">dump <b>${f(d.metrics.dumps,0)}</b> · tap <b>${f(d.metrics.taps,0)}</b>${d.metrics.avgDumpMs?` · 均时 <b>${Math.round(d.metrics.avgDumpMs)}</b>ms`:""}</span></span></div>`:""}`;
     }
     return `<article class="card">
-      <div class="head"><span class="ser">${s}</span><span class="port">:${d.port||""}</span><span class="pill ${ok?"ok":"down"}"><span class="d"></span>${ok?"在线":"离线"}</span></div>
+      <div class="head"><span class="ser">${s}</span><span class="port">:${d.port||""}</span><span class="pill ${pcls}"><span class="d"></span>${ptxt}</span></div>
       <div class="body">${d.running?"":`<div style="padding:4px 0 8px"><div style="font-size:11px;color:var(--l4);font-weight:500;letter-spacing:0.02em;margin-bottom:2px">任务队列(按时长,依次跑)</div>${editorHTML(s)}</div>`}${body}</div>
       <div class="controls">
         <button class="btn primary" onclick="startOne('${s}')">启动</button>
@@ -263,10 +279,9 @@ function render(){
 }
 async function poll(){ state=await api("/status"); render(); updateAgent(); }
 function updateAgent(){
-  const a = state.agent, b=document.getElementById("agbadge"), t=document.getElementById("agtxt");
-  if(!a||!b) return;
-  if(a.active){ b.className="agbadge on"; t.textContent = "agent · "+(a.id||"?"); }
-  else { b.className="agbadge off"; t.textContent = a&&a.id ? "agent 超时" : "无 agent"; }
+  const a = state.agent, b=document.getElementById("agbadge"), t=document.getElementById("agtxt"), bs=document.getElementById("agbarstate");
+  if(a && a.active){ b.className="agbadge on"; t.textContent = "agent · "+(a.id||"?"); if(bs) bs.textContent = "· 当前接管: "+a.id; }
+  else { b.className="agbadge off"; t.textContent = a&&a.id ? "agent 超时" : "无 agent"; if(bs) bs.textContent = a&&a.id ? "· 上次: "+a.id+" (已超时)" : ""; }
 }
 async function loadTasks(){ const t=await api("/tasks"); tasks=t.tasks||[]; if(!tasks.length) tasks=["养号","涨粉","自主","互动","纯刷"]; render(); }
 function jb(o){ return {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(o)}; }
