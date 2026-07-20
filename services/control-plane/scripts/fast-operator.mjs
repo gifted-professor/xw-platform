@@ -204,6 +204,22 @@ export class FastOperator {
     this.llmEndpoint = null;     // http://100.84.194.46:8317/v1/chat/completions
     this.llmKey = null;
     this.llmModel = null;
+    // Slice 2 优化配置（默认保持原拟人/校验行为；由 --ime-sticky/--pace-fast/--verify/--fast 注入）
+    this.imeSticky = false;      // 批处理时发送后不切回 SogouIME，批结束用 restoreImeToPrior() 统一还原
+    this.verifyMode = "strict";  // none|light|strict
+    this._priorIme = null;       // inputTextViaXiaowei 记录的原始 IME，供 imeSticky 批后还原
+    this.paceFast = false;       // --pace-fast/--fast：评论流程 pace 收紧（牺牲拟人度换吞吐）
+  }
+
+  // 评论流程 pace：paceFast 时收紧到 400-800，否则按 kind 给拟人间隔。
+  commentPace(kind = "preBox") {
+    if (this.paceFast) return this.pacer.pace({ minMs: 400, maxMs: 800 });
+    const bounds = {
+      preBox: { minMs: 1500, maxMs: 3500 },   // 开评论框前
+      postTap: { minMs: 800, maxMs: 2000 },   // tap 框后等编辑器
+      postOpen: { minMs: 1200, maxMs: 2800 }, // openCard 后
+    }[kind] || { minMs: 800, maxMs: 2000 };
+    return this.pacer.pace(bounds);
   }
 
   async start() { await this.session.start(); return this; }
@@ -218,26 +234,34 @@ export class FastOperator {
   // hierarchy dump：exec-out uiautomator dump /dev/tty（一次性，避免持久 shell 分帧）
   // 注：详情页 like/收藏/评论按钮 content-desc 为空（xhs 图标按钮无 label），resource-id
   // 被混淆，所以靠位置+class+clickability 解析，不依赖文本。解码用 utf-8。
-  async dump({ label } = {}) {
+  async dump({ label, retries = 2 } = {}) {
     const t0 = Date.now();
-    let buf;
-    try {
-      buf = await this.session.execOut(["uiautomator", "dump", "/dev/tty"], 15000);
-    } catch (e) {
-      // 退路：写到 /sdcard 再 cat
-      await this.session.exec("uiautomator dump /sdcard/fo-dump.xml 2>/dev/null", 15000);
-      buf = await this.session.execOut(["cat", "/sdcard/fo-dump.xml"], 10000);
+    let lastErr = null;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      let buf;
+      try {
+        buf = await this.session.execOut(["uiautomator", "dump", "/dev/tty"], 15000);
+      } catch (e) {
+        // 退路：写到 /sdcard 再 cat
+        await this.session.exec("uiautomator dump /sdcard/fo-dump.xml 2>/dev/null", 15000);
+        try { buf = await this.session.execOut(["cat", "/sdcard/fo-dump.xml"], 10000); }
+        catch (e2) { lastErr = e2; if (attempt < retries) { await new Promise((r) => setTimeout(r, 400)); continue; } throw e2; }
+      }
+      const xml = buf ? buf.toString("utf8") : "";
+      const start = xml.indexOf("<hierarchy");
+      const end = xml.indexOf("</hierarchy>", start);
+      if (start >= 0 && end >= 0) {
+        const doc = parseUiAutomatorXml(xml.slice(start, end + "</hierarchy>".length));
+        this.metrics.dumps += 1;
+        this.metrics.totalDumpMs += Date.now() - t0;
+        doc._dumpMs = Date.now() - t0;
+        doc._label = label;
+        return doc;
+      }
+      lastErr = new Error("hierarchy dump incomplete");
+      if (attempt < retries) await new Promise((r) => setTimeout(r, 400)); // uiautomator 瞬时截断，重试常恢复
     }
-    const xml = buf.toString("utf8");
-    const start = xml.indexOf("<hierarchy");
-    const end = xml.indexOf("</hierarchy>", start);
-    if (start < 0 || end < 0) throw new Error("hierarchy dump incomplete");
-    const doc = parseUiAutomatorXml(xml.slice(start, end + "</hierarchy>".length));
-    this.metrics.dumps += 1;
-    this.metrics.totalDumpMs += Date.now() - t0;
-    doc._dumpMs = Date.now() - t0;
-    doc._label = label;
-    return doc;
+    throw lastErr;
   }
 
   // feed 滚屏：连续 N 次 input swipe，只在末次后 dump 一次。
@@ -331,13 +355,46 @@ export class FastOperator {
     return Math.round(v);
   }
 
-  // 进详情：tap 封面中心，等待并确认进入 NoteDetailActivity。
+  // 进详情：tap 封面中心，等待并确认进入 NoteDetail/DetailFeed。视频笔记(DetailFeed)自动播放会让
+  // uiautomator "could not get idle state"，此处 tap 屏幕中心暂停视频（仅对 DetailFeed 触发，图笔记 NoteDetail 不动）。
   async openCard(card) {
     if (!card?.cover?.center) throw new Error("card cover not resolved");
     await this.tap(card.cover.center[0], card.cover.center[1]);
     await new Promise((r) => setTimeout(r, 900));
     const f = await this.currentFocus();
-    return { opened: (f.activity || "").includes("NoteDetail"), activity: f.activity };
+    const act = f.activity || "";
+    const opened = act.includes("NoteDetail") || act.includes("DetailFeed");
+    if (opened && act.includes("DetailFeed")) await this.pauseIfVideoNote();
+    return { opened, activity: act };
+  }
+
+  // 暂停视频笔记的自动播放：tap 屏幕中心切换播放/暂停。若 tap 偏到别的 activity（理论上不会），BACK 回 NoteDetail。
+  async pauseIfVideoNote() {
+    await this.tap(540, 960);
+    await new Promise((r) => setTimeout(r, 600));
+    const f = await this.currentFocus();
+    if (!/NoteDetail|DetailFeed/.test(f.activity || "")) {
+      await this.session.exec("input keyevent KEYCODE_BACK", 6000);
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    return { paused: true, activity: (await this.currentFocus()).activity };
+  }
+
+  // feed dump：feed 内联视频自动播放也会让 uiautomator 拿不到 idle。失败时小滚一次把视频移出视口再重试。
+  async feedDump({ label, retries = 2 } = {}) {
+    for (let i = 0; i <= retries; i++) {
+      try {
+        const d = await this.dump({ label, retries: 0 });
+        const cards = this.feedCards(d);
+        if (cards.length) return d;
+        // dump 成功但没卡：滚一下再试
+      } catch (e) { /* idle/incomplete，下面滚一下再试 */ }
+      if (i < retries) {
+        await this.session.exec("input swipe 540 1500 540 1100 300", 4000);
+        await new Promise((r) => setTimeout(r, 600));
+      }
+    }
+    return this.dump({ label, retries: 1 });
   }
 
   // 返回 feed：BACK 直到回到 IndexActivityV2，最多 maxBack 次。
@@ -516,13 +573,23 @@ export class FastOperator {
     return c ? { center: centerOf(c.bounds), bounds: c.bounds, desc: c.contentDesc || c.text } : null;
   }
 
-  // 滚到评论区：图文笔记评论在内容下方，下滚直到 dump 出现评论 item。
+  // 滚到评论区：图文笔记评论在内容下方。优化——先滚 1 屏再 dump（评论通常 1 滚即见），
+  // 省掉"评论必不在顶部"时的首次空 dump（1-scroll 常见场景从 2 dump 降到 1 dump）。
+  // 0-scroll 场景：评论本在视口，1 滚不致滚过短评论区，parseComments 仍能命中。
   async scrollToComments({ maxScrolls = 6, settleMs = 600 } = {}) {
-    let doc = await this.dump({ label: "detail-before-comments" });
-    for (let i = 0; i < maxScrolls; i += 1) {
-      if (this.parseComments(doc).length > 0) return { doc, scrolls: i, found: true };
-      await this.scrollDown(1, `to-comments-${i}`);
+    const w = 1080, h = 2400;
+    const rawSwipe = () => this.session.exec(`input swipe ${Math.round(w / 2)} ${Math.round(h * 0.7)} ${Math.round(w / 2)} ${Math.round(h * 0.3)} 300`, 8000);
+    await rawSwipe();
+    this.metrics.scrolls += 1;
+    await new Promise((r) => setTimeout(r, settleMs));
+    let doc = await this.dump({ label: "comments-0" });
+    if (this.parseComments(doc).length > 0) return { doc, scrolls: 1, found: true };
+    for (let i = 1; i < maxScrolls; i += 1) {
+      await rawSwipe();
+      this.metrics.scrolls += 1;
+      await new Promise((r) => setTimeout(r, settleMs));
       doc = await this.dump({ label: `comments-${i}` });
+      if (this.parseComments(doc).length > 0) return { doc, scrolls: i + 1, found: true };
     }
     return { doc, scrolls: maxScrolls, found: this.parseComments(doc).length > 0 };
   }
@@ -665,11 +732,21 @@ export class FastOperator {
     return false;
   }
 
+  // imeSticky 批后还原 IME 到原始（通常 SogouIME）。批处理结束必调，否则设备手动输入异常。
+  async restoreImeToPrior() {
+    const target = this._priorIme || "com.sohu.inputmethod.sogou.xiaomi/.SogouIME";
+    const cur = await this.currentIme();
+    if (cur === target) return { restored: true, already: true, ime: cur };
+    const ok = await this.setIme(target);
+    return { restored: ok, ime: await this.currentIme() };
+  }
+
   // 经 xiaowei 网关输中文：selectIme→bridge → 有界清空(MOVE_END + DEL×48，编辑器空时可跳) → inputText。
   // deferRestore=true 时不立即还原 IME（还原会令编辑器失焦关闭），返回 restore() 让调用方在【发送之后】再还原。
   async inputTextViaXiaowei(text, { bridgeIme, priorIme, clearFirst = true, deferRestore = false } = {}) {
     bridgeIme = bridgeIme || this.xwBridgeIme || "com.android.xwkeyboard/.XwIME";
     priorIme = priorIme || (await this.currentIme());
+    this._priorIme = priorIme; // 记原始 IME，供 imeSticky 批后 restoreImeToPrior() 还原
     const audit = { priorIme, bridgeIme, selected: false, cleared: false, inputAccepted: false, restored: false };
     const restore = async () => {
       try {
@@ -708,7 +785,7 @@ export class FastOperator {
     if (!src) return src;
     const ep = llmEndpoint || this.llmEndpoint;
     const key = llmKey || this.llmKey;
-    const model = llmModel || this.llmModel || "gpt-4o-mini";
+    const model = llmModel || this.llmModel || "grok-4.20-0309-non-reasoning";
     if (ep && key) {
       try {
         const r = await httpPostJson(ep, {
@@ -746,7 +823,19 @@ export class FastOperator {
   // 发送后实证校验：评论数 +1 delta（主）→ 文案扫描（回退）→ 都做不到则明确未验证。
   // 调用前需仍在 NoteDetail（未回首页）。beforeCount 由 commentOnOpenNote 在发送前抓取。
   // 不撒谎：countDelta 不可验且文案没扫到时返回 verified:false，让调用方知道"疑似发出但未实证"。
-  async verifyCommentSent({ beforeCount, sentText, maxScrolls = 4 } = {}) {
+  // mode: none=跳过实证(skipped)；light=1 scroll+1 dump 取 countDelta，不做 textScan 多滚；
+  //       strict=当前完整（countDelta + textScan 回退）。默认 strict。
+  async verifyCommentSent({ beforeCount, sentText, maxScrolls = 4, mode } = {}) {
+    const m = mode || this.verifyMode || "strict";
+    if (m === "none") return { verified: false, method: "skipped", beforeCount, afterCount: null };
+    if (m === "light") {
+      const sc = await this.scrollToComments({ maxScrolls: 1 });
+      const afterCount = this.noteCommentCount(sc.doc);
+      if (beforeCount != null && afterCount != null && afterCount - beforeCount >= 1)
+        return { verified: true, method: "countDelta", beforeCount, afterCount, delta: afterCount - beforeCount };
+      return { verified: false, method: "none", beforeCount, afterCount };
+    }
+    // strict
     const sc = await this.scrollToComments({ maxScrolls });
     const afterCount = this.noteCommentCount(sc.doc);
     if (beforeCount != null && afterCount != null && afterCount - beforeCount >= 1) {
@@ -772,10 +861,13 @@ export class FastOperator {
     const sc = await this.scrollToComments({ maxScrolls });
     push("scrollToComments", { found: sc.found, scrolls: sc.scrolls });
     // 1b. 发送前评论总数（发送后 delta 实证校验用）。header 可能滚出视口，回滚一次再取。
+    // 复用 dump：boxDoc 优先用 sc.doc；若回滚取 beforeCount，则用那次 count-before dump 兼作 box doc。
+    let boxDoc = sc.doc;
     let beforeCount = this.noteCommentCount(sc.doc);
     if (beforeCount == null && sc.found) {
       await this.scrollUp(1, "count-rewind");
-      beforeCount = this.noteCommentCount(await this.dump({ label: "count-before" }));
+      boxDoc = await this.dump({ label: "count-before" });
+      beforeCount = this.noteCommentCount(boxDoc);
     }
     push("beforeCount", beforeCount);
     let finalText = text;
@@ -788,38 +880,40 @@ export class FastOperator {
       finalText = await this.rewriteComment(base);
       push("rewriteComment", { from: base.slice(0, 20), to: finalText.slice(0, 30) });
     }
-    await this.pacer.pace({ minMs: 1500, maxMs: 3500 });
-    // 2. 开编辑器（tap 评论框）。评论框在底部条，滚屏后仍在底部。
-    const det = await this.dump({ label: "before-comment-box" });
-    const box = this.commentBox(det);
+    await this.commentPace("preBox");
+    // 2. 开编辑器（tap 评论框）。评论框在底部条，滚屏后仍在底部。复用 boxDoc 找框，找不到才补 dump（省 2.5s）。
+    let box = this.commentBox(boxDoc);
+    let boxReused = !!box;
+    if (!box) { const det = await this.dump({ label: "before-comment-box" }); box = this.commentBox(det); }
+    push("boxReused", boxReused);
     if (!box) return { ok: false, step: "commentBox", text: finalText, log, ms: Date.now() - t0, activity: (await this.currentFocus()).activity };
     await this.tap(box.center[0], box.center[1]);
-    await new Promise((r) => setTimeout(r, 1500));
+    await new Promise((r) => setTimeout(r, this.paceFast ? 700 : 1500));
     push("openedEditor", (await this.currentFocus()).activity);
     // 3. 输入中文（经 xiaowei 网关，延迟还原 IME——还原会让编辑器失焦关闭，必须在发送之后）
     const { audit, restore } = await this.inputTextViaXiaowei(finalText, { deferRestore: true });
     push("inputText", audit);
-    if (!audit.inputAccepted) { await restore(); return { ok: false, step: "inputText", text: finalText, log, ms: Date.now() - t0 }; }
-    await this.pacer.pace({ minMs: 800, maxMs: 2000 });
+    if (!audit.inputAccepted) { if (!this.imeSticky) await restore(); return { ok: false, step: "inputText", text: finalText, log, ms: Date.now() - t0 }; }
+    await this.commentPace("postTap");
     // 4. 发送前守卫：编辑器必须在岗（EditText 存在）。若已失焦关闭 → editorLostAfterInput，
     //    区别于"编辑器在但找不到发送按钮"的 sendButton——这是 IME 还原时机坑的明确失败码。
     const ed = await this.dump({ label: "editor-before-send" });
     if (!this.commentEditor(ed)) {
-      await restore();
+      if (!this.imeSticky) await restore();
       return { ok: false, step: "editorLostAfterInput", text: finalText, log, ms: Date.now() - t0, focus: (await this.currentFocus()).activity };
     }
     const send = this.sendButton(ed);
-    if (!send) { await restore(); return { ok: false, step: "sendButton", text: finalText, log, ms: Date.now() - t0, focus: (await this.currentFocus()).activity }; }
+    if (!send) { if (!this.imeSticky) await restore(); return { ok: false, step: "sendButton", text: finalText, log, ms: Date.now() - t0, focus: (await this.currentFocus()).activity }; }
     await this.tap(send.center[0], send.center[1]);
     await new Promise((r) => setTimeout(r, 1200));
-    // 5. 还原 IME（发送完成，编辑器即将关闭，安全还原）
-    await restore();
+    // 5. 还原 IME（发送完成，编辑器即将关闭，安全还原）。imeSticky 批处理时跳过，批后统一 restoreImeToPrior。
+    if (!this.imeSticky) await restore();
     // 6. 早退验证：编辑器应关闭（focus 离开 comment.input；或回到 NoteDetail）
     const f = await this.currentFocus();
     const sent = !/comment\.input/.test(f.activity || "");
     push("sent", { sent, activity: f.activity });
-    // 6b. 发送后实证校验：评论数 +1 delta / 文案扫描。仍在 NoteDetail，未回首页。
-    const verify = await this.verifyCommentSent({ beforeCount, sentText: finalText, maxScrolls: 4 });
+    // 6b. 发送后实证校验：评论数 +1 delta / 文案扫描。仍在 NoteDetail，未回首页。verifyMode 分档。
+    const verify = await this.verifyCommentSent({ beforeCount, sentText: finalText, maxScrolls: 4, mode: this.verifyMode });
     push("verifyCommentSent", verify);
     // 7. 回首页
     const back = await this.backToFeed(5);
@@ -830,8 +924,131 @@ export class FastOperator {
       verifyMethod: verify.method,
       beforeCount: verify.beforeCount,
       afterCount: verify.afterCount,
+      imeSticky: this.imeSticky,
+      verifyMode: this.verifyMode,
       text: finalText, log, ms: Date.now() - t0, metrics: this.metricsSummary(),
     };
+  }
+
+  // 评论 dry-run benchmark：openCard→scrollToComments→beforeCount→topComment→rewriteComment→
+  // 开编辑器→inputText(deferRestore)→【量时到此，不 tap 发送】→还原/关编辑器→回首页。
+  // 零 outward 评论，可反复跑 N 次量速度。返回每步 ms + beforeCount + topComment。
+  async commentBenchmark({ maxScrolls = 6, log: logArg, t0: t0Arg } = {}) {
+    const t0 = t0Arg ?? Date.now();
+    const log = logArg ?? [];
+    const push = (k, v) => log.push([k, v]);
+    const steps = {};
+    let s0 = Date.now();
+    const sc = await this.scrollToComments({ maxScrolls });
+    steps.scrollToComments = Date.now() - s0;
+    push("scrollToComments", { found: sc.found, scrolls: sc.scrolls });
+    let boxDoc = sc.doc;
+    let beforeCount = this.noteCommentCount(sc.doc);
+    if (beforeCount == null && sc.found) {
+      await this.scrollUp(1, "cb-rewind");
+      boxDoc = await this.dump({ label: "cb-count" });
+      beforeCount = this.noteCommentCount(boxDoc);
+    }
+    push("beforeCount", beforeCount);
+    const comments = this.parseComments(sc.doc);
+    const top = this.topComment(comments);
+    push("topComment", top ? { username: top.username, likeCount: top.likeCount, isAuthor: top.isAuthor, text: (top.text || "").slice(0, 30) } : null);
+    s0 = Date.now();
+    const base = top?.text || this.fallbackComment();
+    const finalText = await this.rewriteComment(base);
+    steps.rewriteComment = Date.now() - s0;
+    push("rewriteComment", { from: base.slice(0, 16), to: finalText.slice(0, 24) });
+    await this.commentPace("preBox");
+    s0 = Date.now();
+    // 复用 boxDoc 找评论框，找不到才补 dump。boxReused=true 时 commentBoxDump≈0（省 2.5s）。
+    let box = this.commentBox(boxDoc);
+    const boxReused = !!box;
+    if (!box) box = this.commentBox(await this.dump({ label: "cb-before-box" }));
+    steps.commentBoxDump = Date.now() - s0;
+    push("boxReused", boxReused);
+    if (!box) { await this.backToFeed(5); return { ok: false, step: "commentBox", steps, beforeCount, log, ms: Date.now() - t0 }; }
+    await this.tap(box.center[0], box.center[1]);
+    await new Promise((r) => setTimeout(r, this.paceFast ? 700 : 1500));
+    push("openedEditor", (await this.currentFocus()).activity);
+    s0 = Date.now();
+    const { audit, restore } = await this.inputTextViaXiaowei(finalText, { deferRestore: true });
+    steps.inputText = Date.now() - s0;
+    push("inputText", audit);
+    // 不发送：dry-run 量时到此。还原 IME（非 sticky）+ BACK 关编辑器（不触发发送）+ 回首页，零 outward 痕迹。
+    if (!this.imeSticky) await restore();
+    await this.session.exec("input keyevent KEYCODE_BACK", 6000);
+    await new Promise((r) => setTimeout(r, this.paceFast ? 400 : 800));
+    push("dryRunClosed", (await this.currentFocus()).activity);
+    const back = await this.backToFeed(5);
+    push("backToFeed", back);
+    return {
+      ok: true, dryRun: true, steps, beforeCount,
+      topComment: top ? (top.text || "").slice(0, 30) : null,
+      text: finalText, log, ms: Date.now() - t0, metrics: this.metricsSummary(),
+    };
+  }
+
+  // 在【已打开的同一笔记】上原地循环 iters 次 dry-run：scrollToComments→(可选 rewrite)→开编辑器→input(deferRestore)→BACK 关编辑器。
+  // 不 openCard、不 backToFeed，避开 feed 波动，隔离"单条机制成本"。skipRewrite=true 时不调 LLM，测无 LLM 地板。
+  async noteBenchmark({ iters = 6, maxScrolls = 6, skipRewrite = false, log: logArg, t0: t0Arg } = {}) {
+    const t0 = t0Arg ?? Date.now();
+    const log = logArg ?? [];
+    const push = (k, v) => log.push([k, v]);
+    const runs = [];
+    for (let i = 0; i < iters; i++) {
+      const it = { i };
+      let s0 = Date.now();
+      const sc = await this.scrollToComments({ maxScrolls });
+      it.scrollToComments = Date.now() - s0;
+      it.scrolls = sc.scrolls;
+      const comments = this.parseComments(sc.doc);
+      const top = this.topComment(comments);
+      it.topComment = top ? (top.text || "").slice(0, 24) : null;
+      s0 = Date.now();
+      const base = top?.text || this.fallbackComment();
+      let finalText;
+      if (skipRewrite) { finalText = this.templateComment(base); it.rewriteComment = 0; }
+      else { finalText = await this.rewriteComment(base); it.rewriteComment = Date.now() - s0; }
+      it.text = finalText.slice(0, 24);
+      await this.commentPace("preBox");
+      s0 = Date.now();
+      // 复用 scrollToComments 的 sc.doc 找评论框，找不到才补 dump（省 2.5s/iter）。
+      let box = this.commentBox(sc.doc);
+      if (!box) box = this.commentBox(await this.dump({ label: "nb-before-box" }));
+      it.commentBoxDump = Date.now() - s0;
+      it.boxReused = !!this.commentBox(sc.doc);
+      if (!box) { it.ok = false; it.step = "commentBox"; runs.push(it); await this.backToFeed(5); break; }
+      await this.tap(box.center[0], box.center[1]);
+      await new Promise((r) => setTimeout(r, this.paceFast ? 700 : 1500));
+      s0 = Date.now();
+      const { audit, restore } = await this.inputTextViaXiaowei(finalText, { deferRestore: true });
+      it.inputText = Date.now() - s0;
+      it.inputAccepted = audit?.inputAccepted;
+      if (!this.imeSticky) await restore();
+      await this.session.exec("input keyevent KEYCODE_BACK", 6000); // 关编辑器，留在 NoteDetail
+      await new Promise((r) => setTimeout(r, this.paceFast ? 400 : 800));
+      it.ok = true;
+      runs.push(it);
+    }
+    // 收尾：还原 IME（非 sticky）+ 回首页
+    if (!this.imeSticky) await this.restoreImeToPrior();
+    await this.backToFeed(5);
+    return {
+      ok: true, iters, skipRewrite, runs, ms: Date.now() - t0, metrics: this.metricsSummary(),
+    };
+  }
+
+  // 不调 LLM 的本地改写模板：给原评论文案做轻量变换，避免与原评论文案完全雷同（xhs 去重兜底）。
+  templateComment(base) {
+    const t = (base || "").trim();
+    if (!t) return "说说我的看法～";
+    const prefixes = ["感觉", "我觉得", "其实", "个人感觉", "话说"];
+    const suffixes = ["～", "呀", "呢", "哈", ""];
+    const p = prefixes[t.length % prefixes.length];
+    const s = suffixes[(t.length * 3) % suffixes.length];
+    // 去掉原结尾表情/标点再加轻前后缀
+    const core = t.replace(/[~～!！。.]+$/u, "");
+    return (p + core + s).slice(0, 40);
   }
 
   // 评论全流程（从 feed 开笔记起）：openCard → commentOnOpenNote。
@@ -843,7 +1060,7 @@ export class FastOperator {
     const opened = await this.openCard(card);
     push("openCard", opened);
     if (!opened.opened) return { ok: false, step: "openCard", log, ms: Date.now() - t0 };
-    await this.pacer.pace({ minMs: 1200, maxMs: 2800 });
+    await this.commentPace("postOpen");
     return this.commentOnOpenNote({ text, maxScrolls, log, t0 });
   }
 
@@ -888,7 +1105,19 @@ function applyCommentFlags(opP) {
     op.xwBridgeIme = arg("--xw-bridge-ime", "com.android.xwkeyboard/.XwIME");
     op.llmEndpoint = arg("--llm-endpoint", null);
     op.llmKey = arg("--llm-key", null);
-    op.llmModel = arg("--llm-model", "gpt-4o-mini");
+    op.llmModel = arg("--llm-model", "grok-4.20-0309-non-reasoning"); // CPA 非 reasoning 快档(0.9s/0 reasoning)；gpt-4o-mini 在 CPA 不存在
+    // Slice 2 优化 flags（默认关，保持原拟人/strict 校验行为）
+    op.imeSticky = process.argv.includes("--ime-sticky");
+    op.verifyMode = arg("--verify", "strict"); // none|light|strict
+    op.paceFast = process.argv.includes("--pace-fast");
+    if (process.argv.includes("--pace-fast")) op.pacer = new Pacer({ minMs: 400, maxMs: 800 });
+    // --fast preset = ime-sticky + pace-fast + verify=light（一个开关组合）
+    if (process.argv.includes("--fast")) {
+      op.imeSticky = true;
+      op.verifyMode = "light";
+      op.paceFast = true;
+      op.pacer = new Pacer({ minMs: 400, maxMs: 800 });
+    }
     return op;
   });
 }
@@ -965,7 +1194,7 @@ function serve(port) {
           break;
         }
         case "commentTransaction": {
-          const d = await op.dump({ label: "commentTransaction-open" });
+          const d = await op.feedDump({ label: "commentTransaction-open" });
           const cards = op.feedCards(d);
           const c = cards[q.idx ?? 0];
           if (!c?.cover?.center) { out = { ok: false, step: "noCard" }; break; }
@@ -973,10 +1202,43 @@ function serve(port) {
           break;
         }
         case "commentOnOpenNote": {
-          // 对当前已打开的 NoteDetail 跑评论流程（设备由人驱动到目标笔记时用）
+          // 对当前已打开的 NoteDetail/DetailFeed 跑评论流程（设备由人驱动到目标笔记时用）。视频笔记先暂停。
           const f = await op.currentFocus();
           if (!/NoteDetail|DetailFeed/.test(f.activity || "")) { out = { ok: false, step: "notOnNote", activity: f.activity }; break; }
+          if ((f.activity || "").includes("DetailFeed")) await op.pauseIfVideoNote();
           out = await op.commentOnOpenNote({ text: q.text, maxScrolls: q.maxScrolls ?? 6 });
+          break;
+        }
+        case "commentBenchmark": {
+          // dry-run 零发送 benchmark：从 feed 开卡→跑评论流程到 inputText→不发送→回首页。量每步 ms。
+          const d = await op.feedDump({ label: "commentBenchmark-open" });
+          const cards = op.feedCards(d);
+          const c = cards[q.idx ?? 0];
+          if (!c?.cover?.center) { out = { ok: false, step: "noCard" }; break; }
+          op.metrics.actions += 1;
+          const opened = await op.openCard(c);
+          if (!opened.opened) { out = { ok: false, step: "openCard", opened }; break; }
+          out = await op.commentBenchmark({ maxScrolls: q.maxScrolls ?? 6 });
+          break;
+        }
+        case "restoreIme": out = await op.restoreImeToPrior(); break;
+        case "noteBenchmark": {
+          // 在同一笔记上原地循环 dry-run，避开 feed 波动。若不在 NoteDetail 则先 openCard 一次。视频笔记先暂停。
+          let f = await op.currentFocus();
+          if (!/NoteDetail|DetailFeed/.test(f.activity || "")) {
+            const d = await op.feedDump({ label: "noteBenchmark-open" });
+            const cards = op.feedCards(d);
+            const c = cards[q.idx ?? 0];
+            if (!c?.cover?.center) { out = { ok: false, step: "noCard", activity: f.activity }; break; }
+            op.metrics.actions += 1;
+            const opened = await op.openCard(c);
+            if (!opened.opened) { out = { ok: false, step: "openCard", opened }; break; }
+            f = await op.currentFocus();
+          }
+          if ((f.activity || "").includes("DetailFeed")) await op.pauseIfVideoNote();
+          out = await op.noteBenchmark({
+            iters: q.iters ?? 6, maxScrolls: q.maxScrolls ?? 6, skipRewrite: !!q.skipRewrite,
+          });
           break;
         }
         case "metrics": out = op.metricsSummary(); break;
