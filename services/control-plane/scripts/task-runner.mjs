@@ -32,7 +32,10 @@ function flag(name) { return process.argv.includes(name); }
 function loadTask(path) {
   if (!existsSync(path)) throw new Error(`task file not found: ${path}`);
   const raw = JSON.parse(readFileSync(path, "utf8"));
-  if (!raw || !Array.isArray(raw.steps) || !raw.steps.length) throw new Error(`task.steps must be a non-empty array: ${path}`);
+  // 自主模式可省 steps（每张卡片由 LLM 即时决策）；脚本模式仍要求非空 steps
+  if (!raw || !Array.isArray(raw.steps) || (!raw.steps.length && !raw.autonomous)) {
+    throw new Error(`task.steps must be a non-empty array (or set autonomous:true): ${path}`);
+  }
   raw.loops = Number(raw.loops ?? 1);
   raw.restBetweenLoops = raw.restBetweenLoops ?? { minMs: 8000, maxMs: 20000 };
   raw.onError = raw.onError ?? "skip";
@@ -181,13 +184,212 @@ function openLog(logDir, name) {
   return { path, writeLine };
 }
 
+// ---- LLM 自主决策层（叠在脚本层之上）----
+// 每张 feed 卡片：openCard → dump 详情 → LLM 从 caption 决定 like/favorite/comment/skip
+// → 执行 → backToFeed。评论仍守 Slice 2 约束 + commentCap 风控。
+
+// 评论文本安全过滤：命中即降级 skip（绝不发外向/敏感动作指令）
+const UNSAFE_COMMENT_RE = /(点赞|关注|私[信聊]|发布|删除|自动|批量|加群|扫码|代购|转账|打款|微信|qq|vx|加我|联系我)/i;
+
+async function llmChat(op, messages, { maxTokens = 200, temperature = 0.6, timeoutMs = 15000 } = {}) {
+  const ep = op.llmEndpoint;
+  if (!ep) return null;
+  const body = {
+    model: op.llmModel || "grok-4.20-0309-non-reasoning",
+    messages,
+    max_tokens: maxTokens,
+    temperature,
+  };
+  const headers = { "content-type": "application/json" };
+  if (op.llmKey) headers.authorization = `Bearer ${op.llmKey}`;
+  const ctrl = new AbortController();
+  const to = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const r = await fetch(ep, { method: "POST", headers, body: JSON.stringify(body), signal: ctrl.signal });
+    if (!r.ok) return null;
+    const j = await r.json();
+    return j.choices?.[0]?.message?.content?.trim() || null;
+  } catch { return null; }
+  finally { clearTimeout(to); }
+}
+
+// 从详情页 dump 解析 caption / 评论数 / 底部栏数字
+// 标题：全宽 TextView(width>600)、非可点击、y 在 1500-1950，排除 UI 占位串
+const DETAIL_UI_NOISE = /^(关注|说点什么|猜你想搜|不感兴趣|不喜欢|分享|收藏|评论|举报|识图搜同款|去逛逛|立即购买|¥|\d+(\.\d+)?万?|起价|券后)$/;
+function extractDetail(doc) {
+  const nodes = doc?.nodes || [];
+  const tvs = nodes.filter((n) => n.className === "android.widget.TextView" && (n.text || "").trim());
+  let title = null;
+  for (const n of tvs) {
+    const b = n.bounds;
+    const w = b[2] - b[0];
+    const cy = (b[1] + b[3]) / 2;
+    if (!n.clickable && w > 600 && cy >= 1500 && cy <= 1950) {
+      const t = n.text.trim();
+      if (t.length < 4) continue;
+      if (DETAIL_UI_NOISE.test(t)) continue;
+      title = t;
+      break;
+    }
+  }
+  let commentCount = null;
+  for (const n of tvs) {
+    const m = (n.text || "").match(/共\s*(\d+)\s*条评论/);
+    if (m) { commentCount = Number(m[1]); break; }
+  }
+  // 底部栏数字（y>2150 纯数字/万）—— 备用，给 LLM 看热度
+  const barNums = [];
+  for (const n of tvs) {
+    const b = n.bounds; const cy = (b[1] + b[3]) / 2;
+    if (cy > 2150 && /^[\d.]+万?$/.test(n.text.trim())) barNums.push(n.text.trim());
+  }
+  return { title, commentCount, barNums };
+}
+
+// LLM 决策：返回 { action: like|favorite|comment|skip, commentText? }
+async function decideAction(op, detail, ctx) {
+  const capLeft = Math.max(0, ctx.commentCap - ctx.commentCountThisLoop);
+  const sys = "你是小红书真人用户。根据笔记标题决定对这张笔记做什么互动。只回 JSON，不要多余文字。";
+  const user = JSON.stringify({
+    标题: detail.title || "(无法识别标题)",
+    评论数: detail.commentCount,
+    底部数字: detail.barNums,
+    本圈还能评论: capLeft,
+    可选动作: ["like", "favorite", "comment", "skip"],
+    约束: [
+      "像真人浏览，多数笔记只 like 或 skip，偶尔 favorite，少数 comment",
+      "评论要符合笔记内容、自然口语、不超 20 字、不带表情符号刷屏",
+      capLeft <= 0 ? "本圈评论已满，不要选 comment" : "只有内容确实有话说才 comment",
+      "不要发任何点赞/关注/私信/扫码/转账/导流类话术",
+    ],
+    输出格式: '{"action":"like|favorite|comment|skip","commentText":"若 comment 则填，否则省略"}',
+  });
+  const raw = await llmChat(op, [
+    { role: "system", content: sys },
+    { role: "user", content: user },
+  ], { maxTokens: 120, temperature: 0.7 });
+  if (!raw) return { action: "skip", reason: "llmNull" };
+  // 抽取第一个 {...}
+  const m = raw.match(/\{[\s\S]*\}/);
+  if (!m) return { action: "skip", reason: "llmNoJson" };
+  try {
+    const d = JSON.parse(m[0]);
+    if (!["like", "favorite", "comment", "skip"].includes(d.action)) return { action: "skip", reason: "badAction" };
+    if (d.action === "comment") {
+      if (capLeft <= 0) return { action: "skip", reason: "capReached" };
+      const t = (d.commentText || "").trim();
+      if (!t || t.length > 20 || UNSAFE_COMMENT_RE.test(t)) return { action: "skip", reason: "unsafeComment" };
+      return { action: "comment", commentText: t };
+    }
+    return { action: d.action };
+  } catch { return { action: "skip", reason: "llmParseFail" }; }
+}
+
+// 执行单张卡片决策。返回 { ok, action, step?, skipped?, commented? }
+async function executeAutonomousAction(op, decision, ctx, act) {
+  if (decision.action === "skip") return { ok: true, action: "skip", skipped: true, reason: decision.reason };
+  if (decision.action === "like") {
+    const dd = await op.dump({ label: "auto-bar" });
+    const bar = op.detailEngagementBar(dd);
+    if (!bar?.like?.icon?.center) return { ok: false, action: "like", step: "noBarButton", skipped: true };
+    return { ok: true, action: "like", ...(await op.likeDetail(bar)) };
+  }
+  if (decision.action === "favorite") {
+    const dd = await op.dump({ label: "auto-bar" });
+    const bar = op.detailEngagementBar(dd);
+    if (!bar?.favorite?.icon?.center) return { ok: false, action: "favorite", step: "noBarButton", skipped: true };
+    return { ok: true, action: "favorite", ...(await op.favoriteDetail(bar)) };
+  }
+  if (decision.action === "comment") {
+    if (ctx.commentCountThisLoop >= ctx.commentCap) return { ok: false, action: "comment", step: "commentCapReached", skipped: true };
+    if (ctx.dryRun) return { ok: true, action: "comment", step: "dryRunSkip", skipped: true, dryRun: true };
+    // commentOnOpenNote 内部对 DetailFeed 自动委托 commentOnVideoNote
+    const r = await op.commentOnOpenNote({ text: decision.commentText, maxScrolls: 6 });
+    const skipped = !r.ok && SKIP_STEPS.has(r.step);
+    if (r.ok) ctx.commentCountThisLoop += 1;
+    return { ok: r.ok, action: "comment", step: r.step, skipped, verified: r.verified, beforeCount: r.beforeCount, afterCount: r.afterCount, activity: r.activity, commented: r.ok };
+  }
+  return { ok: false, action: "skip", step: "unknownDecision", skipped: true };
+}
+
+// 自主循环：每圈扫一屏卡片，按 cardsPerScreen 张做 LLM 决策，然后 scrollN
+async function runAutonomous(op, task, loops, ctx, logger, summary, onAbort) {
+  const cfg = task.autonomous || {};
+  const cardsPerScreen = Math.max(1, Number(cfg.cardsPerScreen ?? 2));
+  const scrollN = Math.max(1, Number(cfg.scrollN ?? 2));
+  const skipVideo = cfg.skipVideo !== false;
+  const cardsSeen = { like: 0, favorite: 0, comment: 0, skip: 0 };
+
+  for (let loop = 0; loop < loops && !summary.stop && !summary.aborted; loop++) {
+    const run = { loop, t0: Date.now(), cards: [], mode: "autonomous" };
+    const d = await op.feedDump({ label: "auto-feed" });
+    const cards = op.feedCards(d);
+    const take = Math.min(cardsPerScreen, cards.length);
+    for (let i = 0; i < take; i++) {
+      if (summary.stop) break;
+      const c = cards[i];
+      const c0 = Date.now();
+      const opened = await op.openCard(c);
+      const act = opened.activity || "";
+      let cardRes = { idx: i, author: c.authorName, activity: act, ms: Date.now() - c0, action: "open" };
+      // 视频笔记：skipVideo 直接跳过（原语支持评论，此为任务层偏好+降本）
+      if (skipVideo && act.includes("DetailFeed")) {
+        await op.backToFeed(4);
+        cardRes.action = "skipVideo";
+        cardRes.skipped = true;
+        run.cards.push(cardRes);
+        cardsSeen.skip += 1;
+        await op.pacer.pace({ minMs: 800, maxMs: 2000 });
+        continue;
+      }
+      // dump 详情 → 抽 caption → LLM 决策 → 执行 → 回 feed
+      const dd = await op.dump({ label: "auto-detail" });
+      const detail = extractDetail(dd);
+      const decision = await decideAction(op, detail, ctx);
+      const exec = await executeAutonomousAction(op, decision, ctx, act);
+      await op.backToFeed(5);
+      cardRes.action = exec.action;
+      cardRes.ok = exec.ok;
+      if (exec.skipped) cardRes.skipped = true;
+      if (exec.step) cardRes.step = exec.step;
+      if (exec.commented) cardRes.commented = true;
+      if (exec.verified !== undefined) cardRes.verified = exec.verified;
+      cardRes.caption = detail.title ? String(detail.title).slice(0, 40) : null;
+      cardRes.ms = Date.now() - c0;
+      run.cards.push(cardRes);
+      cardsSeen[exec.action] = (cardsSeen[exec.action] || 0) + 1;
+      if (!exec.ok && !exec.skipped && task.onError === "abort") {
+        console.error(JSON.stringify({ phase: "abortCard", loop, ...cardRes }));
+        summary.aborted = true; break;
+      }
+      await op.pacer.pace({ minMs: 1000, maxMs: 2800 }); // 卡间拟人停顿
+    }
+    // 滚一屏
+    if (!summary.stop && !summary.aborted) {
+      const sdoc = await op.scrollN({ n: scrollN, down: true });
+      run.scrollNodes = (sdoc.nodes || []).length;
+    }
+    run.ms = Date.now() - run.t0;
+    run.commentCount = ctx.commentCountThisLoop;
+    run.cardsSeen = cardsSeen;
+    run.metrics = op.metricsSummary();
+    logger.writeLine(run);
+    console.log(JSON.stringify({ phase: "loopDone", loop, ms: run.ms, cards: run.cards.length, seen: cardsSeen, comments: run.commentCount, metrics: run.metrics }));
+    summary.loopsDone += 1;
+    if (loop < loops - 1 && !summary.stop && !summary.aborted) {
+      await op.pacer.pace(task.restBetweenLoops);
+    }
+  }
+  return { cardsSeen };
+}
+
 // ---- main ----
 async function main() {
   const adbPath = arg("--adb", null);
   const serial = arg("--serial", null);
   const taskPath = arg("--task", null);
   if (!adbPath || !serial || !taskPath) {
-    console.error("usage: task-runner.mjs --adb <path> --serial <serial> --task <file.json> [--loops N] [--comment-cap N] [--dry-run] [--fast] [--log-dir <dir>] [--on-error skip|abort]");
+    console.error("usage: task-runner.mjs --adb <path> --serial <serial> --task <file.json> [--loops N] [--comment-cap N] [--dry-run] [--autonomous] [--fast] [--log-dir <dir>] [--on-error skip|abort]");
     process.exit(2);
   }
   const task = loadTask(resolve(taskPath));
@@ -197,18 +399,20 @@ async function main() {
   const dryRun = flag("--dry-run");
   const onError = arg("--on-error", task.onError);
   const logDir = arg("--log-dir", null);
+  const autonomous = flag("--autonomous") || !!task.autonomous;
 
   const opP = applyCommentFlags(new FastOperator({ adbPath, serial }).start());
   const op = await opP;
   const logger = openLog(logDir, task.name);
 
   let stop = false;
+  let aborted = false;
   const stopSignal = async () => { stop = true; };
   process.on("SIGINT", () => { console.error("\n[SIGINT] finishing current step, then backToFeed..."); stopSignal(); });
   process.on("SIGTERM", stopSignal);
 
-  const summary = { task: task.name, loops, dryRun, commentCap, onError, t0: Date.now(), okSteps: 0, skipSteps: 0, errSteps: 0, loopsDone: 0, logPath: logger.path };
-  console.log(JSON.stringify({ phase: "start", task: task.name, loops, dryRun, commentCap, log: logger.path }));
+  const summary = { task: task.name, loops, dryRun, commentCap, onError, autonomous, t0: Date.now(), okSteps: 0, skipSteps: 0, errSteps: 0, loopsDone: 0, logPath: logger.path, stop, aborted };
+  console.log(JSON.stringify({ phase: "start", task: task.name, loops, dryRun, commentCap, autonomous, log: logger.path }));
 
   const ensure = await ensureOnFeed(op);
   console.log(JSON.stringify({ phase: "ensureOnFeed", ...ensure }));
@@ -218,7 +422,27 @@ async function main() {
     process.exit(3);
   }
 
-  let aborted = false;
+  // ---- 自主模式：LLM 每张卡片即时决策；脚本模式：固定 steps 循环 ----
+  if (autonomous) {
+    const ctx = { dryRun, commentCap, commentCountThisLoop: 0 };
+    // 让 runAutonomous 与外层 stop/aborted 共享
+    Object.defineProperty(summary, "stop", { get: () => stop, set: (v) => { stop = v; } });
+    Object.defineProperty(summary, "aborted", { get: () => aborted, set: (v) => { aborted = v; } });
+    const res = await runAutonomous(op, task, loops, ctx, logger, summary, () => stop);
+    summary.cardsSeen = res.cardsSeen;
+    summary.okSteps = res.cardsSeen.like + res.cardsSeen.favorite + res.cardsSeen.comment;
+    summary.skipSteps = res.cardsSeen.skip;
+    try { await op.backToFeed(5); } catch {}
+    try { await op.close(); } catch {}
+    summary.ms = Date.now() - summary.t0;
+    summary.metrics = op.metricsSummary();
+    summary.stopped = stop;
+    summary.aborted = aborted;
+    logger.writeLine({ phase: "summary", ...summary });
+    console.log(JSON.stringify({ phase: "done", ...summary }));
+    process.exit(0);
+  }
+
   for (let loop = 0; loop < loops && !stop && !aborted; loop++) {
     const ctx = { dryRun, commentCap, commentCountThisLoop: 0 };
     const run = { loop, t0: Date.now(), steps: [] };

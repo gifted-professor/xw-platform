@@ -1,0 +1,12 @@
+{
+  "name": "自主",
+  "loops": 10,
+  "restBetweenLoops": { "minMs": 10000, "maxMs": 25000 },
+  "onError": "skip",
+  "autonomous": {
+    "cardsPerScreen": 2,
+    "scrollN": 2,
+    "skipVideo": true
+  },
+  "steps": []
+}
