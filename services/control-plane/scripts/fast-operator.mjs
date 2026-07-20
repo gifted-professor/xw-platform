@@ -257,7 +257,8 @@ export class FastOperator {
   // hierarchy dump：exec-out uiautomator dump /dev/tty（一次性，避免持久 shell 分帧）
   // 注：详情页 like/收藏/评论按钮 content-desc 为空（xhs 图标按钮无 label），resource-id
   // 被混淆，所以靠位置+class+clickability 解析，不依赖文本。解码用 utf-8。
-  async dump({ label, retries = 2 } = {}) {
+  async dump({ label, retries = 2, settleMs = 0 } = {}) {
+    if (settleMs) await new Promise((r) => setTimeout(r, settleMs));
     const t0 = Date.now();
     let lastErr = null;
     for (let attempt = 0; attempt <= retries; attempt++) {
@@ -268,12 +269,15 @@ export class FastOperator {
         // 退路：写到 /sdcard 再 cat
         await this.session.exec("uiautomator dump /sdcard/fo-dump.xml 2>/dev/null", 15000);
         try { buf = await this.session.execOut(["cat", "/sdcard/fo-dump.xml"], 10000); }
-        catch (e2) { lastErr = e2; if (attempt < retries) { await new Promise((r) => setTimeout(r, 400)); continue; } throw e2; }
+        catch (e2) { lastErr = e2; if (attempt < retries) { await new Promise((r) => setTimeout(r, 600)); continue; } throw e2; }
       }
       const xml = buf ? buf.toString("utf8") : "";
+      // uiautomator "could not get idle state" 偶发把错误文本混进 stdout 或只产截断 XML——
+      // 检测到 idle 失败信号且无完整 hierarchy 时视为不完整重试（视频自动播放/动画 settle 期常见）。
+      const idleFail = /could not get idle state|UiAutomator.*[Ee]rror|AndroidRuntime/i.test(xml) && xml.indexOf("<hierarchy") < 0;
       const start = xml.indexOf("<hierarchy");
       const end = xml.indexOf("</hierarchy>", start);
-      if (start >= 0 && end >= 0) {
+      if (start >= 0 && end >= 0 && !idleFail) {
         const doc = parseUiAutomatorXml(xml.slice(start, end + "</hierarchy>".length));
         this.metrics.dumps += 1;
         this.metrics.totalDumpMs += Date.now() - t0;
@@ -281,8 +285,8 @@ export class FastOperator {
         doc._label = label;
         return doc;
       }
-      lastErr = new Error("hierarchy dump incomplete");
-      if (attempt < retries) await new Promise((r) => setTimeout(r, 400)); // uiautomator 瞬时截断，重试常恢复
+      lastErr = new Error(idleFail ? "uiautomator idle state failed" : "hierarchy dump incomplete");
+      if (attempt < retries) await new Promise((r) => setTimeout(r, 600)); // uiautomator 瞬时截断/idle 失败，加长重试间隔常恢复
     }
     throw lastErr;
   }
@@ -855,7 +859,9 @@ export class FastOperator {
     return pool[(this.metrics.actions || 0) % pool.length];
   }
 
-  // 笔记评论总数：扫 "共N条评论" 标题 TextView。无则 null（大计数/无评论时回退文案扫描）。
+  // 笔记评论总数：扫 "共N条评论" 标题 TextView。无则回退到底部 engagement bar 最右 numeric 组
+  // （评论计数；图文/视频笔记底部条都有 like/favorite/comment 计数，评论在最右）——覆盖
+  // "共N条评论" header 滚出视口、大计数("10万+"舍入)等 beforeCount:null 导致 verified:false 的偶发场景。
   // 用作发送前 beforeCount / 发送后 afterCount 的 delta 实证校验来源。
   noteCommentCount(doc) {
     for (const n of doc.nodes) {
@@ -863,7 +869,7 @@ export class FastOperator {
       const m = t.match(/共\s*(\d+)\s*条评论/);
       if (m) return Number(m[1]);
     }
-    return null;
+    return this.videoNoteCommentCount(doc);
   }
 
   // 发送后实证校验：评论数 +1 delta（主）→ 文案扫描（回退）→ 都做不到则明确未验证。
@@ -915,10 +921,19 @@ export class FastOperator {
 
   // 视频笔记(DetailFeed)底部 engagement bar 评论计数 = 最右带 numeric label 的图标组。
   // 顺序：点赞/收藏/评论，评论在最右；用 detailEngagementBar 的 groups，取最后一个 isNumeric。
+  // icon 分组失败(dump 截断/overlay 隐藏导致 icon 节点缺失)时回退直扫底部条最右 numeric TextView。
   videoNoteCommentCount(doc) {
     const bar = this.detailEngagementBar(doc);
     const numeric = (bar.groups || []).filter((g) => g.isNumeric);
-    return numeric.length ? numeric[numeric.length - 1].countValue : null;
+    if (numeric.length) return numeric[numeric.length - 1].countValue;
+    // 回退：底部条(y>2150)最右纯数字 TextView（评论计数在最右）
+    const stripY = 2150;
+    const nums = (doc.nodes || [])
+      .filter((n) => n.className === "android.widget.TextView" && n.bounds
+        && (n.bounds[1] + n.bounds[3]) / 2 > stripY
+        && FastOperator.countValue(n.text) != null)
+      .sort((a, b) => centerOf(a.bounds)[0] - centerOf(b.bounds)[0]);
+    return nums.length ? FastOperator.countValue(nums[nums.length - 1].text) : null;
   }
 
   // 视频笔记(DetailFeed)评论全流程：tap 底部"说点什么..." → NoteCommentActivity 编辑器
@@ -930,12 +945,18 @@ export class FastOperator {
     const t0 = t0Arg ?? Date.now();
     const log = logArg ?? [];
     const push = (k, v) => log.push([k, v]);
-    // 0. 读底部评论计数（beforeCount，发送后 delta 验证用）
-    const d0 = await this.dump({ label: "video-bar" });
+    // 0. 读底部评论计数（beforeCount，发送后 delta 验证用）。视频笔记 settle 期 dump 偶发不完整
+    //（占位条/计数未渲染全），box/count 任一为 null 时带 settleMs 重 dump 一次再判。
+    let d0 = await this.dump({ label: "video-bar" });
+    let box = this.videoNoteCommentBox(d0);
+    if (!box) {
+      push("video-bar-incomplete", { nodes: (d0.nodes || []).length });
+      d0 = await this.dump({ label: "video-bar-retry", settleMs: 700 });
+      box = this.videoNoteCommentBox(d0);
+    }
     const beforeCount = this.videoNoteCommentCount(d0);
     push("beforeCount", beforeCount);
     // 1. 找"说点什么..."入口并 tap → NoteCommentActivity
-    const box = this.videoNoteCommentBox(d0);
     push("videoNoteCommentBox", box ? { via: box.via, center: box.center } : null);
     if (!box) {
       return { ok: false, step: "detailfeedUnsupported", reason: "no comment placeholder (likely 带货/carousel note)", text, log, ms: Date.now() - t0, activity: "DetailFeed" };
@@ -1005,8 +1026,13 @@ export class FastOperator {
     const fd = await this.currentFocus();
     let afterCount = null;
     if (fd.activity && fd.activity.includes("DetailFeed")) {
-      const dd = await this.dump({ label: "video-after-count" });
+      let dd = await this.dump({ label: "video-after-count", settleMs: 500 });
       afterCount = this.videoNoteCommentCount(dd);
+      if (afterCount == null) {
+        // 底部条可能尚未 settle，重 dump 一次
+        dd = await this.dump({ label: "video-after-count-retry", settleMs: 700 });
+        afterCount = this.videoNoteCommentCount(dd);
+      }
     }
     push("afterCount", afterCount);
     const verified = beforeCount != null && afterCount != null && afterCount - beforeCount >= 1;
