@@ -57,8 +57,11 @@ async function dispatchStep(op, step, ctx) {
   const emit = (r) => Object.assign({ action: step.action, idx: step.idx, ms: ms() }, r);
 
   switch (step.action) {
-    case "scrollN":
-      return emit({ ok: true, ...(await op.scrollN({ n: step.n ?? 1, down: step.down !== false })) });
+    case "scrollN": {
+      const doc = await op.scrollN({ n: step.n ?? 1, down: step.down !== false });
+      // scrollN 返回整份 doc（含 nodes 数组），不要 spread 进日志——只记摘要，避免长跑爆日志
+      return emit({ ok: true, scrolls: step.n ?? 1, nodes: (doc.nodes || []).length, dumpMs: doc._dumpMs });
+    }
 
     case "likeCard": {
       const d = await op.feedDump({ label: "like" });
