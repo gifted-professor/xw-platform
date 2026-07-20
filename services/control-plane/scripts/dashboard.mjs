@@ -83,7 +83,10 @@ function activityOf(serial) {
   return m ? `${m[1]}/${m[2]}` : (last || null);
 }
 
+// 回首页:force-stop 清任务栈再重启,保证从 xhs 深处(NoteDetail 等)也重置到 IndexActivityV2。
+// 单纯 monkey -c LAUNCHER 对已在 xhs 深处的 app 只会把现有任务栈拉前台,不重置到首页。
 function launchXhs(serial) {
+  adb(serial, ["shell", "am", "force-stop", "com.xingin.xhs"]);
   const v = adb(serial, ["shell", "monkey", "-p", "com.xingin.xhs", "-c", "android.intent.category.LAUNCHER", "1"]);
   return /Events injected/i.test(v) ? "ok" : v.slice(-120);
 }
