@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>xhs-device-agent 控制台</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin:0; background:#0d1117; color:#c9d1d9; font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif; }
+  header { padding:12px 16px; border-bottom:1px solid #30363d; display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  header h1 { font-size:16px; margin:0 16px 0 0; }
+  .btn { background:#21262d; color:#c9d1d9; border:1px solid #30363d; padding:6px 12px; border-radius:6px; cursor:pointer; }
+  .btn:hover { background:#30363d; }
+  .btn.primary { background:#238636; border-color:#238636; color:#fff; }
+  .btn.danger { background:#da3633; border-color:#da3633; color:#fff; }
+  .btn.warn { background:#9e6a03; border-color:#9e6a03; color:#fff; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(360px,1fr)); gap:12px; padding:12px; }
+  .card { background:#161b22; border:1px solid #30363d; border-radius:8px; padding:12px; }
+  .card h2 { font-size:14px; margin:0 0 8px; display:flex; justify-content:space-between; align-items:center; }
+  .dot { width:10px; height:10px; border-radius:50%; display:inline-block; margin-right:4px; }
+  .dot.ok { background:#238636; } .dot.down { background:#da3633; }
+  .row { display:flex; gap:8px; margin:3px 0; font-size:13px; }
+  .k { color:#8b949e; min-width:64px; }
+  .v { word-break:break-all; }
+  .warn { color:#d29922; } .err { color:#f85149; } .good { color:#3fb950; }
+  .controls { display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; align-items:center; }
+  select, input { background:#0d1117; color:#c9d1d9; border:1px solid #30363d; border-radius:6px; padding:4px 6px; font-size:13px; }
+  input { width:56px; }
+  .progress { background:#21262d; border-radius:6px; padding:6px 8px; margin-top:6px; font-size:12px; }
+  .bar { height:6px; background:#21262d; border-radius:3px; margin-top:4px; overflow:hidden; }
+  .bar > div { height:100%; background:#238636; }
+  footer { padding:8px 16px; color:#6e7681; font-size:12px; border-top:1px solid #30363d; }
+</style>
+</head>
+<body>
+<header>
+  <h1>xhs 4 台控制台</h1>
+  <button class="btn primary" onclick="allStart('养号',2,1)">4 台齐跑养号(2圈,cap1)</button>
+  <button class="btn primary" onclick="allStart('涨粉',2,1)">4 台齐跑涨粉(2圈,cap1)</button>
+  <button class="btn warn" onclick="allHome()">4 台全回首页</button>
+  <button class="btn danger" onclick="allStop()">4 台全停</button>
+  <span id="ts" style="margin-left:auto;color:#6e7681"></span>
+</header>
+<div class="grid" id="grid"></div>
+<footer>每 3s 轮询 /status。任务跑批期间该卡跳过 activity/IME 探测以降 adb 抢占。停止用 SIGINT 优雅退出(当前圈跑完才退)。</footer>
+
+<script>
+const DEVS = ["REPLACE_SERIAL_01","REPLACE_SERIAL_03","REPLACE_SERIAL_02","REPLACE_SERIAL_04"];
+let tasks = [];
+let state = {};
+
+async function api(path, opts) {
+  try {
+    const r = await fetch(path, opts || {});
+    return await r.json();
+  } catch (e) { return { error: String(e) }; }
+}
+
+function clsForActivity(a) {
+  if (!a) return "";
+  if (/Alipay|Gphone/i.test(a)) return "err";   // 支付宝/支付容器=危险
+  if (/xingin\.xhs/i.test(a)) return "good";
+  return "warn";
+}
+function clsForIme(ime) {
+  if (!ime) return "";
+  return /sogou/i.test(ime) ? "good" : "err";   // 非 SogouIME = 残留桥接 IME
+}
+
+function render() {
+  const grid = document.getElementById("grid");
+  const devmap = {};
+  (state.devices||[]).forEach(d => devmap[d.serial] = d);
+  grid.innerHTML = DEVS.map(s => {
+    const d = devmap[s] || { serial:s, serve:"down", running:false };
+    const r = d.task;
+    const serveCls = d.serve === "ok" ? "ok" : "down";
+    let body = "";
+    if (r) {
+      const lp = r.loops ? `${r.loop}/${r.loops}` : `${r.loop}`;
+      const pct = r.loops ? Math.min(100, r.loop/r.loops*100) : 0;
+      body = `
+        <div class="row"><span class="k">任务</span><span class="v good">${r.name} ${r.cap!=null?'cap'+r.cap:''}</span></div>
+        <div class="row"><span class="k">圈数</span><span class="v">${lp} (${r.phase})</span></div>
+        <div class="row"><span class="k">累计</span><span class="v">ok ${r.ok} · skip ${r.skip} · 评论 ${r.comments}</span></div>
+        ${r.lastErr?`<div class="row"><span class="k">最近错</span><span class="v err">${r.lastErr}</span></div>`:""}
+        <div class="bar"><div style="width:${pct}%"></div></div>`;
+    } else {
+      body = `
+        <div class="row"><span class="k">前台</span><span class="v ${clsForActivity(d.activity)}">${d.activity||"?"}</span></div>
+        <div class="row"><span class="k">IME</span><span class="v ${clsForIme(d.ime)}">${d.ime||"?"}</span></div>
+        ${d.lastTask?`<div class="row"><span class="k">末次</span><span class="v">${d.lastTask.name} ok${d.lastTask.ok} skip${d.lastTask.skip} 评${d.lastTask.comments} exit${d.lastTask.exitCode??""}${d.lastTask.lastErr?' · <span class=err>'+d.lastTask.lastErr+'</span>':''}</span></div>`:""}
+        ${d.metrics?`<div class="row"><span class="k">serve</span><span class="v">dump ${d.metrics.dumps} tap ${d.metrics.taps} ${d.metrics.avgDumpMs?'· avgDump '+Math.round(d.metrics.avgDumpMs)+'ms':''}</span></div>`:""}`;
+    }
+    return `<div class="card">
+      <h2><span><span class="dot ${serveCls}"></span>${s}</span><span style="color:#6e7681;font-weight:normal">:${d.port||""}</span></h2>
+      ${body}
+      <div class="controls">
+        <select id="t-${s}">${tasks.map(t=>`<option value="${t}">${t}</option>`).join("")}</select>
+        <label>圈<input id="l-${s}" type="number" value="2" min="1" max="200"></label>
+        <label>cap<input id="c-${s}" type="number" value="1" min="0" max="20"></label>
+        <button class="btn primary" onclick="startOne('${s}')">启动</button>
+        <button class="btn danger" onclick="stopOne('${s}')">停止</button>
+        <button class="btn warn" onclick="homeOne('${s}')">回首页</button>
+      </div>
+    </div>`;
+  }).join("");
+  document.getElementById("ts").textContent = new Date().toLocaleTimeString();
+}
+
+async function poll() {
+  state = await api("/status");
+  render();
+}
+async function loadTasks() {
+  const t = await api("/tasks");
+  tasks = t.tasks || [];
+  if (!tasks.length) tasks = ["养号","涨粉","自主","互动","纯刷"];
+  render();
+}
+function startOne(s) {
+  const task = document.getElementById("t-"+s).value;
+  const loops = document.getElementById("l-"+s).value;
+  const cap = document.getElementById("c-"+s).value;
+  api("/task", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({serial:s,action:"start",task,loops,cap:cap})}).then(poll);
+}
+function stopOne(s) { api("/task",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({serial:s,action:"stop"})}).then(()=>setTimeout(poll,300)); }
+function homeOne(s) { api("/home",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({serial:s})}).then(poll); }
+function allStart(task,loops,cap) { DEVS.forEach(s=>api("/task",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({serial:s,action:"start",task,loops,cap})})); setTimeout(poll,500); }
+function allStop() { DEVS.forEach(s=>stopOne(s)); }
+function allHome() { DEVS.forEach(s=>homeOne(s)); }
+
+loadTasks();
+poll();
+setInterval(poll, 3000);
+</script>
+</body>
+</html>
