@@ -46,7 +46,17 @@ export function isPublishCompose(snapshot) {
   const hasDescription = /描述|宝贝描述|说说宝贝|标题/.test(text);
   const hasCommerceField = /价格|分类|成色|运费/.test(text);
   const hasFinalPublish = /(^|\n)发布($|\n)/m.test(text);
-  return hasDescription && (hasCommerceField || hasFinalPublish);
+  if (hasDescription && (hasCommerceField || hasFinalPublish)) return true;
+
+  // Windows 管道偶发把 UTF-8 content-desc 显示成 GBK mojibake；用真实页布局做二次门控。
+  // 三个区域必须同时存在，且调用方还会校验前台包名，避免单坐标误判。
+  const topRightButton = snapshot.some((node) => node.className === "android.widget.Button"
+    && node.bounds?.[0] >= 850 && node.bounds?.[1] < 220);
+  const mediaButton = snapshot.some((node) => node.className === "android.widget.Button"
+    && node.bounds?.[0] < 150 && node.bounds?.[1] >= 200 && node.bounds?.[3] <= 700);
+  const lowerFormRow = snapshot.some((node) => node.bounds?.[0] < 100 && node.bounds?.[1] >= 1300
+    && node.bounds?.[2] > 900 && node.bounds?.[3] <= 2050);
+  return topRightButton && mediaButton && lowerFormRow;
 }
 
 export function findPublishEntry(snapshot) {
@@ -57,7 +67,11 @@ export function findPublishEntry(snapshot) {
     const hit = candidates.find((node) => node.clickable) || candidates[0];
     if (hit) return hit;
   }
-  return null;
+  // “卖闲置”菜单的首项：全宽、可点击 ImageView，位于屏幕中下部。
+  return snapshot.find((node) => node.clickable && node.className === "android.widget.ImageView"
+    && node.bounds?.[0] === 0 && node.bounds?.[2] >= 1000
+    && node.bounds?.[1] >= 900 && node.bounds?.[1] <= 1350
+    && node.bounds?.[3] - node.bounds?.[1] >= 150) || null;
 }
 
 function center(bounds) {
@@ -178,7 +192,11 @@ export async function openPublishDryRun(op, { maxSteps = 3 } = {}) {
       return { ok: true, stage: "publish-compose", stoppedBeforePublish: true, trace };
     }
     if (step === maxSteps) break;
-    const entry = findPublishEntry(state.nodes);
+    let entry = findPublishEntry(state.nodes);
+    if (!entry && step === 0 && /MainActivity/.test(state.focus.activity || "")) {
+      // 首页中央黄色“卖闲置”：真实 1080x2400 页面截图校验过；下一步仍重新 dump。
+      entry = { bounds: [390, 2070, 690, 2370] };
+    }
     if (!entry) return { ok: false, step: "publish-entry", stoppedBeforePublish: true, trace };
     const [x, y] = center(entry.bounds);
     await op.tap(x, y);

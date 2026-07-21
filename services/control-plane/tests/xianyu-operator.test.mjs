@@ -26,3 +26,11 @@ test("isPublishCompose requires description plus a commerce field", () => {
   assert.equal(isPublishCompose([{ label: "宝贝描述" }, { label: "价格" }, { label: "发布" }]), true);
   assert.equal(isPublishCompose([{ label: "发布" }]), false);
 });
+
+test("isPublishCompose accepts the validated compose layout when labels are mojibake", () => {
+  assert.equal(isPublishCompose([
+    { label: "鍙戝竷", className: "android.widget.Button", bounds: [880, 94, 1080, 178] },
+    { label: "娣诲姞鍥剧墖", className: "android.widget.Button", bounds: [74, 257, 378, 561] },
+    { label: "浠锋牸", className: "android.widget.Button", bounds: [74, 1511, 1006, 1658] },
+  ]), true);
+});
