@@ -6,6 +6,7 @@
 import { pathToFileURL } from "node:url";
 import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FastOperator } from "./fast-operator.mjs";
@@ -181,7 +182,7 @@ async function snapshot(op, label) {
 async function capturePng(op, path) {
   const png = await op.session.execOut(["screencap", "-p"], 15000);
   writeFileSync(path, png);
-  return { path, bytes: png.length };
+  return { path, bytes: png.length, sha256: createHash("sha256").update(png).digest("hex") };
 }
 
 export async function inputDryRun(op, { text, evidenceDir = "C:\\Users\\Public" } = {}) {
@@ -197,12 +198,21 @@ export async function inputDryRun(op, { text, evidenceDir = "C:\\Users\\Public" 
       && node.bounds?.[0] < 100 && node.bounds?.[1] >= 500 && node.bounds?.[3] <= 1200
       && node.bounds?.[2] > 900);
   if (!description?.bounds) return { ok: false, step: "description-field" };
-  const [fieldX, fieldY] = center(description.bounds);
+  // 点击占位文字行，而不是大文本区的空白中心。
+  const fieldX = Math.min(description.bounds[2] - 40, description.bounds[0] + 230);
+  const fieldY = Math.min(description.bounds[3] - 40, description.bounds[1] + 75);
   await op.tap(fieldX, fieldY);
   await settle(800);
-  const { audit, restore } = await op.inputTextViaXiaowei(value, { deferRestore: true });
-  await settle(600);
+  const focusProbe = await op.session.oneShotShell("dumpsys input_method | grep -E 'mInputShown=true|InputConnectionAdaptor'", 8000);
+  const flutterInputActive = /mInputShown=true/.test(focusProbe) && /InputConnectionAdaptor/.test(focusProbe);
+  if (!flutterInputActive) return { ok: false, step: "flutter-input-focus" };
+
   const safeSerial = String(op.serial).replace(/[^A-Za-z0-9_-]/g, "_");
+  const baseline = await capturePng(op, `${evidenceDir}\\xianyu-input-baseline-${safeSerial}.png`);
+  const clipboard = await op.xiaoweiInvoke("writeClipboard", { content: value });
+  if (clipboard.code !== 10000) throw new Error(`writeClipboard failed: ${clipboard.message || JSON.stringify(clipboard)}`);
+  await op.session.exec("input keyevent KEYCODE_PASTE", 6000);
+  await settle(600);
   const entered = await capturePng(op, `${evidenceDir}\\xianyu-input-entered-${safeSerial}.png`);
 
   // 清空刚输入的测试串，不保存草稿。多给 8 次 DEL 处理 emoji/组合字符边界。
@@ -212,8 +222,19 @@ export async function inputDryRun(op, { text, evidenceDir = "C:\\Users\\Public" 
   const cleared = await capturePng(op, `${evidenceDir}\\xianyu-input-cleared-${safeSerial}.png`);
   await op.session.exec("input keyevent KEYCODE_BACK", 6000);
   await settle(300);
-  await restore();
-  return { ok: true, stoppedBeforePublish: true, audit, evidence: { entered, cleared } };
+  const clipboardClear = await op.xiaoweiInvoke("writeClipboard", { content: "" }).catch(() => null);
+  return {
+    ok: true,
+    stoppedBeforePublish: true,
+    audit: {
+      flutterInputActive,
+      clipboardAccepted: true,
+      pasteSent: true,
+      visualChanged: entered.sha256 !== baseline.sha256,
+      clipboardCleared: clipboardClear?.code === 10000,
+    },
+    evidence: { baseline, entered, cleared },
+  };
 }
 
 export async function openPublishDryRun(op, { maxSteps = 3 } = {}) {
