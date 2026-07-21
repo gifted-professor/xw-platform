@@ -1,6 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { findPublishEntry, isPublishCompose, parseAllUiNodes, semanticSnapshot } from "../scripts/xianyu-operator.mjs";
+import {
+  descriptionContains,
+  findDescriptionField,
+  findPublishEntry,
+  isEmptyDescriptionField,
+  isPublishCompose,
+  parseAllUiNodes,
+  semanticSnapshot,
+} from "../scripts/xianyu-operator.mjs";
 
 test("semanticSnapshot keeps Flutter content-desc text", () => {
   const result = semanticSnapshot({ nodes: [
@@ -41,4 +49,18 @@ test("parseAllUiNodes keeps a clickable Flutter parent with children", () => {
   assert.equal(result.nodes.length, 2);
   assert.equal(result.nodes[0].contentDesc, "描述一下宝贝");
   assert.deepEqual(result.nodes[0].bounds, [74, 575, 1006, 1121]);
+});
+
+test("findDescriptionField and descriptionContains verify actual Flutter text", () => {
+  const field = {
+    label: "闲鱼发布页输入测试\n品牌型号、货品来源",
+    className: "android.view.View",
+    clickable: true,
+    bounds: [74, 575, 1006, 1121],
+  };
+  assert.equal(findDescriptionField([field]), field);
+  assert.equal(descriptionContains(field, "闲鱼发布页输入测试"), true);
+  assert.equal(descriptionContains(field, "别的内容"), false);
+  assert.equal(isEmptyDescriptionField({ label: "描述一下宝贝的品牌型号、货品来源..." }), true);
+  assert.equal(isEmptyDescriptionField({ label: "用户已有的草稿内容" }), false);
 });

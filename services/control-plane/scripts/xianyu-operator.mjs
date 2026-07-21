@@ -71,6 +71,25 @@ export function findPublishEntry(snapshot) {
   return null;
 }
 
+export function findDescriptionField(snapshot) {
+  return snapshot.find((node) => /描述|品牌型号|货品来源/.test(node.label))
+    || snapshot.find((node) => node.clickable && node.className === "android.view.View"
+      && node.bounds?.[0] < 100 && node.bounds?.[1] >= 500 && node.bounds?.[3] <= 1200
+      && node.bounds?.[2] > 900)
+    || null;
+}
+
+export function descriptionContains(node, value) {
+  const expected = String(value || "").replace(/\s+/g, "");
+  const actual = String(node?.label || semanticLabel(node)).replace(/\s+/g, "");
+  return !!expected && actual.includes(expected);
+}
+
+export function isEmptyDescriptionField(node) {
+  const label = String(node?.label || semanticLabel(node));
+  return /描述.*宝贝.*品牌型号.*货品来源|描述.*品牌型号.*货品来源/s.test(label);
+}
+
 function findPublishMenuEntryByLayout(snapshot) {
   // 仅在已经点过首页中央“卖闲置”后的第 1 步使用。
   return snapshot.find((node) => node.clickable && node.className === "android.widget.ImageView"
@@ -193,11 +212,11 @@ export async function inputDryRun(op, { text, evidenceDir = "C:\\Users\\Public" 
     return { ok: false, step: "not-on-publish-compose", focus: before.focus };
   }
 
-  const description = before.nodes.find((node) => /描述|品牌型号|货品来源/.test(node.label))
-    || before.nodes.find((node) => node.clickable && node.className === "android.view.View"
-      && node.bounds?.[0] < 100 && node.bounds?.[1] >= 500 && node.bounds?.[3] <= 1200
-      && node.bounds?.[2] > 900);
+  const description = findDescriptionField(before.nodes);
   if (!description?.bounds) return { ok: false, step: "description-field" };
+  if (!isEmptyDescriptionField(description)) {
+    return { ok: false, step: "description-not-empty", stoppedBeforePublish: true };
+  }
   // 点击占位文字行，而不是大文本区的空白中心。
   const fieldX = Math.min(description.bounds[2] - 40, description.bounds[0] + 230);
   const fieldY = Math.min(description.bounds[3] - 40, description.bounds[1] + 75);
@@ -209,42 +228,83 @@ export async function inputDryRun(op, { text, evidenceDir = "C:\\Users\\Public" 
 
   const safeSerial = String(op.serial).replace(/[^A-Za-z0-9_-]/g, "_");
   const baseline = await capturePng(op, `${evidenceDir}\\xianyu-input-baseline-${safeSerial}.png`);
-  const clipboard = await op.xiaoweiInvoke("writeClipboard", { content: value });
-  if (clipboard.code !== 10000) throw new Error(`writeClipboard failed: ${clipboard.message || JSON.stringify(clipboard)}`);
-  await op.session.exec("input keyevent KEYCODE_PASTE", 6000);
-  await settle(600);
-  const entered = await capturePng(op, `${evidenceDir}\\xianyu-input-entered-${safeSerial}.png`);
-  const afterPaste = await snapshot(op, "xianyu-input-after-paste");
-  const pastedDescription = afterPaste.nodes.find((node) => node.clickable && node.className === "android.view.View"
-    && node.bounds?.[0] < 100 && node.bounds?.[1] >= 500 && node.bounds?.[3] <= 1200
-    && node.bounds?.[2] > 900);
-  const textVerified = !!pastedDescription?.label && pastedDescription.label !== description.label;
+  const priorIme = await op.currentIme();
+  const bridgeIme = op.xwBridgeIme || "com.android.xwkeyboard/.XwIME";
+  const inputAudit = { selected: false, rebound: false, inputAccepted: false };
+  let entered = null;
+  let cleared = null;
+  let textVerified = false;
+  let clearedVerified = false;
+  let inputError = null;
+  try {
+    // Flutter 在运行中切换 IME 后不会总是自动把旧焦点重绑给新输入法。
+    // 因此必须先切效卫桥 IME，再重新点一次同一描述框，最后才发 inputText。
+    if ((await op.currentIme()) !== bridgeIme && !(await op.setIme(bridgeIme))) {
+      throw new Error("bridge IME select failed");
+    }
+    inputAudit.selected = (await op.currentIme()) === bridgeIme;
+    await settle(400);
+    await op.tap(fieldX, fieldY);
+    await settle(500);
+    const reboundProbe = await op.session.oneShotShell(
+      "dumpsys input_method | grep -E 'mInputShown=true|InputConnectionAdaptor'",
+      8000,
+    );
+    inputAudit.rebound = /InputConnectionAdaptor/.test(reboundProbe);
+    if (!inputAudit.rebound) throw new Error("Flutter InputConnection did not rebind after IME switch");
+    const inputResponse = await op.xiaoweiInvoke("inputText", { content: value });
+    if (inputResponse.code !== 10000) {
+      throw new Error(`inputText failed: ${inputResponse.message || JSON.stringify(inputResponse)}`);
+    }
+    inputAudit.inputAccepted = true;
+    await settle(700);
+    entered = await capturePng(op, `${evidenceDir}\\xianyu-input-entered-${safeSerial}.png`);
+    const afterInput = await snapshot(op, "xianyu-input-after-xiaowei");
+    // 写入后占位提示会消失，所以不能再用“描述/品牌型号”反查字段；
+    // 直接在当前发布页的全部语义节点中查找完整测试串。
+    const enteredTextNode = afterInput.nodes.find((node) => descriptionContains(node, value));
+    textVerified = !!enteredTextNode;
+    inputAudit.verifiedNode = enteredTextNode ? {
+      className: enteredTextNode.className,
+      bounds: enteredTextNode.bounds,
+      label: enteredTextNode.label,
+    } : null;
 
-  // 清空刚输入的测试串，不保存草稿。多给 8 次 DEL 处理 emoji/组合字符边界。
-  const deleteCount = [...value].length + 8;
-  await op.session.exec(`input keyevent KEYCODE_MOVE_END ${Array(deleteCount).fill("KEYCODE_DEL").join(" ")}`, 10000);
-  await settle(500);
-  const cleared = await capturePng(op, `${evidenceDir}\\xianyu-input-cleared-${safeSerial}.png`);
-  const afterClear = await snapshot(op, "xianyu-input-after-clear");
-  const clearedDescription = afterClear.nodes.find((node) => node.clickable && node.className === "android.view.View"
-    && node.bounds?.[0] < 100 && node.bounds?.[1] >= 500 && node.bounds?.[3] <= 1200
-    && node.bounds?.[2] > 900);
-  const clearedVerified = !textVerified || clearedDescription?.label === description.label;
-  await op.session.exec("input keyevent KEYCODE_BACK", 6000);
-  await settle(300);
-  const clipboardClear = await op.xiaoweiInvoke("writeClipboard", { content: "" }).catch(() => null);
+    // 只清理本次从空白新建页写入的临时串；多给 8 次 DEL 处理组合字符边界。
+    const deleteCount = [...value].length + 8;
+    await op.session.exec(`input keyevent KEYCODE_MOVE_END ${Array(deleteCount).fill("KEYCODE_DEL").join(" ")}`, 10000);
+    await settle(500);
+    cleared = await capturePng(op, `${evidenceDir}\\xianyu-input-cleared-${safeSerial}.png`);
+    const afterClear = await snapshot(op, "xianyu-input-after-clear");
+    const clearedDescription = findDescriptionField(afterClear.nodes);
+    clearedVerified = !descriptionContains(clearedDescription, value)
+      && String(clearedDescription?.label || semanticLabel(clearedDescription))
+        === String(description?.label || semanticLabel(description));
+  } catch (error) {
+    inputError = error.message;
+  } finally {
+    if ((await op.currentIme()) !== priorIme) await op.setIme(priorIme).catch(() => false);
+    await op.session.exec("input keyevent KEYCODE_BACK", 6000).catch(() => null);
+    await settle(300);
+  }
   return {
     ok: textVerified && clearedVerified,
-    step: textVerified ? (clearedVerified ? "completed" : "clear-unverified") : "flutter-chinese-input-unverified",
+    step: inputError ? "xiaowei-input-error"
+      : textVerified ? (clearedVerified ? "completed" : "clear-unverified")
+        : "flutter-chinese-input-unverified",
     stoppedBeforePublish: true,
     audit: {
       flutterInputActive,
-      clipboardAccepted: true,
-      pasteSent: true,
-      visualChanged: entered.sha256 !== baseline.sha256,
+      priorIme,
+      bridgeIme,
+      bridgeImeSelected: inputAudit.selected,
+      flutterInputRebound: inputAudit.rebound,
+      inputAccepted: inputAudit.inputAccepted,
+      imeRestored: (await op.currentIme()) === priorIme,
+      visualChanged: !!entered && entered.sha256 !== baseline.sha256,
       textVerified,
       clearedVerified,
-      clipboardCleared: clipboardClear?.code === 10000,
+      inputError,
     },
     evidence: { baseline, entered, cleared },
   };

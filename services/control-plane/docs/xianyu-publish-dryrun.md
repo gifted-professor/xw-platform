@@ -35,7 +35,7 @@ node scripts/xianyu-operator.mjs --serial REPLACE_SERIAL_01 input-dry-run --text
 4. 识别到描述、价格/分类/成色/运费等编辑字段后立即停止。
 5. 裸“发布”永远不作为导航入口，防止误触最终发布。
 
-`input-dry-run` 只在已识别为发布编辑页且 Flutter InputConnection 活跃时运行：写入临时文本、截图、校验描述节点确实变化、清空并再次校验；任一证据缺失都返回失败，不点击发布。
+`input-dry-run` 只在已识别为发布编辑页、描述框仍是空白占位状态且 Flutter InputConnection 活跃时运行：切换到效卫桥 IME、重新点一次描述框让 Flutter 重绑 InputConnection、写入临时文本、截图、在全页面语义节点中校验完整文本、清空并确认占位内容恢复，最后切回原输入法。任一证据缺失都返回失败，不点击发布，也不触碰已有草稿。
 
 ## 现场前置条件
 
@@ -59,7 +59,11 @@ node scripts/xianyu-operator.mjs --serial REPLACE_SERIAL_01 input-dry-run --text
 - 编辑页识别到发布、添加图片、描述、商品规格、价格、发货方式和位置；最终发布未点击。
 - “添加图片”进入相册选择器：通过；未选择图片，随后关闭返回。
 - Flutter 描述框可获得 InputConnection；ADB ASCII `XYTEST0721` 真实写入并清空：通过。
-- 小薇 `inputText` 返回成功，但中文没有进入描述框：未通过。
-- 小薇 `writeClipboard` + Android `KEYCODE_PASTE` 返回成功，但中文仍未进入描述框：未通过。
+- 中文输入根因：Flutter 输入框在运行中切换 IME 后，没有自动把旧焦点绑定给效卫桥；只看 `inputText code=10000` 会形成假成功。
+- 修复后链路：`SogouIME → XwIME → 重新点击描述框 → InputConnectionAdaptor 在岗 → inputText → 完整中文语义实证 → 清空 → 占位恢复 → SogouIME`。
+- 临时文本 `闲鱼中文输入验收0721` 真实进入描述框：通过；`textVerified=true`。
+- 临时文本清空且原占位恢复：通过；`clearedVerified=true`。
+- 输入法恢复为 `com.sohu.inputmethod.sogou.xiaomi/.SogouIME`：通过；`imeRestored=true`。
+- 最终结果：`ok=true`、`step=completed`、`stoppedBeforePublish=true`；没有选择图片、没有保存草稿、没有点击发布。
 
-因此当前可对 Hermes 开放“启动闲鱼、进入发布页、读取页面、打开并退出相册”的固定流程；中文描述输入仍必须交回 Codex，不得把桥返回成功当作编辑器实证。
+因此当前可对 Hermes 开放“启动闲鱼、进入发布页、读取页面、打开并退出相册、在空白新建页写入并实证中文描述”的固定流程。后续正式保留描述内容、选图、定价、保存草稿和点击发布仍需单独命令与授权；不得把桥返回成功当作编辑器实证。
