@@ -214,23 +214,36 @@ export async function inputDryRun(op, { text, evidenceDir = "C:\\Users\\Public" 
   await op.session.exec("input keyevent KEYCODE_PASTE", 6000);
   await settle(600);
   const entered = await capturePng(op, `${evidenceDir}\\xianyu-input-entered-${safeSerial}.png`);
+  const afterPaste = await snapshot(op, "xianyu-input-after-paste");
+  const pastedDescription = afterPaste.nodes.find((node) => node.clickable && node.className === "android.view.View"
+    && node.bounds?.[0] < 100 && node.bounds?.[1] >= 500 && node.bounds?.[3] <= 1200
+    && node.bounds?.[2] > 900);
+  const textVerified = !!pastedDescription?.label && pastedDescription.label !== description.label;
 
   // 清空刚输入的测试串，不保存草稿。多给 8 次 DEL 处理 emoji/组合字符边界。
   const deleteCount = [...value].length + 8;
   await op.session.exec(`input keyevent KEYCODE_MOVE_END ${Array(deleteCount).fill("KEYCODE_DEL").join(" ")}`, 10000);
   await settle(500);
   const cleared = await capturePng(op, `${evidenceDir}\\xianyu-input-cleared-${safeSerial}.png`);
+  const afterClear = await snapshot(op, "xianyu-input-after-clear");
+  const clearedDescription = afterClear.nodes.find((node) => node.clickable && node.className === "android.view.View"
+    && node.bounds?.[0] < 100 && node.bounds?.[1] >= 500 && node.bounds?.[3] <= 1200
+    && node.bounds?.[2] > 900);
+  const clearedVerified = !textVerified || clearedDescription?.label === description.label;
   await op.session.exec("input keyevent KEYCODE_BACK", 6000);
   await settle(300);
   const clipboardClear = await op.xiaoweiInvoke("writeClipboard", { content: "" }).catch(() => null);
   return {
-    ok: true,
+    ok: textVerified && clearedVerified,
+    step: textVerified ? (clearedVerified ? "completed" : "clear-unverified") : "flutter-chinese-input-unverified",
     stoppedBeforePublish: true,
     audit: {
       flutterInputActive,
       clipboardAccepted: true,
       pasteSent: true,
       visualChanged: entered.sha256 !== baseline.sha256,
+      textVerified,
+      clearedVerified,
       clipboardCleared: clipboardClear?.code === 10000,
     },
     evidence: { baseline, entered, cleared },
