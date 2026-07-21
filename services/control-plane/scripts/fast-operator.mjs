@@ -131,6 +131,8 @@ class AdbShellSession {
   }
 
   async start() {
+    this.buf = "";
+    this.waiters = [];
     this.proc = spawn(this.adbPath, ["-s", this.serial, "shell"], { stdio: ["pipe", "pipe", "pipe"] });
     this.proc.stdout.setEncoding("utf8");
     this.proc.stdout.on("data", (chunk) => {
@@ -157,19 +159,64 @@ class AdbShellSession {
   }
 
   exec(cmd, timeoutMs = 30000) {
-    if (!this.proc) throw new Error("adb shell session not started");
+    if (!this.proc) return this._restartAndExec(cmd, timeoutMs);
     const marker = `__FO_END_${this.cmdSeq++}__`;
     return new Promise((resolve, reject) => {
       const t = setTimeout(() => {
+        // 超时:命令仍在设备上跑,marker 迟早会落到 buf 当孤儿污染下一条。
+        // 先摘掉自己(用超时信息 reject,不让 _poison 覆盖),再 _poison 杀持久 shell,
+        // 下次 exec 自动起全新 shell——把「一次慢命令 → 整条持久 shell 通道中毒、后续全超时」的级联切断。
         const i = this.waiters.findIndex((w) => w.marker === marker);
         if (i >= 0) this.waiters.splice(i, 1);
+        this._poison("shell timeout");
         reject(new Error(`adb shell timeout (${timeoutMs}ms): ${cmd.slice(0, 80)}`));
       }, timeoutMs);
       this.waiters.push({
         marker,
         resolve: (out) => { clearTimeout(t); resolve(out); },
+        reject: (e) => { clearTimeout(t); reject(e); },
       });
-      this.proc.stdin.write(`${cmd}; echo ${marker}\n`);
+      try {
+        this.proc.stdin.write(`${cmd}; echo ${marker}\n`);
+      } catch (e) {
+        const i = this.waiters.findIndex((w) => w.marker === marker);
+        if (i >= 0) this.waiters.splice(i, 1);
+        this._poison("stdin write failed");
+        reject(e);
+      }
+    });
+  }
+
+  // 中毒:杀掉持久 shell(顺带终止 runaway 命令),摘掉其 stdout 监听避免僵尸数据污染
+  // 新 shell 的 buf,清空 buf/waiters(其余 waiter 一并拒绝)。下次 exec 经 _restartAndExec 起全新 shell。
+  _poison(reason) {
+    const old = this.proc;
+    try { old?.stdin?.end(); } catch {}
+    try { old?.stdout?.removeAllListeners?.("data"); } catch {}
+    try { old?.stderr?.removeAllListeners?.("data"); } catch {}
+    try { old?.kill(); } catch {}
+    this.proc = null;
+    this.buf = "";
+    const ws = this.waiters.splice(0);
+    for (const w of ws) { try { w.reject(new Error(`adb shell poisoned (${reason})`)); } catch {} }
+  }
+
+  async _restartAndExec(cmd, timeoutMs) {
+    await this.start();
+    return this.exec(cmd, timeoutMs);
+  }
+
+  // one-shot adb shell(全新 adb 进程,不经持久 shell,无分帧/中毒风险)。
+  // 给廉价探针(focus)做兜底:持久 shell 偶发超时时再试一次,做到 dump 级稳。
+  oneShotShell(cmd, timeoutMs = 10000) {
+    return new Promise((resolve, reject) => {
+      const p = spawn(this.adbPath, ["-s", this.serial, "shell", cmd], { stdio: ["ignore", "pipe", "pipe"] });
+      let out = "";
+      const t = setTimeout(() => { try { p.kill(); } catch {} reject(new Error(`one-shot timeout (${timeoutMs}ms): ${cmd.slice(0, 60)}`)); }, timeoutMs);
+      p.stdout.setEncoding("utf8");
+      p.stdout.on("data", (c) => { out += c; });
+      p.on("error", (e) => { clearTimeout(t); reject(e); });
+      p.on("close", () => { clearTimeout(t); resolve(out); });
     });
   }
 
@@ -249,7 +296,12 @@ export class FastOperator {
   async close() { await this.session.close(); }
 
   async currentFocus() {
-    const out = await this.session.exec("dumpsys window 2>/dev/null | grep -E mCurrentFocus", 10000);
+    let out = await this.session.exec("dumpsys window 2>/dev/null | grep -E mCurrentFocus", 10000).catch(() => null);
+    if (out == null) {
+      // 持久 shell 超时(已在 exec 内自愈,下条会用全新 shell),本次用 one-shot 兜底再试一次,
+      // 避免一次慢 dumpsys 让 focus 直接失败——focus 是最常调的探针,要 dump 级稳。
+      out = await this.session.oneShotShell("dumpsys window 2>/dev/null | grep -E mCurrentFocus", 8000).catch(() => "");
+    }
     const m = out.match(/mCurrentFocus=Window\{[^}]+ ([^/}\s]+)\/([^}\s]+)/);
     return m ? { package: m[1], activity: m[2], raw: out } : { package: null, activity: null, raw: out };
   }
