@@ -67,7 +67,11 @@ export function findPublishEntry(snapshot) {
     const hit = candidates.find((node) => node.clickable) || candidates[0];
     if (hit) return hit;
   }
-  // “卖闲置”菜单的首项：全宽、可点击 ImageView，位于屏幕中下部。
+  return null;
+}
+
+function findPublishMenuEntryByLayout(snapshot) {
+  // 仅在已经点过首页中央“卖闲置”后的第 1 步使用。
   return snapshot.find((node) => node.clickable && node.className === "android.widget.ImageView"
     && node.bounds?.[0] === 0 && node.bounds?.[2] >= 1000
     && node.bounds?.[1] >= 900 && node.bounds?.[1] <= 1350
@@ -231,10 +235,13 @@ export async function openPublishDryRun(op, { maxSteps = 3 } = {}) {
       return { ok: true, stage: "publish-compose", stoppedBeforePublish: true, trace };
     }
     if (step === maxSteps) break;
-    let entry = findPublishEntry(state.nodes);
-    if (!entry && step === 0 && /MainActivity/.test(state.focus.activity || "")) {
+    let entry = null;
+    if (step === 0 && /MainActivity/.test(state.focus.activity || "")) {
       // 首页中央黄色“卖闲置”：真实 1080x2400 页面截图校验过；下一步仍重新 dump。
       entry = { bounds: [390, 2070, 690, 2370] };
+    } else {
+      entry = findPublishEntry(state.nodes);
+      if (!entry && step === 1) entry = findPublishMenuEntryByLayout(state.nodes);
     }
     if (!entry) return { ok: false, step: "publish-entry", stoppedBeforePublish: true, trace };
     const [x, y] = center(entry.bounds);
