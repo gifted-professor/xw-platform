@@ -8,7 +8,7 @@ import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { FastOperator, parseUiAutomatorXml } from "./fast-operator.mjs";
+import { FastOperator } from "./fast-operator.mjs";
 
 const IDLEFISH_PACKAGE = "com.taobao.idlefish";
 const DEFAULT_ADB = "C:\\PROGRA~2\\xiaowei_android\\tools\\adb.exe";
@@ -101,6 +101,39 @@ function runProcess(file, args, timeoutMs = 20000) {
   });
 }
 
+function parseBounds(value) {
+  const match = String(value || "").match(/^\[(\d+),(\d+)\]\[(\d+),(\d+)\]$/);
+  return match ? match.slice(1).map(Number) : null;
+}
+
+function decodeAttr(value) {
+  return String(value || "")
+    .replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(Number(code)))
+    .replace(/&quot;/g, '"').replace(/&apos;/g, "'")
+    .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+}
+
+export function parseAllUiNodes(xml) {
+  const nodes = [];
+  const nodeRe = /<node\b([^>]*?)\/?\s*>/g;
+  const attrRe = /(\b[a-zA-Z:_][a-zA-Z0-9:_-]*)\s*=\s*"([^"]*)"/g;
+  let nodeMatch;
+  while ((nodeMatch = nodeRe.exec(xml)) !== null) {
+    const attrs = {};
+    let attrMatch;
+    attrRe.lastIndex = 0;
+    while ((attrMatch = attrRe.exec(nodeMatch[1])) !== null) attrs[attrMatch[1]] = attrMatch[2];
+    nodes.push({
+      text: decodeAttr(attrs.text), contentDesc: decodeAttr(attrs["content-desc"]),
+      className: attrs.class || "", resourceId: attrs["resource-id"] || "",
+      bounds: parseBounds(attrs.bounds), clickable: attrs.clickable === "true",
+      focused: attrs.focused === "true", focusable: attrs.focusable === "true",
+      scrollable: attrs.scrollable === "true", enabled: attrs.enabled !== "false",
+    });
+  }
+  return { nodes };
+}
+
 async function xianyuDump(op, label) {
   // Windows 上 adb exec-out 管道会把 Flutter 中文先按 GBK 解码，形成 mojibake。
   // 先让设备写 XML，再 adb pull 原始字节，保证 UTF-8 语义不丢。
@@ -109,13 +142,14 @@ async function xianyuDump(op, label) {
   const local = join(tmpdir(), `xianyu-dump-${token}.xml`);
   const startedAt = Date.now();
   try {
-    await op.session.exec(`uiautomator dump ${remote} >/dev/null 2>&1`, 18000);
+    // 不走持久 adb shell：该 PTY 会让 uiautomator 把 Flutter 中文写成 GBK 错码。
+    await runProcess(op.adbPath, ["-s", op.serial, "shell", "uiautomator", "dump", remote], 20000);
     await runProcess(op.adbPath, ["-s", op.serial, "pull", remote, local], 15000);
     const xml = readFileSync(local, "utf8");
     const start = xml.indexOf("<hierarchy");
     const end = xml.indexOf("</hierarchy>", start);
     if (start < 0 || end < 0) throw new Error("xianyu hierarchy dump incomplete");
-    const doc = parseUiAutomatorXml(xml.slice(start, end + "</hierarchy>".length));
+    const doc = parseAllUiNodes(xml.slice(start, end + "</hierarchy>".length));
     doc._dumpMs = Date.now() - startedAt;
     doc._label = label;
     return doc;
@@ -154,8 +188,13 @@ export async function inputDryRun(op, { text, evidenceDir = "C:\\Users\\Public" 
     return { ok: false, step: "not-on-publish-compose", focus: before.focus };
   }
 
-  // Flutter 描述框未稳定暴露语义节点；坐标仅在发布页语义门控通过后使用。
-  await op.tap(540, 760);
+  const description = before.nodes.find((node) => /描述|品牌型号|货品来源/.test(node.label))
+    || before.nodes.find((node) => node.clickable && node.className === "android.view.View"
+      && node.bounds?.[0] < 100 && node.bounds?.[1] >= 500 && node.bounds?.[3] <= 1200
+      && node.bounds?.[2] > 900);
+  if (!description?.bounds) return { ok: false, step: "description-field" };
+  const [fieldX, fieldY] = center(description.bounds);
+  await op.tap(fieldX, fieldY);
   await settle(800);
   const { audit, restore } = await op.inputTextViaXiaowei(value, { deferRestore: true });
   await settle(600);

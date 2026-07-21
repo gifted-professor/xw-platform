@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { findPublishEntry, isPublishCompose, semanticSnapshot } from "../scripts/xianyu-operator.mjs";
+import { findPublishEntry, isPublishCompose, parseAllUiNodes, semanticSnapshot } from "../scripts/xianyu-operator.mjs";
 
 test("semanticSnapshot keeps Flutter content-desc text", () => {
   const result = semanticSnapshot({ nodes: [
@@ -33,4 +33,12 @@ test("isPublishCompose accepts the validated compose layout when labels are moji
     { label: "娣诲姞鍥剧墖", className: "android.widget.Button", bounds: [74, 257, 378, 561] },
     { label: "浠锋牸", className: "android.widget.Button", bounds: [74, 1511, 1006, 1658] },
   ]), true);
+});
+
+test("parseAllUiNodes keeps a clickable Flutter parent with children", () => {
+  const xml = '<hierarchy><node text="" content-desc="描述一下宝贝" class="android.view.View" clickable="true" bounds="[74,575][1006,1121]"><node text="" content-desc="" class="android.view.View" clickable="false" bounds="[74,575][1006,1121]" /></node></hierarchy>';
+  const result = parseAllUiNodes(xml);
+  assert.equal(result.nodes.length, 2);
+  assert.equal(result.nodes[0].contentDesc, "描述一下宝贝");
+  assert.deepEqual(result.nodes[0].bounds, [74, 575, 1006, 1121]);
 });

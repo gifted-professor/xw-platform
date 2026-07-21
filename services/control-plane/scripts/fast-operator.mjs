@@ -1546,4 +1546,4 @@ else if (process.argv[1] && process.argv[1].endsWith("fast-operator.mjs")) {
 
 // 供 task-runner.mjs 等 in-process 调用方复用（FastOperator 已在上方 export class）。
 // 纯加性导出，不改变任何运行时行为：被 import 时上方 CLI dispatch 因 argv[1] 不指向本文件而自然不触发。
-export { Pacer, applyCommentFlags, parseUiAutomatorXml };
+export { Pacer, applyCommentFlags };
