@@ -1,0 +1,141 @@
+// xianyu-operator.mjs — 闲鱼独立侦察/发布页 dry-run 入口
+//
+// 安全边界：只启动闲鱼、读取语义树、点击“卖闲置/发闲置”进入发布页。
+// 绝不点击最终“发布”，也不复用小红书业务原语。
+
+import { pathToFileURL } from "node:url";
+import { FastOperator } from "./fast-operator.mjs";
+
+const IDLEFISH_PACKAGE = "com.taobao.idlefish";
+const DEFAULT_ADB = "C:\\PROGRA~2\\xiaowei_android\\tools\\adb.exe";
+
+function arg(name, fallback = null) {
+  const i = process.argv.indexOf(name);
+  return i >= 0 ? process.argv[i + 1] : fallback;
+}
+
+export function semanticLabel(node) {
+  return [node?.text, node?.contentDesc]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
+export function semanticSnapshot(doc) {
+  return (doc?.nodes || [])
+    .map((node) => ({
+      label: semanticLabel(node),
+      bounds: node.bounds,
+      clickable: !!node.clickable,
+      focused: !!node.focused,
+      className: node.className,
+      resourceId: node.resourceId,
+    }))
+    .filter((node) => node.label && node.bounds)
+    .filter((node, index, all) => all.findIndex((other) => (
+      other.label === node.label && JSON.stringify(other.bounds) === JSON.stringify(node.bounds)
+    )) === index);
+}
+
+export function isPublishCompose(snapshot) {
+  const text = snapshot.map((node) => node.label).join("\n");
+  const hasDescription = /描述|宝贝描述|说说宝贝|标题/.test(text);
+  const hasCommerceField = /价格|分类|成色|运费/.test(text);
+  const hasFinalPublish = /(^|\n)发布($|\n)/m.test(text);
+  return hasDescription && (hasCommerceField || hasFinalPublish);
+}
+
+export function findPublishEntry(snapshot) {
+  // 不匹配裸“发布”，避免在编辑页误点最终发布按钮。
+  const patterns = [/^卖闲置$/m, /^发闲置$/m, /^发布闲置$/m, /卖闲置/, /发闲置/];
+  for (const pattern of patterns) {
+    const candidates = snapshot.filter((node) => pattern.test(node.label));
+    const hit = candidates.find((node) => node.clickable) || candidates[0];
+    if (hit) return hit;
+  }
+  return null;
+}
+
+function center(bounds) {
+  return [Math.trunc((bounds[0] + bounds[2]) / 2), Math.trunc((bounds[1] + bounds[3]) / 2)];
+}
+
+async function settle(ms = 1200) {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function startIdlefish(op) {
+  await op.session.exec(`am force-stop ${IDLEFISH_PACKAGE}`, 8000);
+  await op.session.exec(`monkey -p ${IDLEFISH_PACKAGE} -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1`, 12000);
+  await settle(1800);
+  return op.currentFocus();
+}
+
+async function snapshot(op, label) {
+  const focus = await op.currentFocus();
+  const doc = await op.dump({ label, retries: 2, settleMs: 500 });
+  return { focus, dumpMs: doc._dumpMs, nodes: semanticSnapshot(doc) };
+}
+
+export async function openPublishDryRun(op, { maxSteps = 3 } = {}) {
+  const started = await startIdlefish(op);
+  if (started.package !== IDLEFISH_PACKAGE) {
+    return { ok: false, step: "start", started };
+  }
+
+  const trace = [];
+  for (let step = 0; step <= maxSteps; step += 1) {
+    const state = await snapshot(op, `xianyu-publish-${step}`);
+    trace.push({
+      step,
+      focus: state.focus,
+      dumpMs: state.dumpMs,
+      labels: state.nodes.map((node) => node.label).slice(0, 80),
+    });
+    if (isPublishCompose(state.nodes)) {
+      return { ok: true, stage: "publish-compose", stoppedBeforePublish: true, trace };
+    }
+    if (step === maxSteps) break;
+    const entry = findPublishEntry(state.nodes);
+    if (!entry) return { ok: false, step: "publish-entry", stoppedBeforePublish: true, trace };
+    const [x, y] = center(entry.bounds);
+    await op.tap(x, y);
+    await settle();
+  }
+  return { ok: false, step: "publish-compose", stoppedBeforePublish: true, trace };
+}
+
+async function main() {
+  const command = process.argv.find((value) => ["start", "snapshot", "open-publish"].includes(value)) || "help";
+  const serial = arg("--serial");
+  const adbPath = arg("--adb", process.env.ADB_PATH || DEFAULT_ADB);
+  if (!serial && command !== "help") throw new Error("缺少 --serial <设备序列号>");
+
+  if (command === "help") {
+    console.log(`闲鱼 operator（只读/发布页 dry-run）
+
+node scripts/xianyu-operator.mjs --serial <serial> start
+node scripts/xianyu-operator.mjs --serial <serial> snapshot
+node scripts/xianyu-operator.mjs --serial <serial> open-publish
+
+open-publish 只进入发布编辑页，绝不点击最终“发布”。`);
+    return;
+  }
+
+  const op = await new FastOperator({ adbPath, serial }).start();
+  try {
+    if (command === "start") console.log(JSON.stringify({ ok: true, focus: await startIdlefish(op) }, null, 2));
+    if (command === "snapshot") console.log(JSON.stringify(await snapshot(op, "xianyu-snapshot"), null, 2));
+    if (command === "open-publish") console.log(JSON.stringify(await openPublishDryRun(op), null, 2));
+  } finally {
+    await op.close();
+  }
+}
+
+const entry = process.argv[1] ? pathToFileURL(process.argv[1]).href : "";
+if (entry === import.meta.url) {
+  main().catch((error) => {
+    console.error(JSON.stringify({ ok: false, error: error.message }));
+    process.exitCode = 1;
+  });
+}
