@@ -4,8 +4,11 @@
 // 绝不点击最终“发布”，也不复用小红书业务原语。
 
 import { pathToFileURL } from "node:url";
-import { writeFileSync } from "node:fs";
-import { FastOperator } from "./fast-operator.mjs";
+import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { FastOperator, parseUiAutomatorXml } from "./fast-operator.mjs";
 
 const IDLEFISH_PACKAGE = "com.taobao.idlefish";
 const DEFAULT_ADB = "C:\\PROGRA~2\\xiaowei_android\\tools\\adb.exe";
@@ -65,6 +68,49 @@ async function settle(ms = 1200) {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function runProcess(file, args, timeoutMs = 20000) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(file, args, { stdio: ["ignore", "pipe", "pipe"] });
+    let stderr = "";
+    const timer = setTimeout(() => {
+      try { child.kill(); } catch {}
+      reject(new Error(`process timeout: ${file} ${args.slice(0, 4).join(" ")}`));
+    }, timeoutMs);
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.on("error", (error) => { clearTimeout(timer); reject(error); });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (code === 0) resolve();
+      else reject(new Error(`process exit ${code}: ${stderr.trim()}`));
+    });
+  });
+}
+
+async function xianyuDump(op, label) {
+  // Windows 上 adb exec-out 管道会把 Flutter 中文先按 GBK 解码，形成 mojibake。
+  // 先让设备写 XML，再 adb pull 原始字节，保证 UTF-8 语义不丢。
+  const token = `${process.pid}-${Date.now()}`;
+  const remote = `/sdcard/xianyu-dump-${token}.xml`;
+  const local = join(tmpdir(), `xianyu-dump-${token}.xml`);
+  const startedAt = Date.now();
+  try {
+    await op.session.exec(`uiautomator dump ${remote} >/dev/null 2>&1`, 18000);
+    await runProcess(op.adbPath, ["-s", op.serial, "pull", remote, local], 15000);
+    const xml = readFileSync(local, "utf8");
+    const start = xml.indexOf("<hierarchy");
+    const end = xml.indexOf("</hierarchy>", start);
+    if (start < 0 || end < 0) throw new Error("xianyu hierarchy dump incomplete");
+    const doc = parseUiAutomatorXml(xml.slice(start, end + "</hierarchy>".length));
+    doc._dumpMs = Date.now() - startedAt;
+    doc._label = label;
+    return doc;
+  } finally {
+    try { unlinkSync(local); } catch {}
+    try { await op.session.exec(`rm -f ${remote}`, 5000); } catch {}
+  }
+}
+
 async function startIdlefish(op) {
   await op.session.exec(`am force-stop ${IDLEFISH_PACKAGE}`, 8000);
   await op.session.exec(`monkey -p ${IDLEFISH_PACKAGE} -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1`, 12000);
@@ -74,7 +120,8 @@ async function startIdlefish(op) {
 
 async function snapshot(op, label) {
   const focus = await op.currentFocus();
-  const doc = await op.dump({ label, retries: 2, settleMs: 500 });
+  await settle(500);
+  const doc = await xianyuDump(op, label);
   const nodes = semanticSnapshot(doc);
   return { focus, dumpMs: doc._dumpMs, publishCompose: isPublishCompose(nodes), nodes };
 }
