@@ -24,6 +24,7 @@ node scripts/greenarrow-api.mjs apk-list
 ```powershell
 node scripts/xianyu-operator.mjs --serial REPLACE_SERIAL_01 snapshot
 node scripts/xianyu-operator.mjs --serial REPLACE_SERIAL_01 open-publish
+node scripts/xianyu-operator.mjs --serial REPLACE_SERIAL_01 input-dry-run --text 闲鱼发布页输入测试
 ```
 
 `open-publish` 的固定安全语义：
@@ -33,6 +34,8 @@ node scripts/xianyu-operator.mjs --serial REPLACE_SERIAL_01 open-publish
 3. 只点击“卖闲置”“发闲置”或“发布闲置”。
 4. 识别到描述、价格/分类/成色/运费等编辑字段后立即停止。
 5. 裸“发布”永远不作为导航入口，防止误触最终发布。
+
+`input-dry-run` 只在已识别为发布编辑页时运行：输入临时文本、截图、清空、再次截图并恢复原输入法；不点击发布。
 
 ## 现场前置条件
 

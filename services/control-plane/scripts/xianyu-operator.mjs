@@ -4,6 +4,7 @@
 // 绝不点击最终“发布”，也不复用小红书业务原语。
 
 import { pathToFileURL } from "node:url";
+import { writeFileSync } from "node:fs";
 import { FastOperator } from "./fast-operator.mjs";
 
 const IDLEFISH_PACKAGE = "com.taobao.idlefish";
@@ -77,6 +78,39 @@ async function snapshot(op, label) {
   return { focus, dumpMs: doc._dumpMs, nodes: semanticSnapshot(doc) };
 }
 
+async function capturePng(op, path) {
+  const png = await op.session.execOut(["screencap", "-p"], 15000);
+  writeFileSync(path, png);
+  return { path, bytes: png.length };
+}
+
+export async function inputDryRun(op, { text, evidenceDir = "C:\\Users\\Public" } = {}) {
+  const value = String(text || "闲鱼发布页输入测试").trim();
+  if (!value) return { ok: false, step: "empty-text" };
+  const before = await snapshot(op, "xianyu-input-before");
+  if (before.focus.package !== IDLEFISH_PACKAGE || !isPublishCompose(before.nodes)) {
+    return { ok: false, step: "not-on-publish-compose", focus: before.focus };
+  }
+
+  // Flutter 描述框未稳定暴露语义节点；坐标仅在发布页语义门控通过后使用。
+  await op.tap(540, 760);
+  await settle(800);
+  const { audit, restore } = await op.inputTextViaXiaowei(value, { deferRestore: true });
+  await settle(600);
+  const safeSerial = String(op.serial).replace(/[^A-Za-z0-9_-]/g, "_");
+  const entered = await capturePng(op, `${evidenceDir}\\xianyu-input-entered-${safeSerial}.png`);
+
+  // 清空刚输入的测试串，不保存草稿。多给 8 次 DEL 处理 emoji/组合字符边界。
+  const deleteCount = [...value].length + 8;
+  await op.session.exec(`input keyevent KEYCODE_MOVE_END ${Array(deleteCount).fill("KEYCODE_DEL").join(" ")}`, 10000);
+  await settle(500);
+  const cleared = await capturePng(op, `${evidenceDir}\\xianyu-input-cleared-${safeSerial}.png`);
+  await op.session.exec("input keyevent KEYCODE_BACK", 6000);
+  await settle(300);
+  await restore();
+  return { ok: true, stoppedBeforePublish: true, audit, evidence: { entered, cleared } };
+}
+
 export async function openPublishDryRun(op, { maxSteps = 3 } = {}) {
   const started = await startIdlefish(op);
   if (started.package !== IDLEFISH_PACKAGE) {
@@ -106,7 +140,7 @@ export async function openPublishDryRun(op, { maxSteps = 3 } = {}) {
 }
 
 async function main() {
-  const command = process.argv.find((value) => ["start", "snapshot", "open-publish"].includes(value)) || "help";
+  const command = process.argv.find((value) => ["start", "snapshot", "open-publish", "input-dry-run"].includes(value)) || "help";
   const serial = arg("--serial");
   const adbPath = arg("--adb", process.env.ADB_PATH || DEFAULT_ADB);
   if (!serial && command !== "help") throw new Error("缺少 --serial <设备序列号>");
@@ -117,6 +151,7 @@ async function main() {
 node scripts/xianyu-operator.mjs --serial <serial> start
 node scripts/xianyu-operator.mjs --serial <serial> snapshot
 node scripts/xianyu-operator.mjs --serial <serial> open-publish
+node scripts/xianyu-operator.mjs --serial <serial> input-dry-run --text <临时文本>
 
 open-publish 只进入发布编辑页，绝不点击最终“发布”。`);
     return;
@@ -127,6 +162,7 @@ open-publish 只进入发布编辑页，绝不点击最终“发布”。`);
     if (command === "start") console.log(JSON.stringify({ ok: true, focus: await startIdlefish(op) }, null, 2));
     if (command === "snapshot") console.log(JSON.stringify(await snapshot(op, "xianyu-snapshot"), null, 2));
     if (command === "open-publish") console.log(JSON.stringify(await openPublishDryRun(op), null, 2));
+    if (command === "input-dry-run") console.log(JSON.stringify(await inputDryRun(op, { text: arg("--text") }), null, 2));
   } finally {
     await op.close();
   }
