@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>小红书 · Agent 控制面</title>
+<style>
+  :root{ --ease:cubic-bezier(0.32,0.72,0,1); --r-card:18px; --r-pill:999px; --r-ctrl:11px; --r-inset:12px;
+    --font:-apple-system,BlinkMacSystemFont,"SF Pro Text","SF Pro Display",system-ui,"SF Pro Rounded","PingFang SC","Segoe UI",Roboto,sans-serif;
+    --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,monospace;
+    --blue:#007aff; --green:#34c759; --orange:#ff9500; --red:#ff3b30; --indigo:#5856d6; }
+  @media (prefers-color-scheme: light){ :root{ --bg:#f2f2f7; --card:#fff; --card-2:#fff; --term:#1c1c1e; --toolbar:rgba(242,242,247,0.72);
+    --hair:rgba(60,60,67,0.18); --hair-soft:rgba(60,60,67,0.08); --label:#1c1c1e; --l2:#3c3c43; --l3:#8e8e93; --l4:#aeaeb2;
+    --shadow:0 1px 1px rgba(0,0,0,0.03),0 6px 20px rgba(0,0,0,0.05); --inset:rgba(120,120,128,0.08); --tg:rgba(255,255,255,0.06); } }
+  @media (prefers-color-scheme: dark){ :root{ --bg:#000; --card:#1c1c1e; --card-2:#2c2c2e; --term:#000; --toolbar:rgba(22,22,23,0.72);
+    --hair:rgba(255,255,255,0.16); --hair-soft:rgba(255,255,255,0.08); --label:#fff; --l2:#ebebf5; --l3:#98989f; --l4:#636366;
+    --shadow:0 1px 2px rgba(0,0,0,0.4),0 10px 30px rgba(0,0,0,0.5); --inset:rgba(120,120,128,0.24); --tg:rgba(255,255,255,0.04); } }
+  *{ box-sizing:border-box; } html,body{ margin:0; }
+  body{ background:var(--bg); color:var(--label); font-family:var(--font); font-size:15px; line-height:1.45; letter-spacing:0.01em;
+    -webkit-font-smoothing:antialiased; padding-bottom:40px; }
+  .toolbar{ position:sticky; top:0; z-index:20; background:var(--toolbar); -webkit-backdrop-filter:blur(20px) saturate(180%); backdrop-filter:blur(20px) saturate(180%); border-bottom:0.5px solid var(--hair-soft); padding:max(12px,env(safe-area-inset-top)) 16px 12px; }
+  .trow{ display:flex; align-items:baseline; gap:8px; }
+  .title{ font-size:26px; font-weight:700; letter-spacing:-0.02em; }
+  .sub{ font-size:14px; color:var(--l3); }
+  .badge{ margin-left:auto; display:inline-flex; align-items:center; gap:7px; font-size:13px; font-weight:600; padding:5px 12px 5px 9px; border-radius:var(--r-pill); font-variant-numeric:tabular-nums; transition:background 240ms var(--ease); }
+  .badge i{ width:9px; height:9px; border-radius:50%; }
+  .badge.on{ color:var(--green); background:color-mix(in srgb,var(--green) 14%,transparent); } .badge.on i{ background:var(--green); box-shadow:0 0 8px color-mix(in srgb,var(--green) 70%,transparent); animation:p 2s var(--ease) infinite; }
+  .badge.off{ color:var(--l3); background:var(--inset); } .badge.off i{ background:var(--l4); }
+  @keyframes p{ 0%{box-shadow:0 0 8px color-mix(in srgb,var(--green) 70%,transparent)} 70%{box-shadow:0 0 0 6px transparent} 100%{box-shadow:0 0 8px color-mix(in srgb,var(--green) 70%,transparent)} }
+  .wrap{ max-width:920px; margin:0 auto; padding:16px; }
+  .card{ background:var(--card); border:0.5px solid var(--hair-soft); border-radius:var(--r-card); box-shadow:var(--shadow); padding:16px 18px; margin-bottom:14px; }
+  .h{ font-size:17px; font-weight:600; letter-spacing:-0.01em; margin:0 0 4px; }
+  .p{ color:var(--l2); font-size:14px; margin:0; }
+  .muted{ color:var(--l3); font-size:13px; }
+  code{ font-family:var(--mono); font-size:12px; background:var(--inset); padding:1px 6px; border-radius:6px; }
+  table{ width:100%; border-collapse:collapse; font-size:13px; }
+  th,td{ text-align:left; padding:7px 8px; border-top:0.5px solid var(--hair-soft); vertical-align:top; }
+  th{ color:var(--l3); font-weight:500; font-size:11px; letter-spacing:0.02em; text-transform:uppercase; }
+  td code{ white-space:nowrap; }
+  .risk{ font-size:11px; font-weight:600; padding:2px 7px; border-radius:var(--r-pill); white-space:nowrap; }
+  .risk.low{ color:var(--green); background:color-mix(in srgb,var(--green) 14%,transparent); }
+  .risk.medium{ color:var(--orange); background:color-mix(in srgb,var(--orange) 14%,transparent); }
+  .risk.high{ color:var(--red); background:color-mix(in srgb,var(--red) 14%,transparent); }
+  .risk.none{ color:var(--l3); background:var(--inset); }
+  ul{ margin:6px 0 0; padding-left:18px; } li{ margin:3px 0; color:var(--l2); font-size:13px; }
+  .cmd{ font-family:var(--mono); font-size:12px; background:var(--term); color:#e8e8e8; border-radius:var(--r-ctrl); padding:10px 12px; margin:6px 0; white-space:pre-wrap; word-break:break-all; line-height:1.5; }
+  .term{ background:var(--term); border-radius:var(--r-card); padding:12px 14px; font-family:var(--mono); font-size:12px; line-height:1.6; min-height:180px; max-height:320px; overflow:auto; color:#c7c7c7; }
+  .term .t{ color:#7a7a7a; } .term .e{ color:#9bd; } .term .ok{ color:var(--green); } .term .w{ color:var(--orange); } .term .err{ color:var(--red); }
+  .grid2{ display:grid; grid-template-columns:1fr 1fr; gap:8px 14px; }
+  @media (max-width:640px){ .grid2{ grid-template-columns:1fr; } }
+  .kv{ display:flex; gap:8px; font-size:13px; padding:4px 0; } .kv .k{ color:var(--l3); width:64px; flex-shrink:0; } .kv .v{ color:var(--l2); font-variant-numeric:tabular-nums; word-break:break-all; }
+  .pb{ border:0.5px solid var(--hair-soft); border-radius:var(--r-ctrl); padding:12px 14px; margin:8px 0; background:color-mix(in srgb,var(--bg) 30%,transparent); }
+  .pb .pn{ font-size:15px; font-weight:600; letter-spacing:-0.01em; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .pb .pg{ color:var(--l3); font-size:12px; margin:3px 0 8px; }
+  .pb .ps{ font-size:12px; line-height:1.6; counter-reset:s; }
+  .pb .ps .step{ position:relative; padding:5px 0 5px 26px; border-top:0.5px solid var(--hair-soft); counter-increment:s; }
+  .pb .ps .step:first-child{ border-top:0; }
+  .pb .ps .step::before{ content:counter(s); position:absolute; left:0; top:5px; width:18px; height:18px; text-align:center; line-height:18px; font-size:11px; font-weight:600; color:var(--l3); background:var(--inset); border-radius:50%; }
+  .pb .ps .sc{ font-family:var(--mono); font-size:12px; color:var(--indigo); font-weight:600; }
+  .pb .ps .sp{ font-family:var(--mono); font-size:11px; color:var(--l2); background:var(--term); color:#d8d8d8; padding:1px 6px; border-radius:5px; word-break:break-all; }
+  .pb .ps .se{ color:var(--green); font-size:12px; }
+  .pb .ps .sn{ color:var(--l3); font-size:12px; }
+  .pb .pbnote{ font-size:12px; color:var(--orange); margin-top:7px; padding-top:7px; border-top:0.5px dashed var(--hair-soft); }
+  .tag{ font-size:10px; font-weight:600; padding:1px 6px; border-radius:var(--r-pill); color:var(--l3); background:var(--inset); }
+  @media (prefers-reduced-motion: reduce){ .badge.on i{ animation:none; } }
+</style>
+</head>
+<body>
+<header class="toolbar">
+  <div class="trow">
+    <span class="title">Agent 控制面</span>
+    <span class="sub">机器接管 · 小红书 4 台</span>
+    <span class="badge off" id="badge"><i></i><span id="btxt">未接管</span></span>
+  </div>
+</header>
+<div class="wrap">
+  <div class="card">
+    <div class="h" id="proj">xhs-device-agent</div>
+    <p class="p" id="purpose"></p>
+  </div>
+
+  <div class="card">
+    <div class="h">接管协议</div>
+    <p class="muted" id="tkhow"></p>
+    <div class="cmd">POST /agent/takeover  {"id":"claude-1","kind":"claude"}    # 已有活跃 agent 时返 409,需先 release 或等 30s 超时
+# 操控时:每次调用带上 id 即隐式续命,不必另起心跳循环 ↓
+POST /primitive      {"id":"claude-1","serial":"REPLACE_SERIAL_01","action":"feedCards"}
+POST /task           {"id":"claude-1","serial":"REPLACE_SERIAL_01","action":"start","queue":[{"task":"养号","durationMin":30,"cap":1}]}
+POST /home           {"id":"claude-1","serial":"REPLACE_SERIAL_01"}
+# 长时间不操作(>15s 无调用)才需显式 heartbeat ↓
+POST /agent/heartbeat {"id":"claude-1"}        # 每 ≤15s
+POST /agent/release   {"id":"claude-1"}
+GET  /agent/manifest                        # 本说明书(JSON)</div>
+  </div>
+
+  <div class="card">
+    <div class="h">操作剧本(agent 照着走)</div>
+    <p class="muted" id="firststeps"></p>
+    <div id="playbooks"></div>
+  </div>
+
+  <div class="card">
+    <div class="h">设备</div>
+    <div id="devs"></div>
+  </div>
+
+  <div class="card">
+    <div class="h">预设任务</div>
+    <table><thead><tr><th>任务</th><th>风险</th><th>可逆</th><th>cap</th><th>步骤</th><th>说明</th></tr></thead><tbody id="ttasks"></tbody></table>
+  </div>
+
+  <div class="card">
+    <div class="h">原语(31,精确控制每台)</div>
+    <p class="muted">POST /primitive {serial, action, …params} 代理到该台 serve;未知参数被忽略。</p>
+    <table><thead><tr><th>原语</th><th>参数</th><th>风险</th><th>说明</th></tr></thead><tbody id="tprim"></tbody></table>
+  </div>
+
+  <div class="card">
+    <div class="h">约束 / 不变量(违反即出事)</div>
+    <ul id="cons"></ul>
+  </div>
+
+  <div class="card">
+    <div class="h">终端 · 接管事件</div>
+    <p class="muted">agent 连接、心跳、原语调用、接管/释放在此滚动显示(2s 轮询)。</p>
+    <div class="term" id="term"></div>
+  </div>
+</div>
+
+<script>
+const BASE = location.origin;
+async function get(p){ try{ return await (await fetch(BASE+p)).json(); }catch(e){ return {error:String(e)}; } }
+const f=(x,d="—")=> (x==null||x==="")?d:x;
+function riskBadge(r){ return `<span class="risk ${r}">${r}</span>`; }
+function fmtAgo(ms){ if(ms==null) return "—"; return Math.round(ms/1000)+"s 前"; }
+
+function renderManifest(m){
+  document.getElementById("proj").textContent = m.project;
+  document.getElementById("purpose").textContent = m.purpose;
+  document.getElementById("tkhow").textContent = m.takeover.how;
+  document.getElementById("devs").innerHTML = m.devices.map(d=>`<div class="kv"><span class="k">serial</span><span class="v">${d.serial} · serve:${d.serve_port}</span></div>`).join("");
+  document.getElementById("ttasks").innerHTML = m.tasks.map(t=>`<tr>
+    <td><code>${t.name}</code></td><td>${riskBadge(t.risk)}</td><td>${t.reversible?"是":"否(评论不可逆)"}</td>
+    <td><span class="muted">${f(t.cap)}</span></td><td><span class="muted">${t.steps.join(" → ")}</span></td><td><span class="muted">${t.desc}</span></td></tr>`).join("");
+  document.getElementById("tprim").innerHTML = m.primitives.curated.map(p=>`<tr>
+    <td><code>${p.name}</code></td><td><span class="muted">${Object.keys(p.params).length?Object.entries(p.params).map(([k,v])=>k+":"+v).join(", "):"—"}</span></td>
+    <td>${riskBadge(p.risk)}</td><td><span class="muted">${p.desc}</span>${p.irreversible?' <span class="risk high">不可逆</span>':""}</td></tr>`).join("");
+  document.getElementById("cons").innerHTML = m.constraints.map(c=>`<li>${c}</li>`).join("");
+  document.getElementById("firststeps").textContent = m.first_steps || "";
+  const riskTag = (r)=> r==="high" ? '<span class="risk high">不可逆</span>' : (r==="none"?'<span class="tag">只读</span>':`<span class="risk ${r}">${r}</span>`);
+  document.getElementById("playbooks").innerHTML = (m.playbooks||[]).map(pb=>`<div class="pb">
+    <div class="pn">${pb.name} ${riskTag(pb.risk)}</div>
+    <div class="pg">目标:${pb.goal}</div>
+    <div class="ps">${pb.steps.map(s=>`<div class="step">
+      <span class="sc">${s.call}</span> <span class="sp">${s.params?JSON.stringify(s.params):""}</span>
+      ${s.expect?`<div class="se">→ ${s.expect}</div>`:""}
+      ${s.note?`<div class="sn">注:${s.note}</div>`:""}
+      ${s.if?`<div class="sn">条件:${s.if}</div>`:""}
+    </div>`).join("")}</div>
+    ${pb.note?`<div class="pbnote">${pb.note}</div>`:""}
+  </div>`).join("");
+}
+
+let logSeen = 0;
+function renderState(s){
+  const a = s.agent;
+  const b = document.getElementById("badge"), bt = document.getElementById("btxt");
+  if(a.active){ b.className="badge on"; bt.textContent = `接管中 · ${a.id} · ${fmtAgo(a.lastHeartbeatAgo)}`; }
+  else { b.className="badge off"; bt.textContent = a.id ? `已超时 · ${a.id}` : "未接管"; }
+  const term = document.getElementById("term");
+  if(s.log && s.log.length){
+    term.innerHTML = s.log.map(e=>{
+      const t = new Date(e.ts).toLocaleTimeString("zh-CN",{hour12:false});
+      let cls = "e";
+      if(/takeover|release/.test(e.type)) cls = "w";
+      if(/heartbeat/.test(e.type)) cls = "t";
+      return `<div><span class="t">${t}</span> <span class="${cls}">${e.type}</span> ${e.detail||""}</div>`;
+    }).join("");
+    term.scrollTop = term.scrollHeight;
+  } else if(!term.innerHTML.trim()){
+    term.innerHTML = '<div class="t">等待 agent 连接…</div>';
+  }
+}
+
+async function loop(){
+  const s = await get("/agent/state");
+  renderState(s);
+}
+async function init(){
+  const m = await get("/agent/manifest");
+  renderManifest(m);
+  loop(); setInterval(loop, 2000);
+}
+init();
+</script>
+</body>
+</html>
