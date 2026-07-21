@@ -75,7 +75,8 @@ async function startIdlefish(op) {
 async function snapshot(op, label) {
   const focus = await op.currentFocus();
   const doc = await op.dump({ label, retries: 2, settleMs: 500 });
-  return { focus, dumpMs: doc._dumpMs, nodes: semanticSnapshot(doc) };
+  const nodes = semanticSnapshot(doc);
+  return { focus, dumpMs: doc._dumpMs, publishCompose: isPublishCompose(nodes), nodes };
 }
 
 async function capturePng(op, path) {
