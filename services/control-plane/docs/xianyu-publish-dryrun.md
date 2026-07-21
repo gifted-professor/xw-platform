@@ -25,6 +25,7 @@ node scripts/greenarrow-api.mjs apk-list
 node scripts/xianyu-operator.mjs --serial REPLACE_SERIAL_01 snapshot
 node scripts/xianyu-operator.mjs --serial REPLACE_SERIAL_01 open-publish
 node scripts/xianyu-operator.mjs --serial REPLACE_SERIAL_01 input-dry-run --text 闲鱼发布页输入测试
+node scripts/xianyu-operator.mjs --serial REPLACE_SERIAL_01 discard-dry-run
 ```
 
 `open-publish` 的固定安全语义：
@@ -36,6 +37,8 @@ node scripts/xianyu-operator.mjs --serial REPLACE_SERIAL_01 input-dry-run --text
 5. 裸“发布”永远不作为导航入口，防止误触最终发布。
 
 `input-dry-run` 只在已识别为发布编辑页、描述框仍是空白占位状态且 Flutter InputConnection 活跃时运行：切换到效卫桥 IME、重新点一次描述框让 Flutter 重绑 InputConnection、写入临时文本、截图、在全页面语义节点中校验完整文本、清空并确认占位内容恢复，最后切回原输入法。任一证据缺失都返回失败，不点击发布，也不触碰已有草稿。
+
+整表验收可以给 `input-dry-run` 加 `--keep-until-discard`，把已实证的描述暂时保留到截图阶段。该模式不会发送额外的 BACK，避免切回原输入法后误退出编辑页；截图完成后必须调用 `discard-dry-run`。后者只接受语义层精确识别出的“不保存”按钮；识别不到就停止，右侧“存草稿”和顶部“发布”始终禁触。
 
 ## 现场前置条件
 
@@ -67,3 +70,14 @@ node scripts/xianyu-operator.mjs --serial REPLACE_SERIAL_01 input-dry-run --text
 - 最终结果：`ok=true`、`step=completed`、`stoppedBeforePublish=true`；没有选择图片、没有保存草稿、没有点击发布。
 
 因此当前可对 Hermes 开放“启动闲鱼、进入发布页、读取页面、打开并退出相册、在空白新建页写入并实证中文描述”的固定流程。后续正式保留描述内容、选图、定价、保存草稿和点击发布仍需单独命令与授权；不得把桥返回成功当作编辑器实证。
+
+## 2026-07-21 · 4 号机整表 dry-run
+
+- 使用单独推送并校验 SHA-256 的受控测试图，选图、图片编辑页“完成”和回填通过。
+- 中文描述 `闲鱼完整表单试运行0721` 真实写入，`textVerified=true`；输入法恢复通过。
+- 商品规格设置两条，价格均为 `12.34`，库存各 `2`；发布页汇总为库存 `4`。
+- 发货方式设为包邮；所在地已在视觉页面回填。该 Flutter 版本的所在地语义仍错误显示“选择位置”，因此位置必须保留截图证据，记录中不得写真实地址。
+- 图片识别动态生成的类别字段也已实测：分类、品牌、成色、尺码、适用季节、裤长、腰型都能点选。不同分类会生成不同字段，不能写成一套固定坐标。
+- `描述不符包邮退`、`24小时发货`、`48小时发货` 属于经营承诺，本次保持关闭，不替账号作承诺。
+- 规格弹窗推荐项可选；底部“下一步”在第二轮出现 ADB/绿箭点击偶发不响应。第一轮完整规格、价格、库存链路已成功，但在修复稳定点击前，不得宣称“一键整表命令”稳定可用。
+- 收尾明确选择“不保存”，回到闲鱼 `MainActivity`；草稿箱仍为 `11`，没有新增草稿，没有点击发布。

@@ -90,6 +90,14 @@ export function isEmptyDescriptionField(node) {
   return /描述.*宝贝.*品牌型号.*货品来源|描述.*品牌型号.*货品来源/s.test(label);
 }
 
+export function findDiscardWithoutSaving(snapshot) {
+  // xianyuDump 会先 pull 原始 UTF-8 XML，所以这里只接受语义层的精确文字。
+  // Windows 控制台如何显示不参与决策；识别不到就 fail-closed，绝不按坐标猜。
+  return snapshot.find((node) => /^不保存$/m.test(node.label)
+    && node.className === "android.widget.Button"
+    && node.bounds?.[0] < 100 && node.bounds?.[1] >= 2050 && node.bounds?.[2] < 550) || null;
+}
+
 function findPublishMenuEntryByLayout(snapshot) {
   // 仅在已经点过首页中央“卖闲置”后的第 1 步使用。
   return snapshot.find((node) => node.clickable && node.className === "android.widget.ImageView"
@@ -204,7 +212,11 @@ async function capturePng(op, path) {
   return { path, bytes: png.length, sha256: createHash("sha256").update(png).digest("hex") };
 }
 
-export async function inputDryRun(op, { text, evidenceDir = "C:\\Users\\Public" } = {}) {
+export async function inputDryRun(op, {
+  text,
+  evidenceDir = "C:\\Users\\Public",
+  clearAfter = true,
+} = {}) {
   const value = String(text || "闲鱼发布页输入测试").trim();
   if (!value) return { ok: false, step: "empty-text" };
   const before = await snapshot(op, "xianyu-input-before");
@@ -270,27 +282,31 @@ export async function inputDryRun(op, { text, evidenceDir = "C:\\Users\\Public" 
       label: enteredTextNode.label,
     } : null;
 
-    // 只清理本次从空白新建页写入的临时串；多给 8 次 DEL 处理组合字符边界。
-    const deleteCount = [...value].length + 8;
-    await op.session.exec(`input keyevent KEYCODE_MOVE_END ${Array(deleteCount).fill("KEYCODE_DEL").join(" ")}`, 10000);
-    await settle(500);
-    cleared = await capturePng(op, `${evidenceDir}\\xianyu-input-cleared-${safeSerial}.png`);
-    const afterClear = await snapshot(op, "xianyu-input-after-clear");
-    const clearedDescription = findDescriptionField(afterClear.nodes);
-    clearedVerified = !descriptionContains(clearedDescription, value)
-      && String(clearedDescription?.label || semanticLabel(clearedDescription))
-        === String(description?.label || semanticLabel(description));
+    if (clearAfter) {
+      // 只清理本次从空白新建页写入的临时串；多给 8 次 DEL 处理组合字符边界。
+      const deleteCount = [...value].length + 8;
+      await op.session.exec(`input keyevent KEYCODE_MOVE_END ${Array(deleteCount).fill("KEYCODE_DEL").join(" ")}`, 10000);
+      await settle(500);
+      cleared = await capturePng(op, `${evidenceDir}\\xianyu-input-cleared-${safeSerial}.png`);
+      const afterClear = await snapshot(op, "xianyu-input-after-clear");
+      const clearedDescription = findDescriptionField(afterClear.nodes);
+      clearedVerified = !descriptionContains(clearedDescription, value)
+        && String(clearedDescription?.label || semanticLabel(clearedDescription))
+          === String(description?.label || semanticLabel(description));
+    }
   } catch (error) {
     inputError = error.message;
   } finally {
     if ((await op.currentIme()) !== priorIme) await op.setIme(priorIme).catch(() => false);
-    await op.session.exec("input keyevent KEYCODE_BACK", 6000).catch(() => null);
+    // 保留到整表证据阶段时，不能再发 BACK：切回原 IME 往往已经收起键盘，
+    // 多余的 BACK 会直接退出编辑页。最终清理由 discard-dry-run 显式完成。
+    if (clearAfter) await op.session.exec("input keyevent KEYCODE_BACK", 6000).catch(() => null);
     await settle(300);
   }
   return {
-    ok: textVerified && clearedVerified,
+    ok: textVerified && (!clearAfter || clearedVerified),
     step: inputError ? "xiaowei-input-error"
-      : textVerified ? (clearedVerified ? "completed" : "clear-unverified")
+      : textVerified ? (!clearAfter || clearedVerified ? "completed" : "clear-unverified")
         : "flutter-chinese-input-unverified",
     stoppedBeforePublish: true,
     audit: {
@@ -304,9 +320,35 @@ export async function inputDryRun(op, { text, evidenceDir = "C:\\Users\\Public" 
       visualChanged: !!entered && entered.sha256 !== baseline.sha256,
       textVerified,
       clearedVerified,
+      clearAfter,
       inputError,
     },
     evidence: { baseline, entered, cleared },
+  };
+}
+
+export async function discardDraftDryRun(op) {
+  const before = await snapshot(op, "xianyu-discard-before");
+  if (before.focus.package !== IDLEFISH_PACKAGE || !isPublishCompose(before.nodes)) {
+    return { ok: false, step: "not-on-publish-compose", stoppedBeforePublish: true };
+  }
+  const close = before.nodes.find((node) => node.className === "android.widget.Button"
+    && node.bounds?.[0] === 0 && node.bounds?.[1] < 200 && node.bounds?.[2] < 120);
+  if (!close?.bounds) return { ok: false, step: "close-button", stoppedBeforePublish: true };
+  await op.tap(...center(close.bounds));
+  await settle(800);
+  const confirm = await snapshot(op, "xianyu-discard-confirm");
+  const discard = findDiscardWithoutSaving(confirm.nodes);
+  if (!discard?.bounds) return { ok: false, step: "discard-button", stoppedBeforePublish: true };
+  await op.tap(...center(discard.bounds));
+  await settle(1000);
+  const focus = await op.currentFocus();
+  return {
+    ok: focus.package === IDLEFISH_PACKAGE && /MainActivity/.test(focus.activity || ""),
+    step: "discarded-without-saving",
+    stoppedBeforePublish: true,
+    savedDraft: false,
+    focus,
   };
 }
 
@@ -346,7 +388,9 @@ export async function openPublishDryRun(op, { maxSteps = 3 } = {}) {
 }
 
 async function main() {
-  const command = process.argv.find((value) => ["start", "snapshot", "open-publish", "input-dry-run"].includes(value)) || "help";
+  const command = process.argv.find((value) => [
+    "start", "snapshot", "open-publish", "input-dry-run", "discard-dry-run",
+  ].includes(value)) || "help";
   const serial = arg("--serial");
   const adbPath = arg("--adb", process.env.ADB_PATH || DEFAULT_ADB);
   if (!serial && command !== "help") throw new Error("缺少 --serial <设备序列号>");
@@ -358,8 +402,10 @@ node scripts/xianyu-operator.mjs --serial <serial> start
 node scripts/xianyu-operator.mjs --serial <serial> snapshot
 node scripts/xianyu-operator.mjs --serial <serial> open-publish
 node scripts/xianyu-operator.mjs --serial <serial> input-dry-run --text <临时文本>
+node scripts/xianyu-operator.mjs --serial <serial> discard-dry-run
 
-open-publish 只进入发布编辑页，绝不点击最终“发布”。`);
+open-publish 只进入发布编辑页，绝不点击最终“发布”。
+discard-dry-run 只点击“关闭 → 不保存”，绝不点击“存草稿/发布”。`);
     return;
   }
 
@@ -368,7 +414,11 @@ open-publish 只进入发布编辑页，绝不点击最终“发布”。`);
     if (command === "start") console.log(JSON.stringify({ ok: true, focus: await startIdlefish(op) }, null, 2));
     if (command === "snapshot") console.log(JSON.stringify(await snapshot(op, "xianyu-snapshot"), null, 2));
     if (command === "open-publish") console.log(JSON.stringify(await openPublishDryRun(op), null, 2));
-    if (command === "input-dry-run") console.log(JSON.stringify(await inputDryRun(op, { text: arg("--text") }), null, 2));
+    if (command === "input-dry-run") console.log(JSON.stringify(await inputDryRun(op, {
+      text: arg("--text"),
+      clearAfter: !process.argv.includes("--keep-until-discard"),
+    }), null, 2));
+    if (command === "discard-dry-run") console.log(JSON.stringify(await discardDraftDryRun(op), null, 2));
   } finally {
     await op.close();
   }

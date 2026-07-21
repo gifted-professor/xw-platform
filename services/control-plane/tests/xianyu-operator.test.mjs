@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   descriptionContains,
+  findDiscardWithoutSaving,
   findDescriptionField,
   findPublishEntry,
   isEmptyDescriptionField,
@@ -63,4 +64,21 @@ test("findDescriptionField and descriptionContains verify actual Flutter text", 
   assert.equal(descriptionContains(field, "别的内容"), false);
   assert.equal(isEmptyDescriptionField({ label: "描述一下宝贝的品牌型号、货品来源..." }), true);
   assert.equal(isEmptyDescriptionField({ label: "用户已有的草稿内容" }), false);
+});
+
+test("findDiscardWithoutSaving selects only the explicit left discard action", () => {
+  const discard = {
+    label: "不保存",
+    className: "android.widget.Button",
+    clickable: true,
+    bounds: [42, 2143, 524, 2248],
+  };
+  const save = {
+    label: "存草稿",
+    className: "android.widget.Button",
+    clickable: true,
+    bounds: [556, 2143, 1038, 2248],
+  };
+  assert.equal(findDiscardWithoutSaving([save, discard]), discard);
+  assert.equal(findDiscardWithoutSaving([save]), null);
 });
