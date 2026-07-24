@@ -2,11 +2,12 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import { CapabilityRegistry } from "../control-plane/lib/capability-registry.mjs";
 import { StateStore } from "../control-plane/lib/state-store.mjs";
 
-const tempBase = join(process.cwd(), "control-plane", "runtime");
+const tempBase = fileURLToPath(new URL("../control-plane/runtime", import.meta.url));
 mkdirSync(tempBase, { recursive: true });
 
 function tempRoot() {

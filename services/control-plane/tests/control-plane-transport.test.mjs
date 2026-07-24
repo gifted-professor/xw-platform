@@ -2,10 +2,11 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import { acquireTransportLock } from "../control-plane/lib/xiaowei-transport.mjs";
 
-const tempBase = join(process.cwd(), "control-plane", "runtime");
+const tempBase = fileURLToPath(new URL("../control-plane/runtime", import.meta.url));
 mkdirSync(tempBase, { recursive: true });
 
 test("tokenized transport lock rejects overlap and preserves the owner", async () => {

@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
@@ -46,7 +45,7 @@ test("XHS adapter uses a per-device loopback serve and fail-closed verifier", as
 
 test("Xianyu adapter preserves stop-before-publish and discard verification", async () => {
   const calls = [];
-  const fakeOperator = join(process.cwd(), "package.json");
+  const fakeOperator = fileURLToPath(new URL("../package.json", import.meta.url));
   const adapter = createXianyuAdapter({
     operatorPath: fakeOperator,
     run: async (_command, args) => {
@@ -74,7 +73,7 @@ test("Xianyu adapter preserves stop-before-publish and discard verification", as
 });
 
 test("WeChat adapter requires title match and baseline restoration", async () => {
-  const fakeOperator = join(process.cwd(), "package.json");
+  const fakeOperator = fileURLToPath(new URL("../package.json", import.meta.url));
   const adapter = createWechatAdapter({
     operatorPath: fakeOperator,
     run: async () => ({
@@ -88,7 +87,7 @@ test("WeChat adapter requires title match and baseline restoration", async () =>
     capability,
     device: privateDevice,
     params: { title: "local-test-contact" },
-    evidenceDirectory: process.cwd(),
+    evidenceDirectory: fileURLToPath(new URL("../control-plane/runtime", import.meta.url)),
   });
   assert.equal((await adapter.verify({ capability, execution })).ok, true);
 });

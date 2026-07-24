@@ -8,7 +8,7 @@ import { CapabilityRegistry } from "../control-plane/lib/capability-registry.mjs
 import { EvidenceStore, redactRuntimeData } from "../control-plane/lib/evidence-store.mjs";
 import { StateStore } from "../control-plane/lib/state-store.mjs";
 
-const tempBase = join(process.cwd(), "control-plane", "runtime");
+const tempBase = fileURLToPath(new URL("../control-plane/runtime", import.meta.url));
 mkdirSync(tempBase, { recursive: true });
 
 test("runtime evidence uses real hashes and removes credentials and runtime IDs", () => {

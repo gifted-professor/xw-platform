@@ -2,10 +2,11 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import { indexLegacyEvidence } from "../control-plane/index-legacy-evidence.mjs";
 
-const tempBase = join(process.cwd(), "control-plane", "runtime");
+const tempBase = fileURLToPath(new URL("../control-plane/runtime", import.meta.url));
 mkdirSync(tempBase, { recursive: true });
 
 test("legacy index hashes files without copying source artifacts", async () => {
