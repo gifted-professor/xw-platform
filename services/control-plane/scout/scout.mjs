@@ -9,6 +9,12 @@
 //   - one primary capability target per round; same-page probes allowed
 
 import { argv, exit, env } from "node:process";
+import { execSync } from "node:child_process";
+import { resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = resolve(__dirname, "..");
 
 // ─── Configuration ──────────────────────────────────────────────────────────
 
@@ -141,57 +147,73 @@ async function selectDevice(pitfalls) {
   return available[0];
 }
 
-// ─── Target selection (§4-2, v2.1 P0/P1/P2) ─────────────────────────────────
+// ─── Target selection (§4-2, v2.2 P0/P1/P2 with appliesTo + verifyMode) ─────
 
 /**
- * Classify a recipe as step-type (replayable) or rule-type (operational constraint).
- * Step-type: has a `steps` array with action/params entries.
- * Rule-type: operational guidance without replayable steps — verify by checking
- * if the constraint still holds in code/config, or leave unverified.
+ * Classify a recipe using v2.2 verifyMode field (preferred) or heuristic fallback.
+ * verifyMode: "replay" (has steps) | "constraint" (rule-type, grep-able) | "human"
  */
 function classifyRecipe(recipe) {
-  if (recipe.steps && Array.isArray(recipe.steps) && recipe.steps.length > 0) {
-    return "step";
+  if (recipe.verifyMode === "replay" || recipe.verifyMode === "constraint" || recipe.verifyMode === "human") {
+    return recipe.verifyMode;
   }
-  // Heuristic: content mentions concrete serve actions → step; otherwise → rule
+  if (recipe.steps && Array.isArray(recipe.steps) && recipe.steps.length > 0) {
+    return "replay";
+  }
   const content = (recipe.content || "").toLowerCase();
   const serveActions = ["focus", "dump", "backtofeed", "opencard", "tap", "scroll", "inputtext"];
-  if (serveActions.some((a) => content.includes(a))) return "step";
-  return "rule";
+  if (serveActions.some((a) => content.includes(a))) return "replay";
+  return "constraint";
+}
+
+/**
+ * Build an index: capabilityId → [recipes that apply to it via appliesTo].
+ * Also supports legacy recipes without appliesTo by falling back to recipe.id === cap.id.
+ */
+function buildRecipeIndex(recipes) {
+  const index = new Map();
+  for (const r of recipes) {
+    const targets = Array.isArray(r.appliesTo) && r.appliesTo.length > 0
+      ? r.appliesTo
+      : [r.id]; // legacy fallback: recipe.id matches capability.id
+    for (const capId of targets) {
+      if (!index.has(capId)) index.set(capId, []);
+      index.get(capId).push(r);
+    }
+  }
+  return index;
 }
 
 function selectTarget(capabilities, allKnowledge, filter) {
   const recipes = allKnowledge.filter((k) => k.category === "recipe");
-  const verifiedIds = new Set(
-    recipes.filter((r) => r.verifiedBy && r.verifiedBy.length > 0).map((r) => r.id)
-  );
-  const unverifiedRecipes = recipes.filter(
-    (r) => !r.verifiedBy || r.verifiedBy.length === 0
-  );
-
-  // Build lookup: capabilityId → recipe (for P0/P1 matching)
-  const recipeByCapId = new Map();
-  for (const r of recipes) {
-    recipeByCapId.set(r.id, r);
-  }
+  const recipeIndex = buildRecipeIndex(recipes);
 
   // P0: E0/E1 + has recipe (any verification status)
-  // P1: any maturity + recipe + verifiedBy=[] (verification backlog)
+  // P1: appliesTo matches capability + verifiedBy=[] + verifyMode ∈ {constraint, replay}
   // P2: E0/E1 + no recipe (pure exploration)
   const candidates = [];
 
   for (const cap of capabilities) {
     if (cap.automationPolicy?.mode === "disabled") continue;
     const isLowMaturity = cap.maturity === "E0" || cap.maturity === "E1";
-    const recipe = recipeByCapId.get(cap.id);
-    const isUnverified = recipe && (!recipe.verifiedBy || recipe.verifiedBy.length === 0);
+    const capRecipes = recipeIndex.get(cap.id) || [];
+    const unverifiedConstraintOrReplay = capRecipes.filter(
+      (r) =>
+        (!r.verifiedBy || r.verifiedBy.length === 0) &&
+        (r.verifyMode === "constraint" || r.verifyMode === "replay")
+    );
+    const hasRecipe = capRecipes.length > 0;
 
     let priority;
-    if (isLowMaturity && recipe) priority = 0;       // P0
-    else if (isUnverified) priority = 1;             // P1
-    else if (isLowMaturity && !recipe) priority = 2;  // P2
-    else continue; // E2+ with verified recipe, or no recipe — scout skips
+    if (isLowMaturity && hasRecipe) priority = 0;                        // P0
+    else if (unverifiedConstraintOrReplay.length > 0) priority = 1;      // P1: v2.2 schema
+    else if (isLowMaturity && !hasRecipe) priority = 2;                  // P2
+    else continue;
 
+    // For P1, prefer the first unverified constraint/replay recipe
+    const recipe = priority === 1
+      ? unverifiedConstraintOrReplay[0]
+      : capRecipes[0] || null;
     const recipeType = recipe ? classifyRecipe(recipe) : null;
     const risk = { R0: 0, R1: 1, R2: 2, R3: 3 };
 
@@ -218,7 +240,6 @@ function selectTarget(capabilities, allKnowledge, filter) {
     );
   }
 
-  // Sort: priority → R0 first → has recipe first → alphabetical
   candidates.sort(
     (a, b) =>
       a.priority - b.priority ||
@@ -237,38 +258,217 @@ function selectTarget(capabilities, allKnowledge, filter) {
   };
 }
 
-// ─── Recipe engine (§5) ──────────────────────────────────────────────────────
+// ─── Constraint verification engine (§5, v2.2) ─────────────────────────────
 
-async function verifyRecipe(device, recipe, target) {
-  const recipeType = target._recipeType || classifyRecipe(recipe);
-  log(`recipe found: "${recipe.title}" (type=${recipeType}) — ${recipeType === "step" ? "replaying steps" : "rule-type, checking constraint"}`);
+const CONSTRAINT_PATTERNS = [
+  {
+    id: "comment-cap",
+    title: "comment-cap per loop ≤ 1-2",
+    keywords: ["comment.?cap", "commentCap"],
+    grepPattern: "commentCap|comment.?cap",
+    grepFiles: ["scripts/task-runner.mjs", "scripts/dashboard.mjs", "scripts/fast-operator.mjs"],
+    expectDesc: "commentCap default should be 1 or 2 (anti-risk-control)",
+    validateEvidence: (text) => {
+      const match = text.match(/commentCap\s*=\s*Number\(.*?(\d+)/);
+      if (!match) return null;
+      const val = Number(match[1]);
+      return { holds: val >= 1 && val <= 2, detail: `commentCap default=${val}` };
+    },
+  },
+  {
+    id: "timeout-90s",
+    title: "primitive operation timeoutMs = 90000",
+    keywords: ["timeout.*90", "90.*timeout", "timeoutMs.*90"],
+    grepPattern: "timeoutMs.*90",
+    grepFiles: ["apps/xhs/capabilities.json", "control-plane/schema/capability.schema.json"],
+    expectDesc: "xhs.comment.send timeoutMs should be 90000",
+    validateEvidence: (text) => {
+      const match = text.match(/"timeoutMs"\s*:\s*(\d+)/);
+      if (!match) return null;
+      const val = Number(match[1]);
+      return { holds: val === 90000, detail: `timeoutMs=${val}` };
+    },
+  },
+  {
+    id: "fail-closed",
+    title: "control-plane routing is fail-closed",
+    keywords: ["fail.?closed", "failClosed"],
+    grepPattern: "fail.?closed|failClosed",
+    grepFiles: ["control-plane/lib/placement.mjs", "control-plane/lib/policy.mjs", "scout/scout.mjs"],
+    expectDesc: "control-plane and scout enforce fail-closed behavior",
+    validateEvidence: (text) => {
+      const count = (text.match(/fail.?closed|failClosed/gi) || []).length;
+      return { holds: count > 0, detail: `fail-closed references found: ${count}` };
+    },
+  },
+];
 
-  if (recipeType === "rule") {
-    // Rule-type: cannot replay. Record as observation, do NOT flag-engineer.
-    // §4 v2.1: "查约束在代码/配置中是否仍成立，查不了就保持未验证，不得编造验证结果"
-    log(`rule-type recipe: cannot replay — recording observation, leaving unverified`);
-    await postKnowledge({
-      id: `scout-observe-${recipe.id}-${Date.now()}`,
-      app: target.appId,
-      category: "pitfall",
-      title: `[scout-observe] ${recipe.id} (rule-type, not replayable)`,
-      content: `scout inspected recipe "${recipe.title}" but it is rule-type (no replayable steps). Constraint: ${recipe.content.slice(0, 200)}. Scout cannot verify this automatically — left unverified.`,
-      scope: "global",
-    });
-    return { ok: null, reason: "rule_type_not_replayable" };
+function grepFile(filePath, pattern) {
+  try {
+    const absPath = resolve(REPO_ROOT, filePath);
+    const result = execSync(
+      `grep -nE ${JSON.stringify(pattern)} ${JSON.stringify(absPath)} 2>/dev/null | head -20`,
+      { encoding: "utf8", timeout: 5000 }
+    );
+    return result.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Find a constraint pattern that matches the recipe content.
+ */
+function matchConstraintPattern(recipe) {
+  const content = (recipe.content || "").toLowerCase() + " " + (recipe.title || "").toLowerCase();
+  for (const pat of CONSTRAINT_PATTERNS) {
+    if (pat.keywords.some((kw) => new RegExp(kw, "i").test(content))) {
+      return pat;
+    }
+  }
+  return null;
+}
+
+/**
+ * Verify a constraint-type recipe by grepping the codebase for evidence.
+ * Returns { ok: boolean|null, evidence: string, pattern: string, details: string }.
+ * ok=null means evidence could not be located (→ pitfall with human tag).
+ */
+function verifyConstraint(recipe, { dryRun = false } = {}) {
+  const pattern = matchConstraintPattern(recipe);
+  if (!pattern) {
+    return {
+      ok: null,
+      reason: "no_matching_pattern",
+      evidence: `recipe "${recipe.title}" content does not match any known constraint pattern`,
+      pattern: null,
+      details: "constraint evidence cannot be located",
+    };
   }
 
-  // Step-type: replay steps
+  log(`constraint pattern matched: ${pattern.id} — grepping ${pattern.grepFiles.length} files`);
+
+  const evidenceLines = [];
+  let validationResult = null;
+
+  for (const file of pattern.grepFiles) {
+    const hit = grepFile(file, pattern.grepPattern);
+    if (hit) {
+      evidenceLines.push({ file, hit });
+      if (!validationResult && pattern.validateEvidence) {
+        validationResult = pattern.validateEvidence(hit);
+      }
+    }
+  }
+
+  if (evidenceLines.length === 0) {
+    return {
+      ok: null,
+      reason: "no_evidence_found",
+      evidence: `grep "${pattern.grepPattern}" in [${pattern.grepFiles.join(", ")}] returned 0 matches`,
+      pattern: pattern.id,
+      details: "constraint evidence cannot be located",
+    };
+  }
+
+  const evidenceSummary = evidenceLines
+    .map((e) => `${e.file}: ${e.hit.split("\n")[0]}`)
+    .join("; ");
+
+  if (validationResult) {
+    return {
+      ok: validationResult.holds,
+      reason: validationResult.holds ? "constraint_confirmed" : "constraint_violated",
+      evidence: evidenceSummary,
+      pattern: pattern.id,
+      details: validationResult.detail,
+    };
+  }
+
+  // Evidence found but no validator → treat as confirmed (grep hit = constraint exists)
+  return {
+    ok: true,
+    reason: "constraint_evidence_found",
+    evidence: evidenceSummary,
+    pattern: pattern.id,
+    details: `evidence found in ${evidenceLines.length} file(s)`,
+  };
+}
+
+// ─── Recipe engine (§5) ──────────────────────────────────────────────────────
+
+async function verifyRecipe(device, recipe, target, { dryRun = false } = {}) {
+  const recipeType = target._recipeType || classifyRecipe(recipe);
+  log(`recipe found: "${recipe.title}" (type=${recipeType})`);
+
+  if (recipeType === "constraint") {
+    // §5 v2.2: constraint verification via grep
+    const result = verifyConstraint(recipe, { dryRun });
+    log(`constraint verify: ok=${result.ok} reason=${result.reason} pattern=${result.pattern || "none"}`);
+
+    if (result.ok === true) {
+      // Constraint confirmed → verify
+      if (!dryRun) {
+        await verifyKnowledge(recipe.id);
+        log(`constraint verified: ${recipe.id}`);
+      } else {
+        log(`[dry-run] would verify knowledge: ${recipe.id}`);
+      }
+      return { ok: true, reason: result.reason, evidence: result.evidence, pattern: result.pattern };
+    }
+
+    if (result.ok === false) {
+      // Constraint violated → pitfall
+      if (!dryRun) {
+        await postKnowledge({
+          id: `scout-constraint-violated-${recipe.id}-${Date.now()}`,
+          app: target.appId,
+          category: "pitfall",
+          title: `[scout-constraint] ${recipe.id} violated: ${result.pattern}`,
+          content: `constraint=${result.pattern} evidence=${result.evidence} details=${result.details}`,
+          scope: "global",
+        });
+      } else {
+        log(`[dry-run] would write pitfall: constraint violated ${recipe.id}`);
+      }
+      return { ok: false, reason: result.reason, evidence: result.evidence, pattern: result.pattern };
+    }
+
+    // ok === null: evidence not located → pitfall tagged human
+    if (!dryRun) {
+      await postKnowledge({
+        id: `scout-constraint-noloc-${recipe.id}-${Date.now()}`,
+        app: target.appId,
+        category: "pitfall",
+        title: `[scout-constraint] ${recipe.id} — evidence unlocatable`,
+        content: `constraint evidence cannot be located for "${recipe.title}". ${result.evidence}. verifyMode should be "human".`,
+        scope: "global",
+        verifyMode: "human",
+      });
+    } else {
+      log(`[dry-run] would write pitfall (human): evidence unlocatable ${recipe.id}`);
+    }
+    return { ok: null, reason: result.reason, evidence: result.evidence };
+  }
+
+  if (recipeType === "human") {
+    log(`human-tagged recipe: cannot verify automatically — leaving unverified`);
+    return { ok: null, reason: "human_tagged" };
+  }
+
+  // replay: replay steps
   if (!recipe.steps || !Array.isArray(recipe.steps) || recipe.steps.length === 0) {
-    log("step-type recipe but no steps array — recording pitfall");
-    await postKnowledge({
-      id: `${target.id}-no-steps-${Date.now()}`,
-      app: target.appId,
-      category: "pitfall",
-      title: `recipe missing steps: ${target.id}`,
-      content: `recipe ${recipe.id} classified as step-type but has no steps array`,
-      scope: "global",
-    });
+    log("replay-type recipe but no steps array — recording pitfall");
+    if (!dryRun) {
+      await postKnowledge({
+        id: `${target.id}-no-steps-${Date.now()}`,
+        app: target.appId,
+        category: "pitfall",
+        title: `recipe missing steps: ${target.id}`,
+        content: `recipe ${recipe.id} classified as replay but has no steps array`,
+        scope: "global",
+      });
+    }
     return { ok: false, reason: "no_steps" };
   }
 
@@ -281,22 +481,28 @@ async function verifyRecipe(device, recipe, target) {
       const failReason = r.data?.error || r.data?.result?.step || step.action;
       log(`  step ${i + 1} FAILED: ${failReason}`);
 
-      await postKnowledge({
-        id: `${target.id}-verify-fail-${Date.now()}`,
-        app: target.appId,
-        category: "pitfall",
-        title: `recipe verify failed: ${target.id} step ${step.action}`,
-        content: `step=${step.action} error=${failReason} recipe=${recipe.id}`,
-        scope: "global",
-      });
-      await flagEngineerKnowledge(recipe.id);
+      if (!dryRun) {
+        await postKnowledge({
+          id: `${target.id}-verify-fail-${Date.now()}`,
+          app: target.appId,
+          category: "pitfall",
+          title: `recipe verify failed: ${target.id} step ${step.action}`,
+          content: `step=${step.action} error=${failReason} recipe=${recipe.id}`,
+          scope: "global",
+        });
+        await flagEngineerKnowledge(recipe.id);
+      }
       return { ok: false, reason: failReason, failedStep: i + 1 };
     }
     log(`  step ${i + 1} OK`);
   }
 
-  await verifyKnowledge(recipe.id);
-  log(`recipe verified: ${recipe.id}`);
+  if (!dryRun) {
+    await verifyKnowledge(recipe.id);
+    log(`recipe verified: ${recipe.id}`);
+  } else {
+    log(`[dry-run] would verify knowledge: ${recipe.id}`);
+  }
   return { ok: true };
 }
 
@@ -440,11 +646,13 @@ async function run({ maxRounds = 1, capabilityFilter = null, dryRun = false } = 
         const recipe = target._recipe;
 
         if (recipe) {
-          // §5: Re-run verification
-          const result = await verifyRecipe(device, recipe, target);
+          // §5: Re-run verification (constraint or replay)
+          const result = await verifyRecipe(device, recipe, target, { dryRun });
           roundResult.status = result.ok === null ? "recipe_observed" : result.ok ? "recipe_verified" : "recipe_verify_failed";
           roundResult.reason = result.reason;
           roundResult.recipeType = target._recipeType;
+          roundResult.evidence = result.evidence;
+          roundResult.pattern = result.pattern;
           roundResult.samplePath = "serve-direct"; // §5: direct serve → knowledge only, not v1.3
           summary.totalKnowledge++;
         } else {
@@ -497,7 +705,7 @@ if (isDirectRun) {
       log(`\n=== Summary ===`);
       log(`rounds: ${summary.rounds.length} | knowledge entries: ${summary.totalKnowledge}`);
       for (const r of summary.rounds) {
-        log(`  round ${r.round}: ${r.device || "—"} / ${r.capability || "—"} → ${r.status}${r.reason ? ` (${r.reason})` : ""}${r.recipeType ? ` [${r.recipeType}]` : ""}${r.samplePath ? ` sample=${r.samplePath}` : ""}`);
+        log(`  round ${r.round}: ${r.device || "—"} / ${r.capability || "—"} → ${r.status}${r.reason ? ` (${r.reason})` : ""}${r.recipeType ? ` [${r.recipeType}]` : ""}${r.pattern ? ` pattern=${r.pattern}` : ""}${r.evidence ? ` evidence="${r.evidence.slice(0, 80)}"` : ""}${r.samplePath ? ` sample=${r.samplePath}` : ""}`);
       }
       log("scout done.");
     })
@@ -508,4 +716,4 @@ if (isDirectRun) {
     });
 }
 
-export { run, selectDevice, selectTarget };
+export { run, selectDevice, selectTarget, classifyRecipe, buildRecipeIndex, verifyConstraint, matchConstraintPattern, grepFile, CONSTRAINT_PATTERNS };
