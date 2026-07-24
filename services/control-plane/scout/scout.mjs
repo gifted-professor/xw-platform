@@ -302,8 +302,27 @@ async function verifyRecipe(device, recipe, target) {
 
 // ─── Exploration mode (§6) ───────────────────────────────────────────────────
 
-async function exploreFresh(device, target, pitfalls) {
+async function exploreFresh(device, target, pitfalls, { dryRun = false } = {}) {
   log("exploring fresh (§6 not yet implemented — dry-run scope only)");
+
+  // Guard: capability without packageName → cannot verify foreground app
+  if (!target.packageName) {
+    const skipId = `scout-skip-${target.id}`;
+    log(`capability ${target.id} has no packageName — skipping (cannot verify foreground app)`);
+    if (!dryRun) {
+      await postKnowledge({
+        id: skipId,
+        app: target.appId,
+        category: "pitfall",
+        title: `[scout-skip] ${target.id}`,
+        content: `capabilityId=${target.id} reason=packageName缺失无法校验前台App`,
+        scope: "global",
+      });
+    } else {
+      log(`[dry-run] would write pitfall: id=${skipId} content=capabilityId=${target.id} reason=packageName缺失无法校验前台App`);
+    }
+    return { ok: false, reason: "no_packageName", skipId };
+  }
 
   // §6-1: build scope
   const scope = {
@@ -332,7 +351,7 @@ async function exploreFresh(device, target, pitfalls) {
   log(`focus: package=${pkg} activity=${activity}`);
 
   // Check for unexpected state (login wall, CAPTCHA, etc.) → §6-6
-  if (pkg && !pkg.includes(target.packageName?.split(".")?.[1] || "xhs")) {
+  if (pkg && !pkg.includes(target.packageName.split(".")[1])) {
     log("unexpected app in foreground — aborting, restoring scene");
     await restoreScene(device);
     return { ok: false, reason: "unexpected_app", pkg };
@@ -342,14 +361,19 @@ async function exploreFresh(device, target, pitfalls) {
   const labels = dump.data?.result?.labels || dump.data?.result?.nodes?.length || 0;
   log(`dump: ${typeof labels === "number" ? labels + " nodes" : JSON.stringify(labels).slice(0, 200)}`);
 
-  await postKnowledge({
+  const exploreEntry = {
     id: `scout-explore-${target.id}-${Date.now()}`,
     app: target.appId,
     category: "pitfall",
     title: `[scout-scope] ${target.id}`,
     content: JSON.stringify({ ...scope, focus: { pkg, activity }, dumpResult: labels }),
     scope: `device:${device.serial}`,
-  });
+  };
+  if (!dryRun) {
+    await postKnowledge(exploreEntry);
+  } else {
+    log(`[dry-run] would write knowledge: id=${exploreEntry.id} app=${exploreEntry.app} title=${exploreEntry.title}`);
+  }
 
   return { ok: true, phase: "scope_recorded" };
 }
@@ -363,7 +387,7 @@ function log(msg) {
 
 // ─── Scout main loop (§4) ────────────────────────────────────────────────────
 
-async function run({ maxRounds = 1, capabilityFilter = null } = {}) {
+async function run({ maxRounds = 1, capabilityFilter = null, dryRun = false } = {}) {
   const summary = { rounds: [], totalKnowledge: 0 };
 
   for (let round = 0; round < maxRounds; round++) {
@@ -425,7 +449,7 @@ async function run({ maxRounds = 1, capabilityFilter = null } = {}) {
           summary.totalKnowledge++;
         } else {
           // §6: Explore fresh
-          const result = await exploreFresh(device, target, allPitfalls);
+          const result = await exploreFresh(device, target, allPitfalls, { dryRun });
           roundResult.status = result.ok ? "explored" : "explore_failed";
           roundResult.reason = result.reason;
           summary.totalKnowledge++;
@@ -468,7 +492,7 @@ if (isDirectRun) {
 
   log(`scout starting (actor=${ACTOR}, rounds=${maxRounds}, filter=${capabilityFilter || "none"}, dryRun=${dryRun})`);
 
-  run({ maxRounds, capabilityFilter })
+  run({ maxRounds, capabilityFilter, dryRun })
     .then(async (summary) => {
       log(`\n=== Summary ===`);
       log(`rounds: ${summary.rounds.length} | knowledge entries: ${summary.totalKnowledge}`);
