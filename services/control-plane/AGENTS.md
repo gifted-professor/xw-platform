@@ -20,6 +20,9 @@
 1. 在 GPFS 仓库改代码 → `npm test` 全绿
 2. commit → push 到 origin 分支
 3. Windows `git pull`（仓库已挂分支，不再是 detached HEAD；注意 Windows 侧 CRLF 行尾，certutil 哈希与 Mac 不一致属正常，比对内容要去 `\r`）
+3b. **同步 `C:\Users\Public\xhs-agent-control\task-launch.json` 的 `gitCommit` 为当前 HEAD**——
+    control-plane-worker.ps1 有 commit 闸门，launch.json 与 HEAD 不一致会直接拒启动
+    （2026-07-25 事故：pull 后忘同步，控制面反复 exit 1）
 4. 重启生效：`schtasks /end /tn XhsDeviceControlPlaneV1 & schtasks /run /tn XhsDeviceControlPlaneV1`（registry 17930 已验证能在控制面重启后存活，无需联动重启）
 
 设备路由/端口配置改 `C:\Users\Public\xhs-routing-v1-1\config\control-plane.devices.json`
