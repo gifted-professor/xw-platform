@@ -255,8 +255,8 @@ async function exploreFresh(device, target, pitfalls) {
   await postKnowledge({
     id: `scout-explore-${target.id}-${Date.now()}`,
     app: target.appId,
-    category: "scope",
-    title: `scout scope: ${target.id}`,
+    category: "pitfall",
+    title: `[scout-scope] ${target.id}`,
     content: JSON.stringify({ ...scope, focus: { pkg, activity }, dumpResult: labels }),
     scope: `device:${device.serial}`,
   });
