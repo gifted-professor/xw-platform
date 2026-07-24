@@ -54,7 +54,7 @@ if ($Action -eq "Install") {
     $taskAction = New-ScheduledTaskAction -Execute $powershell -Argument $arguments -WorkingDirectory $repoRoot
     $principal = New-ScheduledTaskPrincipal `
         -UserId ([System.Security.Principal.WindowsIdentity]::GetCurrent().Name) `
-        -LogonType InteractiveToken `
+        -LogonType Interactive `
         -RunLevel Limited
     $settings = New-ScheduledTaskSettingsSet `
         -AllowStartIfOnBatteries `
