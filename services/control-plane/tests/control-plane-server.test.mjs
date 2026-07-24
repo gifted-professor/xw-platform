@@ -45,6 +45,7 @@ test("HTTP API is loopback-oriented, emits no CORS header, and redacts runtime I
     physicalLabel: "rack-01",
     nodeId: "DESKTOP-3I1EVHE",
     runtimeId: "never-expose",
+    routingProfile: { enabled: true, capabilityIds: ["test.observe"] },
   });
   const evidence = new EvidenceStore({
     runsRoot: join(root, "runs"),
@@ -78,6 +79,43 @@ test("HTTP API is loopback-oriented, emits no CORS header, and redacts runtime I
     const body = await response.json();
     assert.equal(body.devices[0].deviceId, device.deviceId);
     assert.doesNotMatch(JSON.stringify(body), /never-expose|runtimeId/);
+
+    const nodesResponse = await fetch(`http://127.0.0.1:${port}/control/v1/nodes`);
+    assert.equal(nodesResponse.status, 200);
+    const nodes = await nodesResponse.json();
+    assert.equal(nodes.nodes[0].nodeId, "DESKTOP-3I1EVHE");
+    assert.equal(nodes.nodes[0].readyDevices, 1);
+    assert.doesNotMatch(JSON.stringify(nodes), /never-expose|runtimeId|routingProfile/);
+
+    const beforeJobs = state.db.prepare("SELECT COUNT(*) AS count FROM jobs").get().count;
+    const planResponse = await fetch(`http://127.0.0.1:${port}/control/v1/routes/plan`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        actorId: "agent-a",
+        capabilityId: "test.observe",
+      }),
+    });
+    assert.equal(planResponse.status, 200);
+    const plan = await planResponse.json();
+    assert.equal(plan.route.decision, "dispatchable");
+    assert.equal(plan.route.selectedDeviceId, device.deviceId);
+    assert.equal(state.db.prepare("SELECT COUNT(*) AS count FROM jobs").get().count, beforeJobs);
+
+    const submitResponse = await fetch(`http://127.0.0.1:${port}/control/v1/jobs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        actorId: "agent-a",
+        capabilityId: "test.observe",
+        idempotencyKey: "api-auto-route",
+      }),
+    });
+    assert.equal(submitResponse.status, 202);
+    const submitted = await submitResponse.json();
+    assert.equal(submitted.job.routeDecision.selectedDeviceId, device.deviceId);
+    assert.match(submitted.storage.manifestPath, /manifest\.json$/);
+    assert.doesNotMatch(JSON.stringify(submitted), /never-expose|runtimeId|routingProfile/);
 
     const invalid = await fetch(`http://127.0.0.1:${port}/control/v1/jobs`, {
       method: "POST",

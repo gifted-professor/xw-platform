@@ -58,11 +58,13 @@ function fixture({ capabilities, adapter }) {
   const root = mkdtempSync(join(tempBase, "core-test-"));
   const state = new StateStore({ dbPath: join(root, "control.db") });
   const registry = new CapabilityRegistry(capabilities);
+  const capabilityIds = capabilities.map((capability) => capability.id);
   const devices = ["01", "02"].map((alias) => state.upsertDevice({
     alias,
     physicalLabel: `rack-${alias}`,
     nodeId: "DESKTOP-3I1EVHE",
     runtimeId: `private-${alias}`,
+    routingProfile: { enabled: true, tags: [`slot:${alias}`], capabilityIds },
   }));
   const evidence = new EvidenceStore({
     runsRoot: join(root, "runs"),

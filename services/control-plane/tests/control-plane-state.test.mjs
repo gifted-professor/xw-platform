@@ -42,11 +42,13 @@ function setup(path) {
   const state = new StateStore({ dbPath: path });
   const registry = new CapabilityRegistry([capability()]);
   state.syncCapabilities(registry);
+  state.upsertNode({ nodeId: "DESKTOP-3I1EVHE", authority: true });
   const device = state.upsertDevice({
     alias: "01",
     physicalLabel: "rack-01",
     nodeId: "DESKTOP-3I1EVHE",
     runtimeId: "private-runtime-id",
+    routingProfile: { enabled: true, tags: ["slot:01"], capabilityIds: ["test.observe"] },
   });
   return { state, device, registry };
 }
@@ -61,6 +63,7 @@ test("idempotency is durable and public device records redact runtime IDs", () =
     const input = {
       idempotencyKey: "same",
       actorId: "agent-a",
+      authorityNodeId: "DESKTOP-3I1EVHE",
       deviceId: device.deviceId,
       capability: registry.require("test.observe"),
       params: {},
@@ -112,6 +115,7 @@ test("restart marks in-flight work recovery_required and quarantines its device"
     const created = state.createJob({
       idempotencyKey: "restart",
       actorId: "agent-a",
+      authorityNodeId: "DESKTOP-3I1EVHE",
       deviceId: fixture.device.deviceId,
       capability: fixture.registry.require("test.observe"),
       params: {},

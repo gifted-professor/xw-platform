@@ -17,15 +17,18 @@ test("runtime evidence uses real hashes and removes credentials and runtime IDs"
   try {
     const capabilities = CapabilityRegistry.load(fileURLToPath(new URL("../apps", import.meta.url)));
     state.syncCapabilities(capabilities);
+    state.upsertNode({ nodeId: "DESKTOP-3I1EVHE", authority: true });
     const device = state.upsertDevice({
       alias: "01",
       physicalLabel: "rack-01",
       nodeId: "DESKTOP-3I1EVHE",
       runtimeId: "private-runtime",
+      routingProfile: { enabled: true, capabilityIds: ["xhs.observe.metrics"] },
     });
     const created = state.createJob({
       idempotencyKey: "evidence",
       actorId: "agent-a",
+      authorityNodeId: "DESKTOP-3I1EVHE",
       deviceId: device.deviceId,
       capability: capabilities.require("xhs.observe.metrics"),
       params: {},
@@ -51,6 +54,11 @@ test("runtime evidence uses real hashes and removes credentials and runtime IDs"
     assert.match(record.sha256, /^[a-f0-9]{64}$/);
     const manifest = evidence.getManifest(created.runId);
     assert.equal(manifest.evidence[0].sha256, record.sha256);
+    assert.equal(manifest.schemaVersion, 2);
+    assert.equal(manifest.routeDecision.selectedDeviceId, device.deviceId);
+    assert.equal(manifest.storage.manifestPath, join(root, "runs", created.runId, "manifest.json"));
+    const events = readFileSync(manifest.storage.eventsPath, "utf8").trim().split("\n").map(JSON.parse);
+    assert.equal(events[0].type, "route.assigned");
     const content = readFileSync(join(root, "runs", created.runId, record.path), "utf8");
     assert.doesNotMatch(content, /private-runtime|private-token|private-serial/);
     assert.deepEqual(redactRuntimeData({ ok: true, apiKey: "x" }), { ok: true });
