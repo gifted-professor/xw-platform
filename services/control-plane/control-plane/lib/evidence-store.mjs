@@ -77,6 +77,16 @@ export class EvidenceStore {
     return join(this.runsRoot, runId);
   }
 
+  storageForRun(runId) {
+    const runDirectory = this.runDirectory(runId);
+    return {
+      runDirectory,
+      manifestPath: join(runDirectory, "manifest.json"),
+      eventsPath: join(runDirectory, "events.jsonl"),
+      evidenceDirectory: join(runDirectory, "evidence"),
+    };
+  }
+
   getManifest(runId) {
     const path = join(this.runDirectory(runId), "manifest.json");
     if (!existsSync(path)) {
@@ -89,8 +99,9 @@ export class EvidenceStore {
     this.assertCapacity({ externalEffect: job.externalEffect });
     const directory = this.runDirectory(job.runId);
     mkdirSync(join(directory, "evidence"), { recursive: true });
+    const storage = this.storageForRun(job.runId);
     const manifest = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       runId: job.runId,
       jobId: job.jobId,
       actorId: job.actorId,
@@ -102,9 +113,17 @@ export class EvidenceStore {
       capabilityRisk: job.capability.risk,
       gitCommit,
       createdAt: job.createdAt,
+      routeDecision: job.routeDecision,
+      storage,
       evidence: [],
     };
     atomicWriteJson(join(directory, "manifest.json"), redactRuntimeData(manifest));
+    this.appendEvent(job.runId, {
+      type: "route.assigned",
+      jobId: job.jobId,
+      routeDecision: job.routeDecision,
+      createdAt: new Date().toISOString(),
+    });
     this.appendEvent(job.runId, {
       type: "run.initialized",
       jobId: job.jobId,

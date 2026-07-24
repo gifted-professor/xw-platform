@@ -7,6 +7,15 @@
       "physicalLabel": "rack-01",
       "runtimeId": "replace-in-untracked-local-file",
       "online": true,
+      "routingProfile": {
+        "enabled": true,
+        "tags": ["slot:01"],
+        "capabilityIds": [
+          "xiaowei.device.list",
+          "xiaowei.lab.raw",
+          "xhs.observe.metrics"
+        ]
+      },
       "metadata": {
         "xhsServePort": 17895
       }

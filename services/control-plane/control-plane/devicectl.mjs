@@ -12,6 +12,14 @@ function flag(argv, name) {
   return argv.includes(name);
 }
 
+function options(argv, name) {
+  const result = [];
+  for (let index = 0; index < argv.length; index += 1) {
+    if (argv[index] === name && argv[index + 1] !== undefined) result.push(argv[index + 1]);
+  }
+  return result;
+}
+
 function requireOption(argv, name) {
   const value = option(argv, name);
   if (value === undefined) throw new ControlPlaneError("CLI_OPTION_REQUIRED", `${name} is required`);
@@ -26,6 +34,20 @@ function parseJsonOption(argv, name, fallback = {}) {
   } catch {
     throw new ControlPlaneError("CLI_JSON_INVALID", `${name} must be valid JSON`);
   }
+}
+
+function placementOptions(argv) {
+  const placement = {};
+  const nodeId = option(argv, "--node");
+  const physicalLabel = option(argv, "--physical-label");
+  const requiredTags = options(argv, "--require-tag");
+  if (nodeId !== undefined) placement.nodeId = nodeId;
+  if (physicalLabel !== undefined) placement.physicalLabel = physicalLabel;
+  if (requiredTags.length > 0) placement.requiredTags = requiredTags;
+  return {
+    ...(option(argv, "--device") !== undefined ? { deviceId: option(argv, "--device") } : {}),
+    ...(Object.keys(placement).length > 0 ? { placement } : {}),
+  };
 }
 
 async function requestJson(baseUrl, method, path, body) {
@@ -81,11 +103,12 @@ function runRemote(argv, alias) {
 function help() {
   return `devicectl [--ssh xhs-windows] <command>
 
-  health | devices | capabilities | leases
-  job submit --actor ID --device ID --capability ID --idempotency-key KEY [--params JSON]
+  health | nodes | devices | capabilities | leases
+  route plan --actor ID --capability ID [--device ID | --node ID --physical-label LABEL --require-tag TAG]
+  job submit --actor ID --capability ID --idempotency-key KEY [--device ID | placement selectors] [--params JSON]
   job status|watch|cancel --job ID
   approval approve|deny --job ID --actor ID [--reason TEXT]
-  session acquire --actor ID --device ID [--canary]
+  session acquire --actor ID [--device ID | --capability ID with placement selectors] [--canary]
   session heartbeat|release --session ID --token TOKEN
   session action --session ID --token TOKEN --capability ID --idempotency-key KEY [--params JSON]
   lab action --session ID --token TOKEN --action NAME --idempotency-key KEY [--data JSON]
@@ -108,16 +131,24 @@ export async function main(argv = process.argv.slice(2)) {
     return;
   }
   let result;
-  if (["health", "devices", "capabilities", "leases"].includes(group)) {
+  if (["health", "nodes", "devices", "capabilities", "leases"].includes(group)) {
     result = await requestJson(baseUrl, "GET", `/control/v1/${group}`);
+  } else if (group === "route" && action === "plan") {
+    result = await requestJson(baseUrl, "POST", "/control/v1/routes/plan", {
+      actorId: requireOption(argv, "--actor"),
+      capabilityId: requireOption(argv, "--capability"),
+      params: parseJsonOption(argv, "--params", {}),
+      canary: flag(argv, "--canary"),
+      ...placementOptions(argv),
+    });
   } else if (group === "job" && action === "submit") {
     result = await requestJson(baseUrl, "POST", "/control/v1/jobs", {
       actorId: requireOption(argv, "--actor"),
-      deviceId: requireOption(argv, "--device"),
       capabilityId: requireOption(argv, "--capability"),
       idempotencyKey: requireOption(argv, "--idempotency-key"),
       params: parseJsonOption(argv, "--params", {}),
       canary: flag(argv, "--canary"),
+      ...placementOptions(argv),
     });
   } else if (group === "job" && action === "status") {
     result = await requestJson(baseUrl, "GET", `/control/v1/jobs/${encodeURIComponent(requireOption(argv, "--job"))}`);
@@ -139,8 +170,9 @@ export async function main(argv = process.argv.slice(2)) {
   } else if (group === "session" && action === "acquire") {
     result = await requestJson(baseUrl, "POST", "/control/v1/sessions", {
       actorId: requireOption(argv, "--actor"),
-      deviceId: requireOption(argv, "--device"),
+      ...(option(argv, "--capability") !== undefined ? { capabilityId: option(argv, "--capability") } : {}),
       canary: flag(argv, "--canary"),
+      ...placementOptions(argv),
     });
   } else if (group === "session" && ["heartbeat", "release"].includes(action)) {
     const sessionId = requireOption(argv, "--session");

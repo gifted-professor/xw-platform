@@ -68,6 +68,7 @@ function loadDeviceConfig(path) {
 }
 
 export function createControlPlaneRuntime({
+  nodeId = process.env.CONTROL_PLANE_NODE_ID || "DESKTOP-3I1EVHE",
   dbPath,
   runsRoot,
   deviceConfigPath = process.env.CONTROL_PLANE_DEVICES_FILE || join(root, "config", "control-plane.devices.json"),
@@ -90,7 +91,7 @@ export function createControlPlaneRuntime({
     for (const device of config.devices) {
       runtimeState.upsertDevice({
         ...device,
-        nodeId: device.nodeId || config.nodeId || "DESKTOP-3I1EVHE",
+        nodeId: device.nodeId || config.nodeId || nodeId,
       });
     }
   }
@@ -113,6 +114,7 @@ export function createControlPlaneRuntime({
     capabilities: registry,
     adapters: adapterRegistry,
     evidence: runtimeEvidence,
+    authorityNodeId: nodeId,
     schedulerIntervalMs,
     leaseTtlMs,
     leaseHeartbeatMs,
@@ -127,5 +129,6 @@ export function createControlPlaneRuntime({
     dbPath: resolvedDbPath,
     runsRoot: resolvedRunsRoot,
     deviceConfigPath,
+    nodeId,
   };
 }

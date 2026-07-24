@@ -1,5 +1,6 @@
 import { ControlPlaneError, asControlError } from "./errors.mjs";
 import { evaluateCapabilityPolicy } from "./policy.mjs";
+import { inspectTransportLock } from "./xiaowei-transport.mjs";
 
 function collectEvidenceFiles(...values) {
   return values.flatMap((value) => Array.isArray(value?.evidenceFiles) ? value.evidenceFiles : []);
@@ -43,6 +44,8 @@ export class ControlPlane {
     capabilities,
     adapters,
     evidence,
+    authorityNodeId = "DESKTOP-3I1EVHE",
+    transportStatus = inspectTransportLock,
     schedulerIntervalMs = 100,
     leaseTtlMs = 60000,
     leaseHeartbeatMs = 10000,
@@ -51,12 +54,20 @@ export class ControlPlane {
     this.capabilities = capabilities;
     this.adapters = adapters instanceof AdapterRegistry ? adapters : new AdapterRegistry(adapters);
     this.evidence = evidence;
+    this.authorityNodeId = authorityNodeId;
+    this.transportStatus = transportStatus;
     this.schedulerIntervalMs = schedulerIntervalMs;
     this.leaseTtlMs = leaseTtlMs;
     this.leaseHeartbeatMs = leaseHeartbeatMs;
     this.activeJobs = new Map();
     this.started = false;
     this.pumping = false;
+    state.upsertNode({
+      nodeId: authorityNodeId,
+      status: "online",
+      authority: true,
+      dispatchMode: "local",
+    });
     state.syncCapabilities(capabilities);
   }
 
@@ -77,7 +88,8 @@ export class ControlPlane {
   submitJob({
     idempotencyKey,
     actorId,
-    deviceId,
+    deviceId = null,
+    placement = {},
     capabilityId,
     params = {},
     canary = false,
@@ -88,7 +100,9 @@ export class ControlPlane {
     const created = this.state.createJob({
       idempotencyKey,
       actorId,
+      authorityNodeId: this.authorityNodeId,
       deviceId,
+      placement,
       capability,
       params,
       canary,
@@ -97,11 +111,69 @@ export class ControlPlane {
       externalEffect: policy.externalEffect,
     });
     if (!created.reused) {
-      const device = this.state.requireDevice(deviceId);
+      const device = this.state.requireDevice(created.job.deviceId);
       this.evidence.initializeRun({ job: created.job, device });
       if (created.job.status === "queued") queueMicrotask(() => void this.pump());
     }
-    return created;
+    return {
+      ...created,
+      storage: this.evidence.storageForRun(created.job.runId),
+    };
+  }
+
+  planRoute({
+    actorId,
+    capabilityId,
+    params = {},
+    canary = false,
+    deviceId = null,
+    placement = {},
+    invocation = "job",
+  }) {
+    if (typeof actorId !== "string" || actorId.trim() === "") {
+      throw new ControlPlaneError("ACTOR_REQUIRED", "actorId is required");
+    }
+    try {
+      const capability = this.capabilities.validateParams(capabilityId, params);
+      const policy = evaluateCapabilityPolicy(capability, { canary, invocation });
+      const route = this.state.planPlacement({
+        authorityNodeId: this.authorityNodeId,
+        capability,
+        deviceId,
+        placement,
+        invocation,
+        canary,
+      });
+      return {
+        ...route,
+        approvalRequired: policy.approvalRequired,
+        externalEffect: policy.externalEffect,
+        transport: capability.resources.includes("transport:xiaowei:22222")
+          ? this.transportStatus()
+          : { status: "not_required", ageMs: null },
+      };
+    } catch (error) {
+      if (["NO_ELIGIBLE_DEVICE", "NODE_UNAVAILABLE", "PLACEMENT_CONFLICT", "DEVICE_BUSY"].includes(error?.code)) {
+        return {
+          decision: "blocked",
+          advisory: true,
+          error: {
+            code: error.code,
+            message: error.message,
+            details: error.details || {},
+          },
+        };
+      }
+      throw error;
+    }
+  }
+
+  listNodes() {
+    const transport = this.transportStatus();
+    return this.state.listNodes().map((node) => ({
+      ...node,
+      transport: node.nodeId === this.authorityNodeId ? transport : { status: "unknown", ageMs: null },
+    }));
   }
 
   decideApproval(jobId, input) {
@@ -114,8 +186,24 @@ export class ControlPlane {
     return this.state.cancelJob(jobId);
   }
 
-  createSession(input) {
-    return this.state.createSession({ ...input, ttlMs: this.leaseTtlMs });
+  createSession({
+    actorId,
+    deviceId = null,
+    placement = {},
+    capabilityId = null,
+    canary = false,
+  }) {
+    const capability = capabilityId ? this.capabilities.require(capabilityId) : null;
+    if (capability) evaluateCapabilityPolicy(capability, { canary, invocation: "session" });
+    return this.state.createSession({
+      actorId,
+      authorityNodeId: this.authorityNodeId,
+      deviceId,
+      placement,
+      capability,
+      canary,
+      ttlMs: this.leaseTtlMs,
+    });
   }
 
   heartbeatSession(sessionId, token) {
@@ -132,6 +220,13 @@ export class ControlPlane {
     params = {},
   }) {
     const session = this.state.validateSession(sessionId, token);
+    if (session.scopeCapabilityId && session.scopeCapabilityId !== capabilityId) {
+      throw new ControlPlaneError(
+        "SESSION_CAPABILITY_MISMATCH",
+        `session is scoped to ${session.scopeCapabilityId}`,
+        { status: 409, details: { scopeCapabilityId: session.scopeCapabilityId } },
+      );
+    }
     const capability = this.capabilities.validateParams(capabilityId, params);
     const policy = evaluateCapabilityPolicy(capability, { canary: session.canary, invocation: "session" });
     if (policy.approvalRequired) {
@@ -145,7 +240,9 @@ export class ControlPlane {
     const created = this.state.createJob({
       idempotencyKey,
       actorId: session.actorId,
+      authorityNodeId: this.authorityNodeId,
       deviceId: session.deviceId,
+      placement: {},
       capability,
       params,
       canary: session.canary,
@@ -154,13 +251,22 @@ export class ControlPlane {
       approvalRequired: false,
       externalEffect: false,
     });
-    if (created.reused) return created.job;
+    if (created.reused) {
+      return {
+        ...created.job,
+        storage: this.evidence.storageForRun(created.job.runId),
+      };
+    }
     const device = this.state.requireDevice(session.deviceId);
     this.evidence.initializeRun({ job: created.job, device });
-    return this.#runJob(created.job, {
+    const job = await this.#runJob(created.job, {
       lease: { leaseId: session.leaseId, token },
       releaseLease: false,
     });
+    return {
+      ...job,
+      storage: this.evidence.storageForRun(job.runId),
+    };
   }
 
   async pump() {

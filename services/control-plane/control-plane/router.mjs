@@ -59,6 +59,9 @@ export class ControlRouter {
     if (method === "GET" && path === "/control/v1/devices") {
       return { status: 200, body: { devices: this.state.listDevices() } };
     }
+    if (method === "GET" && path === "/control/v1/nodes") {
+      return { status: 200, body: { nodes: this.control.listNodes() } };
+    }
     if (method === "GET" && path === "/control/v1/capabilities") {
       return { status: 200, body: { capabilities: this.capabilities.listPublic() } };
     }
@@ -90,6 +93,9 @@ export class ControlRouter {
     if (method === "POST" && path === "/control/v1/jobs") {
       const created = this.control.submitJob(requireBody(body));
       return { status: 202, body: { ...created, job: publicJob(created.job) } };
+    }
+    if (method === "POST" && path === "/control/v1/routes/plan") {
+      return { status: 200, body: { route: this.control.planRoute(requireBody(body)) } };
     }
     if (method === "POST" && path === "/control/v1/legacy-events") {
       const input = requireBody(body);
