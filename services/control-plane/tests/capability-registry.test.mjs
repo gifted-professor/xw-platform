@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import { CapabilityRegistry, validateAgainstSchema } from "../control-plane/lib/capability-registry.mjs";
 
 test("repository capabilities use the unified E0-E4 manifest", () => {
-  const registry = CapabilityRegistry.load(new URL("../apps", import.meta.url).pathname);
+  const registry = CapabilityRegistry.load(fileURLToPath(new URL("../apps", import.meta.url)));
   assert.equal(registry.capabilities.length, 12);
   assert.equal(new Set(registry.capabilities.map((item) => item.id)).size, 12);
   assert.equal(registry.capabilities.some((item) => /^D/.test(item.maturity)), false);
@@ -13,7 +14,7 @@ test("repository capabilities use the unified E0-E4 manifest", () => {
 });
 
 test("input schema rejects missing and unknown parameters", () => {
-  const registry = CapabilityRegistry.load(new URL("../apps", import.meta.url).pathname);
+  const registry = CapabilityRegistry.load(fileURLToPath(new URL("../apps", import.meta.url)));
   assert.throws(
     () => registry.validateParams("xhs.input.comment_dry_run", {}),
     { code: "PARAMS_SCHEMA_INVALID" },

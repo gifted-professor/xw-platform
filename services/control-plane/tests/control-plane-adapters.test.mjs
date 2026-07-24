@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import { createWechatAdapter } from "../apps/wechat/adapter.mjs";
 import { createXhsAdapter } from "../apps/xhs/adapter.mjs";
@@ -8,7 +9,7 @@ import { createXianyuAdapter } from "../apps/xianyu/adapter.mjs";
 import { createXiaoweiAdapter } from "../apps/xiaowei/adapter.mjs";
 import { CapabilityRegistry } from "../control-plane/lib/capability-registry.mjs";
 
-const registry = CapabilityRegistry.load(new URL("../apps", import.meta.url).pathname);
+const registry = CapabilityRegistry.load(fileURLToPath(new URL("../apps", import.meta.url)));
 const privateDevice = {
   deviceId: "dev-test",
   alias: "01",

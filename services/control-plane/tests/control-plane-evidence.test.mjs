@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import { CapabilityRegistry } from "../control-plane/lib/capability-registry.mjs";
 import { EvidenceStore, redactRuntimeData } from "../control-plane/lib/evidence-store.mjs";
@@ -14,7 +15,7 @@ test("runtime evidence uses real hashes and removes credentials and runtime IDs"
   const root = mkdtempSync(join(tempBase, "evidence-test-"));
   const state = new StateStore({ dbPath: join(root, "control.db") });
   try {
-    const capabilities = CapabilityRegistry.load(new URL("../apps", import.meta.url).pathname);
+    const capabilities = CapabilityRegistry.load(fileURLToPath(new URL("../apps", import.meta.url)));
     state.syncCapabilities(capabilities);
     const device = state.upsertDevice({
       alias: "01",
