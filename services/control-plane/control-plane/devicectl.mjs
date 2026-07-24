@@ -70,8 +70,9 @@ function runRemote(argv, alias) {
       "-NoProfile",
       "-NonInteractive",
       "-Command",
-      remotePowerShell(repo, encodedArgs, expectedHost),
-    ], { stdio: "inherit", shell: false });
+      "-",
+    ], { stdio: ["pipe", "inherit", "inherit"], shell: false });
+    child.stdin.end(remotePowerShell(repo, encodedArgs, expectedHost));
     child.once("error", reject);
     child.once("exit", (code) => code === 0 ? resolve() : reject(new Error(`remote devicectl exited ${code}`)));
   });
