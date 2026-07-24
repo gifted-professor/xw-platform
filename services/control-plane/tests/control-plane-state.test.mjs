@@ -134,3 +134,22 @@ test("restart marks in-flight work recovery_required and quarantines its device"
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("stable device ID follows the private runtime identity across alias changes", () => {
+  const root = tempRoot();
+  const { state, device } = setup(join(root, "control.db"));
+  try {
+    const renamed = state.upsertDevice({
+      alias: "rack-alias-renamed",
+      physicalLabel: "rack-01",
+      nodeId: "DESKTOP-3I1EVHE",
+      runtimeId: "private-runtime-id",
+    });
+    assert.equal(renamed.deviceId, device.deviceId);
+    assert.equal(renamed.alias, "rack-alias-renamed");
+    assert.equal(state.listDevices().length, 1);
+  } finally {
+    state.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});

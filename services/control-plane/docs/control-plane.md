@@ -24,6 +24,24 @@ $env:CONTROL_PLANE_LEGACY_MODE = "audit"
 node control-plane\server.mjs serve
 ```
 
+After the foreground canary passes, install an on-demand task bound to the
+exact commit. Installation does not auto-start it:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File scripts\control-plane-task.ps1 -Action Install
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File scripts\control-plane-task.ps1 -Action Start
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File scripts\control-plane-task.ps1 -Action Status
+```
+
+The task uses the current interactive Windows identity so it can reach the
+desktop-session Xiaowei bridge. Reinstall the task after changing the deployed
+commit. Stop it only when no job is active; an interrupted job is deliberately
+recovered as `recovery_required`. `Remove` is explicit and does not delete
+SQLite or run evidence.
+
 Expected runtime paths:
 
 - `C:\Users\Public\xhs-agent-control\control.db`

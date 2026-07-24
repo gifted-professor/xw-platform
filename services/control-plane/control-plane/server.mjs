@@ -2,7 +2,7 @@ import { createServer } from "node:http";
 import { pathToFileURL } from "node:url";
 
 import { assertAuthorityHost, assertPinnedNodeVersion, createControlPlaneRuntime } from "./bootstrap.mjs";
-import { errorBody } from "./lib/errors.mjs";
+import { ControlPlaneError, errorBody } from "./lib/errors.mjs";
 import { ControlRouter } from "./router.mjs";
 
 const MAX_BODY_BYTES = 1024 * 1024;
@@ -13,15 +13,16 @@ async function readJsonBody(request) {
   for await (const chunk of request) {
     bytes += chunk.length;
     if (bytes > MAX_BODY_BYTES) {
-      const error = new Error("request exceeds 1 MiB");
-      error.code = "REQUEST_TOO_LARGE";
-      error.status = 413;
-      throw error;
+      throw new ControlPlaneError("REQUEST_TOO_LARGE", "request exceeds 1 MiB", { status: 413 });
     }
     chunks.push(chunk);
   }
   if (chunks.length === 0) return undefined;
-  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  } catch {
+    throw new ControlPlaneError("INVALID_JSON", "request body is not valid JSON");
+  }
 }
 
 function sendJson(response, status, body) {
@@ -48,7 +49,7 @@ export function createControlServer({ router }) {
       });
       sendJson(response, result.status, result.body);
     } catch (error) {
-      sendJson(response, error?.status || (error instanceof SyntaxError ? 400 : 500), errorBody(error));
+      sendJson(response, error?.status || 500, errorBody(error));
     }
   });
 }

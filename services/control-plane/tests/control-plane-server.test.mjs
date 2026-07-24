@@ -4,6 +4,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { assertPinnedNodeVersion } from "../control-plane/bootstrap.mjs";
 import { CapabilityRegistry } from "../control-plane/lib/capability-registry.mjs";
 import { AdapterRegistry, ControlPlane } from "../control-plane/lib/control-plane.mjs";
 import { EvidenceStore } from "../control-plane/lib/evidence-store.mjs";
@@ -77,10 +78,29 @@ test("HTTP API is loopback-oriented, emits no CORS header, and redacts runtime I
     const body = await response.json();
     assert.equal(body.devices[0].deviceId, device.deviceId);
     assert.doesNotMatch(JSON.stringify(body), /never-expose|runtimeId/);
+
+    const invalid = await fetch(`http://127.0.0.1:${port}/control/v1/jobs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{",
+    });
+    assert.equal(invalid.status, 400);
+    assert.equal((await invalid.json()).error.code, "INVALID_JSON");
   } finally {
     await new Promise((resolve) => server.close(resolve));
     await control.stop();
     state.close();
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("production startup pins the verified Windows Node version", () => {
+  assert.equal(assertPinnedNodeVersion({
+    expected: "24.11.1",
+    actual: "24.11.1",
+  }), "24.11.1");
+  assert.throws(() => assertPinnedNodeVersion({
+    expected: "24.11.1",
+    actual: "24.12.0",
+  }), { code: "NODE_VERSION_MISMATCH" });
 });
