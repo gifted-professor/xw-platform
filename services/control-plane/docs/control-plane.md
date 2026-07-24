@@ -14,7 +14,9 @@ Copy-Item config\control-plane.devices.example.json config\control-plane.devices
 ```
 
 Edit the untracked device file. Every row needs a stable rack label, its
-current private runtime ID, and adapter metadata such as `xhsServePort`.
+current private runtime ID, an anonymous `routingProfile`, and adapter metadata
+such as `xhsServePort`. `routingProfile.capabilityIds` is an exact fail-closed
+allowlist; dependency-pending capabilities must not be added.
 The first startup assigns and persists a stable `deviceId`; changing an alias
 does not expose the runtime ID through the public API.
 
@@ -59,6 +61,7 @@ Run the same CLI from Mac through the configured SSH identity:
 
 ```bash
 node control-plane/devicectl.mjs --ssh xhs-windows health
+node control-plane/devicectl.mjs --ssh xhs-windows nodes
 node control-plane/devicectl.mjs --ssh xhs-windows devices
 node control-plane/devicectl.mjs --ssh xhs-windows capabilities
 ```
@@ -66,15 +69,26 @@ node control-plane/devicectl.mjs --ssh xhs-windows capabilities
 If the Windows checkout is not at the default location, set
 `DEVICECTL_REMOTE_REPO` on Mac.
 
-Submit a low-risk job:
+Preview the route without reserving a device or writing state:
+
+```bash
+node control-plane/devicectl.mjs --ssh xhs-windows route plan \
+  --actor agent-a \
+  --capability xhs.observe.metrics
+```
+
+Submit a low-risk job with atomic automatic placement:
 
 ```bash
 node control-plane/devicectl.mjs --ssh xhs-windows job submit \
   --actor agent-a \
-  --device dev_REPLACE \
   --capability xhs.observe.metrics \
   --idempotency-key agent-a-metrics-001
 ```
+
+Use `--device` to preserve an explicit pinned request, or use `--node`,
+`--physical-label`, and repeated `--require-tag` to constrain automatic
+placement. A pinned device cannot be combined with other selectors.
 
 Watch its durable result:
 
@@ -98,12 +112,14 @@ account changes always require human approval under `AGENTS.md`.
 ## Interactive exploration
 
 An interactive session owns one device for 60 seconds and must heartbeat at
-least every 20 seconds. A busy device returns `423 DEVICE_BUSY`; v1 never
-preempts.
+least every 20 seconds. An automatic session is capability-scoped and selects
+only a completely idle eligible device. If all eligible devices have a lease
+or pending work, it returns `423 DEVICE_BUSY`; v1.1 never preempts or jumps a
+queue.
 
 ```bash
 node control-plane/devicectl.mjs --ssh xhs-windows session acquire \
-  --actor explorer-a --device dev_REPLACE --canary
+  --actor explorer-a --capability xiaowei.lab.raw --canary
 ```
 
 Use the returned session ID and token for bounded actions. Raw Xiaowei access
@@ -133,6 +149,40 @@ be copied to docs, PRs, logs, or shell history shared with others.
 
 Adapters must implement `execute`, `verify`, and `restore`. Missing verification
 is a failure; timeout after a possible send is `ambiguous` and is never retried.
+
+## Placement and storage
+
+The authority filters devices by local `nodeId`, online and quarantine state,
+capability availability, exact local capability allowlist, and optional
+selectors. Normal jobs choose the lowest value of active lease plus queued and
+waiting-approval jobs, then use physical label and stable `deviceId` as
+deterministic tie-breakers.
+
+Selection and job creation occur in one SQLite transaction. The logical
+selector participates in the idempotency fingerprint, while the selected
+device is stored in `routeDecision`; a replay never re-routes. Shared Xiaowei
+transport state is advisory during placement and remains protected by the
+per-action tokenized lock.
+
+The job response and `manifest.json` include exact `storage` paths and a
+sanitized `routeDecision`. The public API never returns the private routing
+profile, runtime ID, or transport lock token.
+
+## Upgrade from control-plane v1
+
+SQLite migration to schema v2 is additive and preserves v1 jobs, evidence, and
+legacy idempotency fingerprints. Before deploying:
+
+1. Confirm `/control/v1/leases` is empty and no job is active.
+2. Stop `XhsDeviceControlPlaneV1`.
+3. Copy `control.db` plus any `control.db-wal` and `control.db-shm` to a
+   timestamped backup directory.
+4. Update the untracked device config with reviewed routing profiles.
+5. Deploy one exact commit, reinstall/start the task, and verify health, nodes,
+   route plan, and storage paths.
+
+Keep `CONTROL_PLANE_LEGACY_MODE=audit`. Roll back to the PR #14 commit and the
+stopped database backup if migration or canary verification fails.
 
 ## Legacy migration
 

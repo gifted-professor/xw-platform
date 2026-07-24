@@ -1,6 +1,10 @@
 # Agent rules
 
+- Read `docs/agent-entry.md` before any device task and use `devicectl route plan`,
+  `job submit`, or a leased session as the only device-operation entry.
 - Read `skills/xhs-device-operator/SKILL.md` before operating devices.
+- Never choose a runtime device ID or call a direct UI/vendor script outside the
+  control-plane audit/canary rules.
 - Prefer Android UI hierarchy and semantic selectors over fixed coordinates.
 - Treat every phone as an independent layout and version profile.
 - Allowed without extra confirmation: inventory, screenshots for diagnosis, UI dumps, opening the app, navigating to the local user's own profile, and syncing approved public/device fields.
@@ -8,4 +12,3 @@
 - Never bypass CAPTCHAs, platform restrictions, risk controls, or identity verification.
 - Never commit `.env`, `config/local.psd1`, `data/`, screenshots, UI XML, OAuth tokens, or real device/account identifiers.
 - Stop a device after two consecutive navigation failures and report the current screenshot and hierarchy paths.
-

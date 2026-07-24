@@ -68,6 +68,7 @@ hermes -z "按照 skills/xhs-device-operator/SKILL.md 运行一次安全设备�
 - `docs/ARCHITECTURE.md`：系统结构和页面状态机
 - `docs/SAFETY.md`：数据与操作边界
 - `docs/control-plane.md`：多 Agent、多手机控制面部署与使用
+- `docs/agent-entry.md`：所有 Agent 必须遵循的统一选机、提交和落盘入口
 
 ## 多 Agent 控制面
 
@@ -82,9 +83,13 @@ Mac 侧：
 
 ```bash
 node control-plane/devicectl.mjs --ssh xhs-windows health
+node control-plane/devicectl.mjs --ssh xhs-windows route plan \
+  --actor agent-a --capability xiaowei.device.list
 ```
 
-完整配置、审批和迁移规则见 `docs/control-plane.md`。
+普通任务可以省略 `--device`，控制面会按路由档案和最短队列原子分配。
+完整入口、配置、审批和迁移规则见 `docs/agent-entry.md` 与
+`docs/control-plane.md`。
 
 ## 隐私
 
