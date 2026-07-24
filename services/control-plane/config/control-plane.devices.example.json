@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "nodeId": "DESKTOP-3I1EVHE",
+  "devices": [
+    {
+      "alias": "01",
+      "physicalLabel": "rack-01",
+      "runtimeId": "replace-in-untracked-local-file",
+      "online": true,
+      "metadata": {
+        "xhsServePort": 17895
+      }
+    }
+  ]
+}

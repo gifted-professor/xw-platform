@@ -1,0 +1,73 @@
+{
+  "schemaVersion": 1,
+  "capabilities": [
+    {
+      "schemaVersion": 1,
+      "id": "xianyu.observe.snapshot",
+      "appId": "xianyu",
+      "packageName": "com.taobao.idlefish",
+      "versionRange": "observed",
+      "maturity": "E2",
+      "risk": "R0",
+      "resources": ["device"],
+      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+      "outputSchema": { "type": "object" },
+      "preconditions": ["PR #11 xianyu-operator implementation is present"],
+      "verification": { "mode": "state", "description": "fresh focus and semantic snapshot are returned" },
+      "restoration": { "required": false, "description": "read-only" },
+      "timeoutMs": 30000,
+      "idempotency": "read_only",
+      "automationPolicy": { "mode": "automatic" },
+      "implementation": { "adapter": "xianyu", "action": "snapshot" },
+      "evidence": ["PR #11"],
+      "availability": "dependency_pending_pr_11"
+    },
+    {
+      "schemaVersion": 1,
+      "id": "xianyu.publish.open_dry_run",
+      "appId": "xianyu",
+      "packageName": "com.taobao.idlefish",
+      "versionRange": "observed",
+      "maturity": "E2",
+      "risk": "R1",
+      "resources": ["device"],
+      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+      "outputSchema": { "type": "object" },
+      "preconditions": ["PR #11 xianyu-operator implementation is present"],
+      "verification": { "mode": "state", "description": "compose page reached with stoppedBeforePublish=true" },
+      "restoration": { "required": true, "description": "discard without saving and return to a safe page" },
+      "timeoutMs": 60000,
+      "idempotency": "replay_safe",
+      "automationPolicy": { "mode": "automatic" },
+      "implementation": { "adapter": "xianyu", "action": "open-publish" },
+      "evidence": ["PR #11"],
+      "availability": "dependency_pending_pr_11"
+    },
+    {
+      "schemaVersion": 1,
+      "id": "xianyu.publish.input_dry_run",
+      "appId": "xianyu",
+      "packageName": "com.taobao.idlefish",
+      "versionRange": "observed",
+      "maturity": "E2",
+      "risk": "R1",
+      "resources": ["device", "transport:xiaowei:22222"],
+      "inputSchema": {
+        "type": "object",
+        "properties": { "text": { "type": "string", "minLength": 1, "maxLength": 120 } },
+        "required": ["text"],
+        "additionalProperties": false
+      },
+      "outputSchema": { "type": "object" },
+      "preconditions": ["publish compose page is semantically verified"],
+      "verification": { "mode": "text_scan", "description": "fresh field contains the probe and published/savedDraft remain false" },
+      "restoration": { "required": true, "description": "clear probe text, restore IME, discard without saving" },
+      "timeoutMs": 90000,
+      "idempotency": "replay_safe",
+      "automationPolicy": { "mode": "automatic" },
+      "implementation": { "adapter": "xianyu", "action": "input-dry-run" },
+      "evidence": ["PR #11"],
+      "availability": "dependency_pending_pr_11"
+    }
+  ]
+}

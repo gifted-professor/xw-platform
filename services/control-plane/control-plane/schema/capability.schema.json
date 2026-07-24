@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://xhs-device-agent.local/schema/capability-v1.json",
+  "title": "Device capability manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "id",
+    "appId",
+    "packageName",
+    "versionRange",
+    "maturity",
+    "risk",
+    "resources",
+    "inputSchema",
+    "outputSchema",
+    "preconditions",
+    "verification",
+    "restoration",
+    "timeoutMs",
+    "idempotency",
+    "automationPolicy",
+    "implementation",
+    "evidence"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "id": { "type": "string", "pattern": "^[a-z0-9]+(?:[._-][a-z0-9]+)+$" },
+    "appId": { "type": "string", "minLength": 1 },
+    "packageName": { "type": ["string", "null"] },
+    "versionRange": { "type": "string", "minLength": 1 },
+    "maturity": { "enum": ["E0", "E1", "E2", "E3", "E4"] },
+    "risk": { "enum": ["R0", "R1", "R2", "R3"] },
+    "resources": {
+      "type": "array",
+      "items": { "enum": ["device", "transport:xiaowei:22222"] },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "inputSchema": { "type": "object" },
+    "outputSchema": { "type": "object" },
+    "preconditions": { "type": "array", "items": { "type": "string" } },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "description"],
+      "properties": {
+        "mode": { "enum": ["none", "state", "hash", "count_delta", "text_scan", "custom"] },
+        "description": { "type": "string", "minLength": 1 }
+      }
+    },
+    "restoration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["required", "description"],
+      "properties": {
+        "required": { "type": "boolean" },
+        "description": { "type": "string", "minLength": 1 }
+      }
+    },
+    "timeoutMs": { "type": "integer", "minimum": 1, "maximum": 900000 },
+    "idempotency": { "enum": ["read_only", "replay_safe", "external_effect", "ambiguous_on_timeout"] },
+    "automationPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode"],
+      "properties": {
+        "mode": { "enum": ["lab_only", "automatic", "approval_required", "disabled"] },
+        "transactionSafe": { "type": "boolean" },
+        "canaryOnly": { "type": "boolean" }
+      }
+    },
+    "implementation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["adapter", "action"],
+      "properties": {
+        "adapter": { "type": "string", "minLength": 1 },
+        "action": { "type": "string", "minLength": 1 }
+      }
+    },
+    "evidence": { "type": "array", "items": { "type": "string" } }
+  }
+}
