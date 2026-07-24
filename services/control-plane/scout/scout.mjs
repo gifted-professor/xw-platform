@@ -82,9 +82,10 @@ async function acquireSession(deviceId, capability) {
   });
 }
 
-async function releaseSession(sessionId) {
+async function releaseSession(sessionId, token) {
   return httpPost(`${CONTROL}/control/v1/sessions/${sessionId}/release`, {
     actorId: ACTOR,
+    token,
   });
 }
 
@@ -303,21 +304,21 @@ async function run({ maxRounds = 1, capabilityFilter = null } = {}) {
 
     try {
       // §7-3: Acquire session lease
-      const session = await acquireSession(device.control.deviceId, target.id);
-      if (session.status === 423) {
+      const sessionRes = await acquireSession(device.control.deviceId, target.id);
+      if (sessionRes.status === 423) {
         log("device busy (423) — collision, switching device next round");
         roundResult.status = "collision_423";
         summary.rounds.push(roundResult);
         continue;
       }
-      if (!session.data?.session?.id && !session.data?.sessionId) {
-        log(`session acquire failed (${session.status}) — ending round`);
+      if (sessionRes.status !== 201 || !sessionRes.data?.session?.sessionId) {
+        log(`session acquire failed (${sessionRes.status}) — ending round`);
         roundResult.status = "session_failed";
         summary.rounds.push(roundResult);
         continue;
       }
 
-      const sessionId = session.data.session?.id || session.data.sessionId;
+      const { sessionId, token } = sessionRes.data.session;
       log(`session acquired: ${sessionId.slice(0, 12)}…`);
 
       try {
@@ -340,7 +341,7 @@ async function run({ maxRounds = 1, capabilityFilter = null } = {}) {
       } finally {
         // §7-4: Always restore scene and release session
         await restoreScene(device);
-        await releaseSession(sessionId).catch((e) =>
+        await releaseSession(sessionId, token).catch((e) =>
           log(`session release warning: ${e.message}`)
         );
         log("session released, scene restored");
