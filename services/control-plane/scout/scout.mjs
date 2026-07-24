@@ -141,44 +141,134 @@ async function selectDevice(pitfalls) {
   return available[0];
 }
 
-// ─── Target selection (§4-2) ─────────────────────────────────────────────────
+// ─── Target selection (§4-2, v2.1 P0/P1/P2) ─────────────────────────────────
 
-function selectTarget(capabilities, recipes, filter) {
-  let pool = capabilities.filter(
-    (c) =>
-      (c.maturity === "E0" || c.maturity === "E1") &&
-      c.automationPolicy?.mode !== "disabled"
+/**
+ * Classify a recipe as step-type (replayable) or rule-type (operational constraint).
+ * Step-type: has a `steps` array with action/params entries.
+ * Rule-type: operational guidance without replayable steps — verify by checking
+ * if the constraint still holds in code/config, or leave unverified.
+ */
+function classifyRecipe(recipe) {
+  if (recipe.steps && Array.isArray(recipe.steps) && recipe.steps.length > 0) {
+    return "step";
+  }
+  // Heuristic: content mentions concrete serve actions → step; otherwise → rule
+  const content = (recipe.content || "").toLowerCase();
+  const serveActions = ["focus", "dump", "backtofeed", "opencard", "tap", "scroll", "inputtext"];
+  if (serveActions.some((a) => content.includes(a))) return "step";
+  return "rule";
+}
+
+function selectTarget(capabilities, allKnowledge, filter) {
+  const recipes = allKnowledge.filter((k) => k.category === "recipe");
+  const verifiedIds = new Set(
+    recipes.filter((r) => r.verifiedBy && r.verifiedBy.length > 0).map((r) => r.id)
   );
+  const unverifiedRecipes = recipes.filter(
+    (r) => !r.verifiedBy || r.verifiedBy.length === 0
+  );
+
+  // Build lookup: capabilityId → recipe (for P0/P1 matching)
+  const recipeByCapId = new Map();
+  for (const r of recipes) {
+    recipeByCapId.set(r.id, r);
+  }
+
+  // P0: E0/E1 + has recipe (any verification status)
+  // P1: any maturity + recipe + verifiedBy=[] (verification backlog)
+  // P2: E0/E1 + no recipe (pure exploration)
+  const candidates = [];
+
+  for (const cap of capabilities) {
+    if (cap.automationPolicy?.mode === "disabled") continue;
+    const isLowMaturity = cap.maturity === "E0" || cap.maturity === "E1";
+    const recipe = recipeByCapId.get(cap.id);
+    const isUnverified = recipe && (!recipe.verifiedBy || recipe.verifiedBy.length === 0);
+
+    let priority;
+    if (isLowMaturity && recipe) priority = 0;       // P0
+    else if (isUnverified) priority = 1;             // P1
+    else if (isLowMaturity && !recipe) priority = 2;  // P2
+    else continue; // E2+ with verified recipe, or no recipe — scout skips
+
+    const recipeType = recipe ? classifyRecipe(recipe) : null;
+    const risk = { R0: 0, R1: 1, R2: 2, R3: 3 };
+
+    candidates.push({
+      capability: cap,
+      recipe,
+      priority,
+      recipeType,
+      riskRank: risk[cap.risk] ?? 9,
+    });
+  }
 
   if (filter) {
     const re = new RegExp(filter, "i");
-    pool = pool.filter(
-      (c) => re.test(c.id) || re.test(c.appId) || re.test(c.description || "")
+    candidates.splice(
+      0,
+      candidates.length,
+      ...candidates.filter(
+        (c) =>
+          re.test(c.capability.id) ||
+          re.test(c.capability.appId) ||
+          re.test(c.capability.description || "")
+      )
     );
   }
 
-  if (!pool.length) return null;
+  // Sort: priority → R0 first → has recipe first → alphabetical
+  candidates.sort(
+    (a, b) =>
+      a.priority - b.priority ||
+      a.riskRank - b.riskRank ||
+      (a.recipe ? 0 : 1) - (b.recipe ? 0 : 1) ||
+      a.capability.id.localeCompare(b.capability.id)
+  );
 
-  const recipeIds = new Set(recipes.map((r) => r.id));
-
-  pool.sort((a, b) => {
-    const ra = recipeIds.has(a.id) ? 0 : 1;
-    const rb = recipeIds.has(b.id) ? 0 : 1;
-    const risk = { R0: 0, R1: 1, R2: 2, R3: 3 };
-    return ra - rb || (risk[a.risk] ?? 9) - (risk[b.risk] ?? 9) || a.id.localeCompare(b.id);
-  });
-
-  return pool[0];
+  if (!candidates.length) return null;
+  const chosen = candidates[0];
+  return {
+    ...chosen.capability,
+    _recipe: chosen.recipe || null,
+    _recipeType: chosen.recipeType,
+    _priority: chosen.priority,
+  };
 }
 
 // ─── Recipe engine (§5) ──────────────────────────────────────────────────────
 
 async function verifyRecipe(device, recipe, target) {
-  log(`recipe found: "${recipe.title}" — re-running for verification`);
+  const recipeType = target._recipeType || classifyRecipe(recipe);
+  log(`recipe found: "${recipe.title}" (type=${recipeType}) — ${recipeType === "step" ? "replaying steps" : "rule-type, checking constraint"}`);
 
+  if (recipeType === "rule") {
+    // Rule-type: cannot replay. Record as observation, do NOT flag-engineer.
+    // §4 v2.1: "查约束在代码/配置中是否仍成立，查不了就保持未验证，不得编造验证结果"
+    log(`rule-type recipe: cannot replay — recording observation, leaving unverified`);
+    await postKnowledge({
+      id: `scout-observe-${recipe.id}-${Date.now()}`,
+      app: target.appId,
+      category: "pitfall",
+      title: `[scout-observe] ${recipe.id} (rule-type, not replayable)`,
+      content: `scout inspected recipe "${recipe.title}" but it is rule-type (no replayable steps). Constraint: ${recipe.content.slice(0, 200)}. Scout cannot verify this automatically — left unverified.`,
+      scope: "global",
+    });
+    return { ok: null, reason: "rule_type_not_replayable" };
+  }
+
+  // Step-type: replay steps
   if (!recipe.steps || !Array.isArray(recipe.steps) || recipe.steps.length === 0) {
-    log("recipe has no steps array — skipping verify, marking needsEngineer");
-    await flagEngineerKnowledge(recipe.id);
+    log("step-type recipe but no steps array — recording pitfall");
+    await postKnowledge({
+      id: `${target.id}-no-steps-${Date.now()}`,
+      app: target.appId,
+      category: "pitfall",
+      title: `recipe missing steps: ${target.id}`,
+      content: `recipe ${recipe.id} classified as step-type but has no steps array`,
+      scope: "global",
+    });
     return { ok: false, reason: "no_steps" };
   }
 
@@ -289,16 +379,16 @@ async function run({ maxRounds = 1, capabilityFilter = null } = {}) {
     }
     log(`selected device: ${device.alias} (${device.label}) [${device.serial}]`);
 
-    // §4-2: Inventory E0/E1 capabilities
+    // §4-2: Inventory capabilities + P0/P1/P2 target selection
     const allCaps = await getCapabilities();
-    const recipes = await getKnowledge("xhs", "recipe").catch(() => []);
-    const target = selectTarget(allCaps, recipes, capabilityFilter);
+    const allKnowledge = await getKnowledge("xhs").catch(() => []);
+    const target = selectTarget(allCaps, allKnowledge, capabilityFilter);
     if (!target) {
-      log("no E0/E1 capability found — ending round");
+      log("no scoutable capability found — ending round");
       summary.rounds.push({ round: round + 1, status: "no_capability", device: device.alias });
       break;
     }
-    log(`target capability: ${target.id} (${target.maturity}/${target.risk})`);
+    log(`target capability: ${target.id} (${target.maturity}/${target.risk}) P${target._priority} recipeType=${target._recipeType || "none"}`);
 
     let roundResult = { round: round + 1, device: device.alias, capability: target.id, status: "pending" };
 
@@ -322,14 +412,16 @@ async function run({ maxRounds = 1, capabilityFilter = null } = {}) {
       log(`session acquired: ${sessionId.slice(0, 12)}…`);
 
       try {
-        // §4-3: Query knowledge for this capability
-        const recipe = recipes.find((r) => r.id === target.id);
+        // §4-3: Use recipe attached to target (from P0/P1/P2 selection)
+        const recipe = target._recipe;
 
         if (recipe) {
           // §5: Re-run verification
           const result = await verifyRecipe(device, recipe, target);
-          roundResult.status = result.ok ? "recipe_verified" : "recipe_verify_failed";
+          roundResult.status = result.ok === null ? "recipe_observed" : result.ok ? "recipe_verified" : "recipe_verify_failed";
           roundResult.reason = result.reason;
+          roundResult.recipeType = target._recipeType;
+          roundResult.samplePath = "serve-direct"; // §5: direct serve → knowledge only, not v1.3
           summary.totalKnowledge++;
         } else {
           // §6: Explore fresh
@@ -381,7 +473,7 @@ if (isDirectRun) {
       log(`\n=== Summary ===`);
       log(`rounds: ${summary.rounds.length} | knowledge entries: ${summary.totalKnowledge}`);
       for (const r of summary.rounds) {
-        log(`  round ${r.round}: ${r.device || "—"} / ${r.capability || "—"} → ${r.status}${r.reason ? ` (${r.reason})` : ""}`);
+        log(`  round ${r.round}: ${r.device || "—"} / ${r.capability || "—"} → ${r.status}${r.reason ? ` (${r.reason})` : ""}${r.recipeType ? ` [${r.recipeType}]` : ""}${r.samplePath ? ` sample=${r.samplePath}` : ""}`);
       }
       log("scout done.");
     })
