@@ -6,9 +6,21 @@ function collectEvidenceFiles(...values) {
   return values.flatMap((value) => Array.isArray(value?.evidenceFiles) ? value.evidenceFiles : []);
 }
 
-function resultSummary(execution, verification, restoration) {
+function resultSummary(execution, verification, restoration, error = null) {
+  const out = execution?.output;
   return {
     vendorCode: execution?.vendorCode ?? null,
+    // 执行细节摘要（ok/step/verified/counts/text），便于 VERIFICATION_FAILED 时回溯，不落完整 dump
+    output: out && typeof out === "object"
+      ? Object.fromEntries(
+        ["ok", "step", "verified", "verifyMethod", "beforeCount", "afterCount", "text"]
+          .filter((k) => out[k] !== undefined)
+          .map((k) => [k, out[k]]),
+      )
+      : null,
+    error: error
+      ? { code: error.code || null, message: String(error.message || error), details: error.details ?? null }
+      : null,
     verification: verification ? {
       ok: verification.ok !== false,
       mode: verification.mode || null,
@@ -390,16 +402,17 @@ export class ControlPlane {
           label: file.label,
         });
       }
-      const summary = resultSummary(execution, verification, restoration);
+      const summary = resultSummary(execution, verification, restoration, primaryError);
       this.evidence.writeJson({ job, kind: "result", label: "result", value: summary });
       if (restoreError || heartbeatError) {
         const code = restoreError?.code || heartbeatError?.code || "RECOVERY_REQUIRED";
         this.state.quarantineDevice(job.deviceId, code);
         job = this.state.transitionJob(job.jobId, "recovery_required", { errorCode: code, result: summary });
       } else if (primaryError) {
-        const ambiguous = primaryError.sent
-          || primaryError.ambiguous
-          || capability.idempotency === "ambiguous_on_timeout";
+        const ambiguous = !primaryError.notSent
+          && (primaryError.sent
+            || primaryError.ambiguous
+            || capability.idempotency === "ambiguous_on_timeout");
         job = this.state.transitionJob(job.jobId, ambiguous ? "ambiguous" : "failed", {
           errorCode: primaryError.code,
           result: summary,

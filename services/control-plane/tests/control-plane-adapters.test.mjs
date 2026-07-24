@@ -43,6 +43,25 @@ test("XHS adapter uses a per-device loopback serve and fail-closed verifier", as
   }), { ok: false, ambiguous: true, mode: "custom" });
 });
 
+test("XHS adapter surfaces inner serve rejection instead of masking it as verification failure", async () => {
+  const adapter = createXhsAdapter({
+    fetchImpl: async () => new Response(JSON.stringify({
+      ok: true,
+      result: { ok: false, step: "notOnNote", activity: "IndexActivityV2", log: [["focus", {}]] },
+      metrics: {},
+    }), { status: 200, headers: { "content-type": "application/json" } }),
+  });
+  const send = registry.require("xhs.comment.send");
+  await assert.rejects(
+    adapter.execute({ capability: send, device: privateDevice, params: { text: "probe" } }),
+    (error) => {
+      assert.equal(error.code, "ADAPTER_ACTION_REJECTED");
+      assert.equal(error.details.step, "notOnNote");
+      return true;
+    },
+  );
+});
+
 test("Xianyu adapter preserves stop-before-publish and discard verification", async () => {
   const calls = [];
   const fakeOperator = fileURLToPath(new URL("../package.json", import.meta.url));
