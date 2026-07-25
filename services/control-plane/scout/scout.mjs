@@ -185,7 +185,10 @@ function buildRecipeIndex(recipes) {
 }
 
 function selectTarget(capabilities, allKnowledge, filter, { constraintOnly = false } = {}) {
-  const recipes = allKnowledge.filter((k) => k.category === "recipe");
+  // v2.2: verifyMode is the verification arbiter; category is just knowledge classification.
+  // P1 candidates are category-agnostic — pitfall entries with verifyMode ∈ {constraint, replay}
+  // are verifiable too, so do NOT filter by category here. P1's own filter narrows by verifyMode.
+  const recipes = allKnowledge;
   const recipeIndex = buildRecipeIndex(recipes);
 
   // P0: E0/E1 + has recipe (any verification status)
@@ -617,8 +620,12 @@ async function run({ maxRounds = 1, capabilityFilter = null, dryRun = false, con
     let observed = 0;
 
     for (let round = 0; round < maxRounds; round++) {
+      // v2.2: category-agnostic — verifyMode ∈ {constraint, replay} + unverified is the
+      // eligibility test (pitfall entries with verifyMode=constraint are verifiable too).
       const remaining = allKnowledge.filter(
-        (k) => k.category === "recipe" && (!k.verifiedBy || k.verifiedBy.length === 0)
+        (k) =>
+          (!k.verifiedBy || k.verifiedBy.length === 0) &&
+          (k.verifyMode === "constraint" || k.verifyMode === "replay")
       );
       const target = selectTarget(allCaps, remaining, capabilityFilter, { constraintOnly: true });
       if (!target) {
