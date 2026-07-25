@@ -1396,8 +1396,9 @@ export function skuPriceRowEvidence(snapshot, { price, stock } = {}) {
   const stockText = String(stock ?? "").replace(/[^\d]/g, "");
   const rows = [];
   for (const node of snapshot || []) {
-    const compact = String(node?.label || "").replace(/\s+/g, "");
-    // 真机 label 偶发「价格¥99」「价格￥99」「¥99库存10件」等变体
+    // 保留换行压扁：02 机 label 形如「蓝色\nXL\n价格 ¥99.00  库存 40件」
+    const compact = String(node?.label || "").replace(/[\s\n\r]+/g, "");
+    // 真机 label 偶发「价格¥99」「价格¥99.00」「¥99库存10件」
     if (!/库存/.test(compact) || !/[¥￥]|价格/.test(compact)) continue;
     const priceMatch = compact.match(/价格[¥￥]?(\d+(?:\.\d+)?)/)
       || compact.match(/[¥￥](\d+(?:\.\d+)?)/);
@@ -2237,9 +2238,19 @@ function isDimTitle(label, dimName) {
       };
     }
     const priceStr = String(price || "").replace(/[^\d.]/g, "");
+    const stockStr = String(stock ?? "").replace(/[^\d]/g, "");
+    // 批量 sheet 的 EditText 常带旧值（02 实证：库存残留 40 → 列表显示 库存40件）
+    // 先 DEL 清空再打数字，并在确认前校验价/库 EditText。
+    const clearFocusedDigits = async (times = 10) => {
+      for (let i = 0; i < times; i += 1) {
+        await op.shellExec("input keyevent KEYCODE_DEL", 3000).catch(() => null);
+        await settle(60);
+      }
+    };
     if (priceStr) {
       await op.tap(...center(controls.priceInput.bounds));
       await settle(500);
+      await clearFocusedDigits(12);
       const priceTyped = await typeNumKB(priceStr);
       if (!priceTyped.ok) {
         await cleanup();
@@ -2249,8 +2260,8 @@ function isDimTitle(label, dimName) {
     await settle(350);
     await op.tap(...center(controls.stockInput.bounds));
     await settle(500);
-    const stockStr = String(stock ?? "").replace(/[^\d]/g, "");
     if (stockStr) {
+      await clearFocusedDigits(12);
       const stockTyped = await typeNumKB(stockStr);
       if (!stockTyped.ok) {
         await cleanup();
@@ -2260,16 +2271,38 @@ function isDimTitle(label, dimName) {
     await settle(350);
     const beforeConfirm = await snapshot(op, "xianyu-sku-before-batch-confirm");
     skuDebugDump("stock-stage", beforeConfirm.nodes);
-    // 回读 EditText：价格必须精确（防 99→9）
+    // 回读 EditText：价格必须精确（防 99→9）；库存同样精确（防旧值 40 残留）
     const liveControls = findSkuBatchEditControls(beforeConfirm.nodes);
     const priceLabel = String(liveControls.priceInput?.label || "");
-    if (priceStr && !priceLabel.includes(priceStr) && !beforeConfirm.nodes.some((n) => String(n.label || "") === priceStr)) {
+    const stockLabel = String(liveControls.stockInput?.label || "");
+    const priceOk = !priceStr
+      || priceLabel.includes(priceStr)
+      || beforeConfirm.nodes.some((n) => String(n.label || "") === priceStr);
+    if (!priceOk) {
       await cleanup();
       return {
         ok: false,
         step: "sku-price-value-unverified",
         implemented: true,
         expectedPrice: priceStr,
+        priceLabel,
+        dimResults,
+      };
+    }
+    const stockOk = !stockStr
+      || stockLabel.includes(stockStr)
+      || beforeConfirm.nodes.some((n) => {
+        const l = String(n.label || "").replace(/\s+/g, "");
+        return l === stockStr || new RegExp(`(?:^|[^\\d])${stockStr}(?:$|[^\\d])`).test(l);
+      });
+    if (!stockOk) {
+      await cleanup();
+      return {
+        ok: false,
+        step: "sku-stock-value-unverified",
+        implemented: true,
+        expectedStock: stockStr,
+        stockLabel,
         priceLabel,
         dimResults,
       };
