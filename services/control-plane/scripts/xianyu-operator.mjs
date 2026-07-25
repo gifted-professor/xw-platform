@@ -2464,35 +2464,63 @@ async function uploadImagesDryRun(op, images, {
       }
       if (!albumHit.alreadySelected) {
         if (!albumHit.node?.bounds) {
-          await cleanup();
-          return {
-            ok: false,
-            step: "image-album-selector-missing",
-            implemented: true,
-            albumName,
-            manifest,
-            topLabels: (picker.nodes || [])
-              .filter((n) => n?.bounds && n.bounds[1] < 350)
-              .map((n) => n.label)
-              .slice(0, 20),
-          };
+          // 顶栏 dump 偶发缺失：若网格已有足够「选择」overlay，退化为 gallery-leading
+          const selNow = (picker.nodes || []).filter((n) => n.label === "选择" && n.bounds);
+          if (selNow.length >= want) {
+            selectedAlbum = {
+              name: albumName,
+              count: images.length,
+              label: "(selector-missing-fallback-leading)",
+              fallback: "gallery-leading",
+            };
+          } else {
+            await cleanup();
+            return {
+              ok: false,
+              step: "image-album-selector-missing",
+              implemented: true,
+              albumName,
+              manifest,
+              topLabels: (picker.nodes || [])
+                .filter((n) => n?.bounds && n.bounds[1] < 350)
+                .map((n) => n.label)
+                .slice(0, 20),
+              selectNodeCount: selNow.length,
+            };
+          }
+        } else {
+          await op.tap(...center(albumHit.node.bounds));
+          await settle(1000);
+          const albums = await snapshot(op, "xianyu-image-albums");
+          let albumEntry = findPickerAlbumEntry(albums.nodes, albumName, images.length);
+          if (!albumEntry?.bounds) {
+            // 计数偶发不同：放宽到仅匹配相册名
+            albumEntry = findPickerAlbumEntry(albums.nodes, albumName, null);
+          }
+          if (!albumEntry?.bounds) {
+            // 相册列表找不到：关掉列表后若网格够用则 leading fallback
+            await op.back().catch(() => null);
+            await settle(800);
+            picker = await snapshot(op, "xianyu-image-album-missing-fallback");
+            const selNow = (picker.nodes || []).filter((n) => n.label === "选择" && n.bounds);
+            if (selNow.length >= want) {
+              selectedAlbum = {
+                name: albumName,
+                count: images.length,
+                label: "(album-missing-fallback-leading)",
+                fallback: "gallery-leading",
+              };
+            } else {
+              await cleanup();
+              return { ok: false, step: "image-album-missing", implemented: true, albumName, expectedCount: images.length, manifest };
+            }
+          } else {
+            selectedAlbum = { name: albumName, count: images.length, label: albumEntry.label };
+            await op.tap(...center(albumEntry.bounds));
+            await settle(1200);
+            picker = await snapshot(op, "xianyu-image-album-selected");
+          }
         }
-        await op.tap(...center(albumHit.node.bounds));
-        await settle(1000);
-        const albums = await snapshot(op, "xianyu-image-albums");
-        let albumEntry = findPickerAlbumEntry(albums.nodes, albumName, images.length);
-        if (!albumEntry?.bounds) {
-          // 计数偶发不同：放宽到仅匹配相册名
-          albumEntry = findPickerAlbumEntry(albums.nodes, albumName, null);
-        }
-        if (!albumEntry?.bounds) {
-          await cleanup();
-          return { ok: false, step: "image-album-missing", implemented: true, albumName, expectedCount: images.length, manifest };
-        }
-        selectedAlbum = { name: albumName, count: images.length, label: albumEntry.label };
-        await op.tap(...center(albumEntry.bounds));
-        await settle(1200);
-        picker = await snapshot(op, "xianyu-image-album-selected");
       } else {
         selectedAlbum = { name: albumName, count: images.length, label: String(albumHit.node?.label || albumName), alreadySelected: true };
       }
@@ -2879,19 +2907,25 @@ export async function publishDryRun(op, plan, {
  */
 export async function saveDraftDryRun(op) {
   let snap = await snapshot(op, "save-draft-before");
-  if (!isPublishCompose(snap.nodes) && snap.focus?.package === IDLEFISH_PACKAGE) {
-    // 可能滚离顶部：上滑露顶栏
+  let draft = (snap.nodes || []).find((n) => n.bounds && /存草稿/.test(String(n.label || "")));
+  // 顶栏偶发被滚走 / dump 滞后：最多 3 次上滑露顶栏再找
+  for (let i = 0; i < 3 && !draft?.bounds; i += 1) {
     await op.shellExec("input swipe 540 900 540 1500 350", 8000).catch(() => null);
-    await settle(700);
-    snap = await snapshot(op, "save-draft-scroll");
+    await settle(800);
+    snap = await snapshot(op, `save-draft-scroll-${i}`);
+    draft = (snap.nodes || []).find((n) => n.bounds && /存草稿/.test(String(n.label || "")));
   }
-  const draft = (snap.nodes || []).find((n) => n.bounds && /存草稿/.test(String(n.label || "")));
   if (!draft?.bounds) {
     return {
       ok: false,
       step: "save-draft-button-missing",
       stoppedBeforePublish: true,
       savedDraft: false,
+      publishCompose: !!isPublishCompose(snap.nodes),
+      topLabels: (snap.nodes || [])
+        .filter((n) => n?.bounds && n.bounds[1] < 280)
+        .map((n) => n.label)
+        .slice(0, 20),
     };
   }
   await op.tap(...center(draft.bounds));
