@@ -70,12 +70,14 @@ export function createXianyuAdapter({ run = runJsonCommand, operatorPath = defau
         };
       }
       if (capability.implementation.action === "input-dry-run") {
+        // 效卫 XwIME 写中文；不再要求切回 SogouIME（imeRestored）。
+        // dry-run 默认仍要求 textVerified + clearedVerified（写进再擦掉）。
         return {
           ok: output?.ok === true
             && output?.stoppedBeforePublish === true
-            && output?.audit?.imeRestored === true
             && output?.audit?.textVerified === true
-            && output?.audit?.clearedVerified === true,
+            && output?.audit?.clearedVerified === true
+            && output?.audit?.inputAccepted === true,
           mode: "text_scan",
         };
       }

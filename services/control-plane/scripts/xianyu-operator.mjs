@@ -567,11 +567,15 @@ export async function inputDryRun(op, {
   if (!isEmptyDescriptionField(description)) {
     return { ok: false, step: "description-not-empty", stoppedBeforePublish: true };
   }
-  // 点击占位文字行，而不是大文本区的空白中心。
+  // 点描述占位行（不是大空白中心）→ 效卫 XwIME inputText 标准配方。
+  // 与 fillTextField / Hermes 对齐：点字段 → setIme(XwIME) → 再点字段(refocus) → ws inputText。
+  // 不切回 SogouIME（deferRestore + 不调 restore；后续字段仍用效卫）。
   const fieldX = Math.min(description.bounds[2] - 40, description.bounds[0] + 230);
   const fieldY = Math.min(description.bounds[3] - 40, description.bounds[1] + 75);
-  await op.tap(fieldX, fieldY);
-  await settle(800);
+  const refocus = async () => { await op.tap(fieldX, fieldY); };
+
+  await refocus();
+  await settle(700);
   const focusProbe = await op.shellExec("dumpsys input_method | grep -E 'mInputShown=true|InputConnectionAdaptor'", 8000);
   const flutterInputActive = /mInputShown=true/.test(focusProbe) && /InputConnectionAdaptor/.test(focusProbe);
   if (!flutterInputActive) return { ok: false, step: "flutter-input-focus" };
@@ -580,48 +584,65 @@ export async function inputDryRun(op, {
   const baseline = await capturePng(op, `${evidenceDir}\\xianyu-input-baseline-${safeSerial}.png`);
   const priorIme = await op.currentIme();
   const bridgeIme = op.xwBridgeIme || "com.android.xwkeyboard/.XwIME";
-  const inputAudit = { selected: false, rebound: false, inputAccepted: false };
+  let xwAudit = null;
   let entered = null;
   let cleared = null;
   let textVerified = false;
   let clearedVerified = false;
   let inputError = null;
+  let verifiedNode = null;
+
+  const verifyOnPage = (nodes) => {
+    const full = nodes.find((node) => descriptionContains(node, value));
+    if (full) return full;
+    // Flutter 偶发把长文案截断进 label：用去空白后的显著前缀再认一次
+    const compact = value.replace(/\s+/g, "");
+    const prefix = compact.slice(0, Math.min(24, compact.length));
+    if (prefix.length >= 8) {
+      return nodes.find((node) => descriptionContains(node, prefix)) || null;
+    }
+    return null;
+  };
+
   try {
-    // Flutter 在运行中切换 IME 后不会总是自动把旧焦点重绑给新输入法。
-    // 因此必须先切效卫桥 IME，再重新点一次同一描述框，最后才发 inputText。
-    if ((await op.currentIme()) !== bridgeIme && !(await op.setIme(bridgeIme))) {
-      throw new Error("bridge IME select failed");
+    if (typeof op.inputTextViaXiaowei !== "function") {
+      throw new Error("operator missing inputTextViaXiaowei (need gateway/fast transport)");
     }
-    inputAudit.selected = (await op.currentIme()) === bridgeIme;
-    await settle(400);
-    await op.tap(fieldX, fieldY);
-    await settle(500);
-    const reboundProbe = await op.shellExec(
-      "dumpsys input_method | grep -E 'mInputShown=true|InputConnectionAdaptor'",
-      8000,
-    );
-    inputAudit.rebound = /InputConnectionAdaptor/.test(reboundProbe);
-    if (!inputAudit.rebound) throw new Error("Flutter InputConnection did not rebind after IME switch");
-    const inputResponse = await op.xiaoweiInvoke("inputText", { content: value });
-    if (inputResponse.code !== 10000) {
-      throw new Error(`inputText failed: ${inputResponse.message || JSON.stringify(inputResponse)}`);
-    }
-    inputAudit.inputAccepted = true;
+    // clearFirst=false：新建发布页描述应为空，避免 48×DEL 误 dismiss。
+    // deferRestore=true：不在 inputTextViaXiaowei 内切回搜狗。
+    xwAudit = await op.inputTextViaXiaowei(value, {
+      bridgeIme,
+      priorIme,
+      clearFirst: false,
+      deferRestore: true,
+      refocus,
+    });
+    // 明确不调用 xwAudit.restore() —— 保持 XwIME，符合「一直用校卫」约定。
     await settle(700);
     entered = await capturePng(op, `${evidenceDir}\\xianyu-input-entered-${safeSerial}.png`);
-    const afterInput = await snapshot(op, "xianyu-input-after-xiaowei");
-    // 写入后占位提示会消失，所以不能再用“描述/品牌型号”反查字段；
-    // 直接在当前发布页的全部语义节点中查找完整测试串。
-    const enteredTextNode = afterInput.nodes.find((node) => descriptionContains(node, value));
-    textVerified = !!enteredTextNode;
-    inputAudit.verifiedNode = enteredTextNode ? {
-      className: enteredTextNode.className,
-      bounds: enteredTextNode.bounds,
-      label: enteredTextNode.label,
-    } : null;
+    let afterInput = await snapshot(op, "xianyu-input-after-xiaowei");
+    verifiedNode = verifyOnPage(afterInput.nodes);
+    textVerified = !!verifiedNode;
 
-    if (clearAfter) {
-      // 只清理本次从空白新建页写入的临时串；多给 8 次 DEL 处理组合字符边界。
+    // fillTextField 同款：refocus 间歇失效时重聚焦重输一次
+    if (!textVerified) {
+      await refocus();
+      await settle(700);
+      xwAudit = await op.inputTextViaXiaowei(value, {
+        bridgeIme,
+        priorIme,
+        clearFirst: true,
+        deferRestore: true,
+        refocus,
+      });
+      await settle(700);
+      entered = await capturePng(op, `${evidenceDir}\\xianyu-input-entered-${safeSerial}.png`);
+      afterInput = await snapshot(op, "xianyu-input-after-xiaowei-retry");
+      verifiedNode = verifyOnPage(afterInput.nodes);
+      textVerified = !!verifiedNode;
+    }
+
+    if (clearAfter && textVerified) {
       const deleteCount = [...value].length + 8;
       await op.shellExec(`input keyevent KEYCODE_MOVE_END ${Array(deleteCount).fill("KEYCODE_DEL").join(" ")}`, 10000);
       await settle(500);
@@ -634,13 +655,10 @@ export async function inputDryRun(op, {
     }
   } catch (error) {
     inputError = error.message;
-  } finally {
-    if ((await op.currentIme()) !== priorIme) await op.setIme(priorIme).catch(() => false);
-    // 保留到整表证据阶段时，不能再发 BACK：切回原 IME 往往已经收起键盘，
-    // 多余的 BACK 会直接退出编辑页。最终清理由 discard-dry-run 显式完成。
-    if (clearAfter) await op.back().catch(() => null);
-    await settle(300);
   }
+  // 注意：不在 finally 里 setIme(priorIme)、不发 BACK。
+  // 控制面 restore 会走 discard-dry-run 关页；IME 保持 XwIME 供后续步骤。
+  const inner = xwAudit?.audit || xwAudit || {};
   return {
     ok: textVerified && (!clearAfter || clearedVerified),
     step: inputError ? "xiaowei-input-error"
@@ -655,15 +673,28 @@ export async function inputDryRun(op, {
       flutterInputActive,
       priorIme,
       bridgeIme,
-      bridgeImeSelected: inputAudit.selected,
-      flutterInputRebound: inputAudit.rebound,
-      inputAccepted: inputAudit.inputAccepted,
-      imeRestored: (await op.currentIme()) === priorIme,
+      bridgeImeSelected: inner.selected === true || (await op.currentIme().catch(() => "")) === bridgeIme,
+      flutterInputRebound: inner.refocused === true,
+      inputAccepted: inner.inputAccepted === true,
+      // 用户约定：不切回搜狗；true 表示我们有意保持效卫
+      imeKeptOnXw: (await op.currentIme().catch(() => "")) === bridgeIme,
+      imeRestored: false,
       visualChanged: !!entered && entered.sha256 !== baseline.sha256,
       textVerified,
       clearedVerified,
       clearAfter,
       inputError,
+      verifiedNode: verifiedNode ? {
+        className: verifiedNode.className,
+        bounds: verifiedNode.bounds,
+        label: String(verifiedNode.label || "").slice(0, 120),
+      } : null,
+      xw: {
+        selected: inner.selected,
+        refocused: inner.refocused,
+        inputAccepted: inner.inputAccepted,
+        cleared: inner.cleared,
+      },
     },
     evidence: { baseline, entered, cleared },
   };

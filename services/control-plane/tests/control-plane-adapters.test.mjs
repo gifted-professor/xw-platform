@@ -74,7 +74,13 @@ test("Xianyu adapter preserves stop-before-publish and discard verification", as
         return {
           ok: true,
           stoppedBeforePublish: true,
-          audit: { imeRestored: true, textVerified: true, clearedVerified: true },
+          audit: {
+            inputAccepted: true,
+            textVerified: true,
+            clearedVerified: true,
+            imeRestored: false,
+            imeKeptOnXw: true,
+          },
         };
       }
       return { ok: true };
