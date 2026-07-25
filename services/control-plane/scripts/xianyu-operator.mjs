@@ -922,6 +922,7 @@ function planFromArgv() {
     images: imagesRaw ? JSON.parse(imagesRaw) : null,
     imageAlbum: arg("--image-album") || null,
     maxImages: Number(arg("--max-images", "9")),
+    saveDraft: process.argv.includes("--save-draft"),
   };
   return plan;
 }
@@ -1127,13 +1128,63 @@ export function findSkuBatchEditControls(snapshot) {
   const inputs = (snapshot || [])
     .filter((node) => /EditText/.test(String(node?.className || "")) && node?.bounds)
     .sort((a, b) => a.bounds[1] - b.bounds[1]);
-  const keyboardConfirm = (snapshot || []).find((node) =>
-    !!node?.bounds && /^确定(?:[，,]\s*确定)?$/.test(String(node.label || "").trim())) || null;
+  // 批量价库弹层常有两个「确定」：中间 sheet 与右下角键盘确认。必须取最右下的键盘键，
+  // 否则会提前关 sheet（2026-07-26 实证：中键会吞掉未填完的价格）。
+  const confirms = (snapshot || []).filter((node) =>
+    !!node?.bounds && /确定/.test(String(node.label || "")) && !/确认/.test(String(node.label || "")));
+  confirms.sort((a, b) => (b.bounds[0] - a.bounds[0]) || (b.bounds[1] - a.bounds[1]));
   return {
     priceInput: inputs[0] || null,
     stockInput: inputs[1] || null,
-    keyboardConfirm,
+    keyboardConfirm: confirms[0] || null,
   };
+}
+
+/** 应用内数字键盘键间隔（同键连按 debounce；99 连点 9 时 180–220ms 会吞键）。 */
+export const APP_NUMPAD_SETTLE_MS = 450;
+
+/**
+ * 闲鱼应用内数字键盘输入。优先 semantics 数字键（label 为 "0"–"9"/小数点），
+ * 否则回退 1080×2400 固定坐标。每键独立 settle，禁止复用陈旧 bounds。
+ */
+export async function typeAppNumpadDigits(op, value, {
+  settleMs = APP_NUMPAD_SETTLE_MS,
+  fixedFallback = true,
+} = {}) {
+  const FIXED = {
+    "1": [135, 1668], "2": [405, 1668], "3": [675, 1668],
+    "4": [135, 1842], "5": [405, 1842], "6": [675, 1842],
+    "7": [135, 2015], "8": [405, 2015], "9": [675, 2015],
+    ".": [135, 2188], "0": [405, 2188],
+  };
+  const typed = [];
+  for (const ch of String(value ?? "")) {
+    if (!/[0-9.]/.test(ch)) continue;
+    const snap = await snapshot(op, `app-numpad-${ch}`);
+    let key = (snap.nodes || []).find((n) => {
+      if (!n.bounds) return false;
+      const l = String(n.label || "").trim();
+      if (l !== ch && l !== `数字${ch}, ${ch}` && !l.startsWith(`数字${ch},`)) return false;
+      const [, t, , b] = n.bounds;
+      const h = b - t;
+      // 排除整页 EditText（label 也可能是 "0"/"10"）——键位矮且靠下
+      return t > 1500 && h < 200;
+    });
+    if (!key && ch === ".") {
+      key = (snap.nodes || []).find((n) => /小数点|^\.$/.test(String(n.label || "").trim()) && n.bounds && n.bounds[1] > 1500);
+    }
+    if (key?.bounds) {
+      await op.tap(...center(key.bounds));
+      typed.push({ ch, via: "semantics", bounds: key.bounds });
+    } else if (fixedFallback && FIXED[ch]) {
+      await op.tap(...FIXED[ch]);
+      typed.push({ ch, via: "fixed", point: FIXED[ch] });
+    } else {
+      return { ok: false, typed, missing: ch };
+    }
+    await settle(settleMs);
+  }
+  return { ok: true, typed };
 }
 
 export function skuPriceRowEvidence(snapshot, { price, stock } = {}) {
@@ -1598,7 +1649,8 @@ export async function selectFreightTemplate(op, template, {
       const key = keyboard.keyByLabel.get(char);
       if (!key?.bounds) return { ok: false, step: "freight-price-key-missing", implemented: true, keyboardMode: true };
       await op.tap(...center(key.bounds));
-      await settle(180);
+      // 同键连按需 ≥APP_NUMPAD_SETTLE_MS，否则第二下被 debounce（价 99→9 实证）
+      await settle(APP_NUMPAD_SETTLE_MS);
     }
     priceFilled = true;
     if (!keyboard.keyboardConfirm?.bounds) {
@@ -1702,10 +1754,11 @@ async function selectLocation(op, { evidenceDir = EVIDENCE_DIR_DEFAULT, calibrat
 //  ③ 后续维度：「添加规格类型」→ 新自定义区灰色标题**本身是可编辑文本框**（refocus 输维度名）；
 //  ④ 下一步 → 价格库存页**双模式**：非批量（蓝链入口+行>）/批量（全选/行 radio+已选+黄批量按钮）；
 //     无「取消批量设置」→ 点蓝链进批量模式；行=大 radio 逐行点中心选中（重复点会开编辑页）；
-//  ⑤ 批量编辑页：数字键盘**不在 semantics**（和应用内运费键盘不同！）且 input text 不进
-//     → **固定坐标敲键盘**（3列数字布局 + 确定(945,2100)，1080x2400 实测）→ 库存同法 → 确认；
+//  ⑤ 批量编辑页：优先 semantics 数字键（label "0"–"9"），否则固定坐标；键间隔 450ms；
+//     右下角「确定」确认（禁止点中间确定）；
 //  ⑥ 价格列表「完成」收尾。未校准只定位行；calibrated=true 才真正操作。
-async function fillSkuSpecs(op, specs, stock, {
+//  规格值：只走分区 EditText 键入 + ENTER，不点推荐 chip（chip 会把「蓝色」误匹配「湖蓝色」）。
+export async function fillSkuSpecs(op, specs, stock, {
   evidenceDir, calibrated = false, price = null, replaceExisting = false,
 } = {}) {
   const { row } = await locateRowWithScroll(op, findSkuRow, "sku");
@@ -1714,9 +1767,7 @@ async function fillSkuSpecs(op, specs, stock, {
     return { ok: false, step: "sku-needs-calibration", implemented: false, rowBounds: row.bounds };
   }
   const safeSerial = String(op.serial).replace(/[^A-Za-z0-9_-]/g, "_");
-  const KB = { "1": [135, 1668], "2": [405, 1668], "3": [675, 1668], "4": [135, 1842], "5": [405, 1842], "6": [675, 1842], "7": [135, 2015], "8": [405, 2015], "9": [675, 2015], ".": [135, 2188], "0": [405, 2188] };
-  const KB_CONFIRM = [945, 2100];
-  const typeNumKB = async (str) => { for (const ch of String(str)) { const k = KB[ch]; if (k) { await op.tap(k[0], k[1]); await settle(220); } } };
+  const typeNumKB = async (str) => typeAppNumpadDigits(op, str, { settleMs: APP_NUMPAD_SETTLE_MS });
   const cleanup = async () => { for (let i = 0; i < 3; i += 1) { await op.back().catch(() => null); await settle(600); } };
   const dimResults = [];
 
@@ -1916,16 +1967,48 @@ function isDimTitle(label, dimName) {
       };
     }
     const priceStr = String(price || "").replace(/[^\d.]/g, "");
-    if (priceStr) await typeNumKB(priceStr);
+    if (priceStr) {
+      await op.tap(...center(controls.priceInput.bounds));
+      await settle(500);
+      const priceTyped = await typeNumKB(priceStr);
+      if (!priceTyped.ok) {
+        await cleanup();
+        return { ok: false, step: "sku-price-numpad-failed", implemented: true, priceTyped, dimResults };
+      }
+    }
     await settle(350);
     await op.tap(...center(controls.stockInput.bounds));
     await settle(500);
     const stockStr = String(stock ?? "").replace(/[^\d]/g, "");
-    if (stockStr) await typeNumKB(stockStr);
+    if (stockStr) {
+      const stockTyped = await typeNumKB(stockStr);
+      if (!stockTyped.ok) {
+        await cleanup();
+        return { ok: false, step: "sku-stock-numpad-failed", implemented: true, stockTyped, dimResults };
+      }
+    }
     await settle(350);
     const beforeConfirm = await snapshot(op, "xianyu-sku-before-batch-confirm");
     skuDebugDump("stock-stage", beforeConfirm.nodes);
-    const confirmNow = findSkuBatchEditControls(beforeConfirm.nodes).keyboardConfirm || controls.keyboardConfirm;
+    // 回读 EditText：价格必须精确（防 99→9）
+    const liveControls = findSkuBatchEditControls(beforeConfirm.nodes);
+    const priceLabel = String(liveControls.priceInput?.label || "");
+    if (priceStr && !priceLabel.includes(priceStr) && !beforeConfirm.nodes.some((n) => String(n.label || "") === priceStr)) {
+      await cleanup();
+      return {
+        ok: false,
+        step: "sku-price-value-unverified",
+        implemented: true,
+        expectedPrice: priceStr,
+        priceLabel,
+        dimResults,
+      };
+    }
+    const confirmNow = liveControls.keyboardConfirm || controls.keyboardConfirm;
+    if (!confirmNow?.bounds) {
+      await cleanup();
+      return { ok: false, step: "sku-batch-confirm-missing", implemented: true, dimResults };
+    }
     await op.tap(...center(confirmNow.bounds));
     await settle(1400);
     const listStart = await snapshot(op, "xianyu-sku-price-list-filled");
@@ -2210,7 +2293,10 @@ export async function publishDryRun(op, plan, {
   // attributes（动态属性：品牌/尺码/适用季节/裤长/腰型…）默认按 label 尝试，row-not-present 非致命。
   calibrated = { category: false, freight: false, address: false, sku: false, image: false, attributes: true },
   publish = false,
+  /** 终点点「存草稿」（非发布）。与 restore/discard 互斥：存草稿后不 discard。 */
+  saveDraft = false,
 } = {}) {
+  const optionsSaveDraft = saveDraft === true;
   const started = await startIdlefish(op);
   if (started.package !== IDLEFISH_PACKAGE) {
     return { ok: false, step: "start", stoppedBeforePublish: true, focus: started };
@@ -2339,7 +2425,76 @@ export async function publishDryRun(op, plan, {
     summary.publishReason = "publish path disabled until calibration + validation complete";
   }
 
+  // 可选：存草稿（2026-07-26 标准链路终点）。默认 false——restore 仍走 discard。
+  if (plan.saveDraft === true || optionsSaveDraft) {
+    record("saveDraft", await saveDraftDryRun(op));
+    summary.savedDraft = summary.steps.saveDraft?.savedDraft === true;
+    if (!summary.steps.saveDraft?.ok) summary.ok = false;
+  } else {
+    summary.savedDraft = false;
+  }
+
   return summary;
+}
+
+/**
+ * 存草稿 dry-run：只点「存草稿」，处理「我知道了」，**永不点发布**。
+ * 实证 toast：「草稿保存成功 / 已存至「我的-我发布的」中」。
+ */
+export async function saveDraftDryRun(op) {
+  let snap = await snapshot(op, "save-draft-before");
+  if (!isPublishCompose(snap.nodes) && snap.focus?.package === IDLEFISH_PACKAGE) {
+    // 可能滚离顶部：上滑露顶栏
+    await op.shellExec("input swipe 540 900 540 1500 350", 8000).catch(() => null);
+    await settle(700);
+    snap = await snapshot(op, "save-draft-scroll");
+  }
+  const draft = (snap.nodes || []).find((n) => n.bounds && /存草稿/.test(String(n.label || "")));
+  if (!draft?.bounds) {
+    return {
+      ok: false,
+      step: "save-draft-button-missing",
+      stoppedBeforePublish: true,
+      savedDraft: false,
+    };
+  }
+  await op.tap(...center(draft.bounds));
+  await settle(1800);
+
+  let saved = false;
+  for (let i = 0; i < 8; i += 1) {
+    snap = await snapshot(op, `save-draft-after-${i}`);
+    const labels = (snap.nodes || []).map((n) => n.label).filter(Boolean);
+    if (labels.some((l) => /草稿保存成功|已存至|我的-我发布的|存草稿成功/.test(String(l)))) {
+      saved = true;
+    }
+    const dismiss = (snap.nodes || []).find((n) =>
+      n.bounds && /我知道了|知道了|好的/.test(String(n.label || "")) && !/发布/.test(String(n.label || "")));
+    if (dismiss?.bounds) {
+      await op.tap(...center(dismiss.bounds));
+      await settle(1200);
+      snap = await snapshot(op, "save-draft-dismissed");
+      break;
+    }
+    // 已离开发闲置页也视为可能成功（回首页）
+    if (saved || (!labels.some((l) => /发闲置/.test(String(l))) && labels.some((l) => /推荐|闲鱼/.test(String(l))))) {
+      if (saved) break;
+    }
+    await settle(700);
+  }
+  const labels = (snap.nodes || []).map((n) => n.label).filter(Boolean);
+  if (!saved && labels.some((l) => /草稿保存成功|已存至/.test(String(l)))) saved = true;
+  // 若已不在 compose 且未点发布，宽松认为成功（部分机型 toast 无障碍）
+  if (!saved && !labels.some((l) => /发闲置/.test(String(l))) && !labels.some((l) => /^发布/.test(String(l)))) {
+    saved = true;
+  }
+  return {
+    ok: saved,
+    step: saved ? "draft-saved" : "draft-save-unverified",
+    stoppedBeforePublish: true,
+    savedDraft: saved,
+    publishTapped: false,
+  };
 }
 
 // probe：dump 当前页，打印全部语义节点（label/bounds/class/resourceId/clickable/focused）。
@@ -2363,7 +2518,7 @@ export async function probePage(op, { label = "probe" } = {}) {
 async function main() {
   const command = process.argv.find((value) => [
     "start", "snapshot", "open-publish", "input-dry-run", "image-dry-run", "discard-dry-run",
-    "publish-dry-run", "probe",
+    "save-draft-dry-run", "publish-dry-run", "probe",
   ].includes(value)) || "help";
   const serial = arg("--serial");
   const adbPath = arg("--adb", process.env.ADB_PATH || DEFAULT_ADB);
@@ -2378,13 +2533,17 @@ node scripts/xianyu-operator.mjs --serial <serial> open-publish
 node scripts/xianyu-operator.mjs --serial <serial> input-dry-run --text <临时文本>
 node scripts/xianyu-operator.mjs --serial <serial> image-dry-run --images '[{{"phonePath":"/sdcard/Pictures/XianyuStaging/a.png","sha256":"..."}}]' --image-album XianyuStaging
 node scripts/xianyu-operator.mjs --serial <serial> discard-dry-run
+node scripts/xianyu-operator.mjs --serial <serial> save-draft-dry-run
 node scripts/xianyu-operator.mjs --serial <serial> publish-dry-run --plan <plan.json>
 node scripts/xianyu-operator.mjs --serial <serial> publish-dry-run \\
     --title "..." --description "..." --price 119.00 --condition 全新 \\
     --sku-specs '{"颜色":["白色","黑色"],"尺码":["M","L"]}' --sku-stock 10 --sku-price 12.34 \\
     --freight-template 包邮 [--freight-price 8] --return-address 默认 [--max-images 9] \\
-    --attributes '{"品牌":"Burberry","尺码":"M","适用季节":"四季"}'
+    --attributes '{"品牌":"Burberry","尺码":"M","适用季节":"四季"}' \\
+    --calibrated sku,freight,image [--save-draft]
 node scripts/xianyu-operator.mjs --serial <serial> probe [--label xxx]
+
+save-draft-dry-run：仅在已在发闲置编辑页时点「存草稿」，处理「我知道了」；永不点发布。
 
 publish-dry-run：在发布编辑页整表填写（标题/描述/价格/分类/成色/规格/运费/退货地址/图片），
 默认 dry-run，永不点击最终"发布"；裸"发布"不作为任何导航入口。
@@ -2422,6 +2581,10 @@ discard-dry-run 只点击"关闭 → 不保存"，绝不点击"存草稿/发布"
       clearAfter: !process.argv.includes("--keep-until-discard"),
       openIfNeeded: !process.argv.includes("--no-open"),
     }), null, 2));
+    if (command === "save-draft-dry-run") {
+      console.log(JSON.stringify(await saveDraftDryRun(op), null, 2));
+      return;
+    }
     if (command === "image-dry-run") {
       const imagesRaw = arg("--images");
       let images = null;
@@ -2461,6 +2624,7 @@ discard-dry-run 只点击"关闭 → 不保存"，绝不点击"存草稿/发布"
         skipAddress: process.argv.includes("--skip-address"),
         calibrated,
         publish: process.argv.includes("--publish"),
+        saveDraft: process.argv.includes("--save-draft") || plan.saveDraft === true,
       });
       console.log(JSON.stringify(result, null, 2));
     }

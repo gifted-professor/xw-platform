@@ -30,12 +30,17 @@ function commandArgs({ script, action, device, params }) {
   // Map capability action name to operator CLI command.
   const command = action === "full-dry-run" ? "publish-dry-run"
     : action === "image-dry-run" ? "image-dry-run"
-      : action;
+      : action === "save-draft-dry-run" ? "save-draft-dry-run"
+        : action;
   const args = [script, "--serial", device.runtimeId, "--transport", "gateway", command];
   if (params.text !== undefined) args.push("--text", String(params.text));
   // publish-dry-run / image-dry-run params
   if (params.description !== undefined) args.push("--description", String(params.description));
   if (params.price !== undefined) args.push("--price", String(params.price));
+  if (params.skuPrice !== undefined) args.push("--sku-price", String(params.skuPrice));
+  if (params.skuStock !== undefined) args.push("--sku-stock", String(params.skuStock));
+  if (params.skuSpecs !== undefined) args.push("--sku-specs", JSON.stringify(params.skuSpecs));
+  if (params.skuReplaceExisting === true) args.push("--sku-replace");
   if (params.title !== undefined) args.push("--title", String(params.title));
   if (params.freightTemplate !== undefined) args.push("--freight-template", String(params.freightTemplate));
   if (params.freightPrice !== undefined) args.push("--freight-price", String(params.freightPrice));
@@ -46,9 +51,23 @@ function commandArgs({ script, action, device, params }) {
   if (params.images !== undefined) args.push("--images", JSON.stringify(params.images));
   if (params.imageAlbum !== undefined) args.push("--image-album", String(params.imageAlbum));
   if (params.maxImages !== undefined) args.push("--max-images", String(params.maxImages));
-  if (params.calibrated === true || params.calibrated === "image" || params.calibrated === "all") {
-    // publish-dry-run uses --calibrated image; image-dry-run defaults calibrated on
-    if (command === "publish-dry-run") args.push("--calibrated", "image");
+  if (params.attributes !== undefined) args.push("--attributes", JSON.stringify(params.attributes));
+  if (params.saveDraft === true) args.push("--save-draft");
+  // calibrated: true | "all" | "image" | "sku,freight,image" | { sku:true, freight:true, ... }
+  if (params.calibrated === true || params.calibrated === "all") {
+    if (command === "publish-dry-run") args.push("--calibrated", "all");
+  } else if (typeof params.calibrated === "string" && params.calibrated.length) {
+    if (command === "publish-dry-run") args.push("--calibrated", params.calibrated);
+    else if (command === "image-dry-run" && /image|all/.test(params.calibrated)) {
+      /* image-dry-run defaults calibrated on */
+    }
+  } else if (params.calibrated && typeof params.calibrated === "object") {
+    const flags = Object.entries(params.calibrated)
+      .filter(([, v]) => v)
+      .map(([k]) => k);
+    if (flags.length && command === "publish-dry-run") args.push("--calibrated", flags.join(","));
+  } else if (params.calibrated === "image" && command === "publish-dry-run") {
+    args.push("--calibrated", "image");
   }
   if (params.skipUpload) args.push("--skip-upload");
   if (params.skipCategory) args.push("--skip-category");
@@ -104,15 +123,31 @@ export function createXianyuAdapter({ run = runJsonCommand, operatorPath = defau
         };
       }
       if (capability.implementation.action === "full-dry-run") {
+        // 默认不存草稿；若跑了 saveDraft 步骤则要求 savedDraft=true
+        const draftStep = output?.steps?.saveDraft;
+        const draftOk = draftStep
+          ? (output?.savedDraft === true && draftStep.ok === true)
+          : output?.savedDraft !== true;
         return {
-          ok: output?.ok === true && output?.stoppedBeforePublish === true && output?.savedDraft !== true,
+          ok: output?.ok === true && output?.stoppedBeforePublish === true && draftOk,
+          mode: "state",
+        };
+      }
+      if (capability.implementation.action === "save-draft-dry-run") {
+        return {
+          ok: output?.ok === true
+            && output?.stoppedBeforePublish === true
+            && output?.savedDraft === true
+            && output?.publishTapped !== true,
           mode: "state",
         };
       }
       return { ok: false, ambiguous: true, mode: "custom" };
     },
-    async restore({ capability, device }) {
+    async restore({ capability, device, execution }) {
       if (!capability.restoration.required) return { ok: true };
+      // 已存草稿则不要 discard（草稿即期望副作用）
+      if (execution?.output?.savedDraft === true) return { ok: true, skipped: "already-saved-draft" };
       requireFile(operatorPath, capability.id);
       const output = await run(process.execPath, commandArgs({
         script: operatorPath,

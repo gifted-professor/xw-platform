@@ -2,6 +2,41 @@
 
 本入口只验证“启动闲鱼并进入发布编辑页”，不点击最终“发布”，也不发送聊天。
 
+## 标准草稿流程（2026-07-26 实战固化）
+
+每个 App 有各自固定剧本；闲鱼当前推荐 **单会话** 标准链（避免控制面每 job restore 打断）：
+
+| 步 | 做什么 | 能力 / 要点 |
+|---|---|---|
+| 1 | 开启发闲置 | `xianyu.publish.open_dry_run` |
+| 2 | 填描述 | `input_dry_run`；`\n` 先规范化为空格 |
+| 3 | 传图 | `image_dry_run`；相册 Name·count + SHA |
+| 4 | 规格 + 批量价库 | `full_dry_run` + `skuSpecs` + `calibrated.sku`：**只键入不点推荐 chip**；数字键盘键间隔 ≥450ms；右下角确定 |
+| 5 | 发货方式 | `freightTemplate: "包邮"` + `calibrated.freight`；多行块按行心点 |
+| 6 | 存草稿（可选） | `save_draft_dry_run` 或 `full_dry_run` 的 `saveDraft: true` |
+
+```bash
+# 整表标准草稿（校准字段全开 + 终点存草稿）
+node scripts/xianyu-operator.mjs --serial REPLACE_SERIAL_01 --transport gateway publish-dry-run \
+  --description "..." \
+  --sku-specs '{"颜色":["蓝色","紫色"],"尺码":["S","M","L","XL","2XL"]}' \
+  --sku-price 99 --sku-stock 10 \
+  --freight-template 包邮 \
+  --images '[...]' --image-album XianyuStg2 \
+  --calibrated sku,freight,image \
+  --save-draft
+
+# 仅存草稿（已在编辑页）
+node scripts/xianyu-operator.mjs --serial REPLACE_SERIAL_01 --transport gateway save-draft-dry-run
+```
+
+控制面 capability：
+
+- `xianyu.publish.full_dry_run` — 整表剧本（参数见 capabilities.json）
+- `xianyu.publish.save_draft_dry_run` — 仅存草稿
+
+**红线：** 永不点最终「发布」。存草稿会写用户草稿箱，restore 不再 discard。
+
 ## 为什么单独实现
 
 - `fast-operator.mjs` 的业务原语依赖小红书页面结构，不应复用于闲鱼。

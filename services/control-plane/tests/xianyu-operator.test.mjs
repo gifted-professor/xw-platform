@@ -4,13 +4,18 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  APP_NUMPAD_SETTLE_MS,
   boundsClose,
   descriptionContains,
   findDiscardWithoutSaving,
   findDescriptionField,
+  findFreightOptionBlock,
   findHomeTab,
   findPublishEntry,
   findSellTab,
+  findSkuBatchEditControls,
+  freightOptionTarget,
+  freightRowVerified,
   getScreenHeight,
   isBottomTabSelected,
   isEmptyDescriptionField,
@@ -223,4 +228,33 @@ test("normalizeXwInputText collapses newlines for XwIME/Flutter input", () => {
     "a b c",
   );
   assert.equal(normalizeXwInputText("  单行  "), "单行");
+});
+
+test("freight multi-line block targets 包邮 by line geometry", () => {
+  const nodes = [{
+    label: "邮寄\n包邮\n不包邮-按距离付费\n不包邮-固定邮费\n无需邮寄",
+    bounds: [33, 921, 1047, 1622],
+  }];
+  const block = findFreightOptionBlock(nodes);
+  assert.ok(block);
+  const target = freightOptionTarget(block, "包邮");
+  assert.equal(target.index, 1);
+  assert.equal(target.lineCount, 5);
+  // 行心 y ≈ 921 + 1.5 * ((1622-921)/5)
+  assert.ok(Math.abs(target.point[1] - 1131) < 3);
+  assert.ok(freightRowVerified("发货方式\n包邮", "包邮"));
+  assert.equal(freightRowVerified("发货方式\n运费￥0.00", "包邮"), false);
+});
+
+test("findSkuBatchEditControls prefers rightmost 确定 as keyboard confirm", () => {
+  const controls = findSkuBatchEditControls([
+    { label: "¥,编辑框", className: "android.widget.EditText", bounds: [214, 1006, 983, 1063] },
+    { label: "¥,编辑框", className: "android.widget.EditText", bounds: [214, 1155, 983, 1213] },
+    { label: "确定, 确定", bounds: [496, 2159, 584, 2212] },
+    { label: "确定, 确定", bounds: [884, 2132, 972, 2184] },
+  ]);
+  assert.ok(controls.priceInput);
+  assert.ok(controls.stockInput);
+  assert.deepEqual(controls.keyboardConfirm.bounds, [884, 2132, 972, 2184]);
+  assert.ok(APP_NUMPAD_SETTLE_MS >= 400);
 });

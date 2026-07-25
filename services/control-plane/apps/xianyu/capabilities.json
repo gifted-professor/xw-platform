@@ -127,26 +127,81 @@
       "versionRange": "observed",
       "maturity": "E2",
       "risk": "R1",
-      "resources": ["device"],
+      "resources": ["device", "transport:xiaowei:22222"],
       "inputSchema": {
         "type": "object",
         "properties": {
           "description": { "type": "string" },
           "price": { "type": "number" },
+          "skuPrice": { "type": "number" },
+          "skuStock": { "type": "string" },
+          "skuSpecs": { "type": "object" },
+          "skuReplaceExisting": { "type": "boolean" },
           "freightTemplate": { "type": "string" },
-          "freightPrice": { "type": "number" }
+          "freightPrice": { "type": "number" },
+          "images": { "type": "array" },
+          "imageAlbum": { "type": "string" },
+          "saveDraft": { "type": "boolean" },
+          "calibrated": {
+            "type": "object",
+            "description": "二级页校准开关；标准草稿链路建议 sku/freight/image=true"
+          }
         },
         "additionalProperties": true
       },
       "outputSchema": { "type": "object" },
-      "preconditions": ["PR #11 xianyu-operator implementation is present", "publish compose page reachable"],
-      "verification": { "mode": "state", "description": "publish-dry-run completes with stoppedBeforePublish=true and savedDraft=false" },
-      "restoration": { "required": true, "description": "discard without saving and return to MainActivity" },
-      "timeoutMs": 120000,
+      "preconditions": [
+        "PR #11 xianyu-operator implementation is present",
+        "publish compose page reachable",
+        "标准草稿链路（2026-07-26）：规格值只键入不点推荐 chip；批量价库应用内数字键盘键间隔≥450ms；包邮用多行块行心点击；终点可选 saveDraft"
+      ],
+      "verification": {
+        "mode": "state",
+        "description": "publish-dry-run completes with stoppedBeforePublish=true; savedDraft only if saveDraft=true"
+      },
+      "restoration": {
+        "required": true,
+        "description": "若未 saveDraft：discard without saving。若已 saveDraft：不 discard（草稿已是期望副作用）"
+      },
+      "timeoutMs": 360000,
       "idempotency": "replay_safe",
       "automationPolicy": { "mode": "automatic" },
       "implementation": { "adapter": "xianyu", "action": "full-dry-run" },
-      "evidence": ["PR #11", "xianyu-gap1 through xianyu-gap7 probes"],
+      "evidence": [
+        "PR #11",
+        "xianyu-gap1 through xianyu-gap7 probes",
+        "2026-07-26 session: type-into-input SKU, batch 99/10 numpad, 包邮 line geometry, 存草稿"
+      ],
+      "availability": "implemented"
+    },
+    {
+      "schemaVersion": 1,
+      "id": "xianyu.publish.save_draft_dry_run",
+      "appId": "xianyu",
+      "packageName": "com.taobao.idlefish",
+      "versionRange": "observed",
+      "maturity": "E2",
+      "risk": "R1",
+      "resources": ["device"],
+      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+      "outputSchema": { "type": "object" },
+      "preconditions": [
+        "已在发闲置编辑页（或 open_dry_run 之后未 discard）",
+        "会写入用户草稿箱（我的-我发布的）；不得点最终发布"
+      ],
+      "verification": {
+        "mode": "state",
+        "description": "savedDraft=true and stoppedBeforePublish=true and publish never tapped"
+      },
+      "restoration": {
+        "required": false,
+        "description": "草稿已保存，不自动 discard；需要清理时人工或另开任务删草稿"
+      },
+      "timeoutMs": 90000,
+      "idempotency": "external_effect",
+      "automationPolicy": { "mode": "automatic" },
+      "implementation": { "adapter": "xianyu", "action": "save-draft-dry-run" },
+      "evidence": ["2026-07-26 存草稿 toast 草稿保存成功"],
       "availability": "implemented"
     }
   ]
