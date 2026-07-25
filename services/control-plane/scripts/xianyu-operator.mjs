@@ -2486,6 +2486,96 @@ async function uploadImagesDryRun(op, images, {
     await settle(2500);
     let picker = await snapshot(op, "xianyu-image-picker");
     if (!/FishFlutterBoost/.test(picker.focus.activity || "")) { await cleanup(); return { ok: false, step: "image-picker-not-open", implemented: true }; }
+
+    // 若已在图片编辑页（重试时常见残留）：顶栏「1/N」+「完成」→ 直接完成并验证
+    const editDoneEarly = (picker.nodes || []).find((n) =>
+      n.bounds && /^完成$/.test(String(n.label || "").trim()) && n.clickable);
+    const editRatio = (picker.nodes || []).some((n) => /^\d+\/\d+$/.test(String(n.label || "").trim()));
+    if (editDoneEarly?.bounds && editRatio) {
+      await op.tap(...center(editDoneEarly.bounds));
+      await settle(2500);
+      let finalSnap = await snapshot(op, "xianyu-image-final-from-edit");
+      let imageState = analyzeImageUploadState(finalSnap.nodes, {
+        baselineCount: baselineMedia,
+        picked: want,
+        publishCompose: finalSnap.publishCompose,
+      });
+      for (let retry = 0; retry < 3 && !imageState.verified; retry += 1) {
+        await settle(1200);
+        finalSnap = await snapshot(op, `xianyu-image-final-from-edit-r${retry + 1}`);
+        imageState = analyzeImageUploadState(finalSnap.nodes, {
+          baselineCount: baselineMedia,
+          picked: want,
+          publishCompose: finalSnap.publishCompose,
+        });
+      }
+      const finalShot = await captureEvidenceSoft(
+        op,
+        `${evidenceDir}\\xianyu-image-final-${safeSerial}.png`,
+        [],
+        "image-final",
+      );
+      return {
+        ok: imageState.verified,
+        step: imageState.verified ? "images-uploaded" : "images-unverified",
+        implemented: true,
+        verified: imageState.verified,
+        requested: want,
+        picked: want,
+        imgCount: imageState.mediaCount,
+        baselineImgCount: baselineMedia,
+        expectedImgCount: imageState.expectedCount,
+        hasAddMore: imageState.hasAddMore,
+        selectionStrategy: "resume-edit-complete",
+        evidence: { final: finalShot },
+      };
+    }
+
+    // 已在 picker 且已勾选（有「下一步 (N)」）→ 跳过相册选择直接下一步
+    const nextAlready = (picker.nodes || []).find((n) => /下一步/.test(String(n.label || "")) && n.bounds && n.clickable);
+    if (nextAlready?.bounds) {
+      const m = String(nextAlready.label || "").match(/(\d+)/);
+      const alreadyPicked = m ? Number(m[1]) : 0;
+      if (alreadyPicked >= want) {
+        await op.tap(...center(nextAlready.bounds));
+        await settle(2800);
+        const edit = await snapshot(op, "xianyu-image-edit-resume");
+        const doneBtn = edit.nodes.find((n) => /^完成$/.test(String(n.label || "").trim()) && n.bounds && n.clickable);
+        if (doneBtn?.bounds) {
+          await op.tap(...center(doneBtn.bounds));
+          await settle(2500);
+        }
+        let finalSnap = await snapshot(op, "xianyu-image-final-resume");
+        let imageState = analyzeImageUploadState(finalSnap.nodes, {
+          baselineCount: baselineMedia,
+          picked: alreadyPicked,
+          publishCompose: finalSnap.publishCompose,
+        });
+        for (let retry = 0; retry < 3 && !imageState.verified; retry += 1) {
+          await settle(1200);
+          finalSnap = await snapshot(op, `xianyu-image-final-resume-r${retry + 1}`);
+          imageState = analyzeImageUploadState(finalSnap.nodes, {
+            baselineCount: baselineMedia,
+            picked: alreadyPicked,
+            publishCompose: finalSnap.publishCompose,
+          });
+        }
+        return {
+          ok: imageState.verified,
+          step: imageState.verified ? "images-uploaded" : "images-unverified",
+          implemented: true,
+          verified: imageState.verified,
+          requested: want,
+          picked: alreadyPicked,
+          imgCount: imageState.mediaCount,
+          baselineImgCount: baselineMedia,
+          expectedImgCount: imageState.expectedCount,
+          hasAddMore: imageState.hasAddMore,
+          selectionStrategy: "resume-next-complete",
+        };
+      }
+    }
+
     let selectedAlbum = null;
     if (albumName) {
       let albumHit = findAlbumSelector(picker.nodes, albumName);
