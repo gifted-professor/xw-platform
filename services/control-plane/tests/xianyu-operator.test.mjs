@@ -16,6 +16,7 @@ import {
   isEmptyDescriptionField,
   isPublishCompose,
   loadLayoutProfile,
+  normalizeXwInputText,
   parseAllUiNodes,
   probeBottomTabs,
   saveLayoutProfile,
@@ -210,4 +211,16 @@ test("isBottomTabSelected distinguishes 选中 vs 未选中", () => {
   assert.equal(isBottomTabSelected({ label: "闲鱼，选中状态" }), true);
   assert.equal(isBottomTabSelected({ label: "闲鱼，未选中状态" }), false);
   assert.equal(isBottomTabSelected({ label: "消息，未读消息数8，未选中状态" }), false);
+});
+
+test("normalizeXwInputText collapses newlines for XwIME/Flutter input", () => {
+  assert.equal(
+    normalizeXwInputText("第一行\n第二行"),
+    "第一行 第二行",
+  );
+  assert.equal(
+    normalizeXwInputText("a\r\nb\n\nc"),
+    "a b c",
+  );
+  assert.equal(normalizeXwInputText("  单行  "), "单行");
 });

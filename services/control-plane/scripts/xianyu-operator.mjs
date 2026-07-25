@@ -523,6 +523,19 @@ async function capturePng(op, path) {
   return { path, bytes: png.length, sha256: createHash("sha256").update(png).digest("hex") };
 }
 
+/**
+ * 效卫/Flutter 中文 inputText 对换行敏感：含 \n/\r 时常见
+ * inputAccepted 但字段仍空（2026-07-26 控制面对照：同 96 字单行 succeeded、带换行 failed）。
+ * 多行真换行另案验证；默认写前压成空格。
+ */
+export function normalizeXwInputText(text) {
+  return String(text ?? "")
+    .replace(/\r\n/g, "\n")
+    .replace(/[\r\n]+/g, " ")
+    .replace(/[ \t\u00a0]+/g, " ")
+    .trim();
+}
+
 export async function inputDryRun(op, {
   text,
   evidenceDir = "C:\\Users\\Public",
@@ -531,7 +544,9 @@ export async function inputDryRun(op, {
   // 默认：若不在发布编辑页，先 open-publish 再填字（step 1b 正确路径）。
   openIfNeeded = true,
 } = {}) {
-  const value = String(text || "闲鱼发布页输入测试").trim();
+  const rawValue = String(text || "闲鱼发布页输入测试");
+  const hadNewlines = /[\r\n]/.test(rawValue);
+  const value = normalizeXwInputText(rawValue || "闲鱼发布页输入测试");
   if (!value) return { ok: false, step: "empty-text" };
 
   let openTrace = null;
@@ -684,6 +699,9 @@ export async function inputDryRun(op, {
       clearedVerified,
       clearAfter,
       inputError,
+      newlineNormalized: hadNewlines,
+      textLenRaw: rawValue.length,
+      textLenWritten: value.length,
       verifiedNode: verifiedNode ? {
         className: verifiedNode.className,
         bounds: verifiedNode.bounds,
@@ -1187,7 +1205,8 @@ async function verifyPhoneImageManifest(op, images) {
 // 失败 fail-closed，不继续。返回 {ok, verified, audit, evidence}。
 async function fillTextField(op, field, text, { evidenceDir, label = "field", clearFirst = true } = {}) {
   if (!field?.bounds) return { ok: false, step: `${label}-field-missing` };
-  if (!text) return { ok: false, step: `${label}-empty-text` };
+  const value = normalizeXwInputText(text);
+  if (!value) return { ok: false, step: `${label}-empty-text` };
   const safeSerial = String(op.serial).replace(/[^A-Za-z0-9_-]/g, "_");
   const [x, y] = center(field.bounds);
   const tapX = Math.min(field.bounds[2] - 40, x), tapY = Math.min(field.bounds[3] - 40, y + 20);
@@ -1197,14 +1216,14 @@ async function fillTextField(op, field, text, { evidenceDir, label = "field", cl
   let audit = null;
   try {
     // FlutterBoost：切 IME 后必须重新聚焦字段（E6 实证），否则 commitText 不进字段
-    audit = await op.inputTextViaXiaowei(String(text), { clearFirst, deferRestore: true, refocus: async () => { await op.tap(tapX, tapY); } });
+    audit = await op.inputTextViaXiaowei(value, { clearFirst, deferRestore: true, refocus: async () => { await op.tap(tapX, tapY); } });
   } catch (e) {
     return { ok: false, step: `${label}-input-failed`, error: e.message, evidence: { baseline } };
   }
   await settle(600);
   const entered = await capturePng(op, `${evidenceDir}\\xianyu-${label}-entered-${safeSerial}.png`);
   const after = await snapshot(op, `xianyu-${label}-after`);
-  let verified = after.nodes.some((node) => descriptionContains(node, text));
+  let verified = after.nodes.some((node) => descriptionContains(node, value));
   // 还原 IME（deferRestore 模式下 audit 带 restore()）
   if (typeof audit.restore === "function") await audit.restore().catch(() => null);
   if (!verified) {
@@ -1212,10 +1231,10 @@ async function fillTextField(op, field, text, { evidenceDir, label = "field", cl
     await op.tap(tapX, tapY);
     await settle(700);
     try {
-      audit = await op.inputTextViaXiaowei(String(text), { clearFirst, deferRestore: true, refocus: async () => { await op.tap(tapX, tapY); } });
+      audit = await op.inputTextViaXiaowei(value, { clearFirst, deferRestore: true, refocus: async () => { await op.tap(tapX, tapY); } });
       await settle(600);
       const after2 = await snapshot(op, `xianyu-${label}-after2`);
-      verified = after2.nodes.some((node) => descriptionContains(node, text));
+      verified = after2.nodes.some((node) => descriptionContains(node, value));
     } catch { /* 保持 unverified */ }
     if (typeof audit?.restore === "function") await audit.restore().catch(() => null);
   }
