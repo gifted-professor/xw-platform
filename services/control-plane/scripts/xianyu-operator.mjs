@@ -2871,8 +2871,10 @@ export async function publishDryRun(op, plan, {
 
   const record = (key, result) => {
     summary.steps[key] = result;
-    if (!result?.ok && result?.step && !/needs-calibration|unverified|skipped/.test(String(result.step))) {
-      summary.ok = false;
+    // images-unverified / sku-*-unverified 对全流程也是致命（以前把 *unverified* 一律当非致命）
+    if (!result?.ok && result?.step) {
+      const soft = /needs-calibration|skipped|chip-missing/.test(String(result.step));
+      if (!soft) summary.ok = false;
     }
   };
 
