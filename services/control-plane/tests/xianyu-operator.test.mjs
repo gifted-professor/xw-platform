@@ -4,12 +4,34 @@ import {
   descriptionContains,
   findDiscardWithoutSaving,
   findDescriptionField,
+  findHomeTab,
   findPublishEntry,
+  findSellTab,
+  getScreenHeight,
+  isBottomTabSelected,
   isEmptyDescriptionField,
   isPublishCompose,
   parseAllUiNodes,
   semanticSnapshot,
 } from "../scripts/xianyu-operator.mjs";
+
+// 02 号机实测（density 440, 三键导航）：底栏 y 落在 2072–2175，旧硬编码 2180/2320 会 miss。
+const device02BottomTabs = [
+  { label: "闲鱼，未读消息数0，选中状态", bounds: [22, 2132, 218, 2175], clickable: true },
+  { label: "深圳，未选中状态", bounds: [218, 2132, 415, 2175], clickable: true },
+  { label: "卖闲置", bounds: [427, 2072, 653, 2175], clickable: true },
+  { label: "消息，未读消息数8，未选中状态", bounds: [663, 2132, 860, 2175], clickable: true },
+  { label: "我的，未选中状态", bounds: [860, 2132, 1058, 2175], clickable: true },
+  // 瀑布流噪声：左下区域但 y 不够低，不能误命中
+  { label: "闲鱼同款商品卡", bounds: [20, 1800, 280, 2000], clickable: true },
+];
+
+// 04 号机量级：手势导航，底栏更靠下
+const device04BottomTabs = [
+  { label: "闲鱼，未选中状态", bounds: [22, 2227, 218, 2370], clickable: true },
+  { label: "卖闲置", bounds: [427, 2160, 653, 2370], clickable: true },
+  { label: "消息，未选中状态", bounds: [663, 2227, 860, 2370], clickable: true },
+];
 
 test("semanticSnapshot keeps Flutter content-desc text", () => {
   const result = semanticSnapshot({ nodes: [
@@ -81,4 +103,34 @@ test("findDiscardWithoutSaving selects only the explicit left discard action", (
   };
   assert.equal(findDiscardWithoutSaving([save, discard]), discard);
   assert.equal(findDiscardWithoutSaving([save]), null);
+});
+
+test("getScreenHeight derives height from max bounds y2", () => {
+  assert.equal(getScreenHeight(device02BottomTabs), 2175);
+  assert.equal(getScreenHeight([]), 0);
+  assert.equal(getScreenHeight(null), 0);
+});
+
+test("findHomeTab / findSellTab use label + screen-height ratio on device 02 layout", () => {
+  const home = findHomeTab(device02BottomTabs);
+  const sell = findSellTab(device02BottomTabs);
+  assert.equal(home?.label, "闲鱼，未读消息数0，选中状态");
+  assert.deepEqual(home?.bounds, [22, 2132, 218, 2175]);
+  assert.equal(sell?.label, "卖闲置");
+  assert.deepEqual(sell?.bounds, [427, 2072, 653, 2175]);
+  assert.equal(isBottomTabSelected(home), true);
+});
+
+test("findHomeTab / findSellTab still work on higher bottom-bar layouts", () => {
+  const home = findHomeTab(device04BottomTabs);
+  const sell = findSellTab(device04BottomTabs);
+  assert.equal(home?.label, "闲鱼，未选中状态");
+  assert.equal(sell?.label, "卖闲置");
+  assert.equal(isBottomTabSelected(home), false);
+});
+
+test("isBottomTabSelected distinguishes 选中 vs 未选中", () => {
+  assert.equal(isBottomTabSelected({ label: "闲鱼，选中状态" }), true);
+  assert.equal(isBottomTabSelected({ label: "闲鱼，未选中状态" }), false);
+  assert.equal(isBottomTabSelected({ label: "消息，未读消息数8，未选中状态" }), false);
 });

@@ -94,26 +94,53 @@ export function findPublishEntry(snapshot) {
   return null;
 }
 
+// 从 snapshot bounds 推算可视高度（取所有节点 y2 最大值）。
+// 三键导航机型上底栏 y 低于手势导航机型；禁止再写死 2180/2320。
+export function getScreenHeight(snapshot) {
+  let maxY = 0;
+  for (const node of snapshot || []) {
+    const y2 = Number(node?.bounds?.[3]);
+    if (Number.isFinite(y2) && y2 > maxY) maxY = y2;
+  }
+  return maxY;
+}
+
+// 底栏 y1 阈值：屏高 × 0.85。02 号机（三键导航）底栏 y1≈2132，
+// 04 号机（手势）≈2227；0.85 同时覆盖两者，避免写死像素。
+const BOTTOM_TAB_Y_RATIO = 0.85;
+
+export function isBottomTabSelected(node) {
+  // Flutter content-desc：「…，选中状态」vs「…，未选中状态」
+  const label = String(node?.label || "");
+  return /选中状态/.test(label) && !/未选中状态/.test(label);
+}
+
 export function findHomeTab(snapshot) {
-  // 首页底栏项：只接受屏幕最底部、左侧窄区域的可点击节点。
-  // 不能使用旧坐标 y=2220：当前 1080×2400 页面底栏从 y=2227 才开始，
-  // 该坐标会落到瀑布流商品卡并打开 WebHybridActivity。
-  const candidates = snapshot.filter((node) => node.clickable && node.bounds
+  // 首页底栏：label /闲鱼|首页/ + 左下 X 轴 + 屏高比例，不写死 Y 像素。
+  const screenH = getScreenHeight(snapshot);
+  if (!screenH) return null;
+  const minY = screenH * BOTTOM_TAB_Y_RATIO;
+  const candidates = (snapshot || []).filter((node) => node.clickable && node.bounds
+    && /闲鱼|首页/.test(node.label || "")
     && node.bounds[0] >= 0 && node.bounds[0] < 100
     && node.bounds[2] <= 300
-    && node.bounds[1] >= 2180 && node.bounds[3] >= 2320
+    && node.bounds[1] >= minY
     && node.bounds[3] - node.bounds[1] <= 220);
-  return candidates.find((node) => /闲鱼|首页/.test(node.label)) || candidates[0] || null;
+  return candidates[0] || null;
 }
 
 export function findSellTab(snapshot) {
-  // 中央黄色“卖闲置”跨出普通底栏上沿；优先语义，结构兜底也必须限定在屏幕底部中央。
-  const candidates = snapshot.filter((node) => node.clickable && node.bounds
+  // 中央「卖闲置」：label 匹配 + 底部中央 X 轴 + 屏高比例；卖闲置图标略高出普通底栏。
+  const screenH = getScreenHeight(snapshot);
+  if (!screenH) return null;
+  const minY = screenH * BOTTOM_TAB_Y_RATIO;
+  const candidates = (snapshot || []).filter((node) => node.clickable && node.bounds
+    && /卖闲置/.test(node.label || "")
     && node.bounds[0] >= 350 && node.bounds[2] <= 730
     && node.bounds[0] <= 540 && node.bounds[2] >= 540
-    && node.bounds[1] >= 2080 && node.bounds[3] >= 2320
+    && node.bounds[1] >= minY
     && node.bounds[3] - node.bounds[1] <= 320);
-  return candidates.find((node) => /卖闲置/.test(node.label)) || candidates[0] || null;
+  return candidates[0] || null;
 }
 
 export function findDescriptionField(snapshot) {
@@ -467,13 +494,18 @@ export async function openPublishDryRun(op, { maxSteps = 6 } = {}) {
     if (!homeTab?.bounds) {
       return { ok: false, step: "home-tab-not-found", started };
     }
-    await op.tap(...center(homeTab.bounds));
-    await settle(1400);
-    const home = await snapshot(op, "xianyu-home-tab-normalized");
-    if (home.focus.package !== IDLEFISH_PACKAGE || !/MainActivity/.test(home.focus.activity || "")) {
-      return { ok: false, step: "home-tab-normalize", started, focus: home.focus };
+    // 已在首页（闲鱼 label 为选中状态）则跳过点 home，直接找卖闲置。
+    let homeNodes = main.nodes;
+    if (!isBottomTabSelected(homeTab)) {
+      await op.tap(...center(homeTab.bounds));
+      await settle(1400);
+      const home = await snapshot(op, "xianyu-home-tab-normalized");
+      if (home.focus.package !== IDLEFISH_PACKAGE || !/MainActivity/.test(home.focus.activity || "")) {
+        return { ok: false, step: "home-tab-normalize", started, focus: home.focus };
+      }
+      homeNodes = home.nodes;
     }
-    const sellTab = findSellTab(home.nodes);
+    const sellTab = findSellTab(homeNodes);
     if (!sellTab?.bounds) {
       return { ok: false, step: "sell-tab-not-found", started };
     }
