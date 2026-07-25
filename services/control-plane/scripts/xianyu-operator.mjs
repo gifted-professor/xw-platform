@@ -2268,32 +2268,55 @@ function isDimTitle(label, dimName) {
     await settle(350);
     const stockCenter = center(controls.stockInput.bounds);
     await op.tap(...stockCenter);
-    await settle(500);
+    await settle(600);
     if (stockStr) {
-      await clearFocusedDigits(12);
+      // 按当前 label 位数精确退格（02：label「40」需 2 次 END+DEL，再打 10）
+      const readStockDigits = async () => {
+        const s = await snapshot(op, "xianyu-sku-stock-read");
+        return String(findSkuBatchEditControls(s.nodes).stockInput?.label || "").replace(/[^\d]/g, "");
+      };
+      let cur = await readStockDigits();
+      await op.shellExec("input keyevent KEYCODE_MOVE_END", 3000).catch(() => null);
+      await settle(80);
+      for (let i = 0; i < Math.max(cur.length + 4, 8); i += 1) {
+        await op.shellExec("input keyevent KEYCODE_DEL", 3000).catch(() => null);
+        await settle(50);
+      }
       let stockTyped = await typeNumKB(stockStr);
       if (!stockTyped.ok) {
         await cleanup();
         return { ok: false, step: "sku-stock-numpad-failed", implemented: true, stockTyped, dimResults };
       }
-      // 若仍读到旧值：长按选中 + 再清再打（02 机 40 残留实证）
-      let probe = await snapshot(op, "xianyu-sku-stock-probe");
-      let probeStock = String(findSkuBatchEditControls(probe.nodes).stockInput?.label || "");
-      if (!probeStock.includes(stockStr)) {
-        await op.shellExec(`input swipe ${stockCenter[0]} ${stockCenter[1]} ${stockCenter[0]} ${stockCenter[1]} 900`, 8000).catch(() => null);
+      cur = await readStockDigits();
+      if (cur !== stockStr) {
+        // 兜底：小薇 IME 覆写（clearFirst）
+        await op.tap(...stockCenter);
         await settle(400);
-        const selectAll = (await snapshot(op, "xianyu-sku-stock-selectall")).nodes
-          .find((n) => n.bounds && /全选|选择全部|Select all/i.test(String(n.label || "")));
-        if (selectAll?.bounds) {
-          await op.tap(...center(selectAll.bounds));
-          await settle(300);
+        try {
+          const audit = await op.inputTextViaXiaowei(stockStr, {
+            clearFirst: true,
+            deferRestore: true,
+            refocus: async () => { await op.tap(...stockCenter); },
+          });
+          if (typeof audit?.restore === "function") await audit.restore().catch(() => null);
+        } catch {
+          /* IME 失败再试 numpad */
+          await clearFocusedDigits(16);
+          stockTyped = await typeNumKB(stockStr);
         }
-        await clearFocusedDigits(16);
-        stockTyped = await typeNumKB(stockStr);
-        if (!stockTyped.ok) {
-          await cleanup();
-          return { ok: false, step: "sku-stock-numpad-failed", implemented: true, stockTyped, retry: true, dimResults };
-        }
+        cur = await readStockDigits();
+      }
+      if (cur !== stockStr) {
+        await cleanup();
+        return {
+          ok: false,
+          step: "sku-stock-value-unverified",
+          implemented: true,
+          expectedStock: stockStr,
+          stockLabel: cur,
+          afterStrategies: ["del-numpad", "xiaowei-or-numpad"],
+          dimResults,
+        };
       }
     }
     await settle(350);
