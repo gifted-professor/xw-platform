@@ -6,6 +6,7 @@ import { join } from "node:path";
 import {
   APP_NUMPAD_SETTLE_MS,
   boundsClose,
+  createStepSupervisor,
   descriptionContains,
   findDiscardWithoutSaving,
   findDescriptionField,
@@ -257,4 +258,23 @@ test("findSkuBatchEditControls prefers rightmost 确定 as keyboard confirm", ()
   assert.ok(controls.stockInput);
   assert.deepEqual(controls.keyboardConfirm.bounds, [884, 2132, 972, 2184]);
   assert.ok(APP_NUMPAD_SETTLE_MS >= 400);
+});
+
+test("createStepSupervisor retries recover then succeeds", async () => {
+  const fakeOp = { serial: "test-serial" };
+  const seen = [];
+  const sup = createStepSupervisor(fakeOp, { onEvent: (e) => seen.push(e.phase) });
+  let n = 0;
+  const result = await sup.run("probe", async () => {
+    n += 1;
+    return n >= 2 ? { ok: true, step: "ok" } : { ok: false, step: "need-retry" };
+  }, {
+    maxAttempts: 2,
+    recover: async () => { /* no-op recover */ },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.step, "ok");
+  assert.ok(seen.includes("start"));
+  assert.ok(seen.includes("recover"));
+  assert.ok(seen.includes("ok"));
 });

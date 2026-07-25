@@ -37,6 +37,18 @@ node scripts/xianyu-operator.mjs --serial REPLACE_SERIAL_01 --transport gateway 
 
 **红线：** 永不点最终「发布」。存草稿会写用户草稿箱，restore 不再 discard。
 
+## Live supervisor（2026-07-26）
+
+Agent 执行 ≠ 死脚本：`publishDryRun` 内置 `createStepSupervisor`：
+
+- 每步打点：`{event:"supervisor", phase, name, attempt, ok, step}`
+- 失败先 `recover`（`ensureOnPublishCompose` 重进发闲置），再有限次重试
+- 证据截图 **fail-soft**（`captureEvidenceSoft`）：截图 ENOENT 不阻断填文案
+- 并发截图：每 serial 独立目录 `_gwshot_<serial>/`，避免互相 rename
+- SKU 找不到「下一步」时**不再三连 BACK 退桌面**（02 机教训），先上滑找按钮
+
+后续可把 supervisor 事件接到面板/飞书，实现真正的「实时维持」。
+
 ## 为什么单独实现
 
 - `fast-operator.mjs` 的业务原语依赖小红书页面结构，不应复用于闲鱼。

@@ -399,6 +399,120 @@ export async function settle(ms = 1200) {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * 任务内实时 supervisor：逐步打点 + expect 检查 + 有限次恢复。
+ * Agent 执行与死脚本的分界：失败先维持，再决定是否升级，而不是闷头跑完再查 log。
+ */
+export function createStepSupervisor(op, { onEvent = null } = {}) {
+  const events = [];
+  const emit = (payload) => {
+    const ev = { t: new Date().toISOString(), serial: op?.serial || null, ...payload };
+    events.push(ev);
+    console.log(JSON.stringify({ event: "supervisor", ...ev }).slice(0, 1400));
+    if (typeof onEvent === "function") {
+      try { onEvent(ev); } catch { /* ignore listener errors */ }
+    }
+  };
+
+  /**
+   * @param {string} name
+   * @param {(ctx:{attempt:number}) => Promise<any>} fn
+   * @param {{ critical?: boolean, maxAttempts?: number, expect?: function, recover?: function }} [opts]
+   */
+  async function run(name, fn, {
+    critical = true,
+    maxAttempts = 2,
+    expect = null,
+    recover = null,
+  } = {}) {
+    emit({ phase: "start", name, maxAttempts });
+    let lastResult = null;
+    let lastError = null;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        lastResult = await fn({ attempt });
+        lastError = null;
+        let expectOk = true;
+        let snap = null;
+        if (typeof expect === "function") {
+          snap = await snapshot(op, `sup-expect-${name}-${attempt}`);
+          expectOk = !!(await expect(snap, lastResult));
+        }
+        const stepOk = lastResult?.ok !== false && expectOk;
+        emit({
+          phase: stepOk ? "ok" : "soft-fail",
+          name,
+          attempt,
+          step: lastResult?.step || null,
+          ok: stepOk,
+          expectOk,
+        });
+        if (stepOk) return { ...lastResult, supervisor: { name, attempt } };
+        if (attempt < maxAttempts && typeof recover === "function") {
+          emit({ phase: "recover", name, attempt, reason: lastResult?.step || "expect-failed" });
+          await recover({ attempt, snap, result: lastResult });
+          continue;
+        }
+        return { ...lastResult, ok: critical ? false : lastResult?.ok, supervisor: { name, attempt } };
+      } catch (e) {
+        lastError = e;
+        emit({ phase: "error", name, attempt, error: String(e.message || e) });
+        if (attempt < maxAttempts && typeof recover === "function") {
+          emit({ phase: "recover", name, attempt, reason: "threw" });
+          try {
+            await recover({ attempt, snap: null, result: null, error: e });
+          } catch (re) {
+            emit({ phase: "recover-failed", name, error: String(re.message || re) });
+          }
+          continue;
+        }
+        return {
+          ok: false,
+          step: `${name}-threw`,
+          error: String(e.message || e),
+          supervisor: { name, attempt },
+        };
+      }
+    }
+    return lastResult || {
+      ok: false,
+      step: `${name}-exhausted`,
+      error: lastError ? String(lastError.message || lastError) : null,
+      supervisor: { name },
+    };
+  }
+
+  return { run, emit, events };
+}
+
+/** 确保仍在闲鱼发闲置编辑页；掉到桌面/其它 App 时重拉 + open-publish。 */
+export async function ensureOnPublishCompose(op, { maxAttempts = 2 } = {}) {
+  for (let i = 0; i < maxAttempts; i += 1) {
+    const snap = await snapshot(op, `ensure-compose-${i}`);
+    if (snap.focus?.package === IDLEFISH_PACKAGE && isPublishCompose(snap.nodes)) {
+      return { ok: true, recovered: i > 0, snap };
+    }
+    if (snap.focus?.package !== IDLEFISH_PACKAGE) {
+      await startIdlefish(op);
+      await settle(800);
+    }
+    const opened = await openPublishDryRun(op);
+    if (opened.ok) {
+      const s2 = await snapshot(op, `ensure-compose-opened-${i}`);
+      if (s2.focus?.package === IDLEFISH_PACKAGE && isPublishCompose(s2.nodes)) {
+        return { ok: true, recovered: true, snap: s2, open: opened };
+      }
+    }
+  }
+  const finalSnap = await snapshot(op, "ensure-compose-fail");
+  return {
+    ok: false,
+    recovered: false,
+    snap: finalSnap,
+    package: finalSnap.focus?.package || null,
+  };
+}
+
 function runProcess(file, args, timeoutMs = 20000) {
   return new Promise((resolve, reject) => {
     const child = spawn(file, args, { stdio: ["ignore", "pipe", "pipe"] });
@@ -1252,27 +1366,40 @@ async function verifyPhoneImageManifest(op, images) {
   };
 }
 
+/** 证据截图 fail-soft：失败只记 warning，不阻断业务输入（2026-07-26 04 机并发 ENOENT）。 */
+async function captureEvidenceSoft(op, path, warnings, tag) {
+  try {
+    return await capturePng(op, path);
+  } catch (e) {
+    const w = { tag, error: String(e.message || e) };
+    if (Array.isArray(warnings)) warnings.push(w);
+    console.log(JSON.stringify({ event: "evidence-soft-fail", serial: op.serial, ...w }).slice(0, 500));
+    return { path: null, bytes: 0, sha256: null, softFail: true, error: w.error };
+  }
+}
+
 // 通用文本字段填入：点字段 → 切效卫桥 IME → 输入 → 回读校验 → 还原 IME。
-// 失败 fail-closed，不继续。返回 {ok, verified, audit, evidence}。
+// 输入失败 fail-closed；**证据截图失败不阻断**。返回 {ok, verified, audit, evidence, warnings}。
 async function fillTextField(op, field, text, { evidenceDir, label = "field", clearFirst = true } = {}) {
   if (!field?.bounds) return { ok: false, step: `${label}-field-missing` };
   const value = normalizeXwInputText(text);
   if (!value) return { ok: false, step: `${label}-empty-text` };
   const safeSerial = String(op.serial).replace(/[^A-Za-z0-9_-]/g, "_");
+  const warnings = [];
   const [x, y] = center(field.bounds);
   const tapX = Math.min(field.bounds[2] - 40, x), tapY = Math.min(field.bounds[3] - 40, y + 20);
   await op.tap(tapX, tapY);
   await settle(700);
-  const baseline = await capturePng(op, `${evidenceDir}\\xianyu-${label}-baseline-${safeSerial}.png`);
+  const baseline = await captureEvidenceSoft(op, `${evidenceDir}\\xianyu-${label}-baseline-${safeSerial}.png`, warnings, `${label}-baseline`);
   let audit = null;
   try {
     // FlutterBoost：切 IME 后必须重新聚焦字段（E6 实证），否则 commitText 不进字段
     audit = await op.inputTextViaXiaowei(value, { clearFirst, deferRestore: true, refocus: async () => { await op.tap(tapX, tapY); } });
   } catch (e) {
-    return { ok: false, step: `${label}-input-failed`, error: e.message, evidence: { baseline } };
+    return { ok: false, step: `${label}-input-failed`, error: e.message, evidence: { baseline }, warnings };
   }
   await settle(600);
-  const entered = await capturePng(op, `${evidenceDir}\\xianyu-${label}-entered-${safeSerial}.png`);
+  const entered = await captureEvidenceSoft(op, `${evidenceDir}\\xianyu-${label}-entered-${safeSerial}.png`, warnings, `${label}-entered`);
   const after = await snapshot(op, `xianyu-${label}-after`);
   let verified = after.nodes.some((node) => descriptionContains(node, value));
   // 还原 IME（deferRestore 模式下 audit 带 restore()）
@@ -1299,6 +1426,7 @@ async function fillTextField(op, field, text, { evidenceDir, label = "field", cl
     verified,
     audit: audit.audit || audit,
     evidence: { baseline, entered },
+    warnings: warnings.length ? warnings : undefined,
   };
 }
 
@@ -1903,9 +2031,27 @@ function isDimTitle(label, dimName) {
       dimResults.push({ dim: dimName, chosen });
     }
     // ④ 下一步 → 价格库存页（模式判定）
+    // 注意：找不到下一步时**不要**三连 BACK 退到桌面（02 机 2026-07-26 实证会落到 miui.home）
     let snapN = await snapshot(op, "xianyu-sku-before-next");
-    const nextBtn = snapN.nodes.find((n) => /下一步/.test(String(n.label || "")));
-    if (!nextBtn?.bounds) { await cleanup(); return { ok: false, step: "sku-next-missing", implemented: true, dimResults }; }
+    let nextBtn = snapN.nodes.find((n) => /下一步/.test(String(n.label || "")) && n.bounds);
+    if (!nextBtn?.bounds) {
+      for (let si = 0; si < 3 && !nextBtn?.bounds; si += 1) {
+        await op.shellExec("input swipe 540 1700 540 900 400", 8000).catch(() => null);
+        await settle(700);
+        snapN = await snapshot(op, `xianyu-sku-before-next-sc${si}`);
+        nextBtn = snapN.nodes.find((n) => /下一步/.test(String(n.label || "")) && n.bounds);
+      }
+    }
+    if (!nextBtn?.bounds) {
+      return {
+        ok: false,
+        step: "sku-next-missing",
+        implemented: true,
+        dimResults,
+        stillInFlow: true,
+        focus: snapN.focus || null,
+      };
+    }
     await op.tap(...center(nextBtn.bounds));
     await settle(1800);
     let pp = await snapshot(op, "xianyu-sku-price-page");
@@ -2297,20 +2443,7 @@ export async function publishDryRun(op, plan, {
   saveDraft = false,
 } = {}) {
   const optionsSaveDraft = saveDraft === true;
-  const started = await startIdlefish(op);
-  if (started.package !== IDLEFISH_PACKAGE) {
-    return { ok: false, step: "start", stoppedBeforePublish: true, focus: started };
-  }
-  const opened = await openPublishDryRun(op);
-  if (!opened.ok) {
-    return { ok: false, step: "open-publish", stoppedBeforePublish: true, openTrace: opened.trace };
-  }
-  // 必须停在发布编辑页才继续。
-  const page = await snapshot(op, "xianyu-publish-fill-start");
-  if (page.focus.package !== IDLEFISH_PACKAGE || !isPublishCompose(page.nodes)) {
-    return { ok: false, step: "not-on-publish-compose", stoppedBeforePublish: true, focus: page.focus };
-  }
-
+  const sup = createStepSupervisor(op);
   const summary = {
     ok: true,
     stoppedBeforePublish: !publish,
@@ -2318,45 +2451,100 @@ export async function publishDryRun(op, plan, {
     plan: { ...plan, images: plan.images ? plan.images.length : 0 },
     steps: {},
     evidence: {},
+    supervisorEvents: sup.events,
   };
 
-  const record = (key, result) => { summary.steps[key] = result; if (!result.ok && result.step && !/needs-calibration|unverified/.test(result.step)) summary.ok = false; };
+  const record = (key, result) => {
+    summary.steps[key] = result;
+    if (!result?.ok && result?.step && !/needs-calibration|unverified|skipped/.test(String(result.step))) {
+      summary.ok = false;
+    }
+  };
+
+  const recoverCompose = async () => {
+    const r = await ensureOnPublishCompose(op, { maxAttempts: 2 });
+    sup.emit({ phase: "recover-compose", ok: r.ok, recovered: r.recovered, package: r.package || null });
+    return r;
+  };
+
+  // 0. 启动 + 进入发闲置
+  const opened = await sup.run("open", async () => {
+    const started = await startIdlefish(op);
+    if (started.package !== IDLEFISH_PACKAGE) {
+      return { ok: false, step: "start", focus: started };
+    }
+    const o = await openPublishDryRun(op);
+    if (!o.ok) return { ok: false, step: "open-publish", openTrace: o.trace };
+    const page = await snapshot(op, "xianyu-publish-fill-start");
+    if (page.focus.package !== IDLEFISH_PACKAGE || !isPublishCompose(page.nodes)) {
+      return { ok: false, step: "not-on-publish-compose", focus: page.focus };
+    }
+    return { ok: true, step: "opened", page, openTrace: o.trace };
+  }, {
+    maxAttempts: 2,
+    expect: (snap) => snap.focus?.package === IDLEFISH_PACKAGE && isPublishCompose(snap.nodes),
+    recover: recoverCompose,
+  });
+  record("open", opened);
+  if (!opened.ok) {
+    return { ...summary, ok: false, step: opened.step || "open", stoppedBeforePublish: true };
+  }
+  let page = opened.page || await snapshot(op, "xianyu-publish-fill-start");
 
   // 1. 图片
   if (skipUpload) {
     record("images", { ok: true, step: "images-skipped" });
   } else if (plan.images && plan.images.length) {
-    record("images", await uploadImagesDryRun(op, plan.images, {
+    record("images", await sup.run("images", async () => uploadImagesDryRun(op, plan.images, {
       evidenceDir,
       calibrated: calibrated.image,
       maxImages: plan.maxImages || 9,
       albumName: plan.imageAlbum || null,
+    }), {
+      maxAttempts: 2,
+      critical: true,
+      expect: async (snap, result) => result?.ok === true || /FishFlutterBoost|发闲置|发布/.test(
+        `${snap.focus?.activity || ""}|${(snap.nodes || []).map((n) => n.label).filter(Boolean).slice(0, 5).join("|")}`,
+      ),
+      recover: recoverCompose,
     }));
   }
 
   // 2. 标题
   if (plan.title) {
-    const field = findTitleField(page.nodes);
-    record("title", await fillTextField(op, field, plan.title, { evidenceDir, label: "title" }));
+    record("title", await sup.run("title", async () => {
+      const fresh = await snapshot(op, "xianyu-title-field");
+      const field = findTitleField(fresh.nodes);
+      return fillTextField(op, field, plan.title, { evidenceDir, label: "title" });
+    }, { maxAttempts: 2, recover: recoverCompose }));
   }
-  // 3. 描述
+
+  // 3. 描述（证据截图 fail-soft 已在 fillTextField）
   if (plan.description) {
-    let field = findDescriptionField(page.nodes);
-    if (!field?.bounds || !isEmptyDescriptionField(field)) {
-      // 描述区可能已含占位；重新 dump 取最新。
-      const fresh = await snapshot(op, "xianyu-desc-field");
-      field = findDescriptionField(fresh.nodes);
-    }
-    record("description", await fillTextField(op, field, plan.description, { evidenceDir, label: "desc", clearFirst: true }));
+    record("description", await sup.run("description", async () => {
+      await recoverCompose();
+      let fresh = await snapshot(op, "xianyu-desc-field");
+      let field = findDescriptionField(fresh.nodes);
+      if (!field?.bounds) {
+        await op.shellExec("input swipe 540 900 540 1500 350", 8000).catch(() => null);
+        await settle(600);
+        fresh = await snapshot(op, "xianyu-desc-field-sc");
+        field = findDescriptionField(fresh.nodes);
+      }
+      return fillTextField(op, field, plan.description, { evidenceDir, label: "desc", clearFirst: true });
+    }, {
+      maxAttempts: 2,
+      expect: async (snap, result) => result?.ok === true || result?.verified === true,
+      recover: recoverCompose,
+    }));
   }
-  // 4. 分类（点分类行 → 分类选择二级页选目标；label 驱动 + 回读）。
-  //    分类决定后续动态属性字段集，故必须在 attributes 之前。校准前只定位行。
+
+  // 4. 分类
   let categoryPage = page;
   if (!skipCategory && plan.category) {
     if (calibrated.category) {
       const cat = await selectPanelChip(op, plan.category, { evidenceDir, label: "category" });
       record("category", cat);
-      // 选完分类后页面字段会变；刷新一次再进 attributes。
       categoryPage = await snapshot(op, "xianyu-after-category");
     } else {
       const row = findCategoryRow(page.nodes);
@@ -2365,75 +2553,116 @@ export async function publishDryRun(op, plan, {
         : { ok: false, step: "category-row-missing", implemented: false });
     }
   }
-  // 4b. 动态属性（P1a）：分类后动态生成的 品牌/尺码/适用季节/裤长/腰型… 等。
-  //     声明式 plan.attributes = { 字段名: 值 }；按 label 找行，行不在当前页 → present:false 非致命跳过
-  //     （不同分类生成不同字段，不能硬编码）；行在则 selectRowOption 填入 + 回读校验。
+  // 4b. 动态属性
   if (plan.attributes && typeof plan.attributes === "object" && calibrated.attributes !== false) {
     summary.steps.attributes = {};
     for (const [name, value] of Object.entries(plan.attributes)) {
-      // 推荐区属性=chip 组（品牌/型号/容量…），按「值」找 chip；行→sheet 模型不适用（gap5 实证）
       const r = await selectPanelChip(op, value, { evidenceDir, label: `attr-${name}` });
       summary.steps.attributes[name] = r;
       if (!r.ok && r.step && !/chip-missing|unverified/.test(r.step)) summary.ok = false;
     }
   }
-  // 5. 成色（推荐区 chip 优先；无 chip 回退行→sheet）
+  // 5. 成色
   if (plan.condition) {
     const chipTry = await selectPanelChip(op, plan.condition, { evidenceDir, label: "condition" });
     record("condition", chipTry.ok || chipTry.step !== "condition-chip-missing"
       ? chipTry
       : await selectCondition(op, plan.condition, { evidenceDir }));
   }
-  // 6. 价格：有 SKU 时价格在「商品规格」批量设置页内填（用户明确：填完文案直接走规格，
-  //    价格在规格里设，不要在发布页直接设价），此处跳过；无 SKU 时才在发布页价格行填。
+  // 6. 无 SKU 时发布页设价
   if (plan.price && !plan.skuSpecs) {
     const { row: field } = await locateRowWithScroll(op, findPriceField, "price");
     record("price", await fillPriceField(op, field, plan.price, { evidenceDir }));
   }
-  // 7. 规格/SKU
+
+  // 7. 规格/SKU（失败不主动三连 BACK 退桌面）
   if (!skipSku && plan.skuSpecs) {
-    record("sku", await fillSkuSpecs(op, plan.skuSpecs, plan.skuStock, {
-      evidenceDir,
-      calibrated: calibrated.sku,
-      price: plan.skuPrice || plan.price,
-      replaceExisting: plan.skuReplaceExisting === true,
+    record("sku", await sup.run("sku", async () => {
+      const ensured = await recoverCompose();
+      if (!ensured.ok) return { ok: false, step: "sku-not-on-compose", package: ensured.package };
+      return fillSkuSpecs(op, plan.skuSpecs, plan.skuStock, {
+        evidenceDir,
+        calibrated: calibrated.sku,
+        price: plan.skuPrice || plan.price,
+        replaceExisting: plan.skuReplaceExisting === true,
+      });
+    }, {
+      maxAttempts: 2,
+      critical: true,
+      recover: async () => {
+        // 若掉桌面则重进；若仍在规格页则只轻滑，不 BACK
+        const snap = await snapshot(op, "sku-recover");
+        if (snap.focus?.package !== IDLEFISH_PACKAGE) await recoverCompose();
+        else if (!isPublishCompose(snap.nodes) && !/设置宝贝规格|下一步|商品规格/.test(
+          (snap.nodes || []).map((n) => n.label).filter(Boolean).join("|"),
+        )) {
+          await recoverCompose();
+        } else {
+          await op.shellExec("input swipe 540 1600 540 1100 350", 8000).catch(() => null);
+          await settle(600);
+        }
+      },
     }));
   }
-  // 8. 运费模板
+
+  // 8. 运费（要求在 compose）
   if (!skipFreight && plan.freightTemplate) {
-    record("freight", await selectFreightTemplate(op, plan.freightTemplate, {
-      evidenceDir, calibrated: calibrated.freight, freightPrice: plan.freightPrice,
+    record("freight", await sup.run("freight", async () => {
+      const ensured = await recoverCompose();
+      if (!ensured.ok) return { ok: false, step: "freight-not-on-compose", package: ensured.package };
+      return selectFreightTemplate(op, plan.freightTemplate, {
+        evidenceDir, calibrated: calibrated.freight, freightPrice: plan.freightPrice,
+      });
+    }, {
+      maxAttempts: 2,
+      expect: async (snap, result) => result?.ok === true || /包邮|发货方式|运费/.test(
+        (snap.nodes || []).map((n) => n.label).filter(Boolean).join("|"),
+      ),
+      recover: recoverCompose,
     }));
   }
-  // 9. 所在地（视觉选择器；闲鱼发闲置无退货地址，此字段实为所在地）
+
+  // 9. 所在地
   if (!skipAddress && (plan.returnAddress || plan.location)) {
     record("address", await selectLocation(op, { evidenceDir, calibrated: calibrated.address }));
   }
-  // 最终状态截图 + 发布页停留校验。
-  const finalShot = await capturePng(op, `${evidenceDir}\\xianyu-publish-final-${String(op.serial).replace(/[^A-Za-z0-9_-]/g, "_")}.png`);
+
+  // 最终状态（截图 soft）
+  const finalShot = await captureEvidenceSoft(
+    op,
+    `${evidenceDir}\\xianyu-publish-final-${String(op.serial).replace(/[^A-Za-z0-9_-]/g, "_")}.png`,
+    summary.warnings = summary.warnings || [],
+    "final",
+  );
   const finalPage = await snapshot(op, "xianyu-publish-final");
   summary.evidence.final = finalShot;
   summary.finalState = {
     focus: finalPage.focus,
-    stillOnPublishCompose: finalPage.focus.package === IDLEFISH_PACKAGE && isPublishCompose(finalPage.nodes),
+    stillOnPublishCompose: finalPage.focus?.package === IDLEFISH_PACKAGE && isPublishCompose(finalPage.nodes),
   };
 
-  // 安全闸：即便 --publish 也必须显式确认仍在发布页且整表无致命失败；裸「发布」永不点。
-  // 真正的点击发布逻辑在 probe 校准 + 真机验收之后再加（交接表：正式发布继续默认禁止）。
   if (publish) {
     summary.publishAttempted = false;
     summary.publishReason = "publish path disabled until calibration + validation complete";
   }
 
-  // 可选：存草稿（2026-07-26 标准链路终点）。默认 false——restore 仍走 discard。
+  // 10. 存草稿
   if (plan.saveDraft === true || optionsSaveDraft) {
-    record("saveDraft", await saveDraftDryRun(op));
+    record("saveDraft", await sup.run("saveDraft", async () => {
+      const ensured = await recoverCompose();
+      if (!ensured.ok) return { ok: false, step: "save-draft-not-on-compose", savedDraft: false };
+      return saveDraftDryRun(op);
+    }, {
+      maxAttempts: 2,
+      recover: recoverCompose,
+    }));
     summary.savedDraft = summary.steps.saveDraft?.savedDraft === true;
     if (!summary.steps.saveDraft?.ok) summary.ok = false;
   } else {
     summary.savedDraft = false;
   }
 
+  summary.supervisorEvents = sup.events;
   return summary;
 }
 

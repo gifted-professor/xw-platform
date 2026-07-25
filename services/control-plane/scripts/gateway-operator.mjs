@@ -192,33 +192,75 @@ export class GatewayOperator {
 
   // 截图：绿箭 Screen 的 savePath 是**目录**（默认 D:\Pictures），不是文件路径；
   // Screen 把图存为 <serial>_Screenshot_<ts>.png 到该目录。故：
-  // 取 targetPath 的目录作 savePath，Screen 后找新生成的 png，重命名到 targetPath（证据文件名有意义），再读字节算 sha256。
+  // 取 targetPath 的**每设备子目录**作 savePath（并发多机时避免互相抢新文件），
+  // Screen 后找新生成的 png，重命名到 targetPath，再读字节算 sha256。
+  // 读盘失败会重试；rename 失败则回退 src 路径（2026-07-26 四机并发 ENOENT 实证）。
   async capturePng(targetPath, timeoutMs = 15000) {
-    const dir = dirname(targetPath);
+    const parent = dirname(targetPath);
+    // 每 serial 独立落盘目录，杜绝并发 capture 把别人的截图 rename 走
+    const dir = join(parent, `_gwshot_${String(this.serial).replace(/[^A-Za-z0-9_-]/g, "_")}`);
     try { mkdirSync(dir, { recursive: true }); } catch {}
+    try { mkdirSync(parent, { recursive: true }); } catch {}
     const before = (() => { try { return new Set(readdirSync(dir).filter((f) => /\.png$/i.test(f))); } catch { return new Set(); } })();
     const r = await this._invoke("Screen", { savePath: dir }, timeoutMs);
     if (r.code !== 10000) throw new Error(`Screen failed: ${r.message || JSON.stringify(r)}`);
     let found = null;
-    for (let i = 0; i < 15; i += 1) {
+    const serialHint = String(this.serial);
+    for (let i = 0; i < 20; i += 1) {
       await new Promise((res) => setTimeout(res, 200));
-      const after = (() => { try { return readdirSync(dir).filter((f) => /\.png$/i.test(f) && !before.has(f)); } catch { return []; } })();
-      if (after.length) { found = after.sort().slice(-1)[0]; break; }
+      const after = (() => {
+        try {
+          return readdirSync(dir).filter((f) => {
+            if (!/\.png$/i.test(f) || before.has(f)) return false;
+            // 优先本机 serial 前缀，避免扫到脏文件
+            return f.includes(serialHint) || !/^[A-Za-z0-9]+_Screenshot_/.test(f);
+          });
+        } catch { return []; }
+      })();
+      if (after.length) {
+        const preferred = after.filter((f) => f.includes(serialHint));
+        found = (preferred.length ? preferred : after).sort().slice(-1)[0];
+        break;
+      }
     }
     if (!found) throw new Error("Screen: no new png written");
     const src = join(dir, found);
-    // Screen 异步写文件：文件名一出现就可能还是 0 字节在 flush。等非零且两次读大小稳定再 rename，避免空/截断截图。
+    // Screen 异步写文件：文件名一出现就可能还是 0 字节在 flush。等非零且两次读大小稳定再 rename。
     let size = 0, prev = -1, stable = 0;
-    for (let i = 0; i < 25; i += 1) {
-      try { size = readFileSync(src).length; } catch { size = 0; }
+    for (let i = 0; i < 30; i += 1) {
+      try { size = existsSync(src) ? readFileSync(src).length : 0; } catch { size = 0; }
       if (size > 0 && size === prev) { stable += 1; if (stable >= 2) break; } else stable = 0;
       prev = size;
       await new Promise((res) => setTimeout(res, 120));
     }
     let p = src;
-    try { renameSync(src, targetPath); if (existsSync(targetPath)) p = targetPath; } catch {}
-    const buf = readFileSync(p);
-    return { path: p, bytes: buf.length, sha256: createHash("sha256").update(buf).digest("hex") };
+    try {
+      if (existsSync(src)) {
+        renameSync(src, targetPath);
+        if (existsSync(targetPath)) p = targetPath;
+      }
+    } catch {
+      // rename 竞态/锁：继续用 src
+      p = existsSync(targetPath) ? targetPath : src;
+    }
+    // 读盘重试（ENOENT / 短暂锁）
+    let lastErr = null;
+    for (let i = 0; i < 8; i += 1) {
+      const candidates = [p, targetPath, src].filter((x, idx, arr) => x && arr.indexOf(x) === idx);
+      for (const cand of candidates) {
+        try {
+          if (!existsSync(cand)) continue;
+          const buf = readFileSync(cand);
+          if (buf.length > 0) {
+            return { path: cand, bytes: buf.length, sha256: createHash("sha256").update(buf).digest("hex") };
+          }
+        } catch (e) {
+          lastErr = e;
+        }
+      }
+      await new Promise((res) => setTimeout(res, 150));
+    }
+    throw new Error(`Screen: cannot read png after retries (${lastErr?.message || "empty"})`);
   }
 
   // uiautomator dump → base64 回传纯 ASCII（经网关文本通道不丢 UTF-8）→ node 解码 UTF-8 XML。
