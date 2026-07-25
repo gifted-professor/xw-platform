@@ -187,11 +187,53 @@ function buildRecipeIndex(recipes) {
   return index;
 }
 
-function selectTarget(capabilities, allKnowledge, filter, { constraintOnly = false, excludeIds = [] } = {}) {
+// ─── P1 noloc anti-dup (v2.4) ─────────────────────────────────────────────────
+//
+// Problem: selectTarget kept re-picking the same few constraint recipes every
+// round; when the generic grep could not locate evidence it wrote a
+// scout-constraint-noloc-<recipeId>-<ts> pitfall. The same recipe re-appeared
+// every ~45 min, so the knowledge base filled with duplicate noloc entries for
+// one id (observed 3× in a single day).
+//
+// Fix: when selecting a P1 target, skip any recipe that already has a
+// scout-constraint-noloc-<recipeId> pitfall entry written within the last 24h.
+// If every P1 candidate was observed recently, the round idles out (returns
+// null) and writes nothing. After 24h the recipe becomes eligible again — the
+// code may have changed and evidence may now be locatable.
+//
+// Recency is read from the entry's `createdAt` (server-stamped ISO string);
+// falls back to the Date.now() suffix embedded in the pitfall id itself, so
+// the dedup still works even if the registry omits createdAt.
+
+const NOLOC_DEDUP_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+function recentNolocPitfall(knowledge, recipeId, nowMs) {
+  if (!recipeId) return false;
+  const ref = nowMs ?? Date.now();
+  const prefix = `scout-constraint-noloc-${recipeId}-`;
+  for (const k of knowledge || []) {
+    if (typeof k?.id !== "string" || !k.id.startsWith(prefix)) continue;
+    let ts = k.createdAt ? Date.parse(k.createdAt) : NaN;
+    if (Number.isNaN(ts)) {
+      // Fallback: the pitfall id embeds the creation epoch millis as its suffix.
+      ts = Number(k.id.slice(prefix.length));
+    }
+    if (Number.isNaN(ts)) continue; // undatable entry → cannot prove recency, ignore
+    if (ref - ts < NOLOC_DEDUP_WINDOW_MS) return true;
+  }
+  return false;
+}
+
+function selectTarget(capabilities, allKnowledge, filter, { constraintOnly = false, excludeIds = [], dedupKnowledge, nowMs } = {}) {
   // v2.2: verifyMode is the verification arbiter; category is just knowledge classification.
   // P1 candidates are category-agnostic — pitfall entries with verifyMode ∈ {constraint, replay}
   // are verifiable too, so do NOT filter by category here. P1's own filter narrows by verifyMode.
   const recipes = allKnowledge;
+  // Pitfall entries (incl. scout-constraint-noloc-*) live in the full knowledge base.
+  // In constraint-only mode the caller passes the unverified-recipe subset as `recipes`,
+  // so it must pass the full knowledge base as `dedupKnowledge` for the noloc dedup to see
+  // the pitfall entries. In full mode allKnowledge already contains both, so the default works.
+  const dedup = dedupKnowledge || recipes;
   const recipeIndex = buildRecipeIndex(recipes);
   const exclude = new Set(excludeIds);
 
@@ -208,7 +250,8 @@ function selectTarget(capabilities, allKnowledge, filter, { constraintOnly = fal
     const unverifiedConstraintOrReplay = capRecipes.filter(
       (r) =>
         (!r.verifiedBy || r.verifiedBy.length === 0) &&
-        (r.verifyMode === "constraint" || r.verifyMode === "replay")
+        (r.verifyMode === "constraint" || r.verifyMode === "replay") &&
+        !recentNolocPitfall(dedup, r.id, nowMs) // v2.4: skip recipes with a recent noloc pitfall (anti-dup)
     );
     const hasRecipe = capRecipes.length > 0;
 
@@ -779,7 +822,10 @@ async function run({ maxRounds = 1, capabilityFilter = null, dryRun = false, con
           (!k.verifiedBy || k.verifiedBy.length === 0) &&
           (k.verifyMode === "constraint" || k.verifyMode === "replay")
       );
-      const target = selectTarget(allCaps, remaining, capabilityFilter, { constraintOnly: true });
+      const target = selectTarget(allCaps, remaining, capabilityFilter, {
+        constraintOnly: true,
+        dedupKnowledge: allKnowledge, // full base incl. noloc pitfalls (remaining has them filtered out)
+      });
       if (!target) {
         log(`round ${round + 1}: no more unverified constraint recipes`);
         summary.rounds.push({ round: round + 1, status: "no_constraint_target" });
@@ -1023,4 +1069,4 @@ if (isDirectRun) {
     });
 }
 
-export { run, selectDevice, selectTarget, classifyRecipe, buildRecipeIndex, verifyConstraint, matchConstraintPattern, grepFile, grepRepo, extractConstraintTokens, locateEvidence, CONSTRAINT_PATTERNS, GREP_DIRS };
+export { run, selectDevice, selectTarget, classifyRecipe, buildRecipeIndex, verifyConstraint, matchConstraintPattern, grepFile, grepRepo, extractConstraintTokens, locateEvidence, recentNolocPitfall, NOLOC_DEDUP_WINDOW_MS, CONSTRAINT_PATTERNS, GREP_DIRS };

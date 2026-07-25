@@ -46,6 +46,8 @@ import {
   grepRepo,
   extractConstraintTokens,
   locateEvidence,
+  recentNolocPitfall,
+  NOLOC_DEDUP_WINDOW_MS,
   CONSTRAINT_PATTERNS,
   GREP_DIRS,
 } from "../scout/scout.mjs";
@@ -489,4 +491,106 @@ test("verifyConstraint generic: absent tokens → ok=null, no_evidence_found (no
   assert.equal(result.ok, null, `expected ok=null (no fabrication), got ok=${result.ok}`);
   assert.equal(result.reason, "no_evidence_found");
   assert.equal(result.pattern, "generic");
+});
+
+// ── recentNolocPitfall / P1 noloc anti-dup (v2.4) ──────────────────────────────
+
+const NOLOC_NOW = 1_900_000_000_000; // fixed ref time so tests are deterministic
+
+function nolocPitfall(recipeId, ageMs, overrides = {}) {
+  const ts = NOLOC_NOW - ageMs;
+  return {
+    id: `scout-constraint-noloc-${recipeId}-${ts}`,
+    app: "xhs",
+    category: "pitfall",
+    title: `[scout-constraint] ${recipeId} — evidence unlocatable`,
+    content: "constraint evidence cannot be located",
+    scope: "global",
+    verifyMode: "human",
+    createdAt: new Date(ts).toISOString(),
+    ...overrides,
+  };
+}
+
+test("recentNolocPitfall: false when no noloc entry exists", () => {
+  assert.equal(recentNolocPitfall([], "recipe-1", NOLOC_NOW), false);
+  assert.equal(recentNolocPitfall([{ id: "other-id" }], "recipe-1", NOLOC_NOW), false);
+});
+
+test("recentNolocPitfall: true when a noloc entry exists within 24h (createdAt)", () => {
+  const kb = [nolocPitfall("recipe-1", 45 * 60 * 1000)]; // 45 min ago
+  assert.equal(recentNolocPitfall(kb, "recipe-1", NOLOC_NOW), true);
+});
+
+test("recentNolocPitfall: falls back to id-embedded timestamp when createdAt missing", () => {
+  const kb = [nolocPitfall("recipe-1", 30 * 60 * 1000, { createdAt: undefined })];
+  assert.equal(recentNolocPitfall(kb, "recipe-1", NOLOC_NOW), true);
+});
+
+test("recentNolocPitfall: false when the only noloc entry is older than 24h", () => {
+  const kb = [nolocPitfall("recipe-1", NOLOC_DEDUP_WINDOW_MS + 60_000)]; // 24h + 1min
+  assert.equal(recentNolocPitfall(kb, "recipe-1", NOLOC_NOW), false);
+});
+
+test("recentNolocPitfall: matches by exact recipeId prefix only (no cross-recipe bleed)", () => {
+  const kb = [nolocPitfall("recipe-1", 10 * 60 * 1000)];
+  assert.equal(recentNolocPitfall(kb, "recipe-2", NOLOC_NOW), false);
+  // a recipeId that is a string prefix of another must not match the other's entries
+  assert.equal(recentNolocPitfall(kb, "recipe-1-extra", NOLOC_NOW), false);
+});
+
+test("selectTarget P1: skips recipe with a recent noloc pitfall and falls through to null", () => {
+  const cap = makeCapability({ id: "xhs.comment.send", maturity: "E2", risk: "R2" });
+  const recipe = makeRecipe({
+    id: "comment-cap-one-per-loop",
+    appliesTo: ["xhs.comment.send"],
+    verifyMode: "constraint",
+    verifiedBy: [],
+  });
+  const kb = [recipe, nolocPitfall("comment-cap-one-per-loop", 45 * 60 * 1000)];
+  // dedupKnowledge omitted → defaults to the recipes array; noloc pitfall is in it
+  const result = selectTarget([cap], kb, null, { nowMs: NOLOC_NOW });
+  assert.equal(result, null, "recently-observed recipe should be skipped → no P1 target");
+});
+
+test("selectTarget P1: recipe with an old (>24h) noloc pitfall is eligible again", () => {
+  const cap = makeCapability({ id: "xhs.comment.send", maturity: "E2", risk: "R2" });
+  const recipe = makeRecipe({
+    id: "comment-cap-one-per-loop",
+    appliesTo: ["xhs.comment.send"],
+    verifyMode: "constraint",
+    verifiedBy: [],
+  });
+  const kb = [recipe, nolocPitfall("comment-cap-one-per-loop", NOLOC_DEDUP_WINDOW_MS + 60_000)];
+  const result = selectTarget([cap], kb, null, { nowMs: NOLOC_NOW });
+  assert.equal(result?.id, "xhs.comment.send");
+  assert.equal(result?._priority, 1);
+});
+
+test("selectTarget P1: dedupKnowledge overrides recipes array (constraint-only mode shape)", () => {
+  const cap = makeCapability({ id: "xhs.comment.send", maturity: "E2", risk: "R2" });
+  const recipe = makeRecipe({
+    id: "comment-cap-one-per-loop",
+    appliesTo: ["xhs.comment.send"],
+    verifyMode: "constraint",
+    verifiedBy: [],
+  });
+  // `recipes` (remaining) has only the recipe; the noloc pitfall lives only in dedupKnowledge
+  const remaining = [recipe];
+  const fullKb = [recipe, nolocPitfall("comment-cap-one-per-loop", 20 * 60 * 1000)];
+  const result = selectTarget([cap], remaining, null, {
+    dedupKnowledge: fullKb,
+    nowMs: NOLOC_NOW,
+  });
+  assert.equal(result, null, "dedup should see the pitfall in dedupKnowledge and skip the recipe");
+});
+
+test("selectTarget P1: when one recipe is deduped, the next P1 candidate is chosen", () => {
+  const cap1 = makeCapability({ id: "xhs.comment.send", maturity: "E2", risk: "R2" });
+  const cap2 = makeCapability({ id: "xhs.observe.feed", maturity: "E3", risk: "R0" });
+  const r1 = makeRecipe({ id: "comment-cap-one-per-loop", appliesTo: ["xhs.comment.send"], verifyMode: "constraint", verifiedBy: [] });
+  const r2 = makeRecipe({ id: "feed-observe-recipe", appliesTo: ["xhs.observe.feed"], verifyMode: "constraint", verifiedBy: [] });
+  const kb = [r1, r2, nolocPitfall("comment-cap-one-per-loop", 30 * 60 * 1000)];
+  const result = selectTarget([cap1, cap2], kb, null, { nowMs: NOLOC_NOW });
+  assert.equal(result?.id, "xhs.observe.feed", "deduped recipe-1 should give way to recipe-2");
 });
