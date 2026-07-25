@@ -29,7 +29,7 @@ function commandArgs({ script, action, device, params }) {
   }
   // Map capability action name to operator CLI command.
   const command = action === "full-dry-run" ? "publish-dry-run" : action;
-  const args = [script, "--serial", device.runtimeId, command];
+  const args = [script, "--serial", device.runtimeId, "--transport", "gateway", command];
   if (params.text !== undefined) args.push("--text", String(params.text));
   // publish-dry-run params
   if (params.description !== undefined) args.push("--description", String(params.description));
