@@ -4,7 +4,13 @@
 // 绝不点击最终“发布”，也不复用小红书业务原语。
 
 import { pathToFileURL } from "node:url";
-import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -16,6 +22,13 @@ import { XiaoweiHttpAdapter } from "./xiaowei-http-adapter.mjs";
 const IDLEFISH_PACKAGE = "com.taobao.idlefish";
 const IDLEFISH_MAIN_ACTIVITY = "com.taobao.idlefish.maincontainer.activity.MainActivity";
 const DEFAULT_ADB = "C:\\PROGRA~2\\xiaowei_android\\tools\\adb.exe";
+
+// 每台设备底栏真实坐标；运行态写在 Windows 控制面数据目录，不入库。
+export const LAYOUT_PROFILE_DIR = process.env.XIANYU_LAYOUT_PROFILE_DIR
+  || "C:\\Users\\Public\\xhs-agent-control\\layout-profiles";
+// 底栏 y1 兜底：仅无 profile 时使用。有 profile 后一律用真实 bounds ± 容差。
+const BOTTOM_TAB_Y_RATIO = 0.85;
+const PROFILE_BOUNDS_TOLERANCE_PX = 20;
 
 function arg(name, fallback = null) {
   const i = process.argv.indexOf(name);
@@ -105,18 +118,131 @@ export function getScreenHeight(snapshot) {
   return maxY;
 }
 
-// 底栏 y1 阈值：屏高 × 0.85。02 号机（三键导航）底栏 y1≈2132，
-// 04 号机（手势）≈2227；0.85 同时覆盖两者，避免写死像素。
-const BOTTOM_TAB_Y_RATIO = 0.85;
-
-export function isBottomTabSelected(node) {
-  // Flutter content-desc：「…，选中状态」vs「…，未选中状态」
-  const label = String(node?.label || "");
-  return /选中状态/.test(label) && !/未选中状态/.test(label);
+export function safeProfileSerial(serial) {
+  return String(serial || "").replace(/[^A-Za-z0-9_-]/g, "_");
 }
 
-export function findHomeTab(snapshot) {
-  // 首页底栏：label /闲鱼|首页/ + 左下 X 轴 + 屏高比例，不写死 Y 像素。
+export function layoutProfilePath(serial, dir = LAYOUT_PROFILE_DIR) {
+  const safe = safeProfileSerial(serial);
+  if (!safe) return null;
+  return join(dir, `${safe}.json`);
+}
+
+export function loadLayoutProfile(serial, { dir = LAYOUT_PROFILE_DIR } = {}) {
+  const path = layoutProfilePath(serial, dir);
+  if (!path || !existsSync(path)) return null;
+  try {
+    const raw = readFileSync(path, "utf8");
+    const profile = JSON.parse(raw);
+    if (!profile || typeof profile !== "object") return null;
+    if (!Array.isArray(profile?.home?.bounds) || !Array.isArray(profile?.sell?.bounds)) return null;
+    return profile;
+  } catch {
+    return null;
+  }
+}
+
+export function saveLayoutProfile(serial, profile, { dir = LAYOUT_PROFILE_DIR } = {}) {
+  const path = layoutProfilePath(serial, dir);
+  if (!path) throw new Error("saveLayoutProfile: invalid serial");
+  mkdirSync(dir, { recursive: true });
+  const payload = {
+    schemaVersion: 1,
+    ...profile,
+    updatedAt: new Date().toISOString(),
+  };
+  writeFileSync(path, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+  return path;
+}
+
+export function boundsClose(a, b, tolerance = PROFILE_BOUNDS_TOLERANCE_PX) {
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length < 4 || b.length < 4) return false;
+  for (let i = 0; i < 4; i += 1) {
+    if (Math.abs(Number(a[i]) - Number(b[i])) > tolerance) return false;
+  }
+  return true;
+}
+
+// 底栏 label 锚点：匹配 Flutter content-desc（闲鱼，…选中状态 / 卖闲置 / 消息，…），
+// 排除「闲鱼同款商品卡」等瀑布流噪声。
+function bottomTabRole(label) {
+  const text = String(label || "");
+  if (/卖闲置/.test(text)) return "sell";
+  // 首页 tab：以「闲鱼/首页」开头，后接分隔或状态词，不能是「闲鱼同款…」
+  if (/^(闲鱼|首页)([，,。]|$)/.test(text) || /^(闲鱼|首页).*?(选中状态|未选中状态)/.test(text)) {
+    return "home";
+  }
+  if (/^消息([，,。]|$)/.test(text) || /^消息.*?(选中状态|未选中状态)/.test(text)) return "message";
+  if (/^我的([，,。]|$)/.test(text) || /^我的.*?(选中状态|未选中状态)/.test(text)) return "me";
+  return null;
+}
+
+// 从 snapshot 探测底栏 tab 真实坐标。探测用下半屏（0.5），比 0.85 更宽松以便首次建档。
+export function probeBottomTabs(snapshot, screenH) {
+  const height = Number(screenH) || getScreenHeight(snapshot);
+  const halfY = height ? height * 0.5 : 0;
+  const tabs = [];
+  let home = null;
+  let sell = null;
+
+  for (const node of snapshot || []) {
+    if (!node?.bounds || !Array.isArray(node.bounds)) continue;
+    const label = String(node.label || "");
+    const role = bottomTabRole(label);
+    if (!role) continue;
+    // 排除瀑布流噪声：必须在下半屏，且高度像底栏控件。
+    if (halfY && node.bounds[1] < halfY) continue;
+    const h = node.bounds[3] - node.bounds[1];
+    if (h <= 0 || h > 360) continue;
+    const entry = {
+      role,
+      label,
+      bounds: [...node.bounds],
+      clickable: !!node.clickable,
+    };
+    // 同 role 优先 clickable、再取更靠下的。
+    const prefer = (prev, next) => {
+      if (!prev) return next;
+      if (next.clickable && !prev.clickable) return next;
+      if (prev.clickable && !next.clickable) return prev;
+      return next.bounds[1] >= prev.bounds[1] ? next : prev;
+    };
+    if (entry.role === "home") home = prefer(home, entry);
+    if (entry.role === "sell") sell = prefer(sell, entry);
+    tabs.push(entry);
+  }
+
+  // 稳定排序：按 x1
+  tabs.sort((a, b) => a.bounds[0] - b.bounds[0]);
+  return {
+    home: home ? { bounds: home.bounds, label: home.label } : null,
+    sell: sell ? { bounds: sell.bounds, label: sell.label } : null,
+    tabs,
+    screenH: height || null,
+  };
+}
+
+function buildLayoutProfileFromProbe(probe) {
+  return {
+    schemaVersion: 1,
+    capturedAt: new Date().toISOString(),
+    screenH: probe.screenH,
+    home: probe.home,
+    sell: probe.sell,
+    tabs: probe.tabs,
+  };
+}
+
+function matchTabByProfileBounds(snapshot, expected, labelRe, tolerance = PROFILE_BOUNDS_TOLERANCE_PX) {
+  if (!expected?.bounds) return null;
+  const candidates = (snapshot || []).filter((node) => node?.bounds
+    && (!labelRe || labelRe.test(node.label || ""))
+    && boundsClose(node.bounds, expected.bounds, tolerance));
+  // 优先 clickable
+  return candidates.find((node) => node.clickable) || candidates[0] || null;
+}
+
+function findHomeTabByRatio(snapshot) {
   const screenH = getScreenHeight(snapshot);
   if (!screenH) return null;
   const minY = screenH * BOTTOM_TAB_Y_RATIO;
@@ -129,8 +255,7 @@ export function findHomeTab(snapshot) {
   return candidates[0] || null;
 }
 
-export function findSellTab(snapshot) {
-  // 中央「卖闲置」：label 匹配 + 底部中央 X 轴 + 屏高比例；卖闲置图标略高出普通底栏。
+function findSellTabByRatio(snapshot) {
   const screenH = getScreenHeight(snapshot);
   if (!screenH) return null;
   const minY = screenH * BOTTOM_TAB_Y_RATIO;
@@ -141,6 +266,94 @@ export function findSellTab(snapshot) {
     && node.bounds[1] >= minY
     && node.bounds[3] - node.bounds[1] <= 320);
   return candidates[0] || null;
+}
+
+function maybePersistProbe(serial, snapshot, { dir, autoSave } = {}) {
+  if (!serial || autoSave === false) return null;
+  const screenH = getScreenHeight(snapshot);
+  const probe = probeBottomTabs(snapshot, screenH);
+  if (!probe.home?.bounds || !probe.sell?.bounds) return null;
+  const profile = buildLayoutProfileFromProbe(probe);
+  try {
+    saveLayoutProfile(serial, profile, dir ? { dir } : undefined);
+  } catch {
+    return null;
+  }
+  return profile;
+}
+
+export function isBottomTabSelected(node) {
+  // Flutter content-desc：「…，选中状态」vs「…，未选中状态」
+  const label = String(node?.label || "");
+  return /选中状态/.test(label) && !/未选中状态/.test(label);
+}
+
+/**
+ * 找首页底栏 tab。
+ * @param {object[]} snapshot
+ * @param {object|string} [opts] serial 字符串，或 { serial, profile, dir, autoSave }
+ */
+export function findHomeTab(snapshot, opts = {}) {
+  const options = typeof opts === "string" ? { serial: opts } : (opts || {});
+  const { serial = null, dir = LAYOUT_PROFILE_DIR, autoSave = true } = options;
+  const profile = options.profile !== undefined
+    ? options.profile
+    : (serial ? loadLayoutProfile(serial, { dir }) : null);
+
+  // 有 profile 时只按真实 bounds ± 容差匹配，不再混用比例（布局漂移应重探/删 profile）。
+  if (profile?.home?.bounds) {
+    return matchTabByProfileBounds(snapshot, profile.home, /闲鱼|首页/);
+  }
+
+  const fallback = findHomeTabByRatio(snapshot);
+  if (fallback) maybePersistProbe(serial, snapshot, { dir, autoSave });
+  return fallback;
+}
+
+/**
+ * 找中央「卖闲置」底栏 tab。
+ * @param {object[]} snapshot
+ * @param {object|string} [opts] serial 字符串，或 { serial, profile, dir, autoSave }
+ */
+export function findSellTab(snapshot, opts = {}) {
+  const options = typeof opts === "string" ? { serial: opts } : (opts || {});
+  const { serial = null, dir = LAYOUT_PROFILE_DIR, autoSave = true } = options;
+  const profile = options.profile !== undefined
+    ? options.profile
+    : (serial ? loadLayoutProfile(serial, { dir }) : null);
+
+  if (profile?.sell?.bounds) {
+    return matchTabByProfileBounds(snapshot, profile.sell, /卖闲置/);
+  }
+
+  const fallback = findSellTabByRatio(snapshot);
+  if (fallback) maybePersistProbe(serial, snapshot, { dir, autoSave });
+  return fallback;
+}
+
+/**
+ * 确保该设备有 layout profile：已有则直接返回，没有则用当前/新 snapshot 探测并落盘。
+ * @returns {{ profile, source: 'cache'|'probe-saved'|'probe-failed', path?: string }}
+ */
+export async function ensureLayoutProfile(op, snapshotNodes = null, { dir = LAYOUT_PROFILE_DIR } = {}) {
+  const serial = op?.serial;
+  const existing = serial ? loadLayoutProfile(serial, { dir }) : null;
+  if (existing?.home?.bounds && existing?.sell?.bounds) {
+    return { profile: existing, source: "cache", path: layoutProfilePath(serial, dir) };
+  }
+
+  let nodes = snapshotNodes;
+  if (!nodes) {
+    const state = await snapshot(op, "xianyu-layout-probe");
+    nodes = state.nodes;
+  }
+  const probe = probeBottomTabs(nodes, getScreenHeight(nodes));
+  if (!probe.home?.bounds || !probe.sell?.bounds) {
+    return { profile: null, source: "probe-failed", probe };
+  }
+  const profile = buildLayoutProfileFromProbe(probe);
+  const path = saveLayoutProfile(serial, profile, { dir });
+  return { profile, source: "probe-saved", path, probe };
 }
 
 export function findDescriptionField(snapshot) {
@@ -481,6 +694,7 @@ export async function openPublishDryRun(op, { maxSteps = 6 } = {}) {
     return { ok: false, step: "start", started };
   }
 
+  let layoutSource = null;
   // 闲鱼会恢复上次 MainActivity 的 Tab（例如“消息”）。step=0 的中央“卖闲置”坐标只在
   // 首页成立；若直接在消息页点击同一坐标，会命中订单卡片。先固定回首页 Tab，再进发布流。
   // 当前校准设备均为 1080×2400，尺寸不符时拒绝盲点。
@@ -490,9 +704,18 @@ export async function openPublishDryRun(op, { maxSteps = 6 } = {}) {
       return { ok: false, step: "unsupported-display-size", started, sizeRaw: String(sizeRaw).trim() };
     }
     const main = await snapshot(op, "xianyu-main-tab-layout");
-    const homeTab = findHomeTab(main.nodes);
+    // 首次运行自动探测底栏并落盘；之后 find* 直接读 profile 真实 bounds。
+    const layout = await ensureLayoutProfile(op, main.nodes);
+    layoutSource = layout.source;
+    const tabOpts = { serial: op.serial, profile: layout.profile, autoSave: true };
+    const homeTab = findHomeTab(main.nodes, tabOpts);
     if (!homeTab?.bounds) {
-      return { ok: false, step: "home-tab-not-found", started };
+      return {
+        ok: false,
+        step: "home-tab-not-found",
+        started,
+        layoutSource,
+      };
     }
     // 已在首页（闲鱼 label 为选中状态）则跳过点 home，直接找卖闲置。
     let homeNodes = main.nodes;
@@ -501,13 +724,18 @@ export async function openPublishDryRun(op, { maxSteps = 6 } = {}) {
       await settle(1400);
       const home = await snapshot(op, "xianyu-home-tab-normalized");
       if (home.focus.package !== IDLEFISH_PACKAGE || !/MainActivity/.test(home.focus.activity || "")) {
-        return { ok: false, step: "home-tab-normalize", started, focus: home.focus };
+        return { ok: false, step: "home-tab-normalize", started, focus: home.focus, layoutSource };
       }
       homeNodes = home.nodes;
     }
-    const sellTab = findSellTab(homeNodes);
+    const sellTab = findSellTab(homeNodes, tabOpts);
     if (!sellTab?.bounds) {
-      return { ok: false, step: "sell-tab-not-found", started };
+      return {
+        ok: false,
+        step: "sell-tab-not-found",
+        started,
+        layoutSource,
+      };
     }
     await op.tap(...center(sellTab.bounds));
     await settle();
@@ -536,18 +764,38 @@ export async function openPublishDryRun(op, { maxSteps = 6 } = {}) {
       // 发布页可能仍叠了草稿恢复框（极端情况），再清一次再确认落在干净发布页。
       const dismissed = await dismissRestoreDialog(op).catch(() => false);
       if (dismissed) trace.push({ step: "restore-dismissed" });
-      return { ok: true, stage: "publish-compose", stoppedBeforePublish: true, trace };
+      return {
+        ok: true,
+        stage: "publish-compose",
+        stoppedBeforePublish: true,
+        layoutSource,
+        trace,
+      };
     }
     if (step === maxSteps) break;
     let entry = null;
     entry = findPublishEntry(state.nodes);
     if (!entry && step === 0) entry = findPublishMenuEntryByLayout(state.nodes);
-    if (!entry) return { ok: false, step: "publish-entry", stoppedBeforePublish: true, trace };
+    if (!entry) {
+      return {
+        ok: false,
+        step: "publish-entry",
+        stoppedBeforePublish: true,
+        layoutSource,
+        trace,
+      };
+    }
     const [x, y] = center(entry.bounds);
     await op.tap(x, y);
     await settle();
   }
-  return { ok: false, step: "publish-compose", stoppedBeforePublish: true, trace };
+  return {
+    ok: false,
+    step: "publish-compose",
+    stoppedBeforePublish: true,
+    layoutSource,
+    trace,
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

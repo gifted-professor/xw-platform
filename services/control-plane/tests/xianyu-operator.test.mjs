@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
+  boundsClose,
   descriptionContains,
   findDiscardWithoutSaving,
   findDescriptionField,
@@ -11,7 +15,10 @@ import {
   isBottomTabSelected,
   isEmptyDescriptionField,
   isPublishCompose,
+  loadLayoutProfile,
   parseAllUiNodes,
+  probeBottomTabs,
+  saveLayoutProfile,
   semanticSnapshot,
 } from "../scripts/xianyu-operator.mjs";
 
@@ -112,8 +119,8 @@ test("getScreenHeight derives height from max bounds y2", () => {
 });
 
 test("findHomeTab / findSellTab use label + screen-height ratio on device 02 layout", () => {
-  const home = findHomeTab(device02BottomTabs);
-  const sell = findSellTab(device02BottomTabs);
+  const home = findHomeTab(device02BottomTabs, { autoSave: false });
+  const sell = findSellTab(device02BottomTabs, { autoSave: false });
   assert.equal(home?.label, "闲鱼，未读消息数0，选中状态");
   assert.deepEqual(home?.bounds, [22, 2132, 218, 2175]);
   assert.equal(sell?.label, "卖闲置");
@@ -122,11 +129,81 @@ test("findHomeTab / findSellTab use label + screen-height ratio on device 02 lay
 });
 
 test("findHomeTab / findSellTab still work on higher bottom-bar layouts", () => {
-  const home = findHomeTab(device04BottomTabs);
-  const sell = findSellTab(device04BottomTabs);
+  const home = findHomeTab(device04BottomTabs, { autoSave: false });
+  const sell = findSellTab(device04BottomTabs, { autoSave: false });
   assert.equal(home?.label, "闲鱼，未选中状态");
   assert.equal(sell?.label, "卖闲置");
   assert.equal(isBottomTabSelected(home), false);
+});
+
+test("probeBottomTabs extracts home/sell real bounds from snapshot", () => {
+  const probe = probeBottomTabs(device02BottomTabs, getScreenHeight(device02BottomTabs));
+  assert.deepEqual(probe.home?.bounds, [22, 2132, 218, 2175]);
+  assert.deepEqual(probe.sell?.bounds, [427, 2072, 653, 2175]);
+  assert.equal(probe.tabs.length >= 4, true);
+  // 瀑布流噪声不应进 tabs
+  assert.equal(probe.tabs.some((t) => /同款商品卡/.test(t.label)), false);
+});
+
+test("findHomeTab / findSellTab match profile bounds with ±20px tolerance", () => {
+  const profile = {
+    home: { bounds: [22, 2132, 218, 2175], label: "闲鱼" },
+    sell: { bounds: [427, 2072, 653, 2175], label: "卖闲置" },
+  };
+  // 轻微抖动仍命中
+  const jittered = [
+    { label: "闲鱼，选中状态", bounds: [30, 2140, 210, 2180], clickable: true },
+    { label: "卖闲置", bounds: [435, 2080, 645, 2185], clickable: true },
+  ];
+  const home = findHomeTab(jittered, { profile, autoSave: false });
+  const sell = findSellTab(jittered, { profile, autoSave: false });
+  assert.deepEqual(home?.bounds, [30, 2140, 210, 2180]);
+  assert.deepEqual(sell?.bounds, [435, 2080, 645, 2185]);
+  assert.equal(boundsClose([22, 2132, 218, 2175], [30, 2140, 210, 2180], 20), true);
+  // 超出容差：profile miss 后可回落到 ratio；本例 y 太高 ratio 也 miss。
+  const far = [
+    { label: "闲鱼，选中状态", bounds: [22, 1000, 218, 1100], clickable: true },
+    { label: "卖闲置", bounds: [427, 1000, 653, 1150], clickable: true },
+  ];
+  assert.equal(findHomeTab(far, { profile, autoSave: false }), null);
+  assert.equal(findSellTab(far, { profile, autoSave: false }), null);
+});
+
+test("loadLayoutProfile / saveLayoutProfile round-trip to temp dir", () => {
+  const dir = mkdtempSync(join(tmpdir(), "xianyu-layout-"));
+  try {
+    const serial = "test-serial-02";
+    assert.equal(loadLayoutProfile(serial, { dir }), null);
+    const probe = probeBottomTabs(device02BottomTabs, 2175);
+    const path = saveLayoutProfile(serial, {
+      capturedAt: "2026-07-25T00:00:00.000Z",
+      screenH: probe.screenH,
+      home: probe.home,
+      sell: probe.sell,
+      tabs: probe.tabs,
+    }, { dir });
+    assert.equal(path.endsWith("test-serial-02.json"), true);
+    const loaded = loadLayoutProfile(serial, { dir });
+    assert.deepEqual(loaded.home.bounds, [22, 2132, 218, 2175]);
+    assert.deepEqual(loaded.sell.bounds, [427, 2072, 653, 2175]);
+    const raw = JSON.parse(readFileSync(path, "utf8"));
+    assert.equal(raw.schemaVersion, 1);
+    assert.ok(raw.updatedAt);
+
+    // 无 profile 时 find* 兜底 ratio 并 autoSave
+    const dir2 = mkdtempSync(join(tmpdir(), "xianyu-layout-auto-"));
+    try {
+      const home = findHomeTab(device02BottomTabs, { serial: "auto-02", dir: dir2, autoSave: true });
+      assert.ok(home);
+      const saved = loadLayoutProfile("auto-02", { dir: dir2 });
+      assert.deepEqual(saved?.home?.bounds, [22, 2132, 218, 2175]);
+      assert.deepEqual(saved?.sell?.bounds, [427, 2072, 653, 2175]);
+    } finally {
+      rmSync(dir2, { recursive: true, force: true });
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("isBottomTabSelected distinguishes 选中 vs 未选中", () => {
