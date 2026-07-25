@@ -31,6 +31,7 @@ $ProgressPreference = "SilentlyContinue"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $logDir = Join-Path $repoRoot "data\scout-logs"
+$xmlPath = Join-Path $logDir "$TaskName-task.xml"
 
 function Write-Result([hashtable]$Value) {
     $Value | ConvertTo-Json -Depth 8 -Compress
@@ -53,82 +54,86 @@ if ($Action -eq "Install") {
     # ── Ensure log directory ──
     New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 
-    # ── Build task action ──
+    # ── Build task XML directly (schtasks.exe approach) ──
     # --constraint-only: only grep-based constraint verification, no device ops
-    # --dry-run: first run is observation-only (no knowledge writes)
-    $nodeArgs = "`"$scoutScript`" --constraint-only 3"
-    $taskAction = New-ScheduledTaskAction `
-        -Execute $nodeExe `
-        -Argument $nodeArgs `
-        -WorkingDirectory $repoRoot
+    # 3: max rounds (process up to 3 unverified constraint recipes per run)
+    $q = [char]34
 
-    # ── Trigger: every 45 minutes, starting now ──
-    $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 45) -RepetitionDuration ([TimeSpan]::MaxValue)
+    # Calculate start time: 1 minute from now
+    $startTime = (Get-Date).AddMinutes(1).ToString("HH:mm")
+    $startDate = (Get-Date).ToString("yyyy-MM-dd")
 
-    # ── Principal: current user, limited privileges ──
-    $principal = New-ScheduledTaskPrincipal `
-        -UserId ([System.Security.Principal.WindowsIdentity]::GetCurrent().Name) `
-        -LogonType Interactive `
-        -RunLevel Limited
+    $xml = @"
+<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>Scout auto-cruise: constraint-only verification every 45min. No device ops.</Description>
+  </RegistrationInfo>
+  <Triggers>
+    <TimeTrigger>
+      <Repetition>
+        <Interval>PT45M</Interval>
+        <StopAtDurationEnd>false</StopAtDurationEnd>
+      </Repetition>
+      <StartBoundary>$($startDate)T$($startTime)</StartBoundary>
+      <Enabled>true</Enabled>
+    </TimeTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>LeastPrivilege</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <AllowHardTerminate>true</AllowHardTerminate>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
+    <AllowStartOnDemand>true</AllowStartOnDemand>
+    <Enabled>true</Enabled>
+    <Hidden>false</Hidden>
+    <RunOnlyIfIdle>false</RunOnlyIfIdle>
+    <WakeToRun>false</WakeToRun>
+    <ExecutionTimeLimit>PT30M</ExecutionTimeLimit>
+    <Priority>7</Priority>
+    <RestartOnFailure>
+      <Interval>PT2M</Interval>
+      <Count>3</Count>
+    </RestartOnFailure>
+    <IdleSettings>
+      <StopOnIdleEnd>false</StopOnIdleEnd>
+      <RestartOnIdle>false</RestartOnIdle>
+      <Duration>PT0S</Duration>
+      <WaitTimeout>PT0S</WaitTimeout>
+    </IdleSettings>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>$nodeExe</Command>
+      <Arguments>$q$scoutScript$q --constraint-only 3</Arguments>
+      <WorkingDirectory>$repoRoot</WorkingDirectory>
+    </Exec>
+  </Actions>
+</Task>
+"@
 
-    # ── Settings: CRITICAL — StopOnIdleEnd must be false ──
-    # Lesson from infra pitfall: StopOnIdleEnd kills services prematurely.
-    # New-ScheduledTaskSettingsSet does not expose StopOnIdleEnd directly;
-    # we use XML manipulation after registration to ensure it is off.
-    $settings = New-ScheduledTaskSettingsSet `
-        -AllowStartIfOnBatteries `
-        -DontStopIfGoingOnBatteries `
-        -StartWhenAvailable `
-        -MultipleInstances IgnoreNew `
-        -RestartCount 3 `
-        -RestartInterval (New-TimeSpan -Minutes 2) `
-        -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
+    $xml | Out-File -FilePath $xmlPath -Encoding Unicode
 
-    # ── Register first, then patch idle settings via XML ──
-    Register-ScheduledTask `
-        -TaskName $TaskName `
-        -Action $taskAction `
-        -Trigger $trigger `
-        -Principal $principal `
-        -Settings $settings `
-        -Description "Scout auto-cruise: constraint-only verification every 45min. No device ops." `
-        -Force | Out-Null
+    # ── Register via schtasks.exe (most reliable) ──
+    $r = schtasks.exe /Create /TN $TaskName /XML $xmlPath /F 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "schtasks /create failed: $r" }
 
-    # ── Patch idle settings via schtasks XML export/import ──
-    # This is the reliable way to set StopOnIdleEnd=false
-    $tmpXml = Join-Path $env:TEMP "$TaskName-idle-patch.xml"
-    schtasks.exe /Query /TN $TaskName /XML ONE | Out-File -FilePath $tmpXml -Encoding Unicode
-    [xml]$xml = Get-Content -Path $tmpXml
-    $ns = New-Object System.Xml.XmlNamespaceManager($xml.NameTable)
+    # Verify idle settings
+    $verifyXml = Join-Path $env:TEMP "$TaskName-verify.xml"
+    schtasks.exe /Query /TN $TaskName /XML ONE | Out-File -FilePath $verifyXml -Encoding Unicode
+    [xml]$check = Get-Content -Path $verifyXml
+    $ns = New-Object System.Xml.XmlNamespaceManager($check.NameTable)
     $ns.AddNamespace("t", "http://schemas.microsoft.com/windows/2004/02/mit/task")
-
-    # Ensure IdleSettings element exists
-    $settingsNode = $xml.SelectSingleNode("//t:Settings", $ns)
-    $idleNode = $settingsNode.SelectSingleNode("t:IdleSettings", $ns)
-    if (-not $idleNode) {
-        $idleNode = $xml.CreateElement("IdleSettings", $ns.LookupNamespace("t"))
-        $settingsNode.AppendChild($idleNode) | Out-Null
-    }
-
-    # Set StopOnIdleEnd = false
-    $stopNode = $idleNode.SelectSingleNode("t:StopOnIdleEnd", $ns)
-    if (-not $stopNode) {
-        $stopNode = $xml.CreateElement("StopOnIdleEnd", $ns.LookupNamespace("t"))
-        $idleNode.AppendChild($stopNode) | Out-Null
-    }
-    $stopNode.InnerText = "false"
-
-    # Set Duration = PT0S (don't wait for idle)
-    $durNode = $idleNode.SelectSingleNode("t:Duration", $ns)
-    if (-not $durNode) {
-        $durNode = $xml.CreateElement("Duration", $ns.LookupNamespace("t"))
-        $idleNode.AppendChild($durNode) | Out-Null
-    }
-    $durNode.InnerText = "PT0S"
-
-    $xml.Save($tmpXml)
-    schtasks.exe /Create /TN $TaskName /XML $tmpXml /F | Out-Null
-    Remove-Item -Path $tmpXml -Force -ErrorAction SilentlyContinue
+    $stopOnIdle = $check.SelectSingleNode("//t:StopOnIdleEnd", $ns)
+    Remove-Item -Path $verifyXml -Force -ErrorAction SilentlyContinue
 
     Write-Result @{
         ok = $true
@@ -140,13 +145,14 @@ if ($Action -eq "Install") {
         nodeVersion = $nodeVersion
         repoRoot = $repoRoot
         logDir = $logDir
-        stopOnIdleEnd = $false
+        stopOnIdleEnd = if ($stopOnIdle) { $stopOnIdle.InnerText } else { "not found" }
     }
     exit 0
 }
 
 if ($Action -eq "Start") {
-    Start-ScheduledTask -TaskName $TaskName
+    $r = schtasks.exe /Run /TN $TaskName 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "schtasks /run failed: $r" }
     Start-Sleep -Seconds 2
     $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
     Write-Result @{
@@ -170,7 +176,7 @@ if ($Action -eq "Stop") {
 
 if ($Action -eq "Remove") {
     Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-    Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
+    schtasks.exe /Delete /TN $TaskName /F 2>&1 | Out-Null
     Write-Result @{
         ok = $true
         action = "removed"
@@ -194,5 +200,4 @@ Write-Result @{
     lastRun = if ($info) { [string]$info.LastRunTime } else { $null }
     lastResult = if ($info) { [string]$info.LastTaskResult } else { $null }
     nextRun = if ($info) { [string]$info.NextRunTime } else { $null }
-    stopOnIdleEnd = if ($task) { [string]$task.Settings.StopOnIdleEnd } else { $null }
 }
