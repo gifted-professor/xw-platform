@@ -20,7 +20,7 @@
       "automationPolicy": { "mode": "automatic" },
       "implementation": { "adapter": "xianyu", "action": "snapshot" },
       "evidence": ["PR #11"],
-      "availability": "dependency_pending_pr_11"
+      "availability": "implemented"
     },
     {
       "schemaVersion": 1,
@@ -41,7 +41,7 @@
       "automationPolicy": { "mode": "automatic" },
       "implementation": { "adapter": "xianyu", "action": "open-publish" },
       "evidence": ["PR #11"],
-      "availability": "dependency_pending_pr_11"
+      "availability": "implemented"
     },
     {
       "schemaVersion": 1,
@@ -67,7 +67,7 @@
       "automationPolicy": { "mode": "automatic" },
       "implementation": { "adapter": "xianyu", "action": "input-dry-run" },
       "evidence": ["PR #11"],
-      "availability": "dependency_pending_pr_11"
+      "availability": "implemented"
     }
   ]
 }
