@@ -27,3 +27,10 @@
 
 设备路由/端口配置改 `C:\Users\Public\xhs-routing-v1-1\config\control-plane.devices.json`
 （不入库），改后同样重启控制面生效。
+
+## Windows 服务清单
+
+| 服务名 | 脚本 | 用途 |
+|--------|------|------|
+| `XhsDeviceControlPlaneV1` | `scripts/control-plane-task.ps1` | 控制面主服务（设备路由/作业调度） |
+| `XhsScoutScout` | `scripts/install-scout-task.ps1` | scout 自动巡航：每 45min 跑 constraint-only 验证（只读 grep，不碰手机） |

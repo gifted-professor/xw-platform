@@ -184,7 +184,7 @@ function buildRecipeIndex(recipes) {
   return index;
 }
 
-function selectTarget(capabilities, allKnowledge, filter) {
+function selectTarget(capabilities, allKnowledge, filter, { constraintOnly = false } = {}) {
   const recipes = allKnowledge.filter((k) => k.category === "recipe");
   const recipeIndex = buildRecipeIndex(recipes);
 
@@ -237,6 +237,15 @@ function selectTarget(capabilities, allKnowledge, filter) {
           re.test(c.capability.appId) ||
           re.test(c.capability.description || "")
       )
+    );
+  }
+
+  // constraintOnly: only keep constraint-type recipes (no device ops needed)
+  if (constraintOnly) {
+    candidates.splice(
+      0,
+      candidates.length,
+      ...candidates.filter((c) => c.recipeType === "constraint")
     );
   }
 
@@ -593,9 +602,101 @@ function log(msg) {
 
 // ─── Scout main loop (§4) ────────────────────────────────────────────────────
 
-async function run({ maxRounds = 1, capabilityFilter = null, dryRun = false } = {}) {
-  const summary = { rounds: [], totalKnowledge: 0 };
+async function run({ maxRounds = 1, capabilityFilter = null, dryRun = false, constraintOnly = false } = {}) {
+  const summary = { rounds: [], totalKnowledge: 0, mode: constraintOnly ? "constraint-only" : "full" };
 
+  // ── Constraint-only mode: no device ops, only grep-based verification ──
+  if (constraintOnly) {
+    log("running in constraint-only mode (no device interaction)");
+    const allKnowledge = await getKnowledge("xhs").catch(() => []);
+    const allCaps = await getCapabilities().catch(() => []);
+
+    // Pick up to maxRounds unverified constraint recipes
+    let verified = 0;
+    let failed = 0;
+    let observed = 0;
+
+    for (let round = 0; round < maxRounds; round++) {
+      const remaining = allKnowledge.filter(
+        (k) => k.category === "recipe" && (!k.verifiedBy || k.verifiedBy.length === 0)
+      );
+      const target = selectTarget(allCaps, remaining, capabilityFilter, { constraintOnly: true });
+      if (!target) {
+        log(`round ${round + 1}: no more unverified constraint recipes`);
+        summary.rounds.push({ round: round + 1, status: "no_constraint_target" });
+        break;
+      }
+
+      const recipe = target._recipe;
+      log(`round ${round + 1}: ${recipe.id} (${target.id})`);
+      const result = verifyConstraint(recipe, { dryRun });
+
+      const roundResult = {
+        round: round + 1,
+        capability: target.id,
+        recipeId: recipe.id,
+        recipeType: "constraint",
+        pattern: result.pattern,
+        evidence: result.evidence?.slice(0, 200),
+        status: result.ok === true ? "constraint_verified" : result.ok === false ? "constraint_violated" : "constraint_unlocatable",
+        reason: result.reason,
+      };
+
+      if (result.ok === true) {
+        if (!dryRun) {
+          await verifyKnowledge(recipe.id);
+          log(`  → verified ${recipe.id}`);
+        } else {
+          log(`  → [dry-run] would verify ${recipe.id}`);
+        }
+        verified++;
+      } else if (result.ok === false) {
+        if (!dryRun) {
+          await postKnowledge({
+            id: `scout-constraint-violated-${recipe.id}-${Date.now()}`,
+            app: target.appId,
+            category: "pitfall",
+            title: `[scout-constraint] ${recipe.id} violated: ${result.pattern}`,
+            content: `constraint=${result.pattern} evidence=${result.evidence} details=${result.details}`,
+            scope: "global",
+          });
+          log(`  → pitfall (violated) ${recipe.id}`);
+        } else {
+          log(`  → [dry-run] would write pitfall (violated) ${recipe.id}`);
+        }
+        failed++;
+      } else {
+        if (!dryRun) {
+          await postKnowledge({
+            id: `scout-constraint-noloc-${recipe.id}-${Date.now()}`,
+            app: target.appId,
+            category: "pitfall",
+            title: `[scout-constraint] ${recipe.id} — evidence unlocatable`,
+            content: `constraint evidence cannot be located for "${recipe.title}". ${result.evidence}. verifyMode should be "human".`,
+            scope: "global",
+            verifyMode: "human",
+          });
+          log(`  → pitfall (human) ${recipe.id}`);
+        } else {
+          log(`  → [dry-run] would write pitfall (human) ${recipe.id}`);
+        }
+        observed++;
+      }
+
+      summary.rounds.push(roundResult);
+      summary.totalKnowledge++;
+
+      // Remove this recipe from remaining pool for next iteration
+      const idx = allKnowledge.indexOf(recipe);
+      if (idx >= 0) allKnowledge.splice(idx, 1);
+    }
+
+    summary.constraintSummary = { verified, failed, observed };
+    log(`constraint-only done: verified=${verified} failed=${failed} observed=${observed}`);
+    return summary;
+  }
+
+  // ── Full mode: device-backed verification ──
   for (let round = 0; round < maxRounds; round++) {
     log(`\n=== Round ${round + 1}/${maxRounds} ===`);
 
@@ -697,10 +798,11 @@ if (isDirectRun) {
   const filterIdx = args.indexOf("--filter");
   const capabilityFilter = filterIdx >= 0 ? args[filterIdx + 1] : null;
   const dryRun = args.includes("--dry-run");
+  const constraintOnly = args.includes("--constraint-only");
 
-  log(`scout starting (actor=${ACTOR}, rounds=${maxRounds}, filter=${capabilityFilter || "none"}, dryRun=${dryRun})`);
+  log(`scout starting (actor=${ACTOR}, rounds=${maxRounds}, filter=${capabilityFilter || "none"}, dryRun=${dryRun}, constraintOnly=${constraintOnly})`);
 
-  run({ maxRounds, capabilityFilter, dryRun })
+  run({ maxRounds, capabilityFilter, dryRun, constraintOnly })
     .then(async (summary) => {
       log(`\n=== Summary ===`);
       log(`rounds: ${summary.rounds.length} | knowledge entries: ${summary.totalKnowledge}`);
