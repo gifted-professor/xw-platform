@@ -305,3 +305,111 @@ test("E1 lab actions require an exclusive canary session and valid token", async
     await f.close();
   }
 });
+
+test("pump skips quarantined devices and keeps the job queued", async () => {
+  let executions = 0;
+  const adapter = {
+    id: "test",
+    async execute() { executions += 1; return { vendorCode: 0 }; },
+    async verify() { return { ok: true, mode: "state" }; },
+    async restore() { return { ok: true }; },
+  };
+  const capability = manifest("test.observe");
+  const f = fixture({ capabilities: [capability], adapter });
+  try {
+    await f.control.stop();
+    const cap = f.registry.require(capability.id);
+
+    const blocked = f.state.createJob({
+      idempotencyKey: "quarantined-queued",
+      actorId: "agent-a",
+      authorityNodeId: "DESKTOP-3I1EVHE",
+      deviceId: f.devices[0].deviceId,
+      capability: cap,
+      params: {},
+    });
+    f.evidence.initializeRun({ job: blocked.job, device: f.devices[0] });
+    f.state.quarantineDevice(f.devices[0].deviceId, "TEST_QUARANTINE");
+
+    const healthy = f.state.createJob({
+      idempotencyKey: "healthy-queued",
+      actorId: "agent-b",
+      authorityNodeId: "DESKTOP-3I1EVHE",
+      deviceId: f.devices[1].deviceId,
+      capability: cap,
+      params: {},
+    });
+    f.evidence.initializeRun({ job: healthy.job, device: f.devices[1] });
+
+    await assert.doesNotReject(() => f.control.pump());
+    assert.equal(f.state.requireJob(blocked.job.jobId).status, "queued");
+    await until(() => f.state.requireJob(healthy.job.jobId).status === "succeeded");
+    assert.equal(executions, 1);
+
+    f.state.clearDeviceQuarantine(f.devices[0].deviceId);
+    await assert.doesNotReject(() => f.control.pump());
+    await until(() => f.state.requireJob(blocked.job.jobId).status === "succeeded");
+    assert.equal(executions, 2);
+  } finally {
+    await f.close();
+  }
+});
+
+test("pump skips offline devices and start does not crash on residual queued jobs", async () => {
+  let executions = 0;
+  const adapter = {
+    id: "test",
+    async execute() { executions += 1; return { vendorCode: 0 }; },
+    async verify() { return { ok: true, mode: "state" }; },
+    async restore() { return { ok: true }; },
+  };
+  const capability = manifest("test.observe");
+  const f = fixture({ capabilities: [capability], adapter });
+  try {
+    await f.control.stop();
+    const cap = f.registry.require(capability.id);
+
+    const offlineJob = f.state.createJob({
+      idempotencyKey: "offline-queued",
+      actorId: "agent-a",
+      authorityNodeId: "DESKTOP-3I1EVHE",
+      deviceId: f.devices[0].deviceId,
+      capability: cap,
+      params: {},
+    });
+    f.evidence.initializeRun({ job: offlineJob.job, device: f.devices[0] });
+
+    const device = f.state.getDevice(f.devices[0].deviceId, { includeRuntime: true });
+    f.state.upsertDevice({
+      deviceId: device.deviceId,
+      alias: device.alias,
+      physicalLabel: device.physicalLabel,
+      nodeId: device.nodeId,
+      runtimeId: device.runtimeId,
+      metadata: device.metadata,
+      routingProfile: device.routingProfile,
+      online: false,
+    });
+
+    // Simulates control-plane restart with leftover queued work for an offline device.
+    f.control.start();
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    assert.equal(f.state.requireJob(offlineJob.job.jobId).status, "queued");
+    assert.equal(executions, 0);
+
+    f.state.upsertDevice({
+      deviceId: device.deviceId,
+      alias: device.alias,
+      physicalLabel: device.physicalLabel,
+      nodeId: device.nodeId,
+      runtimeId: device.runtimeId,
+      metadata: device.metadata,
+      routingProfile: device.routingProfile,
+      online: true,
+    });
+    await until(() => f.state.requireJob(offlineJob.job.jobId).status === "succeeded");
+    assert.equal(executions, 1);
+  } finally {
+    await f.close();
+  }
+});

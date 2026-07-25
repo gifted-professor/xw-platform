@@ -88,7 +88,9 @@ export class ControlPlane {
     this.started = true;
     this.scheduler = setInterval(() => this.pump().catch(() => {}), this.schedulerIntervalMs);
     this.scheduler.unref?.();
-    void this.pump();
+    // Defense-in-depth: never let the initial pump become an unhandled rejection
+    // (e.g. quarantined/offline devices with leftover queued jobs after restart).
+    void this.pump().catch(() => {});
   }
 
   async stop() {
@@ -297,7 +299,11 @@ export class ControlPlane {
             ttlMs: this.leaseTtlMs,
           });
         } catch (error) {
-          if (error?.code === "DEVICE_BUSY") continue;
+          // Skip jobs that cannot acquire a lease right now; leave them queued so they
+          // retry after the device recovers (busy / quarantined / offline).
+          if (["DEVICE_BUSY", "DEVICE_QUARANTINED", "DEVICE_OFFLINE"].includes(error?.code)) {
+            continue;
+          }
           throw error;
         }
         const promise = this.#runJob(job, { lease, releaseLease: true })
