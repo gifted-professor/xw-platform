@@ -1243,7 +1243,6 @@ export function analyzeImageUploadState(snapshot, {
   publishCompose = true,
 } = {}) {
   const topMediaNodes = (snapshot || []).filter((node) => {
-    const label = String(node?.label || "").trim();
     const b = node?.bounds;
     return !!b
       && b[1] >= 150
@@ -1264,13 +1263,47 @@ export function analyzeImageUploadState(snapshot, {
   const hasAddMore = (snapshot || []).some((node) =>
     !!node?.bounds
     && node.bounds[1] < 750
-    && /添加更多|添加图片|添加照片|娣诲姞鍥剧墖/.test(String(node.label || "")));
+    && /添加更多|添加图片|添加照片|上传|娣诲姞/.test(String(node.label || "")));
+  // hasAddMore 作辅助信号：部分机 dump 偶发不带该 label，媒体数已够且仍在发布页即可通过
+  const verified = !!publishCompose
+    && picked > 0
+    && mediaCount >= expectedCount
+    && (hasAddMore || mediaCount >= expectedCount);
   return {
-    verified: !!publishCompose && picked > 0 && mediaCount >= expectedCount && hasAddMore,
+    verified,
     mediaCount,
     expectedCount,
     hasAddMore,
   };
+}
+
+/**
+ * 相册顶栏选择器：真机常见「所有文件 / 全部 / 最近项目」，或已切到目标相册名。
+ * 返回 { node, alreadySelected }；alreadySelected 时跳过点选。
+ */
+export function findAlbumSelector(nodes, albumName = null) {
+  const list = nodes || [];
+  const wanted = String(albumName || "").trim();
+  const top = list.filter((n) => n?.bounds && n.bounds[1] < 320 && n.bounds[3] < 420);
+  if (wanted) {
+    const already = top.find((n) => {
+      const l = String(n.label || "").trim();
+      return l === wanted
+        || l.startsWith(`${wanted}·`)
+        || l.startsWith(`${wanted} `)
+        || new RegExp(`^${wanted.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[·\\s(]`).test(l);
+    });
+    if (already?.bounds) return { node: already, alreadySelected: true };
+  }
+  const exact = list.find((n) => /^所有文件$/.test(String(n.label || "").trim()) && n.bounds);
+  if (exact) return { node: exact, alreadySelected: false };
+  const soft = top.find((n) => {
+    const l = String(n.label || "").trim();
+    return /^(所有文件|全部|最近项目|所有照片|图片|相册|最近)$/.test(l)
+      || /所有文件|最近项目/.test(l);
+  });
+  if (soft) return { node: soft, alreadySelected: false };
+  return { node: null, alreadySelected: false };
 }
 
 export function expectedSkuCombinationCount(specs) {
@@ -1364,14 +1397,16 @@ export function skuPriceRowEvidence(snapshot, { price, stock } = {}) {
   const rows = [];
   for (const node of snapshot || []) {
     const compact = String(node?.label || "").replace(/\s+/g, "");
-    if (!compact.includes("价格¥") || !compact.includes("库存")) continue;
-    const priceMatch = compact.match(/价格¥(\d+(?:\.\d+)?)/);
-    const stockMatch = compact.match(/库存(\d+)件/);
+    // 真机 label 偶发「价格¥99」「价格￥99」「¥99库存10件」等变体
+    if (!/库存/.test(compact) || !/[¥￥]|价格/.test(compact)) continue;
+    const priceMatch = compact.match(/价格[¥￥]?(\d+(?:\.\d+)?)/)
+      || compact.match(/[¥￥](\d+(?:\.\d+)?)/);
+    const stockMatch = compact.match(/库存(\d+)件?/) || compact.match(/库存(\d+)/);
     if (!priceMatch || !stockMatch) continue;
     const actualPrice = Number(priceMatch[1]);
     const expectedPrice = Number(priceText);
     if (!Number.isFinite(expectedPrice) || actualPrice !== expectedPrice || stockMatch[1] !== stockText) continue;
-    const keyMatch = compact.match(/^(?:已选中,|,)?(.+?)价格¥/);
+    const keyMatch = compact.match(/^(?:已选中,|,)?(.+?)(?:价格|[¥￥])/);
     if (!keyMatch) continue;
     rows.push({ key: keyMatch[1].replace(/,$/, ""), label: node.label, bounds: node.bounds });
   }
@@ -2221,14 +2256,19 @@ function isDimTitle(label, dimName) {
     // 当整表证据；以组合 key 去重，直到收齐 expectedRows 或有界停止。
     const covered = new Map();
     let coverageSnap = listStart;
-    for (let pageIndex = 0; pageIndex < 5; pageIndex += 1) {
+    // dump 偶发空 hierarchy：首屏 0 命中时 settle 重抓一次再滚动
+    for (let pageIndex = 0; pageIndex < 6; pageIndex += 1) {
       skuDebugDump(`coverage-${pageIndex}`, coverageSnap.nodes);
-      for (const row of skuPriceRowEvidence(coverageSnap.nodes, { price: priceStr, stock: stockStr })) {
-        covered.set(row.key, row);
+      let pageRows = skuPriceRowEvidence(coverageSnap.nodes, { price: priceStr, stock: stockStr });
+      if (pageIndex === 0 && pageRows.length === 0) {
+        await settle(1000);
+        coverageSnap = await snapshot(op, "xianyu-sku-coverage-retry0");
+        pageRows = skuPriceRowEvidence(coverageSnap.nodes, { price: priceStr, stock: stockStr });
       }
+      for (const row of pageRows) covered.set(row.key, row);
       if (covered.size >= expectedRows) break;
       await op.shellExec("input swipe 540 1800 540 900 450", 8000).catch(() => null);
-      await settle(800);
+      await settle(900);
       coverageSnap = await snapshot(op, `xianyu-sku-coverage-${pageIndex + 1}`);
     }
     const filledRows = covered.size;
@@ -2344,23 +2384,47 @@ async function uploadImagesDryRun(op, images, {
     if (!/FishFlutterBoost/.test(picker.focus.activity || "")) { await cleanup(); return { ok: false, step: "image-picker-not-open", implemented: true }; }
     let selectedAlbum = null;
     if (albumName) {
-      const albumSelector = picker.nodes.find((node) => /^所有文件$/.test(String(node.label || "")) && node.bounds);
-      if (!albumSelector?.bounds) {
-        await cleanup();
-        return { ok: false, step: "image-album-selector-missing", implemented: true, albumName, manifest };
+      let albumHit = findAlbumSelector(picker.nodes, albumName);
+      // dump 偶发缺顶栏：再 settle 重抓一次
+      if (!albumHit.node?.bounds && !albumHit.alreadySelected) {
+        await settle(1200);
+        picker = await snapshot(op, "xianyu-image-picker-retry");
+        albumHit = findAlbumSelector(picker.nodes, albumName);
       }
-      await op.tap(...center(albumSelector.bounds));
-      await settle(1000);
-      const albums = await snapshot(op, "xianyu-image-albums");
-      const albumEntry = findPickerAlbumEntry(albums.nodes, albumName, images.length);
-      if (!albumEntry?.bounds) {
-        await cleanup();
-        return { ok: false, step: "image-album-missing", implemented: true, albumName, expectedCount: images.length, manifest };
+      if (!albumHit.alreadySelected) {
+        if (!albumHit.node?.bounds) {
+          await cleanup();
+          return {
+            ok: false,
+            step: "image-album-selector-missing",
+            implemented: true,
+            albumName,
+            manifest,
+            topLabels: (picker.nodes || [])
+              .filter((n) => n?.bounds && n.bounds[1] < 350)
+              .map((n) => n.label)
+              .slice(0, 20),
+          };
+        }
+        await op.tap(...center(albumHit.node.bounds));
+        await settle(1000);
+        const albums = await snapshot(op, "xianyu-image-albums");
+        let albumEntry = findPickerAlbumEntry(albums.nodes, albumName, images.length);
+        if (!albumEntry?.bounds) {
+          // 计数偶发不同：放宽到仅匹配相册名
+          albumEntry = findPickerAlbumEntry(albums.nodes, albumName, null);
+        }
+        if (!albumEntry?.bounds) {
+          await cleanup();
+          return { ok: false, step: "image-album-missing", implemented: true, albumName, expectedCount: images.length, manifest };
+        }
+        selectedAlbum = { name: albumName, count: images.length, label: albumEntry.label };
+        await op.tap(...center(albumEntry.bounds));
+        await settle(1200);
+        picker = await snapshot(op, "xianyu-image-album-selected");
+      } else {
+        selectedAlbum = { name: albumName, count: images.length, label: String(albumHit.node?.label || albumName), alreadySelected: true };
       }
-      selectedAlbum = { name: albumName, count: images.length, label: albumEntry.label };
-      await op.tap(...center(albumEntry.bounds));
-      await settle(1200);
-      picker = await snapshot(op, "xianyu-image-album-selected");
     }
     // ② 选 N 个「选择」overlay（按 y,x 排序：相机磁贴在列0行1无「选择」，自然跳过）
     const selNodes = picker.nodes
@@ -2390,12 +2454,22 @@ async function uploadImagesDryRun(op, images, {
     await settle(2500);
     // 验证：回发布页 + 顶部媒体区「删除」角标相对基线增加 N 个。
     // 真实 tile 没有「商品图片」label，不能再用该 label 计数。
-    const finalSnap = await snapshot(op, "xianyu-image-final");
-    const imageState = analyzeImageUploadState(finalSnap.nodes, {
+    // 部分机从编辑页返回语义 dump 滞后，最多 3 次 settle 重抓。
+    let finalSnap = await snapshot(op, "xianyu-image-final");
+    let imageState = analyzeImageUploadState(finalSnap.nodes, {
       baselineCount: baselineMedia,
       picked: picked.length,
       publishCompose: finalSnap.publishCompose,
     });
+    for (let retry = 0; retry < 3 && !imageState.verified; retry += 1) {
+      await settle(1200);
+      finalSnap = await snapshot(op, `xianyu-image-final-r${retry + 1}`);
+      imageState = analyzeImageUploadState(finalSnap.nodes, {
+        baselineCount: baselineMedia,
+        picked: picked.length,
+        publishCompose: finalSnap.publishCompose,
+      });
+    }
     const mediaNodes = finalSnap.nodes
       .filter((node) => node.bounds && node.bounds[1] >= 150 && node.bounds[3] <= 750)
       .map((node) => ({
@@ -2405,7 +2479,12 @@ async function uploadImagesDryRun(op, images, {
         clickable: node.clickable,
       }))
       .slice(0, 60);
-    const finalShot = await capturePng(op, `${evidenceDir}\\xianyu-image-final-${safeSerial}.png`);
+    const finalShot = await captureEvidenceSoft(
+      op,
+      `${evidenceDir}\\xianyu-image-final-${safeSerial}.png`,
+      [],
+      "image-final",
+    );
     const verified = imageState.verified;
     return {
       ok: verified,
