@@ -72,7 +72,9 @@ if ($Action -eq "Install") {
         -RunLevel Limited
 
     # ── Settings: CRITICAL — StopOnIdleEnd must be false ──
-    # Lesson from infra pitfall: StopOnIdleEnd kills services prematurely
+    # Lesson from infra pitfall: StopOnIdleEnd kills services prematurely.
+    # New-ScheduledTaskSettingsSet does not expose StopOnIdleEnd directly;
+    # we use XML manipulation after registration to ensure it is off.
     $settings = New-ScheduledTaskSettingsSet `
         -AllowStartIfOnBatteries `
         -DontStopIfGoingOnBatteries `
@@ -81,11 +83,8 @@ if ($Action -eq "Install") {
         -RestartCount 3 `
         -RestartInterval (New-TimeSpan -Minutes 2) `
         -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
-    # Explicitly disable idle-stop (belt-and-suspenders)
-    $settings.StopOnIdleEnd = $false
-    $settings.DisallowStartOnIdle = $false
 
-    # ── Register ──
+    # ── Register first, then patch idle settings via XML ──
     Register-ScheduledTask `
         -TaskName $TaskName `
         -Action $taskAction `
@@ -94,6 +93,42 @@ if ($Action -eq "Install") {
         -Settings $settings `
         -Description "Scout auto-cruise: constraint-only verification every 45min. No device ops." `
         -Force | Out-Null
+
+    # ── Patch idle settings via schtasks XML export/import ──
+    # This is the reliable way to set StopOnIdleEnd=false
+    $tmpXml = Join-Path $env:TEMP "$TaskName-idle-patch.xml"
+    schtasks.exe /Query /TN $TaskName /XML ONE | Out-File -FilePath $tmpXml -Encoding Unicode
+    [xml]$xml = Get-Content -Path $tmpXml
+    $ns = New-Object System.Xml.XmlNamespaceManager($xml.NameTable)
+    $ns.AddNamespace("t", "http://schemas.microsoft.com/windows/2004/02/mit/task")
+
+    # Ensure IdleSettings element exists
+    $settingsNode = $xml.SelectSingleNode("//t:Settings", $ns)
+    $idleNode = $settingsNode.SelectSingleNode("t:IdleSettings", $ns)
+    if (-not $idleNode) {
+        $idleNode = $xml.CreateElement("IdleSettings", $ns.LookupNamespace("t"))
+        $settingsNode.AppendChild($idleNode) | Out-Null
+    }
+
+    # Set StopOnIdleEnd = false
+    $stopNode = $idleNode.SelectSingleNode("t:StopOnIdleEnd", $ns)
+    if (-not $stopNode) {
+        $stopNode = $xml.CreateElement("StopOnIdleEnd", $ns.LookupNamespace("t"))
+        $idleNode.AppendChild($stopNode) | Out-Null
+    }
+    $stopNode.InnerText = "false"
+
+    # Set Duration = PT0S (don't wait for idle)
+    $durNode = $idleNode.SelectSingleNode("t:Duration", $ns)
+    if (-not $durNode) {
+        $durNode = $xml.CreateElement("Duration", $ns.LookupNamespace("t"))
+        $idleNode.AppendChild($durNode) | Out-Null
+    }
+    $durNode.InnerText = "PT0S"
+
+    $xml.Save($tmpXml)
+    schtasks.exe /Create /TN $TaskName /XML $tmpXml /F | Out-Null
+    Remove-Item -Path $tmpXml -Force -ErrorAction SilentlyContinue
 
     Write-Result @{
         ok = $true
