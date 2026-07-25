@@ -7,6 +7,7 @@ import { createWechatAdapter } from "../apps/wechat/adapter.mjs";
 import { createXhsAdapter } from "../apps/xhs/adapter.mjs";
 import { createXianyuAdapter } from "../apps/xianyu/adapter.mjs";
 import { createXiaoweiAdapter } from "../apps/xiaowei/adapter.mjs";
+import { createVisionAdapter } from "../apps/vision/adapter.mjs";
 import { CapabilityRegistry } from "./lib/capability-registry.mjs";
 import { AdapterRegistry, ControlPlane } from "./lib/control-plane.mjs";
 import { EvidenceStore } from "./lib/evidence-store.mjs";
@@ -108,6 +109,7 @@ export function createControlPlaneRuntime({
       createXianyuAdapter(),
       createWechatAdapter(),
       createXiaoweiAdapter(),
+      createVisionAdapter(),
     ]);
   const control = new ControlPlane({
     state: runtimeState,

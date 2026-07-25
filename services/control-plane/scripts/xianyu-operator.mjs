@@ -18,6 +18,12 @@ import { join } from "node:path";
 import { FastOperator } from "./fast-operator.mjs";
 import { GatewayOperator } from "./gateway-operator.mjs";
 import { XiaoweiHttpAdapter } from "./xiaowei-http-adapter.mjs";
+import {
+  fingerprintLabels,
+  hasXianyuPublishComposeFingerprint,
+  isForbiddenLabel,
+  resolveTarget,
+} from "./vision-safety.mjs";
 
 const IDLEFISH_PACKAGE = "com.taobao.idlefish";
 const IDLEFISH_MAIN_ACTIVITY = "com.taobao.idlefish.maincontainer.activity.MainActivity";
@@ -485,12 +491,15 @@ export function createStepSupervisor(op, { onEvent = null } = {}) {
   return { run, emit, events };
 }
 
-/** 确保仍在闲鱼发闲置编辑页；掉到桌面/其它 App 时重拉 + open-publish。 */
+/** 确保仍在闲鱼发闲置编辑页；掉到桌面/其它 App 时重拉 + open-publish。带页面指纹闸。 */
 export async function ensureOnPublishCompose(op, { maxAttempts = 2 } = {}) {
   for (let i = 0; i < maxAttempts; i += 1) {
     const snap = await snapshot(op, `ensure-compose-${i}`);
-    if (snap.focus?.package === IDLEFISH_PACKAGE && isPublishCompose(snap.nodes)) {
-      return { ok: true, recovered: i > 0, snap };
+    const fp = fingerprintLabels(snap.nodes || []);
+    const composeOk = snap.focus?.package === IDLEFISH_PACKAGE
+      && (isPublishCompose(snap.nodes) || hasXianyuPublishComposeFingerprint(fp));
+    if (composeOk) {
+      return { ok: true, recovered: i > 0, snap, fingerprint: [...fp].slice(0, 30) };
     }
     if (snap.focus?.package !== IDLEFISH_PACKAGE) {
       await startIdlefish(op);
@@ -499,8 +508,10 @@ export async function ensureOnPublishCompose(op, { maxAttempts = 2 } = {}) {
     const opened = await openPublishDryRun(op);
     if (opened.ok) {
       const s2 = await snapshot(op, `ensure-compose-opened-${i}`);
-      if (s2.focus?.package === IDLEFISH_PACKAGE && isPublishCompose(s2.nodes)) {
-        return { ok: true, recovered: true, snap: s2, open: opened };
+      const fp2 = fingerprintLabels(s2.nodes || []);
+      if (s2.focus?.package === IDLEFISH_PACKAGE
+        && (isPublishCompose(s2.nodes) || hasXianyuPublishComposeFingerprint(fp2))) {
+        return { ok: true, recovered: true, snap: s2, open: opened, fingerprint: [...fp2].slice(0, 30) };
       }
     }
   }
@@ -510,6 +521,52 @@ export async function ensureOnPublishCompose(op, { maxAttempts = 2 } = {}) {
     recovered: false,
     snap: finalSnap,
     package: finalSnap.focus?.package || null,
+    fingerprint: [...fingerprintLabels(finalSnap.nodes || [])].slice(0, 30),
+  };
+}
+
+/**
+ * 安全语义 resolve：从当前 dump 找 label（接入 vision-safety 非空/黑名单/region）
+ * 不执行 tap；供 supervisor 或 vision capability 使用。
+ */
+export async function resolveSemanticTarget(op, {
+  label,
+  region = null,
+  requireSafeNav = false,
+} = {}) {
+  if (isForbiddenLabel(label)) {
+    return { ok: false, reason: "forbidden_needle", target: null };
+  }
+  const snap = await snapshot(op, `resolve-${String(label).slice(0, 12)}`);
+  const elements = (snap.nodes || [])
+    .filter((n) => n.bounds)
+    .map((n) => ({
+      label: n.label || "",
+      bounds: n.bounds,
+      center: n.bounds ? center(n.bounds) : null,
+      conf: 1,
+      source: "semantic",
+    }));
+  const resolution = (() => {
+    let maxX = 1080, maxY = 2400;
+    for (const n of elements) {
+      if (n.bounds) {
+        maxX = Math.max(maxX, n.bounds[2]);
+        maxY = Math.max(maxY, n.bounds[3]);
+      }
+    }
+    return [maxX, maxY];
+  })();
+  const resolved = resolveTarget(elements, {
+    label,
+    region,
+    resolution,
+    requireSafeNav,
+  });
+  return {
+    ...resolved,
+    focus: snap.focus || null,
+    fingerprint: [...fingerprintLabels(snap.nodes || [])].slice(0, 40),
   };
 }
 
