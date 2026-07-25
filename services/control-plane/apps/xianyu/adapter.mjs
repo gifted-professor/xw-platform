@@ -28,10 +28,12 @@ function commandArgs({ script, action, device, params }) {
     throw new ControlPlaneError("DEVICE_RUNTIME_ID_MISSING", "Xianyu adapter needs a private runtime ID", { status: 503 });
   }
   // Map capability action name to operator CLI command.
-  const command = action === "full-dry-run" ? "publish-dry-run" : action;
+  const command = action === "full-dry-run" ? "publish-dry-run"
+    : action === "image-dry-run" ? "image-dry-run"
+      : action;
   const args = [script, "--serial", device.runtimeId, "--transport", "gateway", command];
   if (params.text !== undefined) args.push("--text", String(params.text));
-  // publish-dry-run params
+  // publish-dry-run / image-dry-run params
   if (params.description !== undefined) args.push("--description", String(params.description));
   if (params.price !== undefined) args.push("--price", String(params.price));
   if (params.title !== undefined) args.push("--title", String(params.title));
@@ -41,6 +43,18 @@ function commandArgs({ script, action, device, params }) {
   if (params.condition !== undefined) args.push("--condition", String(params.condition));
   if (params.returnAddress !== undefined) args.push("--return-address", String(params.returnAddress));
   if (params.location !== undefined) args.push("--return-address", String(params.location));
+  if (params.images !== undefined) args.push("--images", JSON.stringify(params.images));
+  if (params.imageAlbum !== undefined) args.push("--image-album", String(params.imageAlbum));
+  if (params.maxImages !== undefined) args.push("--max-images", String(params.maxImages));
+  if (params.calibrated === true || params.calibrated === "image" || params.calibrated === "all") {
+    // publish-dry-run uses --calibrated image; image-dry-run defaults calibrated on
+    if (command === "publish-dry-run") args.push("--calibrated", "image");
+  }
+  if (params.skipUpload) args.push("--skip-upload");
+  if (params.skipCategory) args.push("--skip-category");
+  if (params.skipSku) args.push("--skip-sku");
+  if (params.skipFreight) args.push("--skip-freight");
+  if (params.skipAddress) args.push("--skip-address");
   if (device.metadata?.adbPath) args.push("--adb", device.metadata.adbPath);
   return args;
 }
@@ -79,6 +93,14 @@ export function createXianyuAdapter({ run = runJsonCommand, operatorPath = defau
             && output?.audit?.clearedVerified === true
             && output?.audit?.inputAccepted === true,
           mode: "text_scan",
+        };
+      }
+      if (capability.implementation.action === "image-dry-run") {
+        return {
+          ok: output?.ok === true
+            && output?.stoppedBeforePublish === true
+            && (output?.upload?.ok === true || output?.step === "images-uploaded"),
+          mode: "state",
         };
       }
       if (capability.implementation.action === "full-dry-run") {

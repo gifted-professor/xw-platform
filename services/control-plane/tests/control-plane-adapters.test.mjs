@@ -83,6 +83,14 @@ test("Xianyu adapter preserves stop-before-publish and discard verification", as
           },
         };
       }
+      if (args.includes("image-dry-run")) {
+        return {
+          ok: true,
+          stoppedBeforePublish: true,
+          step: "images-uploaded",
+          upload: { ok: true, step: "images-uploaded", picked: 2, imgCount: 2 },
+        };
+      }
       return { ok: true };
     },
   });
@@ -95,6 +103,18 @@ test("Xianyu adapter preserves stop-before-publish and discard verification", as
   assert.equal((await adapter.verify({ capability, execution })).ok, true);
   assert.equal((await adapter.restore({ capability, device: privateDevice })).ok, true);
   assert.equal(calls.some((args) => args.includes("discard-dry-run")), true);
+
+  const imageCap = registry.require("xianyu.publish.image_dry_run");
+  const imageExec = await adapter.execute({
+    capability: imageCap,
+    device: privateDevice,
+    params: {
+      images: [{ phonePath: "/sdcard/Pictures/XianyuStaging/a.png", sha256: "a".repeat(64) }],
+      imageAlbum: "XianyuStaging",
+    },
+  });
+  assert.equal((await adapter.verify({ capability: imageCap, execution: imageExec })).ok, true);
+  assert.equal(calls.some((args) => args.includes("image-dry-run")), true);
 });
 
 test("WeChat adapter requires title match and baseline restoration", async () => {

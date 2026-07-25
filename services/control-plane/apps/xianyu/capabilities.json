@@ -71,6 +71,56 @@
     },
     {
       "schemaVersion": 1,
+      "id": "xianyu.publish.image_dry_run",
+      "appId": "xianyu",
+      "packageName": "com.taobao.idlefish",
+      "versionRange": "observed",
+      "maturity": "E2",
+      "risk": "R1",
+      "resources": ["device"],
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "images": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 9,
+            "items": {
+              "type": "object",
+              "properties": {
+                "phonePath": { "type": "string", "minLength": 8 },
+                "sha256": { "type": "string", "minLength": 64, "maxLength": 64 }
+              },
+              "required": ["phonePath", "sha256"],
+              "additionalProperties": true
+            }
+          },
+          "imageAlbum": { "type": "string", "minLength": 1, "maxLength": 80 },
+          "maxImages": { "type": "integer", "minimum": 1, "maximum": 9 }
+        },
+        "required": ["images"],
+        "additionalProperties": true
+      },
+      "outputSchema": { "type": "object" },
+      "preconditions": [
+        "PR #11 xianyu-operator image path present",
+        "images staged on device under /sdcard/Pictures/<album> with matching SHA",
+        "picker album label Name·count matches imageAlbum and images.length"
+      ],
+      "verification": {
+        "mode": "state",
+        "description": "image-dry-run selects N staged images and publish page media count increases; never taps final publish"
+      },
+      "restoration": { "required": true, "description": "discard without saving and return to MainActivity" },
+      "timeoutMs": 180000,
+      "idempotency": "replay_safe",
+      "automationPolicy": { "mode": "automatic" },
+      "implementation": { "adapter": "xianyu", "action": "image-dry-run" },
+      "evidence": ["xianyu-image-picker-staging-album", "xianyu-image-tile-no-label", "2026-07-26 step2"],
+      "availability": "implemented"
+    },
+    {
+      "schemaVersion": 1,
       "id": "xianyu.publish.full_dry_run",
       "appId": "xianyu",
       "packageName": "com.taobao.idlefish",

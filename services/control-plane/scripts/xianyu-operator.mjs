@@ -2144,6 +2144,60 @@ async function uploadImagesDryRun(op, images, {
   }
 }
 
+/**
+ * Step2 独立选图 dry-run：必要时先 open-publish，再 uploadImagesDryRun。
+ * 不点最终发布；控制面 restore 走 discard-dry-run。
+ */
+export async function imageDryRun(op, {
+  images = null,
+  imageAlbum = null,
+  maxImages = 9,
+  evidenceDir = EVIDENCE_DIR_DEFAULT,
+  openIfNeeded = true,
+  calibrated = true,
+} = {}) {
+  let openTrace = null;
+  let page = await snapshot(op, "xianyu-image-dryrun-before");
+  if (page.focus.package !== IDLEFISH_PACKAGE || !isPublishCompose(page.nodes)) {
+    if (!openIfNeeded) {
+      return { ok: false, step: "not-on-publish-compose", stoppedBeforePublish: true, focus: page.focus };
+    }
+    const opened = await openPublishDryRun(op);
+    openTrace = opened;
+    if (!opened.ok) {
+      return { ok: false, step: "open-publish", stoppedBeforePublish: true, openTrace: opened };
+    }
+    page = await snapshot(op, "xianyu-image-dryrun-after-open");
+    if (page.focus.package !== IDLEFISH_PACKAGE || !isPublishCompose(page.nodes)) {
+      return {
+        ok: false,
+        step: "not-on-publish-compose-after-open",
+        stoppedBeforePublish: true,
+        focus: page.focus,
+        openTrace: opened,
+      };
+    }
+  }
+
+  const list = Array.isArray(images) ? images : [];
+  const upload = await uploadImagesDryRun(op, list, {
+    evidenceDir,
+    calibrated: Boolean(calibrated) && list.length > 0,
+    maxImages,
+    albumName: imageAlbum || null,
+  });
+  return {
+    ok: upload.ok === true,
+    step: upload.step || (upload.ok ? "images-uploaded" : "images-failed"),
+    stoppedBeforePublish: true,
+    openIfNeeded,
+    openTrace: openTrace
+      ? { ok: openTrace.ok, stage: openTrace.stage, step: openTrace.step, layoutSource: openTrace.layoutSource }
+      : null,
+    upload,
+  };
+}
+
 // 主流程：按序填整表，每步聚合到 summary。dry-run 默认 stoppedBeforePublish:true。
 export async function publishDryRun(op, plan, {
   evidenceDir = EVIDENCE_DIR_DEFAULT,
@@ -2308,7 +2362,7 @@ export async function probePage(op, { label = "probe" } = {}) {
 
 async function main() {
   const command = process.argv.find((value) => [
-    "start", "snapshot", "open-publish", "input-dry-run", "discard-dry-run",
+    "start", "snapshot", "open-publish", "input-dry-run", "image-dry-run", "discard-dry-run",
     "publish-dry-run", "probe",
   ].includes(value)) || "help";
   const serial = arg("--serial");
@@ -2322,6 +2376,7 @@ node scripts/xianyu-operator.mjs --serial <serial> [--adb <adb>] start
 node scripts/xianyu-operator.mjs --serial <serial> snapshot
 node scripts/xianyu-operator.mjs --serial <serial> open-publish
 node scripts/xianyu-operator.mjs --serial <serial> input-dry-run --text <临时文本>
+node scripts/xianyu-operator.mjs --serial <serial> image-dry-run --images '[{{"phonePath":"/sdcard/Pictures/XianyuStaging/a.png","sha256":"..."}}]' --image-album XianyuStaging
 node scripts/xianyu-operator.mjs --serial <serial> discard-dry-run
 node scripts/xianyu-operator.mjs --serial <serial> publish-dry-run --plan <plan.json>
 node scripts/xianyu-operator.mjs --serial <serial> publish-dry-run \\
@@ -2367,6 +2422,23 @@ discard-dry-run 只点击"关闭 → 不保存"，绝不点击"存草稿/发布"
       clearAfter: !process.argv.includes("--keep-until-discard"),
       openIfNeeded: !process.argv.includes("--no-open"),
     }), null, 2));
+    if (command === "image-dry-run") {
+      const imagesRaw = arg("--images");
+      let images = null;
+      if (imagesRaw) {
+        try { images = JSON.parse(imagesRaw); } catch (e) {
+          throw new Error(`--images must be JSON array: ${e.message}`);
+        }
+      }
+      console.log(JSON.stringify(await imageDryRun(op, {
+        images,
+        imageAlbum: arg("--image-album") || null,
+        maxImages: Number(arg("--max-images", "9")),
+        evidenceDir: arg("--evidence-dir", EVIDENCE_DIR_DEFAULT),
+        openIfNeeded: !process.argv.includes("--no-open"),
+        calibrated: !process.argv.includes("--no-calibrated"),
+      }), null, 2));
+    }
     if (command === "discard-dry-run") console.log(JSON.stringify(await discardDraftDryRun(op), null, 2));
     if (command === "publish-dry-run") {
       const plan = planFromArgv();
