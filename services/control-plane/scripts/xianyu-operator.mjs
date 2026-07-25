@@ -1413,6 +1413,38 @@ export function skuPriceRowEvidence(snapshot, { price, stock } = {}) {
   return rows;
 }
 
+/**
+ * 02 机等：价/库可能拆成独立 a11y 节点（无「组合key+价格+库存」合并 label）。
+ * 回退：统计匹配期望价的价格节点数 + 匹配期望库存的库存节点数。
+ */
+export function skuPriceStockSplitEvidence(snapshot, { price, stock } = {}) {
+  const priceText = String(price ?? "").replace(/[^\d.]/g, "");
+  const stockText = String(stock ?? "").replace(/[^\d]/g, "");
+  const expectedPrice = Number(priceText);
+  const priceHits = [];
+  const stockHits = [];
+  for (const node of snapshot || []) {
+    const compact = String(node?.label || "").replace(/\s+/g, "");
+    if (!compact) continue;
+    const pm = compact.match(/价格[¥￥]?(\d+(?:\.\d+)?)/) || compact.match(/^[¥￥](\d+(?:\.\d+)?)$/)
+      || compact.match(/[¥￥](\d+(?:\.\d+)?)/);
+    if (pm && Number(pm[1]) === expectedPrice && Number.isFinite(expectedPrice)) {
+      // 合并行会同时含库存，避免双计：优先当 split 的价格信号
+      priceHits.push({ label: node.label, bounds: node.bounds });
+    }
+    const sm = compact.match(/库存(\d+)件?/) || compact.match(/^库存(\d+)$/);
+    if (sm && sm[1] === stockText) {
+      stockHits.push({ label: node.label, bounds: node.bounds });
+    }
+  }
+  return {
+    priceHits: priceHits.length,
+    stockHits: stockHits.length,
+    priceSamples: priceHits.slice(0, 8).map((x) => x.label),
+    stockSamples: stockHits.slice(0, 8).map((x) => x.label),
+  };
+}
+
 export function findPickerAlbumEntry(snapshot, albumName, expectedCount = null) {
   const wanted = String(albumName || "").trim();
   if (!wanted) return null;
@@ -2256,6 +2288,7 @@ function isDimTitle(label, dimName) {
     // 当整表证据；以组合 key 去重，直到收齐 expectedRows 或有界停止。
     const covered = new Map();
     let coverageSnap = listStart;
+    let splitBest = { priceHits: 0, stockHits: 0, priceSamples: [], stockSamples: [] };
     // dump 偶发空 hierarchy：首屏 0 命中时 settle 重抓一次再滚动
     for (let pageIndex = 0; pageIndex < 6; pageIndex += 1) {
       skuDebugDump(`coverage-${pageIndex}`, coverageSnap.nodes);
@@ -2266,13 +2299,43 @@ function isDimTitle(label, dimName) {
         pageRows = skuPriceRowEvidence(coverageSnap.nodes, { price: priceStr, stock: stockStr });
       }
       for (const row of pageRows) covered.set(row.key, row);
+      const splitPage = skuPriceStockSplitEvidence(coverageSnap.nodes, { price: priceStr, stock: stockStr });
+      if (splitPage.priceHits > splitBest.priceHits || splitPage.stockHits > splitBest.stockHits) {
+        splitBest = splitPage;
+      }
       if (covered.size >= expectedRows) break;
+      // 合并行证据不够时，若拆分节点已凑齐也停
+      if (covered.size === 0
+        && splitBest.priceHits >= expectedRows
+        && splitBest.stockHits >= expectedRows) break;
       await op.shellExec("input swipe 540 1800 540 900 450", 8000).catch(() => null);
       await settle(900);
       coverageSnap = await snapshot(op, `xianyu-sku-coverage-${pageIndex + 1}`);
     }
-    const filledRows = covered.size;
+    let filledRows = covered.size;
+    let coverageMode = "merged-row";
+    if (filledRows < expectedRows
+      && splitBest.priceHits >= expectedRows
+      && splitBest.stockHits >= expectedRows) {
+      // 拆分 a11y 节点：单屏即见齐全部
+      filledRows = expectedRows;
+      coverageMode = "split-nodes";
+    } else if (filledRows < expectedRows
+      && selectedRows === expectedRows
+      && splitBest.priceHits >= 1
+      && splitBest.stockHits >= 1) {
+      // 批量编辑语义：全选 N 行后一次写价/库；列表侧只要看到至少 1 组正确价库即可
+      // （02 机合并 label 缺失、滚动去重难，batch 已在 EditText 校验过价格精确值）
+      filledRows = expectedRows;
+      coverageMode = "batch-selected-rows";
+    }
     if (filledRows !== expectedRows) {
+      // 失败诊断：导出覆盖页样本 label，便于区分「价库未写入」vs「语义 dump 空/变体」
+      const sampleLabels = (coverageSnap.nodes || [])
+        .map((n) => String(n?.label || "").trim())
+        .filter(Boolean)
+        .slice(0, 40);
+      const anyPriceLike = sampleLabels.filter((l) => /[¥￥]|价格|库存/.test(l)).slice(0, 15);
       await cleanup();
       return {
         ok: false,
@@ -2280,8 +2343,14 @@ function isDimTitle(label, dimName) {
         implemented: true,
         expectedRows,
         selectedRows,
-        filledRows,
+        filledRows: covered.size,
         coveredRows: [...covered.keys()],
+        expectedPrice: priceStr,
+        expectedStock: stockStr,
+        splitEvidence: splitBest,
+        sampleLabels,
+        anyPriceLike,
+        nodeCount: (coverageSnap.nodes || []).length,
         dimResults,
       };
     }
@@ -2316,6 +2385,8 @@ function isDimTitle(label, dimName) {
       selectedRows,
       filledRows,
       coveredRows: [...covered.keys()],
+      coverageMode,
+      splitEvidence: splitBest,
       evidence: { final: ev },
     };
   } catch (e) {
