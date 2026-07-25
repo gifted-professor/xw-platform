@@ -527,12 +527,39 @@ export async function inputDryRun(op, {
   text,
   evidenceDir = "C:\\Users\\Public",
   clearAfter = true,
+  // 控制面单 job 无法在 open 与 input 之间保留页面（每 job 必 restore）。
+  // 默认：若不在发布编辑页，先 open-publish 再填字（step 1b 正确路径）。
+  openIfNeeded = true,
 } = {}) {
   const value = String(text || "闲鱼发布页输入测试").trim();
   if (!value) return { ok: false, step: "empty-text" };
-  const before = await snapshot(op, "xianyu-input-before");
+
+  let openTrace = null;
+  let before = await snapshot(op, "xianyu-input-before");
   if (before.focus.package !== IDLEFISH_PACKAGE || !isPublishCompose(before.nodes)) {
-    return { ok: false, step: "not-on-publish-compose", focus: before.focus };
+    if (!openIfNeeded) {
+      return { ok: false, step: "not-on-publish-compose", focus: before.focus };
+    }
+    const opened = await openPublishDryRun(op);
+    openTrace = opened;
+    if (!opened.ok) {
+      return {
+        ok: false,
+        step: "open-publish",
+        stoppedBeforePublish: true,
+        openTrace: opened,
+      };
+    }
+    before = await snapshot(op, "xianyu-input-before-after-open");
+    if (before.focus.package !== IDLEFISH_PACKAGE || !isPublishCompose(before.nodes)) {
+      return {
+        ok: false,
+        step: "not-on-publish-compose-after-open",
+        stoppedBeforePublish: true,
+        focus: before.focus,
+        openTrace: opened,
+      };
+    }
   }
 
   const description = findDescriptionField(before.nodes);
@@ -620,6 +647,10 @@ export async function inputDryRun(op, {
       : textVerified ? (!clearAfter || clearedVerified ? "completed" : "clear-unverified")
         : "flutter-chinese-input-unverified",
     stoppedBeforePublish: true,
+    openIfNeeded,
+    openTrace: openTrace
+      ? { ok: openTrace.ok, stage: openTrace.stage, step: openTrace.step, layoutSource: openTrace.layoutSource }
+      : null,
     audit: {
       flutterInputActive,
       priorIme,
@@ -2284,6 +2315,7 @@ discard-dry-run 只点击"关闭 → 不保存"，绝不点击"存草稿/发布"
     if (command === "input-dry-run") console.log(JSON.stringify(await inputDryRun(op, {
       text: arg("--text"),
       clearAfter: !process.argv.includes("--keep-until-discard"),
+      openIfNeeded: !process.argv.includes("--no-open"),
     }), null, 2));
     if (command === "discard-dry-run") console.log(JSON.stringify(await discardDraftDryRun(op), null, 2));
     if (command === "publish-dry-run") {

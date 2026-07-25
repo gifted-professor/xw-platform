@@ -54,15 +54,15 @@
       "resources": ["device", "transport:xiaowei:22222"],
       "inputSchema": {
         "type": "object",
-        "properties": { "text": { "type": "string", "minLength": 1, "maxLength": 120 } },
+        "properties": { "text": { "type": "string", "minLength": 1, "maxLength": 500 } },
         "required": ["text"],
         "additionalProperties": false
       },
       "outputSchema": { "type": "object" },
-      "preconditions": ["publish compose page is semantically verified"],
+      "preconditions": ["PR #11 xianyu-operator implementation is present; operator open-if-needed when not on compose"],
       "verification": { "mode": "text_scan", "description": "fresh field contains the probe and published/savedDraft remain false" },
       "restoration": { "required": true, "description": "clear probe text, restore IME, discard without saving" },
-      "timeoutMs": 90000,
+      "timeoutMs": 150000,
       "idempotency": "replay_safe",
       "automationPolicy": { "mode": "automatic" },
       "implementation": { "adapter": "xianyu", "action": "input-dry-run" },
