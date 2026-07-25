@@ -2240,11 +2240,19 @@ function isDimTitle(label, dimName) {
     const priceStr = String(price || "").replace(/[^\d.]/g, "");
     const stockStr = String(stock ?? "").replace(/[^\d]/g, "");
     // 批量 sheet 的 EditText 常带旧值（02 实证：库存残留 40 → 列表显示 库存40件）
-    // 先 DEL 清空再打数字，并在确认前校验价/库 EditText。
-    const clearFocusedDigits = async (times = 10) => {
+    // 光标常在开头，单纯 KEYCODE_DEL(退格) 无效 → 先 MOVE_END 再退格，再 FORWARD_DEL 兜底。
+    const clearFocusedDigits = async (times = 12) => {
+      await op.shellExec("input keyevent KEYCODE_MOVE_END", 3000).catch(() => null);
+      await settle(80);
       for (let i = 0; i < times; i += 1) {
         await op.shellExec("input keyevent KEYCODE_DEL", 3000).catch(() => null);
-        await settle(60);
+        await settle(40);
+      }
+      await op.shellExec("input keyevent KEYCODE_MOVE_HOME", 3000).catch(() => null);
+      await settle(60);
+      for (let i = 0; i < times; i += 1) {
+        await op.shellExec("input keyevent KEYCODE_FORWARD_DEL", 3000).catch(() => null);
+        await settle(40);
       }
     };
     if (priceStr) {
