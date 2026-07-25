@@ -1,0 +1,246 @@
+// gateway-operator.mjs — 闲鱼/设备操作的「绿箭网关」传输层
+//
+// 不依赖 adb.exe：所有设备操作经小薇/绿箭 WS 网关 ws://127.0.0.1:22222 的独立 USB 传输。
+//  - shellExec  → action=adb_shell {command}      （uiautomator dump / input tap / dumpsys / cat …）
+//  - tap        → shellExec("input tap x y")      （像素坐标，与 FastOperator.tap 同语义）
+//  - currentFocus → shellExec dumpsys mCurrentFocus
+//  - setIme/currentIme → selectIme / adb_shell settings
+//  - inputTextViaXiaowei → 效卫桥 IME inputText + adb_shell keyevent 清空
+//  - capturePng → action=Screen {savePath}（存 Windows 本地路径，node 直接 readFileSync）
+//
+// 接口与 FastOperator 对齐（serial/transport/tap/shellExec/currentFocus/currentIme/setIme/
+// xiaoweiInvoke/inputTextViaXiaowei/xwBridgeIme/close），xianyu-operator 按 op.transport 分支 dump/capture。
+// 在 Windows 本机运行：网关 localhost、Screen 落本地盘、node 直读。
+
+import { readFileSync, existsSync, readdirSync, renameSync, mkdirSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { join, dirname } from "node:path";
+
+const DEFAULT_WS = "ws://127.0.0.1:22222/";
+const BRIDGE_IME = "com.android.xwkeyboard/.XwIME";
+
+export function parseFocusOutput(output) {
+  const raw = String(output || "");
+  const patterns = [
+    /mCurrentFocus=Window\{[^}]+ (?:u\d+\s+)?([^/}\s]+)\/([^}\s]+)/,
+    /mFocusedApp=ActivityRecord\{[^}]+ (?:u\d+\s+)?([^/}\s]+)\/([^}\s]+)/,
+    /mResumedActivity[:=]\s*ActivityRecord\{[^}]+ (?:u\d+\s+)?([^/}\s]+)\/([^}\s]+)/,
+  ];
+  for (const pattern of patterns) {
+    const match = raw.match(pattern);
+    if (match) return { package: match[1], activity: match[2], raw };
+  }
+  return { package: null, activity: null, raw };
+}
+
+export class GatewayOperator {
+  constructor({ serial, xwWs = DEFAULT_WS, pacer = null } = {}) {
+    if (!serial) throw new Error("GatewayOperator 缺 serial");
+    this.serial = serial;
+    this.xwWs = xwWs;
+    this.transport = "gateway";
+    this.adbPath = null; // 不走 adb；仅为接口兼容保留
+    this.xwBridgeIme = BRIDGE_IME;
+    this._httpReady = false; // 是否已确认 HTTP 接口可用
+    this._deviceAlias = "01"; // 默认使用 alias 01，可通过外部参数覆盖
+    this.metrics = { actions: 0, dumps: 0, scrolls: 0, taps: 0, totalDumpMs: 0, totalScrollMs: 0 };
+    this._priorIme = null;
+    this._chain = Promise.resolve(); // 串行化 WS（单设备顺序调用，避免并发 accept 失败）
+  }
+
+  async start() {
+    // 探活：跑一条 echo；失败说明网关/设备不可达，fail-fast。
+    const out = await this.shellExec("echo gateway-ready", 8000).catch(() => null);
+    if (out == null || !String(out).includes("gateway-ready")) {
+      throw new Error(`gateway not reachable for ${this.serial} (ws=${this.xwWs})`);
+    }
+    return this;
+  }
+
+  async close() { /* WS 一连接一请求，无需关闭长连 */ }
+
+  // 单请求一连接：发 {action, devices:serial, data}，首条消息即响应，code===10000=SUCCESS。
+  async xiaoweiInvoke(action, data, timeoutMs = 15000) {
+    const req = { action, devices: this.serial };
+    if (data != null) req.data = data;
+    // 串行化：网关单实例 accept 串行，同设备并发会偶发 connection failed。
+    const run = () => new Promise((resolve, reject) => {
+      const ws = new WebSocket(this.xwWs);
+      let settled = false;
+      const finish = (fn, v) => { if (settled) return; settled = true; clearTimeout(t); try { ws.close(); } catch {} fn(v); };
+      const t = setTimeout(() => finish(reject, new Error(`gateway WS timeout (${timeoutMs}ms) action=${action}`)), timeoutMs);
+      ws.addEventListener("open", () => { try { ws.send(JSON.stringify(req)); } catch (e) { finish(reject, e); } });
+      ws.addEventListener("message", (e) => {
+        let r; try { r = JSON.parse(String(e.data)); } catch { return finish(reject, new Error("gateway WS malformed response")); }
+        finish(resolve, r);
+      });
+      ws.addEventListener("error", () => finish(reject, new Error(`gateway WS connection failed action=${action}`)));
+    });
+    // 最多 3 次重试（连接失败/超时），malformed 不重试。
+    let lastErr;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try { return await run(); }
+      catch (e) {
+        lastErr = e;
+        if (e.message.includes("malformed")) throw e;
+        if (attempt < 2) await new Promise((r) => setTimeout(r, 400));
+      }
+    }
+    throw lastErr;
+  }
+
+  // 串行化包装：所有 WS 调用排队，避免并发 accept 失败。
+  // 加 200ms 起搏：高频 connect/close 会触发 Windows node 的 libuv UV_HANDLE_CLOSING 崩溃（2026-07-22 实证，120ms 仍偶发）。
+  _invoke(action, data, timeoutMs) {
+    const p = this._chain.then(async () => {
+      await new Promise((r) => setTimeout(r, 200));
+      return this.xiaoweiInvoke(action, data, timeoutMs);
+    });
+    this._chain = p.catch(() => {});
+    return p;
+  }
+
+  // 统一 shell：action=adb_shell {command}，返回该设备 stdout 字符串。
+  async shellExec(cmd, timeoutMs = 15000) {
+    const r = await this._invoke("adb_shell", { command: String(cmd) }, timeoutMs);
+    if (r.code !== 10000) throw new Error(`adb_shell failed: ${r.message || JSON.stringify(r)}`);
+    const out = r.data?.[this.serial];
+    return out == null ? "" : String(out);
+  }
+
+  async tap(x, y) {
+    this.metrics.taps += 1;
+    return this.shellExec(`input tap ${Math.round(x)} ${Math.round(y)}`, 8000);
+  }
+
+  async home() {
+    return this.shellExec("input keyevent 3", 8000);
+  }
+
+  async back() {
+    return this.shellExec("input keyevent 4", 6000);
+  }
+
+  async currentFocus() {
+    const out = await this.shellExec(
+      "dumpsys window 2>/dev/null | grep -E 'mCurrentFocus|mFocusedApp'; "
+      + "dumpsys activity activities 2>/dev/null | grep -E 'mResumedActivity' | head -1",
+      10000,
+    ).catch(() => "");
+    return parseFocusOutput(out);
+  }
+
+  async currentIme() {
+    const out = await this.shellExec("settings get secure default_input_method", 8000).catch(() => "");
+    return String(out).trim();
+  }
+
+  async setIme(ime) {
+    const r = await this._invoke("selectIme", { ime }, 12000);
+    if (r.code !== 10000) throw new Error(`selectIme failed: ${r.message || JSON.stringify(r)}`);
+    for (let i = 0; i < 8; i += 1) {
+      await new Promise((r) => setTimeout(r, 200));
+      if ((await this.currentIme()) === ime) return true;
+    }
+    return false;
+  }
+
+  // 效卫桥 IME 输入中文：切 XwIME → 清空（adb_shell keyevent）→ inputText → 还原。
+  // 与 FastOperator.inputTextViaXiaowei 行为对齐；keyevent 走 shellExec（不经 adb.exe）。
+  // FlutterBoost 关键修法（2026-07-22 E6 实证）：切 IME 后 Flutter 的 input connection 已随旧 IME
+  // 销毁，commitText 会石沉大海（inputAccepted=true 但字不进字段）。必须在切 IME 后**重新聚焦**
+  // （refocus 回调，一般是重点一次字段），让 Flutter 在 XwIME 名下重建 connection，再 inputText。
+  async inputTextViaXiaowei(text, { bridgeIme, priorIme, clearFirst = false, deferRestore = false, refocus = null } = {}) {
+    bridgeIme = bridgeIme || this.xwBridgeIme || BRIDGE_IME;
+    priorIme = priorIme || (await this.currentIme());
+    this._priorIme = priorIme;
+    const audit = { priorIme, bridgeIme, selected: false, cleared: false, inputAccepted: false, restored: false };
+    const restore = async () => {
+      try {
+        if ((await this.currentIme()) !== priorIme) { await this.setIme(priorIme); audit.restored = true; }
+        else audit.restored = true;
+      } catch { audit.restoreError = true; }
+      return audit;
+    };
+    try {
+      if ((await this.currentIme()) !== bridgeIme) {
+        if (!(await this.setIme(bridgeIme))) throw new Error("bridge IME select failed");
+      }
+      audit.selected = true;
+      await new Promise((r) => setTimeout(r, 400));
+      if (refocus) {
+        await refocus();
+        await new Promise((r) => setTimeout(r, 600));
+        audit.refocused = true;
+      }
+      if (clearFirst) {
+        await this.shellExec("input keyevent KEYCODE_MOVE_END " + Array(48).fill("KEYCODE_DEL").join(" "), 8000);
+        await new Promise((r) => setTimeout(r, 150));
+        audit.cleared = true;
+      }
+      const r = await this._invoke("inputText", { content: String(text) }, 12000);
+      if (r.code !== 10000) throw new Error(`inputText failed: ${r.message || JSON.stringify(r)}`);
+      audit.inputAccepted = true;
+    } catch (e) {
+      await restore();
+      throw e;
+    }
+    if (deferRestore) return { audit, restore };
+    await restore();
+    return audit;
+  }
+
+  // 截图：绿箭 Screen 的 savePath 是**目录**（默认 D:\Pictures），不是文件路径；
+  // Screen 把图存为 <serial>_Screenshot_<ts>.png 到该目录。故：
+  // 取 targetPath 的目录作 savePath，Screen 后找新生成的 png，重命名到 targetPath（证据文件名有意义），再读字节算 sha256。
+  async capturePng(targetPath, timeoutMs = 15000) {
+    const dir = dirname(targetPath);
+    try { mkdirSync(dir, { recursive: true }); } catch {}
+    const before = (() => { try { return new Set(readdirSync(dir).filter((f) => /\.png$/i.test(f))); } catch { return new Set(); } })();
+    const r = await this._invoke("Screen", { savePath: dir }, timeoutMs);
+    if (r.code !== 10000) throw new Error(`Screen failed: ${r.message || JSON.stringify(r)}`);
+    let found = null;
+    for (let i = 0; i < 15; i += 1) {
+      await new Promise((res) => setTimeout(res, 200));
+      const after = (() => { try { return readdirSync(dir).filter((f) => /\.png$/i.test(f) && !before.has(f)); } catch { return []; } })();
+      if (after.length) { found = after.sort().slice(-1)[0]; break; }
+    }
+    if (!found) throw new Error("Screen: no new png written");
+    const src = join(dir, found);
+    // Screen 异步写文件：文件名一出现就可能还是 0 字节在 flush。等非零且两次读大小稳定再 rename，避免空/截断截图。
+    let size = 0, prev = -1, stable = 0;
+    for (let i = 0; i < 25; i += 1) {
+      try { size = readFileSync(src).length; } catch { size = 0; }
+      if (size > 0 && size === prev) { stable += 1; if (stable >= 2) break; } else stable = 0;
+      prev = size;
+      await new Promise((res) => setTimeout(res, 120));
+    }
+    let p = src;
+    try { renameSync(src, targetPath); if (existsSync(targetPath)) p = targetPath; } catch {}
+    const buf = readFileSync(p);
+    return { path: p, bytes: buf.length, sha256: createHash("sha256").update(buf).digest("hex") };
+  }
+
+  // uiautomator dump → base64 回传纯 ASCII（经网关文本通道不丢 UTF-8）→ node 解码 UTF-8 XML。
+  // 不能用 cat：网关 adb_shell 会把设备 UTF-8 stdout 按 GBK 解再回传，中文 content-desc 变 mojibake。
+  // base64 是纯 ASCII，不受网关文本编码影响；node 端 Buffer.from(b64,'base64').toString('utf8') 还原。
+  async dumpXml(label) {
+    const token = `${process.pid}-${Date.now()}`;
+    const remote = `/sdcard/xianyu-dump-${token}.xml`;
+    const t0 = Date.now();
+    await this.shellExec(`uiautomator dump ${remote}`, 20000);
+    let b64 = "";
+    for (let i = 0; i < 3; i += 1) {
+      b64 = await this.shellExec(`base64 ${remote}`, 20000).catch(() => "");
+      if (b64 && b64.trim()) break;
+      await new Promise((r) => setTimeout(r, 400));
+    }
+    await this.shellExec(`rm -f ${remote}`, 5000).catch(() => null);
+    if (!b64 || !b64.trim()) throw new Error("gateway dump: empty base64");
+    const xml = Buffer.from(b64.replace(/\s+/g, ""), "base64").toString("utf8");
+    if (!xml.includes("<hierarchy")) throw new Error("gateway dump: hierarchy XML not returned");
+    this.metrics.dumps += 1;
+    this.metrics.totalDumpMs += Date.now() - t0;
+    return xml;
+  }
+}
