@@ -43,7 +43,11 @@ import {
   verifyConstraint,
   matchConstraintPattern,
   grepFile,
+  grepRepo,
+  extractConstraintTokens,
+  locateEvidence,
   CONSTRAINT_PATTERNS,
+  GREP_DIRS,
 } from "../scout/scout.mjs";
 
 // ── classifyRecipe v2.2 ─────────────────────────────────────────────────────
@@ -373,4 +377,116 @@ test("verifyConstraint dry-run mode returns result without side effects", () => 
   assert.equal(result.pattern, "comment-cap");
   // No HTTP calls made — this is a pure function, dry-run only matters at the
   // postKnowledge/verifyKnowledge call level in verifyRecipe
+});
+
+// ── selectTarget excludeIds (full-mode multi-target retry) ───────────────────
+
+test("selectTarget excludeIds skips the given capability ids", () => {
+  const cap1 = makeCapability({ id: "xhs.comment.send", maturity: "E2", risk: "R2" });
+  const cap2 = makeCapability({ id: "xhs.observe.feed", maturity: "E3", risk: "R0" });
+  const r1 = makeRecipe({ id: "r1", appliesTo: ["xhs.comment.send"], verifyMode: "constraint", verifiedBy: [] });
+  const r2 = makeRecipe({ id: "r2", appliesTo: ["xhs.observe.feed"], verifyMode: "constraint", verifiedBy: [] });
+  const first = selectTarget([cap1, cap2], [r1, r2], null);
+  assert.ok(first, "first target should exist");
+  // exclude first → the other capability becomes the candidate
+  const second = selectTarget([cap1, cap2], [r1, r2], null, { excludeIds: [first.id] });
+  assert.ok(second, "second target should exist");
+  assert.notEqual(second.id, first.id);
+  // exclude both → null
+  const none = selectTarget([cap1, cap2], [r1, r2], null, { excludeIds: [first.id, second.id] });
+  assert.equal(none, null);
+});
+
+// ── extractConstraintTokens ────────────────────────────────────────────────────
+
+test("extractConstraintTokens extracts filenames, flags, UPPER_SNAKE, camelCase", () => {
+  const recipe = makeRecipe({
+    id: "infra-placement-fail-closed-20260724",
+    content: "control-plane/lib/placement.mjs must enforce fail-closed; --comment-cap default 1; ERR_TIMEOUT_90 timeoutMs=90000",
+    title: "placement failClosed constraint",
+  });
+  const tokens = extractConstraintTokens(recipe);
+  // filename path
+  assert.ok(tokens.includes("control-plane/lib/placement.mjs"), `tokens: ${JSON.stringify(tokens)}`);
+  // CLI flag
+  assert.ok(tokens.includes("--comment-cap"), `tokens: ${JSON.stringify(tokens)}`);
+  // UPPER_SNAKE constant
+  assert.ok(tokens.includes("ERR_TIMEOUT_90"), `tokens: ${JSON.stringify(tokens)}`);
+  // camelCase identifier
+  assert.ok(tokens.includes("failClosed") || tokens.includes("timeoutMs"), `tokens: ${JSON.stringify(tokens)}`);
+});
+
+test("extractConstraintTokens returns [] for plain English with no distinctive tokens", () => {
+  const recipe = makeRecipe({
+    id: "something-unrelated",
+    content: "something completely unrelated to any known pattern",
+    title: "random",
+  });
+  const tokens = extractConstraintTokens(recipe);
+  assert.deepEqual(tokens, []);
+});
+
+test("extractConstraintTokens filters ubiquitous acronyms from UPPER_SNAKE", () => {
+  const recipe = makeRecipe({
+    id: "x",
+    content: "the API must return JSON over HTTP",
+    title: "api constraint",
+  });
+  const tokens = extractConstraintTokens(recipe);
+  assert.ok(!tokens.includes("API"), `API should be filtered: ${JSON.stringify(tokens)}`);
+  assert.ok(!tokens.includes("JSON"), `JSON should be filtered: ${JSON.stringify(tokens)}`);
+  assert.ok(!tokens.includes("HTTP"), `HTTP should be filtered: ${JSON.stringify(tokens)}`);
+});
+
+// ── grepRepo / locateEvidence ──────────────────────────────────────────────────
+
+test("grepRepo finds a known token in the repo dirs", () => {
+  const hit = grepRepo("commentCap");
+  assert.ok(hit, "grepRepo should find commentCap in the repo");
+  assert.ok(hit.includes("task-runner.mjs"), `expected task-runner.mjs hit: ${hit.slice(0, 120)}`);
+});
+
+test("grepRepo returns null for an absent token", () => {
+  const hit = grepRepo("ZZZ_NO_SUCH_TOKEN_99999_XYZ");
+  assert.equal(hit, null);
+});
+
+test("locateEvidence finds a real file by basename", () => {
+  const ev = locateEvidence("placement.mjs");
+  assert.ok(ev, "expected evidence for placement.mjs");
+  assert.ok(["file", "grep"].includes(ev.kind), `kind: ${ev.kind}`);
+  assert.ok(ev.detail.includes("placement.mjs"), `detail: ${ev.detail}`);
+});
+
+test("locateEvidence returns null for an absent token", () => {
+  assert.equal(locateEvidence("zzz-no-such-file-99999.mjs"), null);
+  assert.equal(locateEvidence("zzzNopeTokenXyz"), null);
+});
+
+// ── verifyConstraint generic fallback ─────────────────────────────────────────
+
+test("verifyConstraint generic: recipe referencing a real repo file → confirmed", () => {
+  const recipe = makeRecipe({
+    id: "infra-placement-routing-location",
+    content: "the placement routing logic lives in control-plane/lib/placement.mjs and must stay fail-safe",
+    title: "placement-routing-location",
+    verifyMode: "constraint",
+  });
+  const result = verifyConstraint(recipe);
+  assert.equal(result.ok, true, `expected ok=true, got ok=${result.ok} reason=${result.reason} ev=${result.evidence}`);
+  assert.equal(result.pattern, "generic");
+  assert.ok(result.evidence.includes("placement.mjs"), `evidence should mention placement.mjs: ${result.evidence}`);
+});
+
+test("verifyConstraint generic: absent tokens → ok=null, no_evidence_found (no fabrication)", () => {
+  const recipe = makeRecipe({
+    id: "infra-fake-zzz-99999",
+    content: "the zzzNopeTokenXyz flag --zzz-not-a-real-flag-xyz in zzz-no-such-file-99999.mjs must hold",
+    title: "fake-zzz-constraint",
+    verifyMode: "constraint",
+  });
+  const result = verifyConstraint(recipe);
+  assert.equal(result.ok, null, `expected ok=null (no fabrication), got ok=${result.ok}`);
+  assert.equal(result.reason, "no_evidence_found");
+  assert.equal(result.pattern, "generic");
 });

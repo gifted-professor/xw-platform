@@ -12,6 +12,7 @@ import { argv, exit, env } from "node:process";
 import { execSync } from "node:child_process";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { existsSync } from "node:fs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, "..");
@@ -120,14 +121,16 @@ async function restoreScene(device) {
 
 // ─── Device selection (§4-1) ────────────────────────────────────────────────
 
-async function selectDevice(pitfalls) {
+async function selectDevice(pitfalls, excludeSerials = []) {
   const devices = await getDevices();
+  const exclude = new Set(excludeSerials);
   const available = devices.filter(
     (d) =>
       d.control?.online &&
       !d.control?.quarantined &&
       !d.control?.lease &&
-      !d.control?.identityStale
+      !d.control?.identityStale &&
+      !exclude.has(d.serial)
   );
   if (!available.length) return null;
 
@@ -184,12 +187,13 @@ function buildRecipeIndex(recipes) {
   return index;
 }
 
-function selectTarget(capabilities, allKnowledge, filter, { constraintOnly = false } = {}) {
+function selectTarget(capabilities, allKnowledge, filter, { constraintOnly = false, excludeIds = [] } = {}) {
   // v2.2: verifyMode is the verification arbiter; category is just knowledge classification.
   // P1 candidates are category-agnostic — pitfall entries with verifyMode ∈ {constraint, replay}
   // are verifiable too, so do NOT filter by category here. P1's own filter narrows by verifyMode.
   const recipes = allKnowledge;
   const recipeIndex = buildRecipeIndex(recipes);
+  const exclude = new Set(excludeIds);
 
   // P0: E0/E1 + has recipe (any verification status)
   // P1: appliesTo matches capability + verifiedBy=[] + verifyMode ∈ {constraint, replay}
@@ -198,6 +202,7 @@ function selectTarget(capabilities, allKnowledge, filter, { constraintOnly = fal
 
   for (const cap of capabilities) {
     if (cap.automationPolicy?.mode === "disabled") continue;
+    if (exclude.has(cap.id)) continue;
     const isLowMaturity = cap.maturity === "E0" || cap.maturity === "E1";
     const capRecipes = recipeIndex.get(cap.id) || [];
     const unverifiedConstraintOrReplay = capRecipes.filter(
@@ -328,6 +333,117 @@ function grepFile(filePath, pattern) {
   }
 }
 
+// ─── Generic constraint evidence location (v2.3) ─────────────────────────────
+//
+// The 3 built-in CONSTRAINT_PATTERNS only cover a handful of named constraints.
+// The 47-item backlog is mostly infra/config constraints whose evidence lives in
+// the repo (filenames, CLI flags, config keys, error-code constants). We extract
+// distinctive, grep-able tokens from the recipe content/title/id and locate them
+// across apps/ control-plane/ scout/ scripts/.
+//
+// Principle preserved: evidence insufficient → do NOT judge (ok=null → human).
+// Found → constraint confirmed (the referenced artifact exists in the codebase).
+
+const GREP_DIRS = ["apps", "control-plane", "scout", "scripts"];
+
+// Acronyms/protocol tokens that appear everywhere and carry no constraint meaning.
+const UPPER_SNAKE_DENYLIST = new Set([
+  "JSON", "API", "HTTP", "HTTPS", "URL", "URI", "TCP", "UDP", "ADB", "APK",
+  "XML", "CSS", "HTML", "JS", "TS", "MJS", "PS1", "ENV", "WS", "WSS", "SSH",
+  "PID", "TTY", "UTF", "GPFS", "CDP", "REST", "POST", "GET", "HEAD", "DNS",
+  "TODO", "FIXME", "OK", "NOT", "AND", "OR", "THE", "FOR", "E0", "E1", "E2",
+  "E3", "R0", "R1", "R2", "R3", "PR", "ID", "UI", "IME",
+]);
+
+/**
+ * Extract distinctive grep-able tokens from a constraint recipe.
+ * Order of specificity: filenames > CLI flags > UPPER_SNAKE constants > camelCase.
+ * Returns a de-duplicated array (most specific first).
+ */
+function extractConstraintTokens(recipe) {
+  const text = `${recipe.content || ""} ${recipe.title || ""} ${recipe.id || ""}`;
+  const tokens = [];
+  const seen = new Set();
+  const add = (t) => {
+    if (t && !seen.has(t)) {
+      seen.add(t);
+      tokens.push(t);
+    }
+  };
+
+  // Filenames / paths with extensions: task-runner.mjs, control-plane/lib/placement.mjs
+  for (const m of text.matchAll(/([\w./-]+\.(?:mjs|ps1|json|js|ts|sh|md|psd1))\b/g)) {
+    add(m[1]);
+  }
+  // CLI flags: --comment-cap
+  for (const m of text.matchAll(/(--[a-z][\w-]{2,})/g)) {
+    add(m[1]);
+  }
+  // UPPER_SNAKE constants / error codes: TIMEOUT_MS, ECONNREFUSED, ERR_TIMEOUT
+  for (const m of text.matchAll(/\b([A-Z][A-Z0-9_]{3,})\b/g)) {
+    if (!UPPER_SNAKE_DENYLIST.has(m[1])) add(m[1]);
+  }
+  // camelCase identifiers: commentCap, timeoutMs, failClosed
+  for (const m of text.matchAll(/\b([a-z]+[A-Z][A-Za-z0-9]+)\b/g)) {
+    add(m[1]);
+  }
+
+  return tokens;
+}
+
+/**
+ * Grep a literal token across the repo's evidence dirs (fixed-string, recursive).
+ * Returns the trimmed grep output (up to 20 lines) or null.
+ */
+function grepRepo(token, dirs = GREP_DIRS) {
+  try {
+    const absDirs = dirs.map((d) => resolve(REPO_ROOT, d)).filter((d) => existsSync(d));
+    if (!absDirs.length) return null;
+    const out = execSync(
+      `grep -rnF ${JSON.stringify(token)} ${absDirs.map((d) => JSON.stringify(d)).join(" ")} 2>/dev/null | head -20`,
+      { encoding: "utf8", timeout: 8000 }
+    );
+    return out.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Locate evidence for a single token. For filenames, also checks file existence
+ * (direct path or by basename) since a referenced file existing IS the evidence,
+ * even if no other file mentions it by name.
+ * Returns { kind, detail } or null.
+ */
+function locateEvidence(token, dirs = GREP_DIRS) {
+  const grepHit = grepRepo(token, dirs);
+  if (grepHit) return { kind: "grep", detail: grepHit.split("\n")[0] };
+
+  if (/\.(mjs|ps1|json|js|ts|sh|md|psd1)$/.test(token)) {
+    const direct = resolve(REPO_ROOT, token);
+    if (existsSync(direct)) {
+      return { kind: "file", detail: token };
+    }
+    const base = token.split("/").pop();
+    const absDirs = dirs.map((d) => resolve(REPO_ROOT, d)).filter((d) => existsSync(d));
+    if (absDirs.length) {
+      try {
+        const found = execSync(
+          `find ${absDirs.map((d) => JSON.stringify(d)).join(" ")} -type f -name ${JSON.stringify(base)} 2>/dev/null | head -3`,
+          { encoding: "utf8", timeout: 5000 }
+        ).trim();
+        if (found) {
+          const rel = found.split("\n")[0].replace(REPO_ROOT + "/", "");
+          return { kind: "file", detail: rel };
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+  return null;
+}
+
 /**
  * Find a constraint pattern that matches the recipe content.
  */
@@ -349,12 +465,48 @@ function matchConstraintPattern(recipe) {
 function verifyConstraint(recipe, { dryRun = false } = {}) {
   const pattern = matchConstraintPattern(recipe);
   if (!pattern) {
+    // No built-in pattern matched — try generic token extraction from recipe content.
+    // 47-item backlog is mostly infra/config constraints whose evidence lives in
+    // the repo; the 3 built-in patterns only cover a few named ones.
+    const tokens = extractConstraintTokens(recipe);
+    if (tokens.length === 0) {
+      return {
+        ok: null,
+        reason: "no_matching_pattern",
+        evidence: `recipe "${recipe.title}" content does not match any known constraint pattern and yields no grep-able tokens`,
+        pattern: null,
+        details: "constraint evidence cannot be located",
+      };
+    }
+
+    log(`no built-in pattern; trying generic token grep: ${tokens.join(", ")}`);
+
+    const evidenceLines = [];
+    for (const token of tokens) {
+      const ev = locateEvidence(token);
+      if (ev) evidenceLines.push({ token, ...ev });
+      if (evidenceLines.length >= 3) break;
+    }
+
+    if (evidenceLines.length === 0) {
+      return {
+        ok: null,
+        reason: "no_evidence_found",
+        evidence: `tokens [${tokens.join(", ")}] not located in repo (${GREP_DIRS.join(", ")})`,
+        pattern: "generic",
+        details: "constraint evidence cannot be located — verifyMode should be human",
+      };
+    }
+
+    const evidenceSummary = evidenceLines
+      .map((e) => `${e.kind}:${e.token} → ${e.detail}`)
+      .join("; ");
     return {
-      ok: null,
-      reason: "no_matching_pattern",
-      evidence: `recipe "${recipe.title}" content does not match any known constraint pattern`,
-      pattern: null,
-      details: "constraint evidence cannot be located",
+      ok: true,
+      reason: "constraint_evidence_found",
+      evidence: evidenceSummary,
+      pattern: "generic",
+      details: `${evidenceLines.length} token(s) located in repo`,
     };
   }
 
@@ -704,72 +856,124 @@ async function run({ maxRounds = 1, capabilityFilter = null, dryRun = false, con
   }
 
   // ── Full mode: device-backed verification ──
+  // v2.3: constraint targets are verified by grepping the repo (no phone needed),
+  // so they skip device selection + session acquire entirely. Only replay/explore
+  // targets need a device session. On session acquire failure (409/423/non-201),
+  // try the next target (up to 3 per round) instead of ending the round at 0 output.
   for (let round = 0; round < maxRounds; round++) {
     log(`\n=== Round ${round + 1}/${maxRounds} ===`);
 
-    // §4-1: Select device
-    const allPitfalls = await getKnowledge("xhs", "pitfall").catch(() => []);
-    const device = await selectDevice(allPitfalls);
-    if (!device) {
-      log("no available device (all busy/offline/quarantined) — ending round");
-      summary.rounds.push({ round: round + 1, status: "no_device" });
-      break;
-    }
-    log(`selected device: ${device.alias} (${device.label}) [${device.serial}]`);
-
-    // §4-2: Inventory capabilities + P0/P1/P2 target selection
-    const allCaps = await getCapabilities();
+    // §4-2: Inventory capabilities + knowledge once per round
+    const allCaps = await getCapabilities().catch(() => []);
     const allKnowledge = await getKnowledge("xhs").catch(() => []);
-    const target = selectTarget(allCaps, allKnowledge, capabilityFilter);
-    if (!target) {
-      log("no scoutable capability found — ending round");
-      summary.rounds.push({ round: round + 1, status: "no_capability", device: device.alias });
-      break;
-    }
-    log(`target capability: ${target.id} (${target.maturity}/${target.risk}) P${target._priority} recipeType=${target._recipeType || "none"}`);
+    const allPitfalls = allKnowledge.filter((k) => k.category === "pitfall");
 
-    let roundResult = { round: round + 1, device: device.alias, capability: target.id, status: "pending" };
+    const triedCapIds = new Set();   // capabilities attempted this round (session failed)
+    const triedSerials = new Set(); // devices already tried & locked this round
+    let roundResult = { round: round + 1, status: "no_attempt_succeeded" };
+    let handled = false;
 
-    try {
-      // §7-3: Acquire session lease
-      const sessionRes = await acquireSession(device.control.deviceId, target.id);
-      if (sessionRes.status === 423) {
-        log("device busy (423) — collision, switching device next round");
-        roundResult.status = "collision_423";
-        summary.rounds.push(roundResult);
-        continue;
+    // Up to 3 targets per round; constraint targets resolve on first try.
+    for (let attempt = 0; attempt < 3 && !handled; attempt++) {
+      const target = selectTarget(allCaps, allKnowledge, capabilityFilter, {
+        excludeIds: [...triedCapIds],
+      });
+      if (!target) {
+        log("no scoutable capability found — ending round");
+        roundResult = { round: round + 1, status: "no_capability" };
+        break;
       }
-      if (sessionRes.status !== 201 || !sessionRes.data?.session?.sessionId) {
-        log(`session acquire failed (${sessionRes.status}) — ending round`);
-        roundResult.status = "session_failed";
-        summary.rounds.push(roundResult);
-        continue;
+      log(`target capability: ${target.id} (${target.maturity}/${target.risk}) P${target._priority} recipeType=${target._recipeType || "none"}`);
+
+      // ── Constraint target: grep-only verification, no device / no session ──
+      if (target._recipeType === "constraint") {
+        const recipe = target._recipe;
+        log(`constraint target — verifying via repo grep (no device session needed)`);
+        const result = await verifyRecipe(null, recipe, target, { dryRun });
+        roundResult = {
+          round: round + 1,
+          capability: target.id,
+          status: result.ok === null ? "recipe_observed" : result.ok ? "recipe_verified" : "recipe_verify_failed",
+          reason: result.reason,
+          recipeType: "constraint",
+          pattern: result.pattern,
+          evidence: result.evidence,
+          samplePath: "grep-only",
+        };
+        summary.totalKnowledge++;
+        handled = true;
+        break;
+      }
+
+      // ── Replay / explore target: needs a device session ──
+      const device = await selectDevice(allPitfalls, [...triedSerials]);
+      if (!device) {
+        log("no available device (all busy/offline/quarantined) — ending round");
+        roundResult = { round: round + 1, status: "no_device" };
+        break;
+      }
+      log(`selected device: ${device.alias} (${device.label}) [${device.serial}]`);
+
+      const sessionRes = await acquireSession(device.control.deviceId, target.id);
+      const sessionBusy = sessionRes.status === 423 || sessionRes.status === 409;
+      if (sessionBusy || sessionRes.status !== 201 || !sessionRes.data?.session?.sessionId) {
+        log(`session acquire failed (${sessionRes.status}) for ${target.id} — trying next target`);
+        triedCapIds.add(target.id);
+        if (sessionBusy) triedSerials.add(device.serial); // device locked → avoid re-selecting
+        roundResult = {
+          round: round + 1,
+          capability: target.id,
+          device: device.alias,
+          status: sessionBusy ? "session_busy" : "session_failed",
+          reason: `http ${sessionRes.status}`,
+        };
+        continue; // §4: try next target this round (up to 3)
       }
 
       const { sessionId, token } = sessionRes.data.session;
       log(`session acquired: ${sessionId.slice(0, 12)}…`);
 
       try {
-        // §4-3: Use recipe attached to target (from P0/P1/P2 selection)
         const recipe = target._recipe;
-
         if (recipe) {
-          // §5: Re-run verification (constraint or replay)
+          // §5: Re-run verification (replay; constraint would have taken the branch above)
           const result = await verifyRecipe(device, recipe, target, { dryRun });
-          roundResult.status = result.ok === null ? "recipe_observed" : result.ok ? "recipe_verified" : "recipe_verify_failed";
-          roundResult.reason = result.reason;
-          roundResult.recipeType = target._recipeType;
-          roundResult.evidence = result.evidence;
-          roundResult.pattern = result.pattern;
-          roundResult.samplePath = "serve-direct"; // §5: direct serve → knowledge only, not v1.3
+          roundResult = {
+            round: round + 1,
+            device: device.alias,
+            capability: target.id,
+            status: result.ok === null ? "recipe_observed" : result.ok ? "recipe_verified" : "recipe_verify_failed",
+            reason: result.reason,
+            recipeType: target._recipeType,
+            evidence: result.evidence,
+            pattern: result.pattern,
+            samplePath: "serve-direct", // §5: direct serve → knowledge only, not v1.3
+          };
           summary.totalKnowledge++;
         } else {
           // §6: Explore fresh
           const result = await exploreFresh(device, target, allPitfalls, { dryRun });
-          roundResult.status = result.ok ? "explored" : "explore_failed";
-          roundResult.reason = result.reason;
+          roundResult = {
+            round: round + 1,
+            device: device.alias,
+            capability: target.id,
+            status: result.ok ? "explored" : "explore_failed",
+            reason: result.reason,
+          };
           summary.totalKnowledge++;
         }
+        handled = true;
+      } catch (err) {
+        log(`round error: ${err.message}`);
+        roundResult = {
+          round: round + 1,
+          device: device.alias,
+          capability: target.id,
+          status: "error",
+          error: err.message,
+        };
+        // §7-2: fail-closed — record and stop this round (do not retry a thrown op)
+        handled = true;
       } finally {
         // §7-4: Always restore scene and release session
         await restoreScene(device);
@@ -778,12 +982,6 @@ async function run({ maxRounds = 1, capabilityFilter = null, dryRun = false, con
         );
         log("session released, scene restored");
       }
-    } catch (err) {
-      log(`round error: ${err.message}`);
-      roundResult.status = "error";
-      roundResult.error = err.message;
-      // §7-2: fail-closed — try to restore even on error
-      await restoreScene(device).catch(() => {});
     }
 
     summary.rounds.push(roundResult);
@@ -825,4 +1023,4 @@ if (isDirectRun) {
     });
 }
 
-export { run, selectDevice, selectTarget, classifyRecipe, buildRecipeIndex, verifyConstraint, matchConstraintPattern, grepFile, CONSTRAINT_PATTERNS };
+export { run, selectDevice, selectTarget, classifyRecipe, buildRecipeIndex, verifyConstraint, matchConstraintPattern, grepFile, grepRepo, extractConstraintTokens, locateEvidence, CONSTRAINT_PATTERNS, GREP_DIRS };
