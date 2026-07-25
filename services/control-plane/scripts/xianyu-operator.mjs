@@ -2266,14 +2266,34 @@ function isDimTitle(label, dimName) {
       }
     }
     await settle(350);
-    await op.tap(...center(controls.stockInput.bounds));
+    const stockCenter = center(controls.stockInput.bounds);
+    await op.tap(...stockCenter);
     await settle(500);
     if (stockStr) {
       await clearFocusedDigits(12);
-      const stockTyped = await typeNumKB(stockStr);
+      let stockTyped = await typeNumKB(stockStr);
       if (!stockTyped.ok) {
         await cleanup();
         return { ok: false, step: "sku-stock-numpad-failed", implemented: true, stockTyped, dimResults };
+      }
+      // 若仍读到旧值：长按选中 + 再清再打（02 机 40 残留实证）
+      let probe = await snapshot(op, "xianyu-sku-stock-probe");
+      let probeStock = String(findSkuBatchEditControls(probe.nodes).stockInput?.label || "");
+      if (!probeStock.includes(stockStr)) {
+        await op.shellExec(`input swipe ${stockCenter[0]} ${stockCenter[1]} ${stockCenter[0]} ${stockCenter[1]} 900`, 8000).catch(() => null);
+        await settle(400);
+        const selectAll = (await snapshot(op, "xianyu-sku-stock-selectall")).nodes
+          .find((n) => n.bounds && /全选|选择全部|Select all/i.test(String(n.label || "")));
+        if (selectAll?.bounds) {
+          await op.tap(...center(selectAll.bounds));
+          await settle(300);
+        }
+        await clearFocusedDigits(16);
+        stockTyped = await typeNumKB(stockStr);
+        if (!stockTyped.ok) {
+          await cleanup();
+          return { ok: false, step: "sku-stock-numpad-failed", implemented: true, stockTyped, retry: true, dimResults };
+        }
       }
     }
     await settle(350);
@@ -2297,12 +2317,9 @@ function isDimTitle(label, dimName) {
         dimResults,
       };
     }
-    const stockOk = !stockStr
-      || stockLabel.includes(stockStr)
-      || beforeConfirm.nodes.some((n) => {
-        const l = String(n.label || "").replace(/\s+/g, "");
-        return l === stockStr || new RegExp(`(?:^|[^\\d])${stockStr}(?:$|[^\\d])`).test(l);
-      });
+    // 精确匹配：label 去掉非数字后应等于 stockStr（避免 "40".includes("10") 假阳，也避免 "410" 误过）
+    const stockDigits = stockLabel.replace(/[^\d]/g, "");
+    const stockOk = !stockStr || stockDigits === stockStr || stockLabel.trim() === stockStr;
     if (!stockOk) {
       await cleanup();
       return {
@@ -2496,11 +2513,20 @@ async function uploadImagesDryRun(op, images, {
     if (!/FishFlutterBoost/.test(picker.focus.activity || "")) { await cleanup(); return { ok: false, step: "image-picker-not-open", implemented: true }; }
 
     // 若已在图片编辑页（重试时常见残留）：顶栏「1/N」+「完成」→ 直接完成并验证
-    const editDoneEarly = (picker.nodes || []).find((n) =>
-      n.bounds && /^完成$/.test(String(n.label || "").trim()) && n.clickable);
+    // 04 机 dump 偶发只有「返回/1/2/删除」无「完成」label → 右下坐标兜底
+    const editDoneEarly = (picker.nodes || []).find((n) => {
+      if (!n.bounds) return false;
+      const l = String(n.label || "").trim();
+      return /^完成(?:[，,].*)?$/.test(l) || l === "完成";
+    });
     const editRatio = (picker.nodes || []).some((n) => /^\d+\/\d+$/.test(String(n.label || "").trim()));
-    if (editDoneEarly?.bounds && editRatio) {
-      await op.tap(...center(editDoneEarly.bounds));
+    if (editRatio && (editDoneEarly?.bounds || true)) {
+      if (editDoneEarly?.bounds) {
+        await op.tap(...center(editDoneEarly.bounds));
+      } else {
+        // 1080×2400 编辑页右下「完成」
+        await op.tap(930, 2280);
+      }
       await settle(2500);
       let finalSnap = await snapshot(op, "xianyu-image-final-from-edit");
       let imageState = analyzeImageUploadState(finalSnap.nodes, {
@@ -3038,29 +3064,46 @@ export async function publishDryRun(op, plan, {
  */
 export async function saveDraftDryRun(op) {
   let snap = await snapshot(op, "save-draft-before");
-  let draft = (snap.nodes || []).find((n) => n.bounds && /存草稿/.test(String(n.label || "")));
+  const findDraftBtn = (nodes) => (nodes || []).find((n) => {
+    if (!n?.bounds) return false;
+    const l = String(n.label || "").trim();
+    // 标准「存草稿」；部分版本顶栏只露「草稿箱·N」（点开会进列表，不点）
+    return /存草稿/.test(l) || /^草稿$/.test(l);
+  });
+  let draft = findDraftBtn(snap.nodes);
   // 顶栏偶发被滚走 / dump 滞后：最多 3 次上滑露顶栏再找
   for (let i = 0; i < 3 && !draft?.bounds; i += 1) {
     await op.shellExec("input swipe 540 900 540 1500 350", 8000).catch(() => null);
     await settle(800);
     snap = await snapshot(op, `save-draft-scroll-${i}`);
-    draft = (snap.nodes || []).find((n) => n.bounds && /存草稿/.test(String(n.label || "")));
+    draft = findDraftBtn(snap.nodes);
   }
+  // 仍无「存草稿」但顶栏有「发闲置/发布」：1080×2400 顶栏存草稿约在发布左侧
+  let usedCoordFallback = false;
   if (!draft?.bounds) {
-    return {
-      ok: false,
-      step: "save-draft-button-missing",
-      stoppedBeforePublish: true,
-      savedDraft: false,
-      publishCompose: !!isPublishCompose(snap.nodes),
-      topLabels: (snap.nodes || [])
-        .filter((n) => n?.bounds && n.bounds[1] < 280)
-        .map((n) => n.label)
-        .slice(0, 20),
-    };
+    const hasPublishBar = (snap.nodes || []).some((n) =>
+      n?.bounds && n.bounds[1] < 280 && /发闲置|发布/.test(String(n.label || "")));
+    if (hasPublishBar || isPublishCompose(snap.nodes)) {
+      usedCoordFallback = true;
+      await op.tap(780, 160);
+      await settle(1800);
+    } else {
+      return {
+        ok: false,
+        step: "save-draft-button-missing",
+        stoppedBeforePublish: true,
+        savedDraft: false,
+        publishCompose: !!isPublishCompose(snap.nodes),
+        topLabels: (snap.nodes || [])
+          .filter((n) => n?.bounds && n.bounds[1] < 280)
+          .map((n) => n.label)
+          .slice(0, 20),
+      };
+    }
+  } else {
+    await op.tap(...center(draft.bounds));
+    await settle(1800);
   }
-  await op.tap(...center(draft.bounds));
-  await settle(1800);
 
   let saved = false;
   for (let i = 0; i < 8; i += 1) {
@@ -3095,6 +3138,7 @@ export async function saveDraftDryRun(op) {
     stoppedBeforePublish: true,
     savedDraft: saved,
     publishTapped: false,
+    usedCoordFallback,
   };
 }
 
