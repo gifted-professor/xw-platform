@@ -3078,32 +3078,68 @@ export async function saveDraftDryRun(op) {
     snap = await snapshot(op, `save-draft-scroll-${i}`);
     draft = findDraftBtn(snap.nodes);
   }
-  // 仍无「存草稿」但顶栏有「发闲置/发布」：1080×2400 顶栏存草稿约在发布左侧
-  let usedCoordFallback = false;
+  // 全树再搜一次（不限顶栏 y）
   if (!draft?.bounds) {
-    const hasPublishBar = (snap.nodes || []).some((n) =>
-      n?.bounds && n.bounds[1] < 280 && /发闲置|发布/.test(String(n.label || "")));
-    if (hasPublishBar || isPublishCompose(snap.nodes)) {
-      usedCoordFallback = true;
-      await op.tap(780, 160);
-      await settle(1800);
-    } else {
-      return {
-        ok: false,
-        step: "save-draft-button-missing",
-        stoppedBeforePublish: true,
-        savedDraft: false,
-        publishCompose: !!isPublishCompose(snap.nodes),
-        topLabels: (snap.nodes || [])
-          .filter((n) => n?.bounds && n.bounds[1] < 280)
-          .map((n) => n.label)
-          .slice(0, 20),
-      };
-    }
-  } else {
-    await op.tap(...center(draft.bounds));
-    await settle(1800);
+    draft = (snap.nodes || []).find((n) => n?.bounds && /存草稿/.test(String(n.label || "")));
   }
+  // 仍无显式「存草稿」：点关闭看是否弹出「保存草稿/存草稿」对话框（绝不点发布）
+  let usedCloseDialog = false;
+  if (!draft?.bounds) {
+    const closeBtn = (snap.nodes || []).find((n) =>
+      n?.bounds && n.bounds[1] < 280 && /^(关闭|返回)(?:[，,].*)?$/.test(String(n.label || "").trim()));
+    if (closeBtn?.bounds) {
+      const draftCountBefore = (() => {
+        for (const n of snap.nodes || []) {
+          const m = String(n.label || "").match(/草稿箱[·・]?(\d+)/);
+          if (m) return Number(m[1]);
+        }
+        return null;
+      })();
+      await op.tap(...center(closeBtn.bounds));
+      await settle(1200);
+      const dlg = await snapshot(op, "save-draft-close-dialog");
+      const saveInDlg = (dlg.nodes || []).find((n) =>
+        n?.bounds && /存草稿|保存草稿|保存/.test(String(n.label || "")) && !/发布|不保存|放弃/.test(String(n.label || "")));
+      if (saveInDlg?.bounds) {
+        usedCloseDialog = true;
+        await op.tap(...center(saveInDlg.bounds));
+        await settle(1800);
+        return {
+          ok: true,
+          step: "draft-saved",
+          stoppedBeforePublish: true,
+          savedDraft: true,
+          publishTapped: false,
+          usedCloseDialog: true,
+          draftCountBefore,
+        };
+      }
+      // 无保存选项：点回继续编辑（若有）或保持
+      const cont = (dlg.nodes || []).find((n) =>
+        n?.bounds && /继续|取消|再想想/.test(String(n.label || "")));
+      if (cont?.bounds) {
+        await op.tap(...center(cont.bounds));
+        await settle(800);
+      }
+      snap = await snapshot(op, "save-draft-after-close-miss");
+      draft = findDraftBtn(snap.nodes);
+    }
+  }
+  if (!draft?.bounds) {
+    return {
+      ok: false,
+      step: "save-draft-button-missing",
+      stoppedBeforePublish: true,
+      savedDraft: false,
+      publishCompose: !!isPublishCompose(snap.nodes),
+      topLabels: (snap.nodes || [])
+        .filter((n) => n?.bounds && n.bounds[1] < 280)
+        .map((n) => n.label)
+        .slice(0, 20),
+    };
+  }
+  await op.tap(...center(draft.bounds));
+  await settle(1800);
 
   let saved = false;
   for (let i = 0; i < 8; i += 1) {
@@ -3138,7 +3174,7 @@ export async function saveDraftDryRun(op) {
     stoppedBeforePublish: true,
     savedDraft: saved,
     publishTapped: false,
-    usedCoordFallback,
+    usedCloseDialog,
   };
 }
 
