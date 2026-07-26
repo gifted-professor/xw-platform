@@ -1,0 +1,22 @@
+{
+ "calibrated": {
+  "freight": true,
+  "sku": true
+ },
+ "description": "闲鱼精度验收04-20260726",
+ "freightTemplate": "包邮",
+ "price": 12.34,
+ "saveDraft": false,
+ "skipAddress": true,
+ "skipCategory": true,
+ "skipUpload": true,
+ "skuPrice": 12.34,
+ "skuReplaceExisting": true,
+ "skuSpecs": {
+  "颜色": [
+   "白色",
+   "黑色"
+  ]
+ },
+ "skuStock": "2"
+}

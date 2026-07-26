@@ -1,0 +1,33 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["verdict", "perDevice", "findings"],
+  "properties": {
+    "verdict": { "type": "string", "enum": ["pass", "fail"] },
+    "perDevice": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["consecutiveGreenRounds", "claimsMatchControlDb", "notes"],
+        "properties": {
+          "consecutiveGreenRounds": { "type": "integer" },
+          "claimsMatchControlDb": { "type": "boolean" },
+          "notes": { "type": "string" }
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["severity", "summary"],
+        "properties": {
+          "severity": { "type": "string", "enum": ["blocker", "major", "minor"] },
+          "summary": { "type": "string" }
+        }
+      }
+    }
+  }
+}
