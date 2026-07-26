@@ -1140,6 +1140,23 @@ export function findSkuRecoveryClose(snapshot, { focus = null, resolution = null
   return candidates.length === 1 ? candidates[0] : null;
 }
 
+export function findSkuExitConfirm(snapshot, { focus = null, resolution = null } = {}) {
+  const width = Array.isArray(resolution) ? Number(resolution[0]) : 0;
+  const height = Array.isArray(resolution) ? Number(resolution[1]) : 0;
+  if (width <= 0 || height <= 0 || focus?.package !== IDLEFISH_PACKAGE) return null;
+  const classification = classifyXianyuPage({ semanticNodes: snapshot, focus, resolution });
+  if (classification.pageType !== "sku-exit-dialog" || classification.confidence < 0.99) return null;
+  const candidates = snapshot.filter((node) => /^确认退出(?:[,，].*)?$/.test(String(node.label || "")
+    .replace(/[\u200B-\u200D\uFEFF]/g, "").trim())
+    && node.className === "android.view.View"
+    && Array.isArray(node.bounds)
+    && node.bounds[0] >= width * 0.5
+    && node.bounds[1] >= height * 0.82
+    && node.bounds[2] <= width
+    && node.bounds[3] <= height * 0.95);
+  return candidates.length === 1 ? candidates[0] : null;
+}
+
 export function recoverySemanticHints(snapshot = []) {
   const relevant = /^(?:关闭(?:[,，\s]|$)|设置价格和库存$|选中的规格(?:\s|$)|价格(?:[,，\s]|$)|库存(?:[,，\s]|$)|不保存$|存草稿$|保存草稿$|要不要先存个草稿$|退出后不会保存这次设置的规格哦$|确认退出(?:[,，]|$)|取消(?:[,，]|$)|发布$|发闲置$)/;
   return snapshot
@@ -1298,23 +1315,37 @@ export async function recoverDiscardDryRun(op, { evidenceDir = EVIDENCE_DIR_DEFA
       focus: page.focus,
       resolution,
     });
-    if (pageClassification.pageType !== "discard-dialog" || pageClassification.confidence < 0.99) {
-      const close = findSkuRecoveryClose(page.nodes, { focus: page.focus, resolution });
-      if (!close?.bounds) {
-        return fail("sku-close-not-uniquely-verified", { pageClassification });
-      }
-
-      await op.tap(...center(close.bounds));
-      await settle(1000);
-      page = await snapshot(op, "xianyu-recovery-after-sku-close");
-      await capture("after-sku-close");
-      pageClassification = classifyXianyuPage({
-        semanticNodes: page.nodes,
-        focus: page.focus,
-        resolution,
-      });
-    } else {
+    if (pageClassification.pageType === "discard-dialog" && pageClassification.confidence >= 0.99) {
       recoverySource = "discard-dialog";
+    } else {
+      for (let transition = 0; transition < 4
+        && ["sku-sheet", "sku-exit-dialog"].includes(pageClassification.pageType);
+        transition += 1) {
+        if (pageClassification.pageType === "sku-sheet") {
+          const close = findSkuRecoveryClose(page.nodes, { focus: page.focus, resolution });
+          if (!close?.bounds) return fail("sku-close-not-uniquely-verified", { pageClassification });
+          await op.tap(...center(close.bounds));
+          await settle(1000);
+          page = await snapshot(op, `xianyu-recovery-after-sku-close-${transition}`);
+          await capture(`after-sku-close-${transition}`);
+        } else {
+          const confirmExit = findSkuExitConfirm(page.nodes, { focus: page.focus, resolution });
+          if (!confirmExit?.bounds) return fail("sku-exit-confirm-not-uniquely-verified", { pageClassification });
+          await op.tap(...center(confirmExit.bounds));
+          await settle(1000);
+          page = await snapshot(op, `xianyu-recovery-after-sku-exit-confirm-${transition}`);
+          await capture(`after-sku-exit-confirm-${transition}`);
+          recoverySource = "sku-exit-dialog";
+        }
+        pageClassification = classifyXianyuPage({
+          semanticNodes: page.nodes,
+          focus: page.focus,
+          resolution,
+        });
+      }
+      if (["sku-sheet", "sku-exit-dialog"].includes(pageClassification.pageType)) {
+        return fail("sku-recovery-transition-limit", { pageClassification });
+      }
     }
 
     if (pageClassification.pageType === "discard-dialog" && pageClassification.confidence >= 0.99) {

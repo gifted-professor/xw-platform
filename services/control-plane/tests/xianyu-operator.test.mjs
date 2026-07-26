@@ -16,6 +16,7 @@ import {
   findPublishEntry,
   findSellTab,
   findSkuRecoveryClose,
+  findSkuExitConfirm,
   findSkuBatchEditControls,
   freightOptionTarget,
   freightRowVerified,
@@ -139,6 +140,26 @@ test("recovery inspection keeps bounded recovery metadata without unrelated text
     { label: "确认退出，按钮, 确认退出", className: "android.widget.Button", clickable: true, bounds: [550, 2040, 1040, 2210] },
     { label: "取消，按钮, 取消", className: "android.widget.Button", clickable: true, bounds: [40, 2040, 520, 2210] },
   ]);
+});
+
+test("SKU exit recovery selects only the unique audited bottom-right confirmation", () => {
+  const focus = { package: "com.taobao.idlefish", activity: "SkuActivity" };
+  const confirm = {
+    label: "确认退出，按钮, 确认退出",
+    className: "android.view.View",
+    clickable: false,
+    bounds: [557, 2068, 1034, 2175],
+  };
+  const nodes = [
+    { label: "退\u200b出\u200b后\u200b不\u200b会\u200b保\u200b存\u200b这\u200b次\u200b设\u200b置\u200b的\u200b规\u200b格\u200b哦\u200b", bounds: [173, 1804, 907, 1873] },
+    { label: "取消，按钮, 取消", className: "android.view.View", clickable: false, bounds: [46, 2068, 523, 2175] },
+    confirm,
+  ];
+  assert.equal(findSkuExitConfirm(nodes, { focus, resolution: [1080, 2400] }), confirm);
+  assert.equal(findSkuExitConfirm([...nodes, { ...confirm, bounds: [600, 2070, 1000, 2170] }], {
+    focus,
+    resolution: [1080, 2400],
+  }), null);
 });
 
 test("recovery safe main requires MainActivity and the complete bottom bar", () => {
@@ -284,6 +305,52 @@ test("recoverDiscardDryRun resumes safely when recovery starts on the discard di
   assert.equal(result.savedDraft, false);
   assert.equal(result.discard.step, "discarded-without-saving-from-recovery-dialog");
   assert.equal(taps.length, 1);
+});
+
+test("recoverDiscardDryRun confirms the audited SKU exit dialog before discarding compose", async () => {
+  const skuExitDialog = [
+    { label: "退\u200b出\u200b后\u200b不\u200b会\u200b保\u200b存\u200b这\u200b次\u200b设\u200b置\u200b的\u200b规\u200b格\u200b哦\u200b", bounds: [173, 1804, 907, 1873] },
+    { label: "取消，按钮, 取消", className: "android.view.View", clickable: false, bounds: [46, 2068, 523, 2175] },
+    { label: "确认退出，按钮, 确认退出", className: "android.view.View", clickable: false, bounds: [557, 2068, 1034, 2175] },
+  ];
+  const compose = [
+    { label: "关闭", className: "android.widget.Button", clickable: true, bounds: [0, 94, 113, 178] },
+    { label: "发布", className: "android.widget.Button", clickable: true, bounds: [880, 94, 1080, 178] },
+    { label: "+添加优质 首图更吸引人~", className: "android.widget.Button", clickable: true, bounds: [74, 257, 378, 561] },
+  ];
+  const discardDialog = [
+    { label: "不保存", className: "android.widget.Button", clickable: true, bounds: [42, 1980, 524, 2130] },
+    { label: "存草稿", className: "android.widget.Button", clickable: true, bounds: [556, 1980, 1038, 2130] },
+  ];
+  let state = "sku-exit";
+  const taps = [];
+  const op = {
+    serial: "device-02",
+    transport: "gateway",
+    async shellExec(command) { return command === "wm size" ? "Physical size: 1080x2400" : ""; },
+    async currentFocus() {
+      return state === "main"
+        ? { package: "com.taobao.idlefish", activity: "com.taobao.idlefish.maincontainer.activity.MainActivity" }
+        : { package: "com.taobao.idlefish", activity: "FishFlutterBoostActivity" };
+    },
+    async dumpXml() {
+      const nodes = state === "sku-exit" ? skuExitDialog
+        : state === "compose" ? compose
+          : state === "discard" ? discardDialog : device02BottomTabs;
+      return recoveryXml(nodes);
+    },
+    async tap(x, y) {
+      taps.push([x, y]);
+      state = state === "sku-exit" ? "compose" : state === "compose" ? "discard" : "main";
+    },
+    async capturePng(path) { return { path, bytes: 100, sha256: "e".repeat(64) }; },
+  };
+
+  const result = await recoverDiscardDryRun(op, { evidenceDir: "/tmp/xianyu-recovery-test" });
+  assert.equal(result.ok, true);
+  assert.equal(result.step, "sku-exit-dialog-discarded-to-safe-main");
+  assert.equal(result.savedDraft, false);
+  assert.equal(taps.length, 3);
 });
 
 test("recoverDiscardDryRun performs zero taps when two fresh snapshots already show safe main", async () => {
