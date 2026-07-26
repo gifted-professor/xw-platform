@@ -24,6 +24,8 @@ import {
   isEmptyDescriptionField,
   isPublishCompose,
   isRecoverySafeMain,
+  ensureOnPublishCompose,
+  firstFailedPublishStep,
   loadLayoutProfile,
   normalizeXwInputText,
   parseDisplayResolution,
@@ -65,6 +67,14 @@ test("SKU values scroll exactly after each completed pair, never after the final
     [1, 2].filter((count) => shouldScrollAfterSkuValue(count, 2)),
     [],
   );
+});
+
+test("publish dry-run surfaces the first failed step without full operator output", () => {
+  assert.equal(firstFailedPublishStep({
+    description: { ok: true, step: "desc-filled" },
+    sku: { ok: false, step: "sku-next-missing" },
+  }), "sku:sku-next-missing");
+  assert.equal(firstFailedPublishStep({}), null);
 });
 
 test("parseDisplayResolution uses the effective override size", () => {
@@ -113,6 +123,24 @@ test("recovery safe main requires MainActivity and the complete bottom bar", () 
     resolution: [1080, 2400],
   }), false);
   assert.equal(isRecoverySafeMain({ focus, nodes: device02BottomTabs, resolution: null }), false);
+});
+
+test("compose recovery never force-stops when Xianyu is already on a child page", async () => {
+  const shellCommands = [];
+  const op = {
+    serial: "device-02",
+    transport: "gateway",
+    async currentFocus() {
+      return { package: "com.taobao.idlefish", activity: "SkuActivity" };
+    },
+    async dumpXml() { return recoveryXml(skuRecoveryNodes); },
+    async shellExec(command) { shellCommands.push(command); return ""; },
+  };
+
+  const result = await ensureOnPublishCompose(op, { maxAttempts: 1 });
+  assert.equal(result.ok, false);
+  assert.equal(result.step, "same-app-non-compose");
+  assert.equal(shellCommands.some((command) => /force-stop/.test(command)), false);
 });
 
 function recoveryXml(nodes) {

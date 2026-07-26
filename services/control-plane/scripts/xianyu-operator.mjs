@@ -496,21 +496,47 @@ export function createStepSupervisor(op, { onEvent = null } = {}) {
 
 /** 确保仍在闲鱼发闲置编辑页；掉到桌面/其它 App 时重拉 + open-publish。带页面指纹闸。 */
 export async function ensureOnPublishCompose(op, { maxAttempts = 2 } = {}) {
+  let finalSnap = null;
   for (let i = 0; i < maxAttempts; i += 1) {
     const snap = await snapshot(op, `ensure-compose-${i}`);
+    finalSnap = snap;
     const fp = fingerprintLabels(snap.nodes || []);
+    const classification = classifyXianyuPage({
+      semanticNodes: snap.nodes,
+      focus: snap.focus,
+    });
+    const knownChildPage = ["sku-sheet", "image-picker", "discard-dialog"]
+      .includes(classification.pageType);
     const composeOk = snap.focus?.package === IDLEFISH_PACKAGE
+      && !knownChildPage
       && (isPublishCompose(snap.nodes) || hasXianyuPublishComposeFingerprint(fp));
     if (composeOk) {
       return { ok: true, recovered: i > 0, snap, fingerprint: [...fp].slice(0, 30) };
     }
-    if (snap.focus?.package !== IDLEFISH_PACKAGE) {
-      await startIdlefish(op);
-      await settle(800);
+    // 同一个 App 内的规格 sheet / 键盘态 / 临时语义空树，不得用 force-stop“恢复”。
+    // 最多重抓一次；仍不是 compose 就诚实失败，让调用方保留具体现场。
+    if (snap.focus?.package === IDLEFISH_PACKAGE) {
+      if (i + 1 < maxAttempts) {
+        await settle(600);
+        continue;
+      }
+      return {
+        ok: false,
+        step: "same-app-non-compose",
+        recovered: false,
+        snap,
+        package: snap.focus.package,
+        pageType: classification.pageType,
+        fingerprint: [...fp].slice(0, 30),
+      };
     }
-    const opened = await openPublishDryRun(op);
+    await startIdlefish(op);
+    await settle(800);
+    // startIdlefish 已完成一次强制归一；这里禁止 openPublishDryRun 再 force-stop 第二次。
+    const opened = await openPublishDryRun(op, { startApp: false });
     if (opened.ok) {
       const s2 = await snapshot(op, `ensure-compose-opened-${i}`);
+      finalSnap = s2;
       const fp2 = fingerprintLabels(s2.nodes || []);
       if (s2.focus?.package === IDLEFISH_PACKAGE
         && (isPublishCompose(s2.nodes) || hasXianyuPublishComposeFingerprint(fp2))) {
@@ -518,9 +544,10 @@ export async function ensureOnPublishCompose(op, { maxAttempts = 2 } = {}) {
       }
     }
   }
-  const finalSnap = await snapshot(op, "ensure-compose-fail");
+  if (!finalSnap) finalSnap = await snapshot(op, "ensure-compose-fail");
   return {
     ok: false,
+    step: "compose-recovery-failed",
     recovered: false,
     snap: finalSnap,
     package: finalSnap.focus?.package || null,
@@ -942,8 +969,8 @@ export async function dismissRestoreDialog(op) {
   return true;
 }
 
-export async function openPublishDryRun(op, { maxSteps = 6 } = {}) {
-  const started = await startIdlefish(op);
+export async function openPublishDryRun(op, { maxSteps = 6, startApp = true } = {}) {
+  const started = startApp ? await startIdlefish(op) : await op.currentFocus();
   if (started.package !== IDLEFISH_PACKAGE) {
     return { ok: false, step: "start", started };
   }
@@ -1067,6 +1094,11 @@ export async function openPublishDryRun(op, { maxSteps = 6 } = {}) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const EVIDENCE_DIR_DEFAULT = process.env.XIANYU_EVIDENCE_DIR || "C:\\Users\\Public";
+
+export function firstFailedPublishStep(steps = {}) {
+  const failed = Object.entries(steps).find(([, result]) => result?.ok === false);
+  return failed ? `${failed[0]}:${failed[1]?.step || "failed"}` : null;
+}
 
 export function parseDisplayResolution(value) {
   const matches = [...String(value || "").matchAll(/(\d+)x(\d+)/g)];
@@ -3147,10 +3179,7 @@ export async function publishDryRun(op, plan, {
 
   // 0. 启动 + 进入发闲置
   const opened = await sup.run("open", async () => {
-    const started = await startIdlefish(op);
-    if (started.package !== IDLEFISH_PACKAGE) {
-      return { ok: false, step: "start", focus: started };
-    }
+    // openPublishDryRun 自己负责且只负责一次启动归一，避免开场连续两次 force-stop。
     const o = await openPublishDryRun(op);
     if (!o.ok) return { ok: false, step: "open-publish", openTrace: o.trace };
     const page = await snapshot(op, "xianyu-publish-fill-start");
@@ -3265,21 +3294,9 @@ export async function publishDryRun(op, plan, {
         replaceExisting: plan.skuReplaceExisting === true,
       });
     }, {
-      maxAttempts: 2,
+      // 长 SKU 失败后整段重跑既慢又会覆盖现场；一次失败立即返回具体 step。
+      maxAttempts: 1,
       critical: true,
-      recover: async () => {
-        // 若掉桌面则重进；若仍在规格页则只轻滑，不 BACK
-        const snap = await snapshot(op, "sku-recover");
-        if (snap.focus?.package !== IDLEFISH_PACKAGE) await recoverCompose();
-        else if (!isPublishCompose(snap.nodes) && !/设置宝贝规格|下一步|商品规格/.test(
-          (snap.nodes || []).map((n) => n.label).filter(Boolean).join("|"),
-        )) {
-          await recoverCompose();
-        } else {
-          await op.shellExec("input swipe 540 1600 540 1100 350", 8000).catch(() => null);
-          await settle(600);
-        }
-      },
     }));
   }
 
@@ -3341,6 +3358,9 @@ export async function publishDryRun(op, plan, {
   }
 
   summary.supervisorEvents = sup.events;
+  if (!summary.ok && !summary.step) {
+    summary.step = firstFailedPublishStep(summary.steps) || "publish-dry-run-unverified";
+  }
   return summary;
 }
 
