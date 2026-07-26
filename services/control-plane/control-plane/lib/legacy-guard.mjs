@@ -6,7 +6,7 @@ export async function guardLegacyUiRoute({
   source,
   action,
   actorPresent = false,
-  mode = process.env.CONTROL_PLANE_LEGACY_MODE || "audit",
+  mode = process.env.CONTROL_PLANE_LEGACY_MODE || "enforce",
   controlUrl = process.env.CONTROL_PLANE_URL || "http://127.0.0.1:17920/",
   fetchImpl = globalThis.fetch,
   logger = () => {},

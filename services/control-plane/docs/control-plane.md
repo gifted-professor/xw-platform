@@ -22,7 +22,7 @@ does not expose the runtime ID through the public API.
 
 ```powershell
 $env:CONTROL_PLANE_GIT_COMMIT = (git rev-parse HEAD)
-$env:CONTROL_PLANE_LEGACY_MODE = "audit"
+$env:CONTROL_PLANE_LEGACY_MODE = "enforce"
 node control-plane\server.mjs serve
 ```
 
@@ -181,8 +181,8 @@ legacy idempotency fingerprints. Before deploying:
 5. Deploy one exact commit, reinstall/start the task, and verify health, nodes,
    route plan, and storage paths.
 
-Keep `CONTROL_PLANE_LEGACY_MODE=audit`. Roll back to the PR #14 commit and the
-stopped database backup if migration or canary verification fails.
+Keep `CONTROL_PLANE_LEGACY_MODE=enforce`. An explicit `audit` or `off` override
+is a temporary lab/rollback mode and cannot count as production acceptance.
 
 ## Legacy migration
 
@@ -190,14 +190,15 @@ The dashboard now defaults to loopback, has no wildcard CORS, reads private
 device IDs from the untracked device config, and never places an LLM credential
 in process arguments.
 
-- `CONTROL_PLANE_LEGACY_MODE=audit`: direct `/home`, `/task`, and `/primitive`
-  calls continue but create sanitized audit events.
 - `CONTROL_PLANE_LEGACY_MODE=enforce`: those routes return
-  `423 LEGACY_ROUTE_BLOCKED`.
-- `CONTROL_PLANE_LEGACY_MODE=off`: temporary local rollback only.
+  `423 LEGACY_ROUTE_BLOCKED`; this is the production default.
+- `CONTROL_PLANE_LEGACY_MODE=audit`: temporary lab/rollback mode; direct
+  `/home`, `/task`, and `/primitive` calls continue but create sanitized audit
+  events.
+- `CONTROL_PLANE_LEGACY_MODE=off`: emergency local rollback only.
 
-Switch to `enforce` only after the control-plane adapters pass one stable
-acceptance cycle.
+The control-plane adapters passed the stable entry acceptance cycle on
+2026-07-26. Do not switch production back to `audit`.
 
 Index historical evidence without copying it:
 

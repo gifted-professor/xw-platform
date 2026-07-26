@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { guardLegacyUiRoute } from "../control-plane/lib/legacy-guard.mjs";
 
-test("legacy guard audits by default without sending device identifiers", async () => {
+test("legacy audit mode records sanitized events without device identifiers", async () => {
   const calls = [];
   const result = await guardLegacyUiRoute({
     source: "dashboard",
@@ -23,6 +23,17 @@ test("legacy guard audits by default without sending device identifiers", async 
     mode: "audit",
   });
   assert.doesNotMatch(JSON.stringify(calls[0]), /serial|runtimeId/);
+});
+
+test("legacy dashboard routes default to fail-closed enforcement", async () => {
+  await assert.rejects(
+    guardLegacyUiRoute({
+      source: "dashboard",
+      action: "home",
+      fetchImpl: async () => new Response("{}", { status: 202 }),
+    }),
+    { code: "LEGACY_ROUTE_BLOCKED", status: 423 },
+  );
 });
 
 test("legacy enforce mode returns the lease-style 423 blocker", async () => {
