@@ -278,3 +278,23 @@ test("createStepSupervisor retries recover then succeeds", async () => {
   assert.ok(seen.includes("recover"));
   assert.ok(seen.includes("ok"));
 });
+
+test("createStepSupervisor keeps progress events off stdout", async () => {
+  const stdout = [];
+  const stderr = [];
+  const originalLog = console.log;
+  const originalError = console.error;
+  console.log = (...args) => stdout.push(args.join(" "));
+  console.error = (...args) => stderr.push(args.join(" "));
+  try {
+    const sup = createStepSupervisor({ serial: "test-serial" });
+    const result = await sup.run("probe", async () => ({ ok: true, step: "ok" }));
+    assert.equal(result.ok, true);
+  } finally {
+    console.log = originalLog;
+    console.error = originalError;
+  }
+  assert.deepEqual(stdout, []);
+  assert.ok(stderr.length >= 2);
+  assert.ok(stderr.every((line) => JSON.parse(line).event === "supervisor"));
+});

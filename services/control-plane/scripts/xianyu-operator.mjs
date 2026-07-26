@@ -414,7 +414,9 @@ export function createStepSupervisor(op, { onEvent = null } = {}) {
   const emit = (payload) => {
     const ev = { t: new Date().toISOString(), serial: op?.serial || null, ...payload };
     events.push(ev);
-    console.log(JSON.stringify({ event: "supervisor", ...ev }).slice(0, 1400));
+    // stdout is reserved for the one terminal JSON document consumed by the
+    // control-plane command runner. Progress diagnostics must stay on stderr.
+    console.error(JSON.stringify({ event: "supervisor", ...ev }).slice(0, 1400));
     if (typeof onEvent === "function") {
       try { onEvent(ev); } catch { /* ignore listener errors */ }
     }
@@ -1498,7 +1500,7 @@ async function captureEvidenceSoft(op, path, warnings, tag) {
   } catch (e) {
     const w = { tag, error: String(e.message || e) };
     if (Array.isArray(warnings)) warnings.push(w);
-    console.log(JSON.stringify({ event: "evidence-soft-fail", serial: op.serial, ...w }).slice(0, 500));
+    console.error(JSON.stringify({ event: "evidence-soft-fail", serial: op.serial, ...w }).slice(0, 500));
     return { path: null, bytes: 0, sha256: null, softFail: true, error: w.error };
   }
 }
