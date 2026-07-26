@@ -1140,6 +1140,19 @@ export function findSkuRecoveryClose(snapshot, { focus = null, resolution = null
   return candidates.length === 1 ? candidates[0] : null;
 }
 
+export function recoverySemanticHints(snapshot = []) {
+  const relevant = /^(?:关闭(?:[,，\s]|$)|设置价格和库存$|选中的规格(?:\s|$)|价格(?:[,，\s]|$)|库存(?:[,，\s]|$)|不保存$|存草稿$|保存草稿$|要不要先存个草稿$|发布$|发闲置$)/;
+  return snapshot
+    .filter((node) => relevant.test(String(node?.label || "").replace(/\s+/g, " ").trim()))
+    .slice(0, 32)
+    .map((node) => ({
+      label: String(node.label || "").replace(/\s+/g, " ").trim().slice(0, 240),
+      className: String(node.className || "").slice(0, 120),
+      clickable: node.clickable === true,
+      bounds: Array.isArray(node.bounds) ? node.bounds.map(Number).slice(0, 4) : null,
+    }));
+}
+
 export function isRecoverySafeMain({ focus = null, nodes = [], resolution = null } = {}) {
   const height = Array.isArray(resolution) ? Number(resolution[1]) : 0;
   if (height <= 0 || focus?.package !== IDLEFISH_PACKAGE
@@ -1208,6 +1221,7 @@ export async function inspectRecoveryPage(op, { evidenceDir = EVIDENCE_DIR_DEFAU
       resolution,
       semanticNodeCount: snapshotResult.nodes.length,
       semanticLabels: snapshotResult.nodes.map((node) => node.label).filter(Boolean).slice(0, 160),
+      recoverySemanticHints: recoverySemanticHints(snapshotResult.nodes),
       semanticClassification,
       pageClassification: {
         schemaVersion: 1,

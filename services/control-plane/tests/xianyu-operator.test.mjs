@@ -32,6 +32,7 @@ import {
   parseAllUiNodes,
   probeBottomTabs,
   recoverDiscardDryRun,
+  recoverySemanticHints,
   saveLayoutProfile,
   semanticSnapshot,
   shouldScrollAfterSkuValue,
@@ -121,6 +122,19 @@ test("SKU recovery recognizes the device-02 batch price-stock sub-sheet", () => 
     { label: "库存, 库存", bounds: [40, 1020, 220, 1150] },
   ];
   assert.equal(findSkuRecoveryClose(nodes, { focus, resolution: [1080, 2400] }), close);
+});
+
+test("recovery inspection keeps bounded recovery metadata without unrelated text", () => {
+  assert.deepEqual(recoverySemanticHints([
+    { label: "关闭,按钮", className: "android.widget.Button", clickable: false, bounds: [920, 84, 1050, 174] },
+    { label: "设置价格和库存", className: "android.view.View", clickable: false, bounds: [300, 80, 800, 180] },
+    { label: "库存, 库存", className: "android.view.View", clickable: false, bounds: [40, 1020, 220, 1150] },
+    { label: "用户发布正文不应进入恢复诊断", className: "android.widget.EditText", clickable: true, bounds: [40, 300, 1040, 700] },
+  ]), [
+    { label: "关闭,按钮", className: "android.widget.Button", clickable: false, bounds: [920, 84, 1050, 174] },
+    { label: "设置价格和库存", className: "android.view.View", clickable: false, bounds: [300, 80, 800, 180] },
+    { label: "库存, 库存", className: "android.view.View", clickable: false, bounds: [40, 1020, 220, 1150] },
+  ]);
 });
 
 test("recovery safe main requires MainActivity and the complete bottom bar", () => {
