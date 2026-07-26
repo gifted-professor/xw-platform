@@ -66,8 +66,9 @@ export function classifyXianyuPage({
     : 2400;
   const inBottomBar = (entry) => entry.bounds && entry.bounds[1] >= height * 0.82;
 
-  const discard = matching(entries, /不保存|放弃修改|放弃编辑/);
-  const draft = matching(entries, /存草稿|保存草稿/);
+  // 对话框动作必须是独立精确标签；发布描述正文可能合法包含“不保存草稿”等说明文字。
+  const discard = matching(entries, /^(不保存|放弃修改|放弃编辑)$/);
+  const draft = matching(entries, /^(存草稿|保存草稿)$/);
   if (discard.length && draft.length) {
     return result(
       "discard-dialog",

@@ -74,12 +74,19 @@ export function isPublishCompose(snapshot) {
   const hasDescription = /宝贝描述|说说宝贝|描述一下宝贝|品牌型号|货品来源|宝贝标题/.test(text);
   const hasCommerceField = /(^|\n)价格(¥| ¥|$|\n)|分类|成色|发货方式|运费|商品规格/.test(text);
   const hasMediaUpload = /添加图片|添加照片|拍照/.test(text);
+  // 02 的新版 compose 媒体卡文案是“添加优质 / 首图更吸引人”。描述填入后占位词会消失，
+  // 键盘态又会把分类/成色/SKU 等商务行挤出语义树；新文案必须再绑定左右顶栏按钮。
+  const hasDevice02MediaCard = /添加优质|首图更吸引人/.test(text);
   const hasFinalPublish = /(^|\n)发布($|\n)/m.test(text);
   const topRightButton = snapshot.some((node) => node.className === "android.widget.Button"
     && node.bounds?.[0] >= 850 && node.bounds?.[1] < 220);
   const closeButton = snapshot.some((node) => node.className === "android.widget.Button"
     && node.bounds?.[0] === 0 && node.bounds?.[1] < 220 && node.bounds?.[2] < 120);
+  const finalPublishButton = snapshot.some((node) => node.className === "android.widget.Button"
+    && String(node.label || "").trim() === "发布"
+    && node.bounds?.[0] >= 850 && node.bounds?.[1] < 220);
   // 发布页必有媒体上传入口（首页没有），用它做主门控，杜绝首页误判。
+  if (hasDevice02MediaCard && closeButton && finalPublishButton) return true;
   if (hasMediaUpload && (hasDescription || hasCommerceField || hasFinalPublish)) return true;
   if (hasDescription && (hasCommerceField || hasFinalPublish)) return true;
   // 页面滚到 SKU/运费/所在地后，Flutter 只暴露可视节点，描述和图片入口会离开语义树。

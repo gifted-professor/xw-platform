@@ -90,6 +90,21 @@ test("classifies discard dialog ahead of compose markers", () => {
   assert.equal(result.safeStateVerified, false);
 });
 
+test("does not treat filled description text as discard-dialog actions", () => {
+  const result = classifyXianyuPage({
+    resolution,
+    focus: { package: "com.taobao.idlefish", activity: "FishFlutterBoostActivity" },
+    semanticNodes: [
+      element("关闭", [0, 94, 113, 178]),
+      element("发布", [880, 94, 1080, 178]),
+      element("+添加优质 首图更吸引人~", [74, 257, 378, 561]),
+      element("控制面库存验证 不保存草稿 不发布", [74, 575, 1006, 1121]),
+    ],
+  });
+  assert.notEqual(result.pageType, "discard-dialog");
+  assert.equal(result.safeStateVerified, false);
+});
+
 test("classifies SKU sheet and publish composer", () => {
   const sku = classifyXianyuPage({
     resolution,

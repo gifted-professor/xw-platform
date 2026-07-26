@@ -143,6 +143,42 @@ test("compose recovery never force-stops when Xianyu is already on a child page"
   assert.equal(shellCommands.some((command) => /force-stop/.test(command)), false);
 });
 
+test("compose recovery accepts device 02 filled-description keyboard state without restarting", async () => {
+  const shellCommands = [];
+  const nodes = [
+    { label: "关闭", className: "android.widget.Button", clickable: true, bounds: [0, 94, 113, 178] },
+    { label: "发布", className: "android.widget.Button", clickable: true, bounds: [880, 94, 1080, 178] },
+    {
+      label: "+添加优质\n首图更吸引人~",
+      className: "android.widget.Button",
+      clickable: true,
+      bounds: [74, 257, 378, 561],
+    },
+    {
+      label: "控制面库存验证 不保存草稿 不发布",
+      className: "android.view.View",
+      clickable: true,
+      bounds: [74, 575, 1006, 1121],
+    },
+  ];
+  const op = {
+    serial: "device-02",
+    transport: "gateway",
+    async currentFocus() {
+      return {
+        package: "com.taobao.idlefish",
+        activity: "com.idlefish.flutterbridge.flutterboost.boost.FishFlutterBoostActivity",
+      };
+    },
+    async dumpXml() { return recoveryXml(nodes); },
+    async shellExec(command) { shellCommands.push(command); return ""; },
+  };
+
+  const result = await ensureOnPublishCompose(op, { maxAttempts: 1 });
+  assert.equal(result.ok, true);
+  assert.equal(shellCommands.some((command) => /force-stop/.test(command)), false);
+});
+
 function recoveryXml(nodes) {
   const escape = (value) => String(value).replace(/&/g, "&amp;").replace(/"/g, "&quot;");
   return `<hierarchy>${nodes.map((node) => `<node text="" content-desc="${escape(node.label)}" class="${node.className || "android.view.View"}" clickable="${node.clickable === true}" bounds="[${node.bounds[0]},${node.bounds[1]}][${node.bounds[2]},${node.bounds[3]}]" />`).join("")}</hierarchy>`;
@@ -304,6 +340,23 @@ test("isPublishCompose accepts the validated compose layout when labels are moji
     { label: "娣诲姞鍥剧墖", className: "android.widget.Button", bounds: [74, 257, 378, 561] },
     { label: "浠锋牸", className: "android.widget.Button", bounds: [74, 1511, 1006, 1658] },
   ]), true);
+});
+
+test("isPublishCompose accepts device 02 after description fill while the keyboard hides commerce rows", () => {
+  assert.equal(isPublishCompose([
+    { label: "关闭", className: "android.widget.Button", bounds: [0, 94, 113, 178] },
+    { label: "发布", className: "android.widget.Button", bounds: [880, 94, 1080, 178] },
+    { label: "+添加优质\n首图更吸引人~", className: "android.widget.Button", bounds: [74, 257, 378, 561] },
+    {
+      label: "控制面库存验证 不保存草稿 不发布",
+      className: "android.view.View",
+      bounds: [74, 575, 1006, 1121],
+    },
+  ]), true);
+  assert.equal(isPublishCompose([
+    { label: "发布", className: "android.widget.Button", bounds: [880, 94, 1080, 178] },
+    { label: "+添加优质\n首图更吸引人~", className: "android.widget.Button", bounds: [74, 257, 378, 561] },
+  ]), false);
 });
 
 test("parseAllUiNodes keeps a clickable Flutter parent with children", () => {
