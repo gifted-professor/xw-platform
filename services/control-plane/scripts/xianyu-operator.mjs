@@ -24,6 +24,7 @@ import {
   isForbiddenLabel,
   resolveTarget,
 } from "./vision-safety.mjs";
+import { classifyXianyuPage } from "./xianyu-page-classifier.mjs";
 
 const IDLEFISH_PACKAGE = "com.taobao.idlefish";
 const IDLEFISH_MAIN_ACTIVITY = "com.taobao.idlefish.maincontainer.activity.MainActivity";
@@ -1067,6 +1068,81 @@ export async function openPublishDryRun(op, { maxSteps = 6 } = {}) {
 
 const EVIDENCE_DIR_DEFAULT = process.env.XIANYU_EVIDENCE_DIR || "C:\\Users\\Public";
 
+export function parseDisplayResolution(value) {
+  const matches = [...String(value || "").matchAll(/(\d+)x(\d+)/g)];
+  if (!matches.length) return null;
+  const match = matches.at(-1);
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  if (!Number.isInteger(width) || !Number.isInteger(height)
+    || width < 100 || height < 100 || width > 10000 || height > 10000) return null;
+  return [width, height];
+}
+
+function sameFocus(left, right) {
+  return Boolean(left?.package && left?.activity
+    && left.package === right?.package
+    && left.activity === right?.activity);
+}
+
+export async function inspectRecoveryPage(op, { evidenceDir = EVIDENCE_DIR_DEFAULT } = {}) {
+  mkdirSync(evidenceDir, { recursive: true });
+  const startedAt = new Date().toISOString();
+  const sizeRaw = await op.shellExec("wm size", 8000).catch(() => "");
+  const resolution = parseDisplayResolution(sizeRaw);
+  if (!resolution) {
+    return {
+      ok: false,
+      step: "display-size-unavailable",
+      stoppedBeforeAction: true,
+      observation: { startedAt, finishedAt: new Date().toISOString() },
+    };
+  }
+  const focusBefore = await op.currentFocus();
+  const screenshot = await capturePng(
+    op,
+    join(evidenceDir, `xianyu-recovery-inspect-${Date.now()}.png`),
+  );
+  const snapshotResult = await snapshot(op, "xianyu-recovery-inspect");
+  const focusStable = sameFocus(focusBefore, snapshotResult.focus);
+  const semanticClassification = classifyXianyuPage({
+    semanticNodes: snapshotResult.nodes,
+    focus: snapshotResult.focus,
+    resolution,
+  });
+  return {
+    ok: focusStable,
+    step: focusStable ? "recovery-inspected" : "focus-changed-during-capture",
+    stoppedBeforeAction: true,
+    screenshot,
+    evidenceFiles: [{
+      path: screenshot.path,
+      kind: "screenshot",
+      label: "xianyu-recovery-inspection",
+    }],
+    observation: {
+      schemaVersion: 1,
+      startedAt,
+      finishedAt: new Date().toISOString(),
+      focus: snapshotResult.focus,
+      focusBefore,
+      focusStable,
+      resolution,
+      semanticNodeCount: snapshotResult.nodes.length,
+      semanticLabels: snapshotResult.nodes.map((node) => node.label).filter(Boolean).slice(0, 160),
+      semanticClassification,
+      pageClassification: {
+        schemaVersion: 1,
+        pageType: "unknown",
+        confidence: 0,
+        safeStateVerified: false,
+        reasons: ["visual analysis is required before recovery decisions"],
+        sources: { visual: 0, semantic: snapshotResult.nodes.length },
+      },
+    },
+  };
+}
+
 function planFromArgv() {
   // 优先 --plan <path>（JSON 文件），否则从分项 flag 组装。
   const planPath = arg("--plan");
@@ -1679,8 +1755,8 @@ const _screenSize = new Map();
 async function screenSize(op) {
   if (_screenSize.has(op.serial)) return _screenSize.get(op.serial);
   const out = await op.shellExec("wm size", 6000).catch(() => "");
-  const m = String(out || "").match(/(\d+)x(\d+)/);
-  const sz = m ? { w: +m[1], h: +m[2] } : { w: 1080, h: 2400 };
+  const parsed = parseDisplayResolution(out);
+  const sz = parsed ? { w: parsed[0], h: parsed[1] } : { w: 1080, h: 2400 };
   _screenSize.set(op.serial, sz);
   return sz;
 }
@@ -3226,7 +3302,7 @@ export async function probePage(op, { label = "probe" } = {}) {
 async function main() {
   const command = process.argv.find((value) => [
     "start", "snapshot", "open-publish", "input-dry-run", "image-dry-run", "discard-dry-run",
-    "save-draft-dry-run", "publish-dry-run", "probe",
+    "save-draft-dry-run", "publish-dry-run", "inspect-recovery", "probe",
   ].includes(value)) || "help";
   const serial = arg("--serial");
   const adbPath = arg("--adb", process.env.ADB_PATH || DEFAULT_ADB);
@@ -3241,6 +3317,7 @@ node scripts/xianyu-operator.mjs --serial <serial> open-publish
 node scripts/xianyu-operator.mjs --serial <serial> input-dry-run --text <临时文本>
 node scripts/xianyu-operator.mjs --serial <serial> image-dry-run --images '[{{"phonePath":"/sdcard/Pictures/XianyuStaging/a.png","sha256":"..."}}]' --image-album XianyuStaging
 node scripts/xianyu-operator.mjs --serial <serial> discard-dry-run
+node scripts/xianyu-operator.mjs --serial <serial> inspect-recovery --evidence-dir <dir>
 node scripts/xianyu-operator.mjs --serial <serial> save-draft-dry-run
 node scripts/xianyu-operator.mjs --serial <serial> publish-dry-run --plan <plan.json>
 node scripts/xianyu-operator.mjs --serial <serial> publish-dry-run \\
@@ -3267,6 +3344,7 @@ publish-dry-run：在发布编辑页整表填写（标题/描述/价格/分类/�
 probe：dump 当前页全部语义节点，用于校准各字段选择器（运费/退货地址/SKU/图片二级页结构）。
 open-publish 只进入发布编辑页，绝不点击最终"发布"。
 discard-dry-run 只点击"关闭 → 不保存"，绝不点击"存草稿/发布"。
+inspect-recovery 只读取 focus/语义树并截图，不点击、不清隔离。
 传输：--transport gateway|adb（默认 gateway）。gateway 经绿箭网关 ws://127.0.0.1:22222，
   不依赖 adb.exe——adb 枚举不到设备时用 gateway 仍可 dump/tap/输入/截图。`);
     return;
@@ -3323,6 +3401,11 @@ discard-dry-run 只点击"关闭 → 不保存"，绝不点击"存草稿/发布"
       }), null, 2));
     }
     if (command === "discard-dry-run") console.log(JSON.stringify(await discardDraftDryRun(op), null, 2));
+    if (command === "inspect-recovery") {
+      console.log(JSON.stringify(await inspectRecoveryPage(op, {
+        evidenceDir: arg("--evidence-dir", EVIDENCE_DIR_DEFAULT),
+      }), null, 2));
+    }
     if (command === "publish-dry-run") {
       const plan = planFromArgv();
       const calibArg = arg("--calibrated", "");

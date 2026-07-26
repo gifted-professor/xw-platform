@@ -79,7 +79,16 @@ test("Xianyu adapter preserves stop-before-publish and discard verification", as
     operatorPath: fakeOperator,
     run: async (_command, args, options) => {
       calls.push({ args, options });
-      if (args.includes("discard-dry-run")) return { ok: true, savedDraft: false };
+      if (args.includes("inspect-recovery")) {
+        return {
+          ok: true,
+          step: "recovery-inspected",
+          stoppedBeforeAction: true,
+          screenshot: { path: "C:\\evidence\\inspect.png", bytes: 1000, sha256: "a".repeat(64) },
+          observation: { pageClassification: { pageType: "unknown", confidence: 0 } },
+        };
+      }
+      if (args.includes("discard-dry-run")) return { ok: false, step: "not-on-publish-compose", savedDraft: false };
       if (args.includes("input-dry-run")) {
         return {
           ok: true,
@@ -124,8 +133,22 @@ test("Xianyu adapter preserves stop-before-publish and discard verification", as
     leaseAuthorization,
   });
   assert.equal((await adapter.verify({ capability, execution })).ok, true);
-  assert.equal((await adapter.restore({ capability, device: privateDevice, leaseAuthorization })).ok, true);
+  const restoration = await adapter.restore({ capability, device: privateDevice, leaseAuthorization });
+  assert.equal(restoration.ok, false);
+  assert.equal(restoration.step, "not-on-publish-compose");
   assert.equal(calls.some(({ args }) => args.includes("discard-dry-run")), true);
+
+  const inspection = await adapter.inspectRecovery({
+    capability,
+    device: privateDevice,
+    evidenceDirectory: "C:\\evidence",
+    leaseAuthorization,
+  });
+  assert.equal(inspection.ok, true);
+  assert.equal(inspection.stoppedBeforeAction, true);
+  assert.equal(inspection.evidenceFiles[0].path, "C:\\evidence\\inspect.png");
+  assert.equal(calls.at(-1).args.includes("inspect-recovery"), true);
+  assert.equal(calls.at(-1).args.includes("--evidence-dir"), true);
 
   const imageCap = registry.require("xianyu.publish.image_dry_run");
   const imageExec = await adapter.execute({

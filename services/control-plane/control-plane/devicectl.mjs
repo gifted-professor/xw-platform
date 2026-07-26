@@ -126,6 +126,8 @@ function help() {
   job submit --actor ID --capability ID --idempotency-key KEY [--device ID | placement selectors] [--params JSON]
   job status|watch|cancel --job ID
   job recover --job ID --actor ID --idempotency-key KEY
+  job recover-inspect --job ID --actor ID --idempotency-key KEY
+  job recover-inspect-record --job ID --inspection ID --actor ID --idempotency-key KEY --analysis JSON
   approval approve|deny --job ID --actor ID [--reason TEXT]
   session acquire --actor ID [--device ID | --capability ID with placement selectors] [--canary]
   session heartbeat|release --session ID --token TOKEN
@@ -188,6 +190,29 @@ export async function main(argv = process.argv.slice(2)) {
       {
         actorId: requireOption(argv, "--actor"),
         idempotencyKey: requireOption(argv, "--idempotency-key"),
+      },
+    );
+  } else if (group === "job" && action === "recover-inspect") {
+    result = await requestJson(
+      baseUrl,
+      "POST",
+      `/control/v1/jobs/${encodeURIComponent(requireOption(argv, "--job"))}/recover/inspect`,
+      {
+        actorId: requireOption(argv, "--actor"),
+        idempotencyKey: requireOption(argv, "--idempotency-key"),
+      },
+    );
+  } else if (group === "job" && action === "recover-inspect-record") {
+    const jobId = requireOption(argv, "--job");
+    const inspectionId = requireOption(argv, "--inspection");
+    result = await requestJson(
+      baseUrl,
+      "POST",
+      `/control/v1/jobs/${encodeURIComponent(jobId)}/recover/inspect/${encodeURIComponent(inspectionId)}/analysis`,
+      {
+        actorId: requireOption(argv, "--actor"),
+        idempotencyKey: requireOption(argv, "--idempotency-key"),
+        analysis: parseJsonOption(argv, "--analysis", null),
       },
     );
   } else if (group === "job" && action === "watch") {

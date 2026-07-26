@@ -1,6 +1,8 @@
 import { ControlPlaneError, asControlError } from "./errors.mjs";
+import { fingerprint } from "./canonical.mjs";
 import { evaluateCapabilityPolicy } from "./policy.mjs";
 import { inspectTransportLock } from "./xiaowei-transport.mjs";
+import { normalizeRecoveryVisualAnalysis } from "./recovery-inspection.mjs";
 
 function collectEvidenceFiles(...values) {
   return values.flatMap((value) => Array.isArray(value?.evidenceFiles) ? value.evidenceFiles : []);
@@ -71,6 +73,10 @@ export class ControlPlane {
     this.operatorControlUrl = operatorControlUrl;
     this.transportStatus = transportStatus;
     this.schedulerIntervalMs = schedulerIntervalMs;
+    if (!Number.isFinite(leaseTtlMs) || !Number.isFinite(leaseHeartbeatMs)
+      || leaseTtlMs <= 0 || leaseHeartbeatMs <= 0 || leaseHeartbeatMs >= leaseTtlMs) {
+      throw new TypeError("leaseHeartbeatMs must be positive and less than leaseTtlMs");
+    }
     this.leaseTtlMs = leaseTtlMs;
     this.leaseHeartbeatMs = leaseHeartbeatMs;
     this.activeJobs = new Map();
@@ -365,6 +371,407 @@ export class ControlPlane {
           // Lease expiry remains fail-closed; the device stays quarantined.
         }
       }
+    }
+  }
+
+  async inspectRecovery({ jobId, actorId, idempotencyKey }) {
+    if (typeof actorId !== "string" || actorId.trim() === "") {
+      throw new ControlPlaneError("ACTOR_REQUIRED", "actorId is required");
+    }
+    if (typeof idempotencyKey !== "string" || idempotencyKey.trim() === "") {
+      throw new ControlPlaneError("IDEMPOTENCY_KEY_REQUIRED", "idempotencyKey is required");
+    }
+    const normalizedIdempotencyKey = idempotencyKey.trim();
+    const job = this.state.requireJob(jobId);
+    const prior = this.state.listJobEvents(jobId).find((event) =>
+      ["job.recovery.inspect.succeeded", "job.recovery.inspect.failed"].includes(event.type)
+      && event.payload?.idempotencyKey === normalizedIdempotencyKey);
+    if (prior?.type === "job.recovery.inspect.succeeded") {
+      return { ...prior.payload.inspection, reused: true };
+    }
+    if (prior?.type === "job.recovery.inspect.failed") {
+      throw new ControlPlaneError(
+        "RECOVERY_INSPECTION_PREVIOUSLY_FAILED",
+        "this recovery inspection idempotency key already failed; inspect its evidence before using a new key",
+        { status: 409, details: { jobId, deviceId: job.deviceId } },
+      );
+    }
+    if (job.status !== "recovery_required") {
+      throw new ControlPlaneError("RECOVERY_NOT_REQUIRED", "job is not recovery_required", {
+        status: 409,
+        details: { jobId, status: job.status },
+      });
+    }
+    const device = this.state.requireDevice(job.deviceId, {
+      includeRuntime: true,
+      requireReady: false,
+    });
+    if (!device.online) {
+      throw new ControlPlaneError("DEVICE_OFFLINE", `${device.alias} is offline`, { status: 409 });
+    }
+    if (!device.quarantined) {
+      throw new ControlPlaneError("DEVICE_NOT_QUARANTINED", `${device.alias} is not quarantined`, {
+        status: 409,
+      });
+    }
+    const capability = this.capabilities.require(job.capabilityId);
+    const adapter = this.adapters.require(capability.implementation.adapter);
+    if (typeof adapter.inspectRecovery !== "function") {
+      throw new ControlPlaneError(
+        "RECOVERY_INSPECTION_UNAVAILABLE",
+        "capability adapter has no read-only recovery inspection path",
+        { status: 409 },
+      );
+    }
+
+    let lease = this.state.acquireLease({
+      deviceId: job.deviceId,
+      kind: "recovery",
+      holderId: `recovery-inspection:${actorId.trim()}`,
+      jobId: job.jobId,
+      ttlMs: this.leaseTtlMs,
+      allowQuarantined: true,
+    });
+    let heartbeatError = null;
+    const heartbeat = setInterval(() => {
+      try {
+        this.state.heartbeatLease(lease.leaseId, lease.token, this.leaseTtlMs);
+      } catch (error) {
+        heartbeatError = error;
+      }
+    }, this.leaseHeartbeatMs);
+    heartbeat.unref?.();
+    const appendInspectionEvent = (type, payload) => {
+      const eventId = this.state.appendEvent({ jobId: job.jobId, runId: job.runId, type, payload });
+      try {
+        this.evidence.appendEvent(job.runId, {
+          type,
+          jobId: job.jobId,
+          createdAt: new Date().toISOString(),
+          ...payload,
+        });
+      } catch {
+        // SQLite is the durable audit authority; JSONL mirroring is best-effort.
+      }
+      return eventId;
+    };
+    try {
+      const startedEventId = appendInspectionEvent("job.recovery.inspect.started", {
+        actorId: actorId.trim(),
+        idempotencyKey: normalizedIdempotencyKey,
+        deviceId: job.deviceId,
+      });
+      if (heartbeatError) throw heartbeatError;
+      this.state.heartbeatLease(lease.leaseId, lease.token, this.leaseTtlMs);
+      const output = await adapter.inspectRecovery({
+        job,
+        capability,
+        device,
+        params: job.params,
+        evidenceDirectory: this.evidence.runDirectory(job.runId),
+        leaseAuthorization: {
+          leaseId: lease.leaseId,
+          token: lease.token,
+          deviceId: job.deviceId,
+          controlUrl: this.operatorControlUrl,
+        },
+      });
+      if (heartbeatError) throw heartbeatError;
+      if (output?.ok !== true || output?.stoppedBeforeAction !== true) {
+        throw new ControlPlaneError(
+          "RECOVERY_INSPECTION_REJECTED",
+          "adapter did not produce a verified read-only recovery inspection",
+          { status: 409, details: { step: output?.step || null } },
+        );
+      }
+
+      const attached = [];
+      for (const file of collectEvidenceFiles(output)) {
+        attached.push(await this.evidence.attachFile({
+          job,
+          sourcePath: file.path,
+          kind: file.kind || "adapter",
+          label: file.label,
+        }));
+      }
+      const screenshot = attached.find((item) => item.kind === "screenshot");
+      if (!screenshot) {
+        throw new ControlPlaneError(
+          "RECOVERY_INSPECTION_SCREENSHOT_MISSING",
+          "recovery inspection must attach a screenshot",
+          { status: 500 },
+        );
+      }
+      const pageClassification = output?.observation?.pageClassification || {
+        schemaVersion: 1,
+        pageType: "unknown",
+        confidence: 0,
+        safeStateVerified: false,
+        reasons: ["visual analysis pending"],
+      };
+      const inspectionId = `inspection_${startedEventId}`;
+      const record = this.evidence.writeJson({
+        job,
+        kind: "recovery_inspection",
+        label: `recovery-inspection-${inspectionId}`,
+        value: {
+          schemaVersion: 1,
+          inspectionId,
+          jobId: job.jobId,
+          runId: job.runId,
+          deviceId: job.deviceId,
+          stoppedBeforeAction: true,
+          quarantineCleared: false,
+          screenshot: {
+            evidenceId: screenshot.evidenceId,
+            path: screenshot.path,
+            sha256: screenshot.sha256,
+            bytes: screenshot.bytes,
+          },
+          observation: output.observation || {},
+          analysis: {
+            status: pageClassification.pageType === "unknown" ? "pending" : "semantic_hint_only",
+            requiredImageSha256: screenshot.sha256,
+            protocol: "xhs.visual-elements.v1",
+          },
+        },
+      });
+      const inspection = {
+        ok: true,
+        reused: false,
+        inspectionId,
+        jobId: job.jobId,
+        runId: job.runId,
+        deviceId: job.deviceId,
+        stoppedBeforeAction: true,
+        quarantineCleared: false,
+        screenshot: {
+          evidenceId: screenshot.evidenceId,
+          kind: screenshot.kind,
+          path: screenshot.path,
+          sha256: screenshot.sha256,
+          bytes: screenshot.bytes,
+        },
+        inspectionEvidence: {
+          evidenceId: record.evidenceId,
+          path: record.path,
+          sha256: record.sha256,
+        },
+        pageClassification,
+        focus: {
+          package: String(output?.observation?.focus?.package || "").slice(0, 160),
+          activity: String(output?.observation?.focus?.activity || "").slice(0, 240),
+        },
+        analysis: {
+          status: pageClassification.pageType === "unknown" ? "pending" : "semantic_hint_only",
+          requiredImageSha256: screenshot.sha256,
+          protocol: "xhs.visual-elements.v1",
+        },
+      };
+      appendInspectionEvent("job.recovery.inspect.succeeded", {
+        actorId: actorId.trim(),
+        idempotencyKey: normalizedIdempotencyKey,
+        deviceId: job.deviceId,
+        inspection,
+      });
+      return inspection;
+    } catch (error) {
+      const cause = asControlError(error, "RECOVERY_INSPECTION_FAILED");
+      appendInspectionEvent("job.recovery.inspect.failed", {
+        actorId: actorId.trim(),
+        idempotencyKey: normalizedIdempotencyKey,
+        deviceId: job.deviceId,
+        causeCode: cause.code,
+        step: cause.details?.step || null,
+      });
+      throw new ControlPlaneError(
+        "RECOVERY_INSPECTION_FAILED",
+        "read-only recovery inspection did not produce durable evidence",
+        {
+          status: 409,
+          details: { jobId: job.jobId, deviceId: job.deviceId, causeCode: cause.code },
+          cause,
+        },
+      );
+    } finally {
+      clearInterval(heartbeat);
+      if (lease) {
+        try {
+          this.state.releaseLease(lease.leaseId, lease.token);
+        } catch (releaseError) {
+          try {
+            appendInspectionEvent("job.recovery.inspect.lease_release_failed", {
+              actorId: actorId.trim(),
+              idempotencyKey: normalizedIdempotencyKey,
+              deviceId: job.deviceId,
+              causeCode: releaseError?.code || "LEASE_RELEASE_FAILED",
+            });
+          } catch {
+            // Lease expiry and quarantine remain fail-closed even if audit mirroring also fails.
+          }
+        }
+      }
+    }
+  }
+
+  async recordRecoveryInspectionAnalysis({
+    jobId,
+    inspectionId,
+    actorId,
+    idempotencyKey,
+    analysis,
+  }) {
+    if (typeof actorId !== "string" || actorId.trim() === "") {
+      throw new ControlPlaneError("ACTOR_REQUIRED", "actorId is required");
+    }
+    if (typeof idempotencyKey !== "string" || idempotencyKey.trim() === "") {
+      throw new ControlPlaneError("IDEMPOTENCY_KEY_REQUIRED", "idempotencyKey is required");
+    }
+    if (typeof inspectionId !== "string" || inspectionId.trim() === "") {
+      throw new ControlPlaneError("RECOVERY_INSPECTION_ID_REQUIRED", "inspectionId is required", { status: 400 });
+    }
+    const normalizedIdempotencyKey = idempotencyKey.trim();
+    const normalizedInspectionId = inspectionId.trim();
+    let analysisRequestHash;
+    try {
+      analysisRequestHash = fingerprint({ inspectionId: normalizedInspectionId, analysis });
+    } catch {
+      throw new ControlPlaneError(
+        "RECOVERY_ANALYSIS_SCHEMA_INVALID",
+        "analysis must be JSON-serializable",
+        { status: 400 },
+      );
+    }
+    const job = this.state.requireJob(jobId);
+    const prior = this.state.listJobEvents(jobId).find((event) =>
+      event.type === "job.recovery.analysis.recorded"
+      && event.payload?.idempotencyKey === normalizedIdempotencyKey);
+    if (prior) {
+      if (prior.payload?.analysisRequestHash !== analysisRequestHash
+        || prior.payload?.inspectionId !== normalizedInspectionId) {
+        throw new ControlPlaneError(
+          "IDEMPOTENCY_KEY_CONFLICT",
+          "idempotency key was already used with a different recovery analysis request",
+          { status: 409, details: { jobId, inspectionId: normalizedInspectionId } },
+        );
+      }
+      return { ...prior.payload.analysisResult, reused: true };
+    }
+    if (job.status !== "recovery_required") {
+      throw new ControlPlaneError("RECOVERY_NOT_REQUIRED", "job is not recovery_required", {
+        status: 409,
+        details: { jobId, status: job.status },
+      });
+    }
+    const inspectionEvent = this.state.listJobEvents(jobId).find((event) =>
+      event.type === "job.recovery.inspect.succeeded"
+      && event.payload?.inspection?.inspectionId === normalizedInspectionId);
+    if (!inspectionEvent) {
+      throw new ControlPlaneError(
+        "RECOVERY_INSPECTION_NOT_FOUND",
+        "analysis must reference a successful audited recovery inspection",
+        { status: 404, details: { jobId, inspectionId: normalizedInspectionId } },
+      );
+    }
+    const inspection = inspectionEvent.payload.inspection;
+    try {
+      const normalized = normalizeRecoveryVisualAnalysis(analysis, {
+        expectedImageSha256: inspection.screenshot.sha256,
+        focus: inspection.focus,
+      });
+      const evidence = this.evidence.writeJson({
+        job,
+        kind: "recovery_analysis",
+        label: `recovery-analysis-${normalizedInspectionId}`,
+        value: {
+          inspectionId: normalizedInspectionId,
+          jobId: job.jobId,
+          runId: job.runId,
+          deviceId: job.deviceId,
+          stoppedBeforeAction: true,
+          quarantineCleared: false,
+          ...normalized,
+        },
+      });
+      const analysisResult = {
+        ok: true,
+        reused: false,
+        inspectionId: normalizedInspectionId,
+        jobId: job.jobId,
+        runId: job.runId,
+        deviceId: job.deviceId,
+        stoppedBeforeAction: true,
+        quarantineCleared: false,
+        imageSha256: normalized.image.sha256,
+        analyzer: normalized.analyzer,
+        elementCount: normalized.elementCount,
+        pageClassification: normalized.pageClassification,
+        analysisEvidence: {
+          evidenceId: evidence.evidenceId,
+          path: evidence.path,
+          sha256: evidence.sha256,
+        },
+      };
+      const payload = {
+        actorId: actorId.trim(),
+        idempotencyKey: normalizedIdempotencyKey,
+        deviceId: job.deviceId,
+        inspectionId: normalizedInspectionId,
+        analysisRequestHash,
+        analysisResult,
+      };
+      this.state.appendEvent({
+        jobId: job.jobId,
+        runId: job.runId,
+        type: "job.recovery.analysis.recorded",
+        payload,
+      });
+      try {
+        this.evidence.appendEvent(job.runId, {
+          type: "job.recovery.analysis.recorded",
+          jobId: job.jobId,
+          createdAt: new Date().toISOString(),
+          ...payload,
+        });
+      } catch {
+        // SQLite is the durable audit authority; JSONL mirroring is best-effort.
+      }
+      return analysisResult;
+    } catch (error) {
+      const cause = asControlError(error, "RECOVERY_ANALYSIS_REJECTED");
+      const payload = {
+        actorId: actorId.trim(),
+        idempotencyKey: normalizedIdempotencyKey,
+        deviceId: job.deviceId,
+        inspectionId: normalizedInspectionId,
+        analysisRequestHash,
+        causeCode: cause.code,
+      };
+      this.state.appendEvent({
+        jobId: job.jobId,
+        runId: job.runId,
+        type: "job.recovery.analysis.rejected",
+        payload,
+      });
+      try {
+        this.evidence.appendEvent(job.runId, {
+          type: "job.recovery.analysis.rejected",
+          jobId: job.jobId,
+          createdAt: new Date().toISOString(),
+          ...payload,
+        });
+      } catch {
+        // SQLite is the durable audit authority; JSONL mirroring is best-effort.
+      }
+      throw new ControlPlaneError(
+        "RECOVERY_ANALYSIS_REJECTED",
+        "visual analysis did not match the audited recovery screenshot contract",
+        {
+          status: 409,
+          details: { jobId: job.jobId, inspectionId: normalizedInspectionId, causeCode: cause.code },
+          cause,
+        },
+      );
     }
   }
 

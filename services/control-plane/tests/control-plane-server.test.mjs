@@ -224,3 +224,78 @@ test("router exposes job recovery without returning credentials", async () => {
   assert.equal(result.body.recovery.quarantineCleared, true);
   assert.doesNotMatch(JSON.stringify(result.body), /token|runtime/i);
 });
+
+test("router exposes read-only recovery inspection without returning credentials", async () => {
+  const calls = [];
+  const router = new ControlRouter({
+    control: {
+      async inspectRecovery(input) {
+        calls.push(input);
+        return {
+          ok: true,
+          reused: false,
+          jobId: input.jobId,
+          runId: "run_public",
+          deviceId: "dev_public",
+          stoppedBeforeAction: true,
+          quarantineCleared: false,
+          screenshot: { kind: "screenshot", sha256: "a".repeat(64), bytes: 1234 },
+        };
+      },
+    },
+    state: {},
+    capabilities: {},
+    evidence: {},
+  });
+  const result = await router.handle({
+    method: "POST",
+    path: "/control/v1/jobs/job_recovery/recover/inspect",
+    body: { actorId: "agent-a", idempotencyKey: "inspect-1" },
+  });
+  assert.equal(result.status, 200);
+  assert.deepEqual(calls, [{
+    jobId: "job_recovery",
+    actorId: "agent-a",
+    idempotencyKey: "inspect-1",
+  }]);
+  assert.equal(result.body.inspection.quarantineCleared, false);
+  assert.doesNotMatch(JSON.stringify(result.body), /token|runtime/i);
+});
+
+test("router records hash-bound visual analysis without changing recovery state", async () => {
+  const calls = [];
+  const router = new ControlRouter({
+    control: {
+      async recordRecoveryInspectionAnalysis(input) {
+        calls.push(input);
+        return {
+          ok: true,
+          inspectionId: input.inspectionId,
+          quarantineCleared: false,
+          pageClassification: { pageType: "unknown", safeStateVerified: false },
+        };
+      },
+    },
+    state: {},
+    capabilities: {},
+    evidence: {},
+  });
+  const result = await router.handle({
+    method: "POST",
+    path: "/control/v1/jobs/job_recovery/recover/inspect/inspection_1/analysis",
+    body: {
+      actorId: "agent-a",
+      idempotencyKey: "analysis-1",
+      analysis: { schemaVersion: "xhs.visual-elements.v1" },
+    },
+  });
+  assert.equal(result.status, 200);
+  assert.deepEqual(calls, [{
+    jobId: "job_recovery",
+    inspectionId: "inspection_1",
+    actorId: "agent-a",
+    idempotencyKey: "analysis-1",
+    analysis: { schemaVersion: "xhs.visual-elements.v1" },
+  }]);
+  assert.equal(result.body.analysis.quarantineCleared, false);
+});

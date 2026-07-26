@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -414,6 +414,190 @@ test("failed audited recovery keeps the device quarantined", async () => {
       f.state.listJobEvents(job.jobId).some((event) => event.type === "job.recovery.failed"),
       true,
     );
+  } finally {
+    await f.close();
+  }
+});
+
+test("audited recovery inspection attaches a screenshot and never clears quarantine", async () => {
+  let inspectionCalls = 0;
+  const adapter = {
+    id: "test",
+    async execute() { return { vendorCode: 0 }; },
+    async verify() { return { ok: true, mode: "state" }; },
+    async restore() { return { ok: false, step: "not-on-safe-page" }; },
+    async inspectRecovery({ evidenceDirectory, leaseAuthorization }) {
+      inspectionCalls += 1;
+      const screenshot = join(evidenceDirectory, "inspect.png");
+      writeFileSync(screenshot, Buffer.from("fake-png-evidence"));
+      return {
+        ok: true,
+        step: "recovery-inspected",
+        stoppedBeforeAction: true,
+        leaseKindObserved: leaseAuthorization ? "recovery" : null,
+        observation: {
+          focus: {
+            package: "com.taobao.idlefish",
+            activity: "com.taobao.idlefish.maincontainer.activity.MainActivity",
+          },
+          pageClassification: {
+            schemaVersion: 1,
+            pageType: "unknown",
+            confidence: 0,
+            safeStateVerified: false,
+            reasons: ["visual analysis pending"],
+          },
+        },
+        evidenceFiles: [{ path: screenshot, kind: "screenshot", label: "recovery-inspect" }],
+      };
+    },
+  };
+  const f = fixture({
+    capabilities: [manifest("test.restore", {
+      restoration: { required: true, description: "must restore" },
+    })],
+    adapter,
+  });
+  try {
+    const job = f.control.submitJob({
+      idempotencyKey: "inspect-after-failure",
+      actorId: "agent-a",
+      deviceId: f.devices[0].deviceId,
+      capabilityId: "test.restore",
+      params: {},
+    }).job;
+    assert.equal((await f.control.waitForJob(job.jobId)).status, "recovery_required");
+
+    const inspection = await f.control.inspectRecovery({
+      jobId: job.jobId,
+      actorId: "inspection-agent",
+      idempotencyKey: "inspect-once",
+    });
+    assert.equal(inspection.ok, true);
+    assert.equal(inspection.reused, false);
+    assert.equal(inspection.stoppedBeforeAction, true);
+    assert.equal(inspection.quarantineCleared, false);
+    assert.equal(inspection.screenshot.kind, "screenshot");
+    assert.match(inspection.screenshot.sha256, /^[a-f0-9]{64}$/);
+    assert.equal(inspection.pageClassification.pageType, "unknown");
+    assert.equal(f.state.getDevice(job.deviceId).quarantined, true);
+    assert.equal(f.state.listLeases().length, 0);
+    assert.deepEqual(
+      f.state.listJobEvents(job.jobId)
+        .filter((event) => event.type.startsWith("job.recovery.inspect."))
+        .map((event) => event.type),
+      ["job.recovery.inspect.started", "job.recovery.inspect.succeeded"],
+    );
+    assert.equal(f.state.listEvidence(job.runId).some((item) => item.kind === "screenshot"), true);
+    assert.equal(f.state.listEvidence(job.runId).some((item) => item.kind === "recovery_inspection"), true);
+
+    const replay = await f.control.inspectRecovery({
+      jobId: job.jobId,
+      actorId: "inspection-agent",
+      idempotencyKey: "inspect-once",
+    });
+    assert.equal(replay.reused, true);
+    assert.equal(inspectionCalls, 1);
+
+    await assert.rejects(f.control.recordRecoveryInspectionAnalysis({
+      jobId: job.jobId,
+      inspectionId: inspection.inspectionId,
+      actorId: "inspection-agent",
+      idempotencyKey: "analysis-wrong-hash",
+      analysis: {
+        schemaVersion: "xhs.visual-elements.v1",
+        image: { sha256: "b".repeat(64), resolution: [1080, 2400] },
+        analyzer: { name: "visual-grounding-poc", version: "test", timings: { hotPathMs: 1200 } },
+        elements: [],
+      },
+    }), { code: "RECOVERY_ANALYSIS_REJECTED" });
+
+    const analysis = await f.control.recordRecoveryInspectionAnalysis({
+      jobId: job.jobId,
+      inspectionId: inspection.inspectionId,
+      actorId: "inspection-agent",
+      idempotencyKey: "analysis-once",
+      analysis: {
+        schemaVersion: "xhs.visual-elements.v1",
+        image: { sha256: inspection.screenshot.sha256, resolution: [1080, 2400] },
+        analyzer: { name: "visual-grounding-poc", version: "test", timings: { hotPathMs: 1200 } },
+        elements: [
+          { id: "home", label: "闲鱼", bounds: [0, 2140, 220, 2320], conf: 0.99, source: "ocr" },
+          { id: "messages", label: "消息", bounds: [610, 2140, 800, 2320], conf: 0.99, source: "ocr" },
+          { id: "mine", label: "我的", bounds: [850, 2140, 1070, 2320], conf: 0.99, source: "ocr" },
+        ],
+      },
+    });
+    assert.equal(analysis.pageClassification.pageType, "main-safe");
+    assert.equal(analysis.pageClassification.safeStateVerified, true);
+    assert.equal(analysis.quarantineCleared, false);
+    assert.equal(f.state.getDevice(job.deviceId).quarantined, true);
+    assert.equal(f.state.listEvidence(job.runId).some((item) => item.kind === "recovery_analysis"), true);
+
+    const replayedAnalysis = await f.control.recordRecoveryInspectionAnalysis({
+      jobId: job.jobId,
+      inspectionId: inspection.inspectionId,
+      actorId: "inspection-agent",
+      idempotencyKey: " analysis-once ",
+      analysis: {
+        schemaVersion: "xhs.visual-elements.v1",
+        image: { sha256: inspection.screenshot.sha256, resolution: [1080, 2400] },
+        analyzer: { name: "visual-grounding-poc", version: "test", timings: { hotPathMs: 1200 } },
+        elements: [
+          { id: "home", label: "闲鱼", bounds: [0, 2140, 220, 2320], conf: 0.99, source: "ocr" },
+          { id: "messages", label: "消息", bounds: [610, 2140, 800, 2320], conf: 0.99, source: "ocr" },
+          { id: "mine", label: "我的", bounds: [850, 2140, 1070, 2320], conf: 0.99, source: "ocr" },
+        ],
+      },
+    });
+    assert.equal(replayedAnalysis.reused, true);
+    await assert.rejects(f.control.recordRecoveryInspectionAnalysis({
+      jobId: job.jobId,
+      inspectionId: inspection.inspectionId,
+      actorId: "inspection-agent",
+      idempotencyKey: "analysis-once",
+      analysis: {},
+    }), { code: "IDEMPOTENCY_KEY_CONFLICT" });
+  } finally {
+    await f.close();
+  }
+});
+
+test("failed recovery inspection releases its lease and preserves quarantine", async () => {
+  const adapter = {
+    id: "test",
+    async execute() { return { vendorCode: 0 }; },
+    async verify() { return { ok: true, mode: "state" }; },
+    async restore() { return { ok: false }; },
+    async inspectRecovery() { return { ok: false, step: "capture-failed" }; },
+  };
+  const f = fixture({
+    capabilities: [manifest("test.restore", {
+      restoration: { required: true, description: "must restore" },
+    })],
+    adapter,
+  });
+  try {
+    const job = f.control.submitJob({
+      idempotencyKey: "inspect-failure",
+      actorId: "agent-a",
+      deviceId: f.devices[0].deviceId,
+      capabilityId: "test.restore",
+      params: {},
+    }).job;
+    assert.equal((await f.control.waitForJob(job.jobId)).status, "recovery_required");
+    await assert.rejects(f.control.inspectRecovery({
+      jobId: job.jobId,
+      actorId: "inspection-agent",
+      idempotencyKey: "inspect-fails",
+    }), { code: "RECOVERY_INSPECTION_FAILED" });
+    await assert.rejects(f.control.inspectRecovery({
+      jobId: job.jobId,
+      actorId: "inspection-agent",
+      idempotencyKey: " inspect-fails ",
+    }), { code: "RECOVERY_INSPECTION_PREVIOUSLY_FAILED" });
+    assert.equal(f.state.getDevice(job.deviceId).quarantined, true);
+    assert.equal(f.state.listLeases().length, 0);
   } finally {
     await f.close();
   }

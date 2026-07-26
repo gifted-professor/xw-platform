@@ -151,6 +151,36 @@ export class ControlRouter {
         },
       };
     }
+    match = path.match(/^\/control\/v1\/jobs\/([^/]+)\/recover\/inspect$/);
+    if (method === "POST" && match) {
+      const input = requireBody(body);
+      return {
+        status: 200,
+        body: {
+          inspection: await this.control.inspectRecovery({
+            jobId: decodeURIComponent(match[1]),
+            actorId: input.actorId,
+            idempotencyKey: input.idempotencyKey,
+          }),
+        },
+      };
+    }
+    match = path.match(/^\/control\/v1\/jobs\/([^/]+)\/recover\/inspect\/([^/]+)\/analysis$/);
+    if (method === "POST" && match) {
+      const input = requireBody(body);
+      return {
+        status: 200,
+        body: {
+          analysis: await this.control.recordRecoveryInspectionAnalysis({
+            jobId: decodeURIComponent(match[1]),
+            inspectionId: decodeURIComponent(match[2]),
+            actorId: input.actorId,
+            idempotencyKey: input.idempotencyKey,
+            analysis: input.analysis,
+          }),
+        },
+      };
+    }
 
     if (method === "POST" && path === "/control/v1/sessions") {
       return { status: 201, body: { session: this.control.createSession(requireBody(body)) } };

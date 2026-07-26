@@ -23,11 +23,18 @@ import {
   isPublishCompose,
   loadLayoutProfile,
   normalizeXwInputText,
+  parseDisplayResolution,
   parseAllUiNodes,
   probeBottomTabs,
   saveLayoutProfile,
   semanticSnapshot,
 } from "../scripts/xianyu-operator.mjs";
+
+test("parseDisplayResolution uses the effective override size", () => {
+  assert.deepEqual(parseDisplayResolution("Physical size: 1080x2400\nOverride size: 720x1600"), [720, 1600]);
+  assert.deepEqual(parseDisplayResolution("Physical size: 1080x2400"), [1080, 2400]);
+  assert.equal(parseDisplayResolution("size unavailable"), null);
+});
 
 // 02 号机实测（density 440, 三键导航）：底栏 y 落在 2072–2175，旧硬编码 2180/2320 会 miss。
 const device02BottomTabs = [

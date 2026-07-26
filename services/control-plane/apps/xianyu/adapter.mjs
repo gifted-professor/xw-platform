@@ -38,7 +38,7 @@ function evidenceFiles(output) {
   return files;
 }
 
-function commandArgs({ script, action, device, params }) {
+function commandArgs({ script, action, device, params, evidenceDirectory = null }) {
   if (!device.runtimeId) {
     throw new ControlPlaneError("DEVICE_RUNTIME_ID_MISSING", "Xianyu adapter needs a private runtime ID", { status: 503 });
   }
@@ -89,6 +89,7 @@ function commandArgs({ script, action, device, params }) {
   if (params.skipSku) args.push("--skip-sku");
   if (params.skipFreight) args.push("--skip-freight");
   if (params.skipAddress) args.push("--skip-address");
+  if (evidenceDirectory) args.push("--evidence-dir", evidenceDirectory);
   if (device.metadata?.adbPath) args.push("--adb", device.metadata.adbPath);
   return args;
 }
@@ -178,7 +179,29 @@ export function createXianyuAdapter({ run = runJsonCommand, operatorPath = defau
         device,
         params: {},
       }), { cwd: root, timeoutMs: 60000, env: operatorEnv(leaseAuthorization) });
-      return { ok: output?.ok === true && output?.savedDraft === false };
+      return {
+        ok: output?.ok === true && output?.savedDraft === false,
+        step: output?.step || null,
+        stoppedBeforePublish: output?.stoppedBeforePublish === true,
+        savedDraft: output?.savedDraft === true,
+      };
+    },
+    async inspectRecovery({ capability, device, evidenceDirectory, leaseAuthorization }) {
+      requireFile(operatorPath, capability.id);
+      const output = await run(process.execPath, commandArgs({
+        script: operatorPath,
+        action: "inspect-recovery",
+        device,
+        params: {},
+        evidenceDirectory,
+      }), { cwd: root, timeoutMs: 60000, env: operatorEnv(leaseAuthorization) });
+      return {
+        ok: output?.ok === true && output?.stoppedBeforeAction === true,
+        step: output?.step || null,
+        stoppedBeforeAction: output?.stoppedBeforeAction === true,
+        observation: output?.observation || {},
+        evidenceFiles: evidenceFiles(output),
+      };
     },
   };
 }
