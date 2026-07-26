@@ -566,11 +566,12 @@ export async function ensureOnPublishCompose(op, { maxAttempts = 2 } = {}) {
       semanticNodes: snap.nodes,
       focus: snap.focus,
     });
+    const publishCompose = isPublishCompose(snap.nodes);
     const knownChildPage = ["sku-sheet", "image-picker", "discard-dialog"]
-      .includes(classification.pageType);
+      .includes(classification.pageType) && !publishCompose;
     const composeOk = snap.focus?.package === IDLEFISH_PACKAGE
       && !knownChildPage
-      && (isPublishCompose(snap.nodes) || hasXianyuPublishComposeFingerprint(fp));
+      && (publishCompose || hasXianyuPublishComposeFingerprint(fp));
     if (composeOk) {
       return { ok: true, recovered: i > 0, snap, fingerprint: [...fp].slice(0, 30) };
     }
@@ -1375,7 +1376,10 @@ export async function recoverDiscardDryRun(op, { evidenceDir = EVIDENCE_DIR_DEFA
       focus: page.focus,
       resolution,
     });
-    if (pageClassification.pageType === "discard-dialog" && pageClassification.confidence >= 0.99) {
+    const composePage = page.focus.package === IDLEFISH_PACKAGE && isPublishCompose(page.nodes);
+    if (composePage) {
+      recoverySource = "compose";
+    } else if (pageClassification.pageType === "discard-dialog" && pageClassification.confidence >= 0.99) {
       recoverySource = "discard-dialog";
     } else {
       for (let transition = 0; transition < 4

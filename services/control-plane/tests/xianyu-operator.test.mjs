@@ -381,8 +381,10 @@ test("recoverDiscardDryRun backs out of the audited chat overlay before discardi
   ];
   const compose = [
     { label: "关闭", className: "android.widget.Button", clickable: true, bounds: [0, 94, 113, 178] },
-    { label: "发布", className: "android.widget.Button", clickable: true, bounds: [880, 94, 1080, 178] },
-    { label: "+添加优质 首图更吸引人~", className: "android.widget.Button", clickable: true, bounds: [74, 257, 378, 561] },
+    { label: "发布, 发布", className: "android.view.View", clickable: true, bounds: [880, 94, 1080, 178] },
+    { label: "分类/预计工期/售后服务/等\n售后服务\n额外服务", bounds: [74, 760, 1006, 1500] },
+    { label: "商品规格\n已设置10个规格", bounds: [74, 1650, 1006, 1770] },
+    { label: "价格和库存\n¥12.34、库存20", bounds: [74, 1790, 1006, 1910] },
   ];
   const discardDialog = [
     { label: "不保存", className: "android.widget.Button", clickable: true, bounds: [42, 1980, 524, 2130] },

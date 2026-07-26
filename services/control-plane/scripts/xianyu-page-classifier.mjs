@@ -67,6 +67,9 @@ export function classifyXianyuPage({
   const height = Array.isArray(resolution) && Number(resolution[1]) > 0
     ? Number(resolution[1])
     : 2400;
+  const width = Array.isArray(resolution) && Number(resolution[0]) > 0
+    ? Number(resolution[0])
+    : 1080;
   const inBottomBar = (entry) => entry.bounds && entry.bounds[1] >= height * 0.82;
 
   // 对话框动作必须是独立精确标签；发布描述正文可能合法包含“不保存草稿”等说明文字。
@@ -102,6 +105,27 @@ export function classifyXianyuPage({
       countedNext.length && pickerMarker.length ? 0.98 : 0.92,
       [...countedNext, ...pickerMarker],
       ["image-picker navigation fingerprint is present"],
+      sourceCounts,
+    );
+  }
+
+  // 服务类 compose 滚动到中下部后会同时露出“商品规格/价格和库存”，旧规则会误判成
+  // SKU sheet。只有精确右上最终发布位 + 至少两个服务表单锚点才优先认作 compose。
+  const topRightPublish = matching(entries, /^发布(?:[,，].*)?$/, (entry) => entry.bounds
+    && entry.bounds[0] >= width * 0.72 && entry.bounds[1] < height * 0.1
+    && entry.bounds[2] > width * 0.92);
+  const scrolledComposeAnchors = [
+    matching(entries, /分类.*预计工期.*售后服务|预计工期|售后服务/),
+    matching(entries, /^商品规格(?:[,，\s]|$)/),
+    matching(entries, /^价格和库存(?:[,，\s]|$)/),
+    matching(entries, /^发货方式(?:[,，\s]|$)|^运费(?:[,，\s]|$)/),
+  ].filter((matches) => matches.length);
+  if (topRightPublish.length && scrolledComposeAnchors.length >= 2) {
+    return result(
+      "publish-compose",
+      0.98,
+      [...topRightPublish, ...scrolledComposeAnchors.flat()],
+      ["top-right final publish control and scrolled service form anchors are present"],
       sourceCounts,
     );
   }

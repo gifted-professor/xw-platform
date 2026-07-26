@@ -144,6 +144,22 @@ test("classifies SKU sheet and publish composer", () => {
   assert.equal(compose.safeStateVerified, false);
 });
 
+test("classifies the scrolled device-02 service compose ahead of SKU markers", () => {
+  const result = classifyXianyuPage({
+    resolution,
+    focus: { package: "com.taobao.idlefish", activity: "FishFlutterBoostActivity" },
+    semanticNodes: [
+      element("发布, 发布", [880, 94, 1080, 178]),
+      element("分类/预计工期/售后服务/等 售后服务 额外服务", [74, 760, 1006, 1500]),
+      element("商品规格 已设置10个规格", [74, 1650, 1006, 1770]),
+      element("价格和库存 ¥12.34、库存20", [74, 1790, 1006, 1910]),
+    ],
+  });
+  assert.equal(result.pageType, "publish-compose");
+  assert.equal(result.confidence, 0.98);
+  assert.equal(result.safeStateVerified, false);
+});
+
 test("classifies the fresh device-02 size-spec sheet fingerprint", () => {
   const result = classifyXianyuPage({
     resolution,
