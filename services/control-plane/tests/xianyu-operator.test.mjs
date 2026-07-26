@@ -32,6 +32,7 @@ import {
   returnFromXianyuChatOverlay,
   ensureOnPublishCompose,
   firstFailedPublishStep,
+  firstFailedPublishDiagnostic,
   loadLayoutProfile,
   normalizeXwInputText,
   parseDisplayResolution,
@@ -42,11 +43,54 @@ import {
   saveLayoutProfile,
   semanticSnapshot,
   summarizeImageMediaNodes,
+  summarizeAppNumpadCandidates,
   verifyImageManifestDryRun,
   replaceSkuBatchAppNumpadValue,
   skuBatchInputValue,
   shouldScrollAfterSkuValue,
 } from "../scripts/xianyu-operator.mjs";
+
+test("numpad failure diagnostics retain only matching key geometry and bounded enums", () => {
+  const diagnostic = summarizeAppNumpadCandidates([
+    { label: "小数点, .", className: "android.widget.Button", bounds: [0, 2290, 270, 2390], clickable: true },
+    { label: "用户价格描述 12.34", className: "android.view.View", bounds: [20, 300, 900, 500] },
+  ], ".", [1080, 2400]);
+  assert.equal(diagnostic.kind, "app-numpad-key-missing");
+  assert.equal(diagnostic.missing, ".");
+  assert.equal(diagnostic.candidateCount, 1);
+  assert.deepEqual(diagnostic.candidates[0], {
+    classKind: "button",
+    bounds: [0, 2290, 270, 2390],
+    clickable: true,
+    withinKeyboardGeometry: false,
+  });
+  assert.doesNotMatch(JSON.stringify(diagnostic), /用户价格描述|小数点/);
+});
+
+test("publish failure diagnostic bubbles only the bounded numpad object", () => {
+  const diagnostic = firstFailedPublishDiagnostic({
+    sku: {
+      ok: false,
+      step: "sku-price-numpad-failed",
+      priceTyped: {
+        field: "price",
+        typed: {
+          diagnostic: {
+            kind: "app-numpad-key-missing",
+            missing: ".",
+            resolution: [1080, 2400],
+            candidateCount: 1,
+            candidates: [{ classKind: "button", bounds: [0, 2290, 270, 2390], clickable: true, withinKeyboardGeometry: false, rawLabel: "secret" }],
+            privateRawLabel: "secret",
+          },
+        },
+      },
+    },
+  });
+  assert.equal(diagnostic.field, "price");
+  assert.equal(diagnostic.candidates[0].withinKeyboardGeometry, false);
+  assert.doesNotMatch(JSON.stringify(diagnostic), /secret|rawLabel/);
+});
 
 test("image upload state counts 04 button tiles only when anchored by the add tile", () => {
   const nodes = [

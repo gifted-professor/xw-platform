@@ -1167,6 +1167,30 @@ export function firstFailedPublishStep(steps = {}) {
   return failed ? `${failed[0]}:${failed[1]?.step || "failed"}` : null;
 }
 
+export function firstFailedPublishDiagnostic(steps = {}) {
+  const sku = steps?.sku;
+  for (const [field, key] of [["price", "priceTyped"], ["stock", "stockTyped"]]) {
+    const source = sku?.[key]?.typed?.diagnostic;
+    if (source?.kind !== "app-numpad-key-missing") continue;
+    const candidates = Array.isArray(source.candidates) ? source.candidates : [];
+    return {
+      kind: "app-numpad-key-missing",
+      field,
+      missing: /^[0-9.]$/.test(String(source.missing || "")) ? String(source.missing) : "unknown",
+      resolution: Array.isArray(source.resolution) ? source.resolution.slice(0, 2).map(Number) : [],
+      candidateCount: Math.max(0, Number(source.candidateCount || 0)),
+      candidates: candidates.slice(0, 8).map((candidate) => ({
+        classKind: ["button", "view", "text", "other"].includes(candidate?.classKind)
+          ? candidate.classKind : "other",
+        bounds: Array.isArray(candidate?.bounds) ? candidate.bounds.slice(0, 4).map(Number) : [],
+        clickable: candidate?.clickable === true,
+        withinKeyboardGeometry: candidate?.withinKeyboardGeometry === true,
+      })),
+    };
+  }
+  return null;
+}
+
 export function parseDisplayResolution(value) {
   const matches = [...String(value || "").matchAll(/(\d+)x(\d+)/g)];
   if (!matches.length) return null;
@@ -1828,23 +1852,59 @@ export function findSkuBatchEditControls(snapshot) {
 /** 应用内数字键盘键间隔（同键连按 debounce；99 连点 9 时 180–220ms 会吞键）。 */
 export const APP_NUMPAD_SETTLE_MS = 450;
 
-export function findAppNumpadKey(snapshot, value, resolution = [1080, 2400]) {
+function appNumpadLabelMatches(label, ch) {
+  const value = String(label || "").trim();
+  return ch === "."
+    ? /^(?:小数点[,，]\s*\.|\.)$/.test(value)
+    : value === ch || value === `数字${ch}, ${ch}` || value.startsWith(`数字${ch},`);
+}
+
+function appNumpadGeometryMatches(node, resolution = [1080, 2400]) {
   const width = Number(resolution?.[0] || 0);
   const height = Number(resolution?.[1] || 0);
+  if (width <= 0 || height <= 0 || !node?.bounds) return false;
+  const [left, top, right, bottom] = node.bounds.map(Number);
+  const nodeHeight = bottom - top;
+  return left >= 0 && right <= width * 0.76
+    && top >= height * 0.6 && bottom <= height * 0.95
+    && nodeHeight > 0 && nodeHeight <= height * 0.1;
+}
+
+// 只保留目标数字键本身的结构；不输出原始 label、输入框值或页面其他文本。
+export function summarizeAppNumpadCandidates(snapshot, value, resolution = [1080, 2400]) {
+  const missing = /^[0-9.]$/.test(String(value ?? "")) ? String(value) : "unknown";
+  const classKind = (className) => {
+    if (className === "android.widget.Button") return "button";
+    if (className === "android.view.View") return "view";
+    if (className === "android.widget.TextView") return "text";
+    return "other";
+  };
+  const candidates = (snapshot || []).filter((node) => {
+    const b = node?.bounds;
+    return /^[0-9.]$/.test(missing)
+      && appNumpadLabelMatches(node?.label, missing)
+      && Array.isArray(b) && b.length === 4 && b.every(Number.isFinite);
+  });
+  return {
+    kind: "app-numpad-key-missing",
+    missing,
+    resolution: Array.isArray(resolution) ? resolution.slice(0, 2).map(Number) : [],
+    candidateCount: candidates.length,
+    candidates: candidates.slice(0, 8).map((node) => ({
+      classKind: classKind(node.className),
+      bounds: node.bounds.map(Number),
+      clickable: node.clickable === true,
+      withinKeyboardGeometry: appNumpadGeometryMatches(node, resolution),
+    })),
+  };
+}
+
+export function findAppNumpadKey(snapshot, value, resolution = [1080, 2400]) {
   const ch = String(value ?? "");
-  if (width <= 0 || height <= 0 || !/^[0-9.]$/.test(ch)) return null;
+  if (!/^[0-9.]$/.test(ch)) return null;
   const candidates = (snapshot || []).filter((node) => {
     if (!node?.bounds) return false;
-    const label = String(node.label || "").trim();
-    const labelMatches = ch === "."
-      ? /^(?:小数点[,，]\s*\.|\.)$/.test(label)
-      : label === ch || label === `数字${ch}, ${ch}` || label.startsWith(`数字${ch},`);
-    if (!labelMatches) return false;
-    const [left, top, right, bottom] = node.bounds.map(Number);
-    const nodeHeight = bottom - top;
-    return left >= 0 && right <= width * 0.76
-      && top >= height * 0.6 && bottom <= height * 0.95
-      && nodeHeight > 0 && nodeHeight <= height * 0.1;
+    return appNumpadLabelMatches(node.label, ch) && appNumpadGeometryMatches(node, resolution);
   });
   return candidates.length === 1 ? candidates[0] : null;
 }
@@ -1876,7 +1936,12 @@ export async function typeAppNumpadDigits(op, value, {
       await op.tap(...FIXED[ch]);
       typed.push({ ch, via: "fixed", point: FIXED[ch] });
     } else {
-      return { ok: false, typed, missing: ch };
+      return {
+        ok: false,
+        typed,
+        missing: ch,
+        diagnostic: summarizeAppNumpadCandidates(snap.nodes, ch, resolution),
+      };
     }
     await settle(settleMs);
   }
@@ -3656,6 +3721,10 @@ export async function publishDryRun(op, plan, {
   summary.supervisorEvents = sup.events;
   if (!summary.ok && !summary.step) {
     summary.step = firstFailedPublishStep(summary.steps) || "publish-dry-run-unverified";
+  }
+  if (!summary.ok) {
+    const diagnostic = firstFailedPublishDiagnostic(summary.steps);
+    if (diagnostic) summary.diagnostic = diagnostic;
   }
   return summary;
 }
