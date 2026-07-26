@@ -129,11 +129,15 @@ test("recovery inspection keeps bounded recovery metadata without unrelated text
     { label: "关闭,按钮", className: "android.widget.Button", clickable: false, bounds: [920, 84, 1050, 174] },
     { label: "设置价格和库存", className: "android.view.View", clickable: false, bounds: [300, 80, 800, 180] },
     { label: "库存, 库存", className: "android.view.View", clickable: false, bounds: [40, 1020, 220, 1150] },
+    { label: "确认退出，按钮, 确认退出", className: "android.widget.Button", clickable: true, bounds: [550, 2040, 1040, 2210] },
+    { label: "取消，按钮, 取消", className: "android.widget.Button", clickable: true, bounds: [40, 2040, 520, 2210] },
     { label: "用户发布正文不应进入恢复诊断", className: "android.widget.EditText", clickable: true, bounds: [40, 300, 1040, 700] },
   ]), [
     { label: "关闭,按钮", className: "android.widget.Button", clickable: false, bounds: [920, 84, 1050, 174] },
     { label: "设置价格和库存", className: "android.view.View", clickable: false, bounds: [300, 80, 800, 180] },
     { label: "库存, 库存", className: "android.view.View", clickable: false, bounds: [40, 1020, 220, 1150] },
+    { label: "确认退出，按钮, 确认退出", className: "android.widget.Button", clickable: true, bounds: [550, 2040, 1040, 2210] },
+    { label: "取消，按钮, 取消", className: "android.widget.Button", clickable: true, bounds: [40, 2040, 520, 2210] },
   ]);
 });
 

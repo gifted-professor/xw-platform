@@ -1,7 +1,10 @@
 const XIANYU_PACKAGE = "com.taobao.idlefish";
 
 function cleanLabel(value) {
-  return String(value || "").replace(/\s+/g, " ").trim();
+  return String(value || "")
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function validBounds(value) {
@@ -69,6 +72,18 @@ export function classifyXianyuPage({
   // 对话框动作必须是独立精确标签；发布描述正文可能合法包含“不保存草稿”等说明文字。
   const discard = matching(entries, /^(不保存|放弃修改|放弃编辑)$/);
   const draft = matching(entries, /^(存草稿|保存草稿)$/);
+  const skuExitNotice = matching(entries, /^退出后不会保存这次设置的规格哦$/);
+  const skuExitCancel = matching(entries, /^取消(?:[,，].*)?$/);
+  const skuExitConfirm = matching(entries, /^确认退出(?:[,，].*)?$/);
+  if (skuExitNotice.length && skuExitCancel.length && skuExitConfirm.length) {
+    return result(
+      "sku-exit-dialog",
+      0.99,
+      [...skuExitNotice, ...skuExitCancel, ...skuExitConfirm],
+      ["SKU exit notice and both explicit dialog actions are visible"],
+      sourceCounts,
+    );
+  }
   if (discard.length && draft.length) {
     return result(
       "discard-dialog",

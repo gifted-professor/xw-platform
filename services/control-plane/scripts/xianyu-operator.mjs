@@ -1141,9 +1141,12 @@ export function findSkuRecoveryClose(snapshot, { focus = null, resolution = null
 }
 
 export function recoverySemanticHints(snapshot = []) {
-  const relevant = /^(?:关闭(?:[,，\s]|$)|设置价格和库存$|选中的规格(?:\s|$)|价格(?:[,，\s]|$)|库存(?:[,，\s]|$)|不保存$|存草稿$|保存草稿$|要不要先存个草稿$|发布$|发闲置$)/;
+  const relevant = /^(?:关闭(?:[,，\s]|$)|设置价格和库存$|选中的规格(?:\s|$)|价格(?:[,，\s]|$)|库存(?:[,，\s]|$)|不保存$|存草稿$|保存草稿$|要不要先存个草稿$|退出后不会保存这次设置的规格哦$|确认退出(?:[,，]|$)|取消(?:[,，]|$)|发布$|发闲置$)/;
   return snapshot
-    .filter((node) => relevant.test(String(node?.label || "").replace(/\s+/g, " ").trim()))
+    .filter((node) => relevant.test(String(node?.label || "")
+      .replace(/[\u200B-\u200D\uFEFF]/g, "")
+      .replace(/\s+/g, " ")
+      .trim()))
     .slice(0, 32)
     .map((node) => ({
       label: String(node.label || "").replace(/\s+/g, " ").trim().slice(0, 240),

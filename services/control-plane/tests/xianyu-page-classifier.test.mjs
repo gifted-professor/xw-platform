@@ -90,6 +90,20 @@ test("classifies discard dialog ahead of compose markers", () => {
   assert.equal(result.safeStateVerified, false);
 });
 
+test("classifies the device-02 SKU exit confirmation dialog", () => {
+  const result = classifyXianyuPage({
+    resolution,
+    elements: [
+      element("退\u200b出\u200b后\u200b不\u200b会\u200b保\u200b存\u200b这\u200b次\u200b设\u200b置\u200b的\u200b规\u200b格\u200b哦\u200b", [140, 1800, 950, 1910]),
+      element("取消，按钮, 取消", [40, 2040, 520, 2210]),
+      element("确认退出，按钮, 确认退出", [550, 2040, 1040, 2210]),
+    ],
+  });
+  assert.equal(result.pageType, "sku-exit-dialog");
+  assert.equal(result.safeStateVerified, false);
+  assert.equal(result.confidence, 0.99);
+});
+
 test("does not treat filled description text as discard-dialog actions", () => {
   const result = classifyXianyuPage({
     resolution,
