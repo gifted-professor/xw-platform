@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -180,4 +180,12 @@ test("production startup pins the verified Windows Node version", () => {
     expected: "24.11.1",
     actual: "24.12.0",
   }), { code: "NODE_VERSION_MISMATCH" });
+});
+
+test("production launch assets keep retired legacy UI routes enforced", () => {
+  const worker = readFileSync(fileURLToPath(new URL("../scripts/control-plane-worker.ps1", import.meta.url)), "utf8");
+  const envExample = readFileSync(fileURLToPath(new URL("../.env.example", import.meta.url)), "utf8");
+  assert.match(worker, /CONTROL_PLANE_LEGACY_MODE\s*=\s*"enforce"/);
+  assert.doesNotMatch(worker, /CONTROL_PLANE_LEGACY_MODE\s*=\s*"audit"/);
+  assert.match(envExample, /^CONTROL_PLANE_LEGACY_MODE=enforce$/m);
 });

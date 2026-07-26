@@ -30,7 +30,7 @@ $env:CONTROL_PLANE_NODE_ID = "DESKTOP-3I1EVHE"
 $env:CONTROL_PLANE_NODE_VERSION = "24.11.1"
 $env:CONTROL_PLANE_GIT_COMMIT = $actualCommit
 $env:CONTROL_PLANE_DEVICES_FILE = $deviceConfig
-$env:CONTROL_PLANE_LEGACY_MODE = "audit"
+$env:CONTROL_PLANE_LEGACY_MODE = "enforce"
 $env:NODE_NO_WARNINGS = "1"
 
 $stdout = Join-Path $stateRoot "server.stdout.log"
