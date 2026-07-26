@@ -6,6 +6,7 @@ import { join } from "node:path";
 import {
   APP_NUMPAD_SETTLE_MS,
   boundsClose,
+  createStickyXiaoweiInputSession,
   createStepSupervisor,
   descriptionContains,
   findDiscardWithoutSaving,
@@ -31,7 +32,40 @@ import {
   recoverDiscardDryRun,
   saveLayoutProfile,
   semanticSnapshot,
+  shouldScrollAfterSkuValue,
 } from "../scripts/xianyu-operator.mjs";
+
+test("SKU text input keeps the first IME restore until the batch is complete", async () => {
+  const calls = [];
+  let restores = 0;
+  const session = createStickyXiaoweiInputSession({
+    async inputTextViaXiaowei(text, options) {
+      calls.push({ text, options });
+      return { audit: { inputAccepted: true }, restore: async () => { restores += 1; } };
+    },
+  });
+
+  await session.input("蓝色", { clearFirst: false });
+  await session.input("白色", { clearFirst: false });
+  await session.input("S", { clearFirst: false });
+  assert.equal(restores, 0);
+  assert.equal(calls.every((call) => call.options.deferRestore === true), true);
+
+  await session.restore();
+  await session.restore();
+  assert.equal(restores, 1);
+});
+
+test("SKU values scroll exactly after each completed pair, never after the final value", () => {
+  assert.deepEqual(
+    [1, 2, 3, 4, 5].filter((count) => shouldScrollAfterSkuValue(count, 5)),
+    [2, 4],
+  );
+  assert.deepEqual(
+    [1, 2].filter((count) => shouldScrollAfterSkuValue(count, 2)),
+    [],
+  );
+});
 
 test("parseDisplayResolution uses the effective override size", () => {
   assert.deepEqual(parseDisplayResolution("Physical size: 1080x2400\nOverride size: 720x1600"), [720, 1600]);

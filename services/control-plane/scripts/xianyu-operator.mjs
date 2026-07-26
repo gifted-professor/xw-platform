@@ -2257,6 +2257,31 @@ async function selectLocation(op, { evidenceDir = EVIDENCE_DIR_DEFAULT, calibrat
 //     右下角「确定」确认（禁止点中间确定）；
 //  ⑥ 价格列表「完成」收尾。未校准只定位行；calibrated=true 才真正操作。
 //  规格值：只走分区 EditText 键入 + ENTER，不点推荐 chip（chip 会把「蓝色」误匹配「湖蓝色」）。
+export function createStickyXiaoweiInputSession(op) {
+  let restoreOriginalIme = null;
+  return {
+    async input(text, options = {}) {
+      const result = await op.inputTextViaXiaowei(text, {
+        ...options,
+        deferRestore: true,
+      });
+      if (!restoreOriginalIme && typeof result?.restore === "function") {
+        restoreOriginalIme = result.restore;
+      }
+      return result;
+    },
+    async restore() {
+      const restore = restoreOriginalIme;
+      restoreOriginalIme = null;
+      if (typeof restore === "function") await restore().catch(() => null);
+    },
+  };
+}
+
+export function shouldScrollAfterSkuValue(enteredCount, totalValues) {
+  return enteredCount > 0 && enteredCount < totalValues && enteredCount % 2 === 0;
+}
+
 export async function fillSkuSpecs(op, specs, stock, {
   evidenceDir, calibrated = false, price = null, replaceExisting = false,
 } = {}) {
@@ -2269,31 +2294,8 @@ export async function fillSkuSpecs(op, specs, stock, {
   const typeNumKB = async (str) => typeAppNumpadDigits(op, str, { settleMs: APP_NUMPAD_SETTLE_MS });
   const cleanup = async () => { for (let i = 0; i < 3; i += 1) { await op.back().catch(() => null); await settle(600); } };
   const dimResults = [];
-
-  // 维度值输入（EditText 每值重找 + ENTER 提交 + 每 2 值滚动防挤压）
-  const typeValues = async (values, tag) => {
-    const out = [];
-    let vi = 0;
-    for (const val of values) {
-      const snap0 = await snapshot(op, `xianyu-sku-${tag}-before-${vi}`);
-      const edits = snap0.nodes.filter((n) => /EditText/.test(String(n.className || "")) && n.bounds && n.bounds[1] > 300 && n.bounds[3] < 2200);
-      const input = edits[edits.length - 1];
-      if (!input) { out.push({ val, ok: false, reason: "input-missing" }); continue; }
-      const [ix, iy] = center(input.bounds);
-      await op.tap(ix, iy);
-      await settle(600);
-      const audit = await op.inputTextViaXiaowei(String(val), { clearFirst: false, deferRestore: true, refocus: async () => { await op.tap(ix, iy); } });
-      await settle(500);
-      if (typeof audit.restore === "function") await audit.restore().catch(() => null);
-      await op.shellExec("input keyevent KEYCODE_ENTER", 5000).catch(() => null);
-      await settle(800);
-      const snap1 = await snapshot(op, `xianyu-sku-${tag}-after-${vi}`);
-      out.push({ val, ok: snap1.nodes.some((n) => String(n.label || "").includes(String(val))) });
-      vi += 1;
-      if (vi >= 2) { await op.shellExec("input swipe 540 1500 540 1100 350", 8000).catch(() => null); await settle(700); }
-    }
-    return out;
-  };
+  // 同一批 SKU 文本只切一次 XwIME，全部值完成后再还原；逐值切换会让 2×5 路径逼近超时。
+  const skuInputSession = createStickyXiaoweiInputSession(op);
 
   // 维度标题判定（状态C 实证：维度块 label = '颜色\n选择推荐的\n颜色' 整块形态）
 function isDimTitle(label, dimName) {
@@ -2353,9 +2355,8 @@ function isDimTitle(label, dimName) {
             const [gtx, gty] = center(greyTitle.bounds);
             await op.tap(gtx, gty);
             await settle(700);
-            const auditD = await op.inputTextViaXiaowei(String(dimName), { clearFirst: false, deferRestore: true, refocus: async () => { await op.tap(gtx, gty); } });
+            await skuInputSession.input(String(dimName), { clearFirst: false, refocus: async () => { await op.tap(gtx, gty); } });
             await settle(700);
-            if (typeof auditD.restore === "function") await auditD.restore().catch(() => null);
             snap = await snapshot(op, `xianyu-sku-dim${d}-named`);
             sectionExists = snap.nodes.some((n) => isDimTitle(n.label, dimName));
           }
@@ -2365,42 +2366,54 @@ function isDimTitle(label, dimName) {
       // 填值：用户明确——在分区输入框**打字**（芯片仅作兜底）。输入后校验提交值精确等于目标
       // （输 "XS" 可能被联想成 2XS及以下——实证；不符则点垃圾桶删掉重试）
       const chosen = [];
-      let vi = 0;
-      for (const val of values) {
-        snap = await snapshot(op, `xianyu-sku-dim${d}-val-${vi}`);
+      let valueSnap = snap;
+      for (let vi = 0; vi < values.length; vi += 1) {
+        const val = values[vi];
+        if (!valueSnap) valueSnap = await snapshot(op, `xianyu-sku-dim${d}-val-${vi}`);
         {
-          const input = sectionInput(snap.nodes, dimName, allDimNames) || sectionInput(snap.nodes, dimName, []);
-          if (!input) { chosen.push({ val, ok: false, reason: "input-missing" }); continue; }
+          const input = sectionInput(valueSnap.nodes, dimName, allDimNames) || sectionInput(valueSnap.nodes, dimName, []);
+          if (!input) {
+            chosen.push({ val, ok: false, reason: "input-missing" });
+            valueSnap = null;
+            continue;
+          }
           const [ix, iy] = center(input.bounds);
           await op.tap(ix, iy);
           await settle(600);
-          const audit = await op.inputTextViaXiaowei(String(val), { clearFirst: false, deferRestore: true, refocus: async () => { await op.tap(ix, iy); } });
+          await skuInputSession.input(String(val), { clearFirst: false, refocus: async () => { await op.tap(ix, iy); } });
           await settle(500);
-          if (typeof audit.restore === "function") await audit.restore().catch(() => null);
           await op.shellExec("input keyevent KEYCODE_ENTER", 5000).catch(() => null);
           await settle(800);
-          const after = await snapshot(op, `xianyu-sku-dim${d}-val-after-${vi}`);
+          let after = await snapshot(op, `xianyu-sku-dim${d}-val-after-${vi}`);
           // 精确判定：提交值==目标（防 "XS"→2XS及以下 联想假阳性）
           const exact = (n) => { const l = String(n.label || "").trim(); return l === String(val) || l.startsWith(String(val) + ",") || l.startsWith(String(val) + "，"); };
           let ok = after.nodes.some(exact);
+          let via = "typed";
           if (!ok) {
             // 兜底：推荐 chip 精确点选
             const chip = after.nodes.find((n) => exact(n) && n.bounds && !/EditText/.test(String(n.className || "")));
             if (chip) {
               await op.tap(...center(chip.bounds));
               await settle(600);
-              const after2 = await snapshot(op, `xianyu-sku-dim${d}-val-chip-${vi}`);
-              ok = after2.nodes.some(exact);
-              if (ok) { chosen.push({ val, ok, via: "chip-fallback" }); vi += 1; continue; }
+              after = await snapshot(op, `xianyu-sku-dim${d}-val-chip-${vi}`);
+              ok = after.nodes.some(exact);
+              if (ok) via = "chip-fallback";
             }
           }
-          chosen.push({ val, ok, via: "typed" });
+          chosen.push({ val, ok, via });
+          if (shouldScrollAfterSkuValue(vi + 1, values.length)) {
+            await op.shellExec("input swipe 540 1500 540 1100 350", 8000).catch(() => null);
+            await settle(700);
+            valueSnap = null;
+          } else {
+            // 上一值的精确回读同时就是下一值的定位快照；避免立刻重复 dump 同一页面。
+            valueSnap = after;
+          }
         }
-        vi += 1;
-        if (vi >= 2) { await op.shellExec("input swipe 540 1500 540 1100 350", 8000).catch(() => null); await settle(700); }
       }
       dimResults.push({ dim: dimName, chosen });
     }
+    await skuInputSession.restore();
     // ④ 下一步 → 价格库存页（模式判定）
     // 注意：找不到下一步时**不要**三连 BACK 退到桌面（02 机 2026-07-26 实证会落到 miui.home）
     let snapN = await snapshot(op, "xianyu-sku-before-next");
@@ -2719,6 +2732,8 @@ function isDimTitle(label, dimName) {
   } catch (e) {
     await cleanup();
     return { ok: false, step: "sku-error", error: String(e.message || e), implemented: true, dimResults };
+  } finally {
+    await skuInputSession.restore();
   }
 }
 

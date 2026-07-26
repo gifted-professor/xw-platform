@@ -20,6 +20,7 @@ test("pure and draft-producing Xianyu full dry-runs have separate contracts", ()
 
   assert.equal(pure.idempotency, "replay_safe");
   assert.equal(pure.automationPolicy.mode, "automatic");
+  assert.equal(pure.timeoutMs, 720000);
   assert.throws(
     () => registry.validateParams(pure.id, { saveDraft: true }),
     { code: "PARAMS_SCHEMA_INVALID" },
