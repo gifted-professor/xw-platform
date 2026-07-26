@@ -75,7 +75,11 @@ export class GatewayOperator {
     // 探活：跑一条 echo；失败说明网关/设备不可达，fail-fast。
     const out = await this.shellExec("echo gateway-ready", 8000).catch(() => null);
     if (out == null || !String(out).includes("gateway-ready")) {
-      throw new Error(`gateway not reachable for ${this.serial} (ws=${this.xwWs})`);
+      throw new ControlPlaneError(
+        "GATEWAY_DEVICE_PROBE_FAILED",
+        "gateway could not reach the leased device",
+        { status: 503, details: { phase: "gateway-ready" } },
+      );
     }
     return this;
   }

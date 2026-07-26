@@ -3851,7 +3851,10 @@ const entry = process.argv[1] ? pathToFileURL(process.argv[1]).href : "";
 if (entry === import.meta.url) {
   main().catch((error) => {
     // bridge exec 会把原生命令首条 stderr 提升为 PowerShell 终止错误；远程脚本只写 stdout。
-    console.log(JSON.stringify({ ok: false, error: error.message }));
+    console.log(JSON.stringify({
+      ok: false,
+      errorCode: error?.code || "XIANYU_OPERATOR_FAILED",
+    }));
     process.exitCode = 1;
   });
 }

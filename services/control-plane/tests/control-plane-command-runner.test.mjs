@@ -31,3 +31,27 @@ test("command timeout waits for child exit before rejecting", async () => {
   assert.equal(killed, true);
   assert.ok(Date.now() - startedAt >= 35);
 });
+
+test("failed JSON adapter surfaces only its bounded diagnostic code", async () => {
+  const spawnImpl = () => {
+    const child = new EventEmitter();
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.kill = () => true;
+    queueMicrotask(() => {
+      child.stdout.end(JSON.stringify({
+        ok: false,
+        errorCode: "GATEWAY_DEVICE_PROBE_FAILED",
+        error: "private runtime details must not escape",
+      }));
+      child.emit("exit", 1);
+    });
+    return child;
+  };
+  await assert.rejects(
+    runJsonCommand("fake", [], { timeoutMs: 100, spawnImpl }),
+    (error) => error.code === "ADAPTER_FAILED"
+      && error.details?.adapterCode === "GATEWAY_DEVICE_PROBE_FAILED"
+      && !JSON.stringify(error.details).includes("private runtime details"),
+  );
+});

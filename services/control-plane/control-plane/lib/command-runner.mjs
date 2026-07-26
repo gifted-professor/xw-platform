@@ -100,9 +100,18 @@ export function runJsonCommand(command, args, {
       }
       const output = stdout.toString("utf8").trim();
       if (code !== 0) {
+        let adapterCode = null;
+        try {
+          const parsed = output ? JSON.parse(output) : null;
+          adapterCode = typeof parsed?.errorCode === "string"
+            ? parsed.errorCode.slice(0, 96)
+            : null;
+        } catch {
+          // A failed adapter is not required to return JSON. Keep diagnostics bounded.
+        }
         reject(new ControlPlaneError("ADAPTER_FAILED", "adapter process failed", {
           status: 502,
-          details: { exitCode: code, stderrPresent: stderr.length > 0 },
+          details: { exitCode: code, stderrPresent: stderr.length > 0, adapterCode },
         }));
         return;
       }
