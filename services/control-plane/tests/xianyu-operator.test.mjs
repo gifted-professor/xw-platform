@@ -26,7 +26,9 @@ import {
   isBottomTabSelected,
   isEmptyDescriptionField,
   isPublishCompose,
+  isXianyuChatOverlay,
   isRecoverySafeMain,
+  returnFromXianyuChatOverlay,
   ensureOnPublishCompose,
   firstFailedPublishStep,
   loadLayoutProfile,
@@ -370,6 +372,63 @@ test("recoverDiscardDryRun resumes safely when recovery starts on the discard di
   assert.equal(taps.length, 1);
 });
 
+test("recoverDiscardDryRun backs out of the audited chat overlay before discarding compose", async () => {
+  const chat = [
+    { label: "闲鱼私聊, 左滑看TA的闲鱼号", bounds: [0, 200, 1080, 2200] },
+    { label: "完整聊天", bounds: [40, 260, 220, 330] },
+    { label: "商品信息, ¥25.00", bounds: [40, 350, 1040, 600] },
+    { label: "想跟TA说点什么...", bounds: [140, 2180, 820, 2280] },
+  ];
+  const compose = [
+    { label: "关闭", className: "android.widget.Button", clickable: true, bounds: [0, 94, 113, 178] },
+    { label: "发布", className: "android.widget.Button", clickable: true, bounds: [880, 94, 1080, 178] },
+    { label: "+添加优质 首图更吸引人~", className: "android.widget.Button", clickable: true, bounds: [74, 257, 378, 561] },
+  ];
+  const discardDialog = [
+    { label: "不保存", className: "android.widget.Button", clickable: true, bounds: [42, 1980, 524, 2130] },
+    { label: "存草稿", className: "android.widget.Button", clickable: true, bounds: [556, 1980, 1038, 2130] },
+  ];
+  let state = "chat";
+  let backs = 0;
+  const taps = [];
+  const op = {
+    serial: "device-02",
+    transport: "gateway",
+    async shellExec(command) { return command === "wm size" ? "Physical size: 1080x2400" : ""; },
+    async currentFocus() {
+      if (state === "chat") {
+        return {
+          package: "com.taobao.idlefish",
+          activity: "com.idlefish.flutterbridge.flutterboost.boost.FishFlutterBoostTransparencyActivity",
+        };
+      }
+      return state === "main"
+        ? { package: "com.taobao.idlefish", activity: "com.taobao.idlefish.maincontainer.activity.MainActivity" }
+        : { package: "com.taobao.idlefish", activity: "FishFlutterBoostActivity" };
+    },
+    async dumpXml() {
+      const nodes = state === "chat" ? chat
+        : state === "compose" ? compose
+          : state === "discard" ? discardDialog : device02BottomTabs;
+      return recoveryXml(nodes);
+    },
+    async back() { backs += 1; state = "compose"; },
+    async tap(x, y) {
+      taps.push([x, y]);
+      state = state === "compose" ? "discard" : "main";
+    },
+    async capturePng(path) { return { path, bytes: 100, sha256: "e".repeat(64) }; },
+  };
+
+  const result = await recoverDiscardDryRun(op, { evidenceDir: "/tmp/xianyu-recovery-test" });
+  assert.equal(result.ok, true);
+  assert.equal(result.safeStateVerified, true);
+  assert.equal(result.savedDraft, false);
+  assert.equal(backs, 1);
+  assert.equal(taps.length, 2);
+  assert.equal(result.evidenceFiles.some((file) => file.label === "xianyu-recovery-after-chat-overlay-back"), true);
+});
+
 test("recoverDiscardDryRun confirms the audited SKU exit dialog before discarding compose", async () => {
   const skuExitDialog = [
     { label: "退\u200b出\u200b后\u200b不\u200b会\u200b保\u200b存\u200b这\u200b次\u200b设\u200b置\u200b的\u200b规\u200b格\u200b哦\u200b", bounds: [173, 1804, 907, 1873] },
@@ -523,6 +582,48 @@ test("isPublishCompose accepts device 02 after description fill while the keyboa
     { label: "发布", className: "android.widget.Button", bounds: [880, 94, 1080, 178] },
     { label: "+添加优质\n首图更吸引人~", className: "android.widget.Button", bounds: [74, 257, 378, 561] },
   ]), false);
+});
+
+test("isPublishCompose accepts device 02 scrolled service compose without Button class on publish", () => {
+  assert.equal(isPublishCompose([
+    { label: "发布，按钮, 发布", className: "android.view.View", bounds: [880, 94, 1080, 178] },
+    { label: "分类/预计工期/售后服务/等", bounds: [74, 760, 1006, 870] },
+    { label: "商品规格, 已设置10个规格", bounds: [74, 1650, 1006, 1770] },
+    { label: "价格和库存, ¥12.34、库存20", bounds: [74, 1790, 1006, 1910] },
+  ]), true);
+  assert.equal(isPublishCompose([
+    { label: "发布", className: "android.view.View", bounds: [880, 94, 1080, 178] },
+    { label: "商品规格, 已设置10个规格", bounds: [74, 1650, 1006, 1770] },
+  ]), false);
+});
+
+test("chat overlay requires the exact transparency activity and returns via Back", async () => {
+  const overlay = {
+    focus: {
+      package: "com.taobao.idlefish",
+      activity: "com.idlefish.flutterbridge.flutterboost.boost.FishFlutterBoostTransparencyActivity",
+    },
+    nodes: [
+      { label: "完整聊天" },
+      { label: "商品信息, ¥25.00" },
+      { label: "想跟TA说点什么..." },
+    ],
+  };
+  const compose = {
+    focus: { package: "com.taobao.idlefish", activity: "ComposeActivity" },
+    nodes: [{ label: "发布", bounds: [880, 94, 1080, 178] }],
+  };
+  assert.equal(isXianyuChatOverlay(overlay), true);
+  assert.equal(isXianyuChatOverlay({ ...overlay, focus: { ...overlay.focus, activity: "MainActivity" } }), false);
+  let backs = 0;
+  const result = await returnFromXianyuChatOverlay({ back: async () => { backs += 1; } }, overlay, {
+    settleMs: 0,
+    snapshotFn: async () => compose,
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.handled, true);
+  assert.equal(result.page, compose);
+  assert.equal(backs, 1);
 });
 
 test("parseAllUiNodes keeps a clickable Flutter parent with children", () => {

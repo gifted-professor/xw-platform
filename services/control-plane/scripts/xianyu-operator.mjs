@@ -85,6 +85,14 @@ export function isPublishCompose(snapshot) {
   const finalPublishButton = snapshot.some((node) => node.className === "android.widget.Button"
     && String(node.label || "").trim() === "发布"
     && node.bounds?.[0] >= 850 && node.bounds?.[1] < 220);
+  const boundedFinalPublish = snapshot.some((node) => /^发布(?:(?:[,，]\s*按钮)?(?:[,，]\s*发布)?)?$/.test(String(node.label || "").trim())
+    && node.bounds?.[0] >= 800 && node.bounds?.[1] < 240 && node.bounds?.[2] > 1000);
+  const scrolledComposeAnchors = [
+    /分类.*预计工期.*售后服务|预计工期|售后服务/,
+    /^商品规格(?:[,，\s]|$)/,
+    /^价格和库存(?:[,，\s]|$)/,
+    /^发货方式(?:[,，\s]|$)|^运费(?:[,，\s]|$)/,
+  ].filter((pattern) => snapshot.some((node) => pattern.test(String(node.label || "").trim()))).length;
   // 发布页必有媒体上传入口（首页没有），用它做主门控，杜绝首页误判。
   if (hasDevice02MediaCard && closeButton && finalPublishButton) return true;
   if (hasMediaUpload && (hasDescription || hasCommerceField || hasFinalPublish)) return true;
@@ -92,6 +100,9 @@ export function isPublishCompose(snapshot) {
   // 页面滚到 SKU/运费/所在地后，Flutter 只暴露可视节点，描述和图片入口会离开语义树。
   // 顶栏最终发布按钮 + 可见商务字段是发布页下半部的稳定组合。
   if (topRightButton && hasFinalPublish && hasCommerceField) return true;
+  // 02 的服务类发布页滚动后，顶部发布节点偶发不带 Button class；用精确右上发布位
+  // 加至少两个服务表单锚点识别，避免把 SKU 子页或普通内容页当成 compose。
+  if (boundedFinalPublish && scrolledComposeAnchors >= 2) return true;
 
   // Windows 管道偶发把 UTF-8 content-desc 显示成 GBK mojibake；用真实页布局做二次门控。
   // 三个区域必须同时存在，且调用方还会校验前台包名，避免单坐标误判。
@@ -108,6 +119,33 @@ export function isPublishCompose(snapshot) {
     && node.bounds?.[3] <= 2050
     && (node.bounds[3] - node.bounds[1]) >= 70).length;
   return closeButton && topRightButton && fullWidthFormRows >= 3;
+}
+
+export function isXianyuChatOverlay({ focus, nodes } = {}) {
+  if (focus?.package !== IDLEFISH_PACKAGE
+    || !/FishFlutterBoostTransparencyActivity$/.test(String(focus?.activity || ""))) return false;
+  const labels = (nodes || []).map((node) => String(node?.label || "").replace(/\s+/g, " ").trim());
+  const hasChatTitle = labels.some((label) => /^完整聊天$/.test(label));
+  const hasChatInput = labels.some((label) => /想跟TA说点什么/.test(label));
+  const hasChatContext = labels.some((label) => /闲鱼私聊|商品信息|立即购买/.test(label));
+  return hasChatTitle && hasChatInput && hasChatContext;
+}
+
+export async function returnFromXianyuChatOverlay(op, page, {
+  snapshotFn = snapshot,
+  settleMs = 800,
+} = {}) {
+  if (!isXianyuChatOverlay({ focus: page?.focus, nodes: page?.nodes })) {
+    return { ok: true, handled: false, page };
+  }
+  await op.back();
+  await settle(settleMs);
+  const after = await snapshotFn(op, "xianyu-chat-overlay-after-back");
+  return {
+    ok: !isXianyuChatOverlay({ focus: after?.focus, nodes: after?.nodes }),
+    handled: true,
+    page: after,
+  };
 }
 
 export function findPublishEntry(snapshot) {
@@ -510,7 +548,18 @@ export function createStepSupervisor(op, { onEvent = null } = {}) {
 export async function ensureOnPublishCompose(op, { maxAttempts = 2 } = {}) {
   let finalSnap = null;
   for (let i = 0; i < maxAttempts; i += 1) {
-    const snap = await snapshot(op, `ensure-compose-${i}`);
+    let snap = await snapshot(op, `ensure-compose-${i}`);
+    const overlay = await returnFromXianyuChatOverlay(op, snap);
+    if (!overlay.ok) {
+      return {
+        ok: false,
+        step: "chat-overlay-back-unverified",
+        recovered: false,
+        snap: overlay.page,
+        package: overlay.page?.focus?.package || null,
+      };
+    }
+    snap = overlay.page;
     finalSnap = snap;
     const fp = fingerprintLabels(snap.nodes || []);
     const classification = classifyXianyuPage({
@@ -932,7 +981,12 @@ export async function inputDryRun(op, {
 }
 
 export async function discardDraftDryRun(op) {
-  const before = await snapshot(op, "xianyu-discard-before");
+  let before = await snapshot(op, "xianyu-discard-before");
+  const overlay = await returnFromXianyuChatOverlay(op, before);
+  if (!overlay.ok) {
+    return { ok: false, step: "chat-overlay-back-unverified", stoppedBeforePublish: true };
+  }
+  before = overlay.page;
   if (before.focus.package !== IDLEFISH_PACKAGE || !isPublishCompose(before.nodes)) {
     return { ok: false, step: "not-on-publish-compose", stoppedBeforePublish: true };
   }
@@ -1285,6 +1339,12 @@ export async function recoverDiscardDryRun(op, { evidenceDir = EVIDENCE_DIR_DEFA
 
     let page = await snapshot(op, "xianyu-recovery-before");
     await capture("before");
+    const overlay = await returnFromXianyuChatOverlay(op, page);
+    if (!overlay.ok) return fail("chat-overlay-back-unverified");
+    if (overlay.handled) {
+      page = overlay.page;
+      await capture("after-chat-overlay-back");
+    }
     if (isRecoverySafeMain({ focus: page.focus, nodes: page.nodes, resolution })) {
       const finalPage = await snapshot(op, "xianyu-recovery-already-safe-final");
       const finalScreenshot = await capture("final");
