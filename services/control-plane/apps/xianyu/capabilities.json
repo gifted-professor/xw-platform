@@ -24,6 +24,61 @@
     },
     {
       "schemaVersion": 1,
+      "id": "xianyu.observe.image_manifest",
+      "appId": "xianyu",
+      "packageName": "com.taobao.idlefish",
+      "versionRange": "observed",
+      "maturity": "E2",
+      "risk": "R0",
+      "resources": ["device"],
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "images": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 9,
+            "items": {
+              "type": "object",
+              "properties": {
+                "phonePath": {
+                  "type": "string",
+                  "minLength": 22,
+                  "maxLength": 240
+                },
+                "sha256": {
+                  "type": "string",
+                  "minLength": 64,
+                  "maxLength": 64
+                }
+              },
+              "required": ["phonePath", "sha256"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["images"],
+        "additionalProperties": false
+      },
+      "outputSchema": { "type": "object" },
+      "preconditions": [
+        "images are expected under /sdcard/Pictures",
+        "the capability only computes SHA-256 and never starts or navigates Xianyu"
+      ],
+      "verification": {
+        "mode": "state",
+        "description": "every bounded phone path exists with the expected SHA-256 before any UI work"
+      },
+      "restoration": { "required": false, "description": "read-only; no UI or file mutation" },
+      "timeoutMs": 30000,
+      "idempotency": "read_only",
+      "automationPolicy": { "mode": "automatic" },
+      "implementation": { "adapter": "xianyu", "action": "verify-image-manifest" },
+      "evidence": ["xianyu-04-image-phone-path-preflight-gap-20260726"],
+      "availability": "implemented"
+    },
+    {
+      "schemaVersion": 1,
       "id": "xianyu.publish.open_dry_run",
       "appId": "xianyu",
       "packageName": "com.taobao.idlefish",

@@ -116,6 +116,17 @@ export function createXianyuAdapter({ run = runJsonCommand, operatorPath = defau
       if (capability.implementation.action === "snapshot") {
         return { ok: Boolean(output?.focus), mode: "state" };
       }
+      if (capability.implementation.action === "verify-image-manifest") {
+        return {
+          ok: output?.ok === true
+            && output?.stoppedBeforeAction === true
+            && output?.manifest?.verified === true
+            && Array.isArray(output?.manifest?.entries)
+            && output.manifest.entries.length > 0
+            && output.manifest.entries.every((entry) => entry?.verified === true),
+          mode: "state",
+        };
+      }
       if (capability.implementation.action === "open-publish") {
         return {
           ok: output?.stoppedBeforePublish === true && output?.stage === "publish-compose",

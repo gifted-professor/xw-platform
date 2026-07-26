@@ -116,6 +116,22 @@ test("Xianyu adapter preserves stop-before-publish and discard verification", as
           },
         };
       }
+      if (args.includes("verify-image-manifest")) {
+        return {
+          ok: true,
+          step: "image-manifest-verified",
+          stoppedBeforeAction: true,
+          manifest: {
+            verified: true,
+            entries: [{
+              phonePath: "/sdcard/Pictures/XianyuStaging/a.png",
+              expectedSha256: "a".repeat(64),
+              actualSha256: "a".repeat(64),
+              verified: true,
+            }],
+          },
+        };
+      }
       if (args.includes("image-dry-run")) {
         return {
           ok: true,
@@ -179,6 +195,50 @@ test("Xianyu adapter preserves stop-before-publish and discard verification", as
   assert.equal(inspection.evidenceFiles[0].path, "C:\\evidence\\inspect.png");
   assert.equal(calls.at(-1).args.includes("inspect-recovery"), true);
   assert.equal(calls.at(-1).args.includes("--evidence-dir"), true);
+
+  const imageManifestCap = registry.require("xianyu.observe.image_manifest");
+  const imageManifestParams = {
+    images: [{ phonePath: "/sdcard/Pictures/XianyuStaging/a.png", sha256: "a".repeat(64) }],
+  };
+  const imageManifestExec = await adapter.execute({
+    capability: imageManifestCap,
+    device: privateDevice,
+    params: imageManifestParams,
+    leaseAuthorization,
+  });
+  assert.equal((await adapter.verify({ capability: imageManifestCap, execution: imageManifestExec })).ok, true);
+  assert.equal((await adapter.verify({
+    capability: imageManifestCap,
+    execution: {
+      output: {
+        ok: true,
+        stoppedBeforeAction: true,
+        manifest: { verified: true, entries: [] },
+      },
+    },
+  })).ok, false);
+  assert.equal((await adapter.verify({
+    capability: imageManifestCap,
+    execution: {
+      output: {
+        ok: true,
+        stoppedBeforeAction: true,
+        manifest: { verified: true, entries: [{ verified: false }] },
+      },
+    },
+  })).ok, false);
+  assert.equal(calls.at(-1).args.includes("verify-image-manifest"), true);
+  assert.equal(calls.at(-1).args.includes("--images"), true);
+  assert.deepEqual(evaluateCapabilityPolicy(imageManifestCap), {
+    approvalRequired: false,
+    externalEffect: false,
+  });
+  assert.throws(
+    () => registry.validateParams(imageManifestCap.id, {
+      images: [{ phonePath: "/sdcard/Pictures/a.png", sha256: "short" }],
+    }),
+    { code: "PARAMS_SCHEMA_INVALID" },
+  );
 
   const imageCap = registry.require("xianyu.publish.image_dry_run");
   const imageExec = await adapter.execute({

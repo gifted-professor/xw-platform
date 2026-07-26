@@ -40,10 +40,57 @@ import {
   recoverySemanticHints,
   saveLayoutProfile,
   semanticSnapshot,
+  verifyImageManifestDryRun,
   replaceSkuBatchAppNumpadValue,
   skuBatchInputValue,
   shouldScrollAfterSkuValue,
 } from "../scripts/xianyu-operator.mjs";
+
+test("image manifest preflight reads only bounded Pictures paths and reports exact SHA matches", async () => {
+  const commands = [];
+  const expected = "a".repeat(64);
+  const op = {
+    async shellExec(command) {
+      commands.push(command);
+      return `${expected}  /sdcard/Pictures/XianyuFull4/a.png`;
+    },
+  };
+  const result = await verifyImageManifestDryRun(op, [{
+    phonePath: "/sdcard/Pictures/XianyuFull4/a.png",
+    sha256: expected.toUpperCase(),
+  }]);
+  assert.equal(result.ok, true);
+  assert.equal(result.step, "image-manifest-verified");
+  assert.equal(result.stoppedBeforeAction, true);
+  assert.equal(result.manifest.entries[0].verified, true);
+  assert.deepEqual(commands, ["sha256sum '/sdcard/Pictures/XianyuFull4/a.png'"]);
+});
+
+test("image manifest preflight fails closed on mismatches and path traversal", async () => {
+  const commands = [];
+  const op = {
+    async shellExec(command) {
+      commands.push(command);
+      return `${"b".repeat(64)}  /sdcard/Pictures/XianyuFull4/a.png`;
+    },
+  };
+  const mismatch = await verifyImageManifestDryRun(op, [{
+    phonePath: "/sdcard/Pictures/XianyuFull4/a.png",
+    sha256: "a".repeat(64),
+  }]);
+  assert.equal(mismatch.ok, false);
+  assert.equal(mismatch.step, "image-manifest-unverified");
+  assert.equal(mismatch.manifest.entries[0].verified, false);
+
+  const traversal = await verifyImageManifestDryRun(op, [{
+    phonePath: "/sdcard/Pictures/../private.txt",
+    sha256: "a".repeat(64),
+  }]);
+  assert.equal(traversal.ok, false);
+  assert.equal(traversal.step, "image-manifest-invalid");
+  assert.equal(traversal.stoppedBeforeAction, true);
+  assert.equal(commands.length, 1);
+});
 
 test("SKU text input keeps the first IME restore until the batch is complete", async () => {
   const calls = [];

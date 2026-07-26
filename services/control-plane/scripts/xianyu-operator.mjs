@@ -1991,7 +1991,7 @@ function shellSafePhonePath(path) {
   return value;
 }
 
-async function verifyPhoneImageManifest(op, images) {
+export async function verifyPhoneImageManifest(op, images) {
   const entries = [];
   for (const image of images || []) {
     const phonePath = shellSafePhonePath(image?.phonePath);
@@ -2012,6 +2012,29 @@ async function verifyPhoneImageManifest(op, images) {
     verified: entries.length > 0 && entries.every((entry) => entry.verified),
     entries,
   };
+}
+
+/**
+ * UI-free staging preflight. It only reads SHA-256 for allowlisted Pictures
+ * paths and explicitly reports that no UI action was attempted.
+ */
+export async function verifyImageManifestDryRun(op, images) {
+  try {
+    const manifest = await verifyPhoneImageManifest(op, images);
+    return {
+      ok: manifest.verified === true,
+      step: manifest.verified ? "image-manifest-verified" : "image-manifest-unverified",
+      stoppedBeforeAction: true,
+      manifest,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      step: "image-manifest-invalid",
+      stoppedBeforeAction: true,
+      error: String(error.message || error),
+    };
+  }
 }
 
 /** 证据截图 fail-soft：失败只记 warning，不阻断业务输入（2026-07-26 04 机并发 ENOENT）。 */
@@ -3704,7 +3727,7 @@ export async function probePage(op, { label = "probe" } = {}) {
 
 async function main() {
   const command = process.argv.find((value) => [
-    "start", "snapshot", "open-publish", "input-dry-run", "image-dry-run", "discard-dry-run",
+    "start", "snapshot", "verify-image-manifest", "open-publish", "input-dry-run", "image-dry-run", "discard-dry-run",
     "save-draft-dry-run", "publish-dry-run", "inspect-recovery", "recover-discard-dry-run", "probe",
   ].includes(value)) || "help";
   const serial = arg("--serial");
@@ -3716,6 +3739,7 @@ async function main() {
 
 node scripts/xianyu-operator.mjs --serial <serial> [--adb <adb>] start
 node scripts/xianyu-operator.mjs --serial <serial> snapshot
+node scripts/xianyu-operator.mjs --serial <serial> verify-image-manifest --images '[{{"phonePath":"/sdcard/Pictures/XianyuStaging/a.png","sha256":"..."}}]'
 node scripts/xianyu-operator.mjs --serial <serial> open-publish
 node scripts/xianyu-operator.mjs --serial <serial> input-dry-run --text <临时文本>
 node scripts/xianyu-operator.mjs --serial <serial> image-dry-run --images '[{{"phonePath":"/sdcard/Pictures/XianyuStaging/a.png","sha256":"..."}}]' --image-album XianyuStaging
@@ -3778,6 +3802,16 @@ recover-discard-dry-run 仅在严格识别 SKU 规格页后关闭并不保存，
   try {
     if (command === "start") console.log(JSON.stringify({ ok: true, focus: await startIdlefish(op) }, null, 2));
     if (command === "snapshot") console.log(JSON.stringify(await snapshot(op, "xianyu-snapshot"), null, 2));
+    if (command === "verify-image-manifest") {
+      const imagesRaw = arg("--images");
+      let images = null;
+      if (imagesRaw) {
+        try { images = JSON.parse(imagesRaw); } catch (e) {
+          throw new Error(`--images must be JSON array: ${e.message}`);
+        }
+      }
+      console.log(JSON.stringify(await verifyImageManifestDryRun(op, images), null, 2));
+    }
     if (command === "open-publish") console.log(JSON.stringify(await openPublishDryRun(op), null, 2));
     if (command === "input-dry-run") console.log(JSON.stringify(await inputDryRun(op, {
       text: arg("--text"),
