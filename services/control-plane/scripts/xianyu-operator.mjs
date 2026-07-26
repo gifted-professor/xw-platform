@@ -1130,8 +1130,8 @@ export function findSkuRecoveryClose(snapshot, { focus = null, resolution = null
   const classification = classifyXianyuPage({ semanticNodes: snapshot, focus, resolution });
   if (classification.pageType !== "sku-sheet" || classification.confidence < 0.95) return null;
   const candidates = snapshot.filter((node) => /^关闭(?:[,，\n].*)?$/.test(String(node.label || "").trim())
-    && node.className === "android.widget.Button"
-    && node.clickable === true
+    && ((node.className === "android.widget.Button" && node.clickable === true)
+      || node.className === "android.widget.ImageView")
     && Array.isArray(node.bounds)
     && node.bounds[0] >= width * 0.72
     && node.bounds[1] >= 0

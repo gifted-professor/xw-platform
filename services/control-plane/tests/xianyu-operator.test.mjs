@@ -110,9 +110,9 @@ test("SKU recovery recognizes the device-02 batch price-stock sub-sheet", () => 
   const focus = { package: "com.taobao.idlefish", activity: "SkuActivity" };
   const close = {
     label: "关闭,按钮",
-    className: "android.widget.Button",
-    clickable: true,
-    bounds: [920, 84, 1050, 174],
+    className: "android.widget.ImageView",
+    clickable: false,
+    bounds: [965, 210, 1034, 279],
   };
   const nodes = [
     { label: "设置价格和库存", bounds: [300, 80, 800, 180] },
