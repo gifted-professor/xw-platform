@@ -1866,7 +1866,7 @@ function appNumpadGeometryMatches(node, resolution = [1080, 2400]) {
   const [left, top, right, bottom] = node.bounds.map(Number);
   const nodeHeight = bottom - top;
   return left >= 0 && right <= width * 0.76
-    && top >= height * 0.6 && bottom <= height * 0.95
+    && top >= height * 0.6 && bottom <= height * 0.96
     && nodeHeight > 0 && nodeHeight <= height * 0.1;
 }
 

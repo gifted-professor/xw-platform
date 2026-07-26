@@ -250,6 +250,9 @@ test("SKU app numpad key accepts the device-02 first row just above 1500px and r
   assert.equal(findAppNumpadKey([{ ...one, bounds: [0, 1300, 270, 1478] }], "1"), null);
   assert.equal(findAppNumpadKey([{ label: "1", bounds: [0, 1490, 900, 1668] }], "1"), null);
   assert.equal(findAppNumpadKey([{ label: "小数点, .", bounds: [0, 2070, 270, 2250] }], ".")?.label, "小数点, .");
+  const device04Dot = { label: "小数点, .", className: "android.view.View", bounds: [0, 2109, 271, 2287], clickable: false };
+  assert.equal(findAppNumpadKey([device04Dot], "."), device04Dot);
+  assert.equal(findAppNumpadKey([{ ...device04Dot, bounds: [0, 2127, 271, 2305] }], "."), null);
 });
 
 test("SKU batch app numpad replacement clears stale price and stock through the in-app delete key", async () => {
