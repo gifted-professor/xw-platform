@@ -115,6 +115,24 @@ test("classifies SKU sheet and publish composer", () => {
   assert.equal(compose.safeStateVerified, false);
 });
 
+test("classifies the fresh device-02 size-spec sheet fingerprint", () => {
+  const result = classifyXianyuPage({
+    resolution,
+    focus: {
+      package: "com.taobao.idlefish",
+      activity: "com.idlefish.flutterbridge.flutterboost.boost.FishFlutterBoostTransparencyActivity",
+    },
+    elements: [
+      element("尺码", [60, 320, 240, 430]),
+      element("添加规格类型", [300, 960, 760, 1100]),
+      element("下一步 设置价格和库存", [260, 2130, 850, 2280]),
+    ],
+  });
+  assert.equal(result.pageType, "sku-sheet");
+  assert.equal(result.safeStateVerified, false);
+  assert.ok(result.confidence >= 0.9);
+});
+
 test("returns unknown for weak or conflicting evidence", () => {
   const result = classifyXianyuPage({
     resolution,
