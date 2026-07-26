@@ -10,12 +10,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 仓库性质
 
-- **不是 git 仓库**（`git rev-parse` 会报错）。源在 Mac 本目录，部署目标是 Windows。
-  真正的 git 仓库在 GPFS：`/Volumes/GPFS/.../xhs-device-agent-routing-v1-1`（scout/控制面代码）。
-  本目录的 `registry.mjs` 通过对照 SHA256 部署到 Windows，不走 git。
+- **本目录自 2026-07-27 起是独立 git 仓库**（main 分支，本地无 origin）。运行产物走 `.gitignore`（日志/截图/.bak/runtime/）。
+  routing/scout/控制面代码在另一个 GPFS 仓库：`/Volumes/GPFS/.../xhs-device-agent-routing-v1-1`。
+  `registry.mjs` 仍通过对照 SHA256 部署到 Windows（不走 git pull），commit message 里记部署 SHA 锚点。
 - **零第三方依赖**：只用 `node:http` + `node:sqlite`（Node 22.5+，Windows 上 Node 24 已验证）。
-  无 `package.json`、无 `node_modules`、无测试框架、无 lint 配置。
-- **部署在 Windows**：`C:\Users\Public\xhs-registry\`，计划任务 `XhsDeviceRegistry`，端口 17930。
+  `package.json` 只有 `npm test` / `npm run check` 两个脚本，无 node_modules。
+- **部署在 Windows**：`C:\Users\Public\xhs-registry\`，计划任务 `XhsDeviceRegistry`（AtStartup 触发），端口 17930。
   本目录是「源」，Windows 是「运行实例」。
 
 ## 常用命令
@@ -68,9 +68,17 @@ cat watchdog/state.json
   `schtasks /end /tn XhsDeviceRegistry & schtasks /run /tn XhsDeviceRegistry`（或重跑 `install-registry-task.ps1`）。
 - 重装计划任务本身：`install-registry-task.ps1`（含 token、0.0.0.0 绑定、重启策略）。
 
-## 没有「跑单测」这件事
+## 测试
 
-无测试框架。registry.mjs 的回归靠 E2E 实跑（提交作业→看审批流→看面板），验收由 Kimi/watchdog 独立做，执行者不自评。改了 registry 行为后手动验关键端点：`/api/health`、`/api/devices`、`/api/knowledge`、`/api/approvals/pending`、面板 `/`。
+`npm test`（node --test，tests/registry.test.mjs，13 个集成测试：起真实 registry 子进程 + 临时 sqlite + 假控制面）；`npm run check` 对三个 .mjs 跑 `node --check`。改 registry 行为必须先过这两个，再手动验关键端点：`/api/health`、`/api/agent-entry`、`/agent-entry.md`、`/api/approvals/pending`、面板 `/`。业务链验收仍靠 E2E 实跑，验收独立（执行者不自评）。
+
+## 鉴权模型（2026-07-27 起）
+
+- `--agent-token`：读一切 + 写知识库/身份，**不能审批**（回落旧 `--token`）。
+- `--human-token`：唯一能 `approve/deny` 的凭证；actor 由凭证推导（`human:<--human-actor>`），body 自报无效；API approve 还需 `{"confirm":"APPROVE"}`。
+- loopback 免凭证 = 只读 + 知识库/身份写，永远不含审批。
+- **不传 `--human-token` = LEGACY 模式**，行为与旧单 token 版完全一致（迁移期兼容，长期必须带 human token 跑）。
+- 审批留痕：registry.db `approval_audit` 表，`GET /api/approvals/audit?limit=` 可查。
 
 ## 架构（registry.mjs 内部分解）
 
@@ -93,7 +101,9 @@ cat watchdog/state.json
 
 | 方法 路径 | 作用 |
 |---|---|
-| GET `/` | 人机面板（HTML） |
+| GET `/` | 人机面板（SSR HTML，零 JS） |
+| GET `/api/agent-entry` | Agent 统一入口 JSON（`xhs.agent-entry.v2`：state 分层/jobStatus/blockers/protocol） |
+| GET `/agent-entry.md` | 同上 Markdown 版（curl 直读） |
 | GET `/watchdog` | watchdog 报告查看页 |
 | GET `/api/health` | 健康 |
 | GET `/api/devices` | 聚合视图（身份×控制面状态×lease） |
@@ -105,7 +115,8 @@ cat watchdog/state.json
 | POST `/api/knowledge/:id/flag-engineer` | 标记 needsEngineer（触发 watchdog） |
 | GET `/api/approvals/pending` | 待审批（读 control.db） |
 | GET `/api/approvals/recent?limit=` | 最近审批 |
-| POST `/api/approvals/:jobId/approve\|deny` | 代理到控制面（body.actor/reason） |
+| GET `/api/approvals/audit?limit=` | registry 侧审批审计记录 |
+| POST `/api/approvals/:jobId/approve\|deny` | 代理到控制面（**仅 human token**；approve 需 body.confirm="APPROVE"；actor 凭证推导） |
 
 ## watchdog（无人值守验收，本目录自管）
 

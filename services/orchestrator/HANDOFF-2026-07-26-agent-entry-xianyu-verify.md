@@ -1,5 +1,9 @@
 # 交接：Agent 入口契约 + 闲鱼 01–04 验证战役
 
+> ⚠️ **SUPERSEDED（2026-07-27 标注）**：本文头部与 §0/§3.3 的设备快照已过期（02 stock、04 图片问题后来均已解决）。
+> 真相以 **§11 与 PROGRESS.md 顶部** 为准：01/02/04 已各过一次标准 no-save 全链，03 物理断连是唯一 active blocker。
+> 实时状态一律先看 registry `GET /agent-entry.md`（xhs.agent-entry.v2），本文只当历史过程记录读。
+
 > **给接手 agent / 人**：本文是 2026-07-26 前后一轮会话的完整交接。  
 > **先读顺序**：`AGENTS.md` → 本文 → `PROGRESS.md` → 知识库 `routing-table-v1` / `routing-table-v2`。  
 > **最后更新**：2026-07-26 12:05 CST（01 已绿；02 审计恢复失败后仍隔离）  

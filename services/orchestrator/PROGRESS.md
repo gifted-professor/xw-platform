@@ -1,6 +1,6 @@
 # xhs-registry 进度
 
-> 最后更新：2026-07-26 20:39 CST（Agent 统一入口与零 JS 占用控制台已部署；当前 active blocker 为 03 物理断连）
+> 最后更新：2026-07-27（P0 安全闸与入口语义修正落地：agent-entry v2、token 拆分、审批审计、installer AtStartup、watchdog 冷却修复、本目录 git 化；01/02/04 单次全绿；当前 active blocker 仍为 03 物理断连）
 
 ## 一句话现状（北极星，所有 agent 必读）
 
@@ -19,6 +19,17 @@
 - **部署实证**：Mac/Windows `registry.mjs` SHA-256 均为 `96ed8316262ca0f883520762fd54d439c02c88a46b9de2277076ab2e6dfff012`；`XhsDeviceRegistry` 监听 PID `21968 → 22144`，`StopOnIdleEnd=false`。备份/回滚点：`C:\Users\Public\xhs-registry\backups\deploy-20260726-203924`（含代码与 registry DB/WAL/SHM 当时存在项）。
 - **线上 smoke**：新旧端点均 200；无 token 的 tailnet 请求为 401，正确 token 初始交换为 303；JSON/Markdown 均 no-store；页面无 `<script>`；当前 active blocker 仅 03、两条 02 为 resolved、pending=0。另起 Windows 临时实例断开控制面与 control.db 后 `/api/agent-entry` 仍为 200，两个 source 均明确 stale；临时实例和目录已清理。
 - **边界**：本节只证明 registry 入口/控制台已上线，不代表 P2 感知改造或任何新一轮手机业务链已验证；本轮未申请 lease、未提交设备 job、未碰 01–04 真机。03 继续等现场重插，恢复协议见 `~/handoffs/HANDOFF-from-e98a5289-xhs-registry.md`。
+
+### P0 安全闸与入口语义修正（2026-07-27）
+
+- **agent-entry 升 `xhs.agent-entry.v2`**：per-device 新增 `jobStatus`（latestJob/lastSuccess/lastFailure/**unresolvedFailure**/consecutiveSuccesses，窗口 50）与 `state` 分层（online/quarantined/leaseFree/identityKnown/identityStale/hasUnresolvedFailure/**ready**，任一输入未知则 ready=null 绝不假阳性）。旧 `recentFailure` 保留为废弃别名但语义改为 unresolvedFailure——只有发生在最后一次成功之后的失败才显示，修复「已修好的机器仍顶着旧失败」误导。Markdown 入口设备行补 online/ready/streak/unresolvedFailure，并注明 registry 观测不到 PnP/App 登录态。
+- **命令骨架修正**：入口命令改为 `node control-plane/devicectl.mjs --ssh xhs-windows ...`（cwd = Mac 上 GPFS checkout），新增 route plan / job status 骨架；devicectl 确认自带 `job status|watch|cancel`。
+- **身份 TTL 真实化**：`--identity-stale-s`（默认 900s）；identityCache 返回 ageSeconds/staleAfterSeconds，超时如实标 stale（此前只判「同步过没有」，停摆几天也显示新鲜）。
+- **审批权限拆分（关键安全闸）**：`--agent-token`（读 + 知识库/身份写）与 `--human-token`（唯一能 approve/deny）分离；loopback 免凭证不再能审批（此前 Windows 本机任何进程可无凭证批准 R2）；actor 由凭证推导为 `human:<--human-actor>`，body/表单自报作废；API approve 需 `{"confirm":"APPROVE"}`。新增 registry 侧 `approval_audit` 表与 `GET /api/approvals/audit`。**未传 `--human-token` 时为 LEGACY 模式，行为与旧版完全一致**（零中断迁移用）。
+- **installer 修复**：`install-registry-task.ps1` 此前注册的任务**没有任何触发器**（重启后 17930 不会自动拉起，全靠手动 Start）；现加 AtStartup 触发器 + Principal（S4U，失败回落 Interactive），参数化 `-AgentToken`（默认旧值，sync-feishu 零改动）/`-HumanToken`。
+- **watchdog 冷却期吞变更修复**：冷却期跳过 kimi 时不再推进 lastSha/flags（此前被抑制的 commit 永远不会被验收——22:58 那轮已实际吞掉 `8cf9e08..0686247`，state 已回拨补验收）；kimi rc≠0 也不消费变更。
+- **本目录 git 化**：`git init`（main），`.gitignore` 隔离日志/截图/.bak/runtime；首 commit `9fc0247` 记录改造前 Windows 部署 SHA `96ed8316…` 与新版 SHA 锚点。调试截图已删，旧 .bak 移入 `runtime/backups/`。
+- **测试**：13/13（node --test，新增 per-device 语义、TTL stale、human/agent/loopback 权限矩阵、LEGACY 回归、审计断言）。
 
 ### 闲鱼标准草稿链路（2026-07-26）
 
@@ -120,8 +131,9 @@
    - ~~watchdog launchd 权限~~ 已修（tmux 模式，见 watchdog 节）
 9. ~~**阻塞：闲鱼 supervisor 污染 adapter stdout（2026-07-26 Phase B）**~~ 已由 `3a430e5` 修复：进度事件走 stderr、stdout 只保留终态 JSON；01 控制面 job 已实证成功。
 10. ~~**阻塞：02 长 SKU 超时后恢复失败**~~ 恢复与 360s 硬超时均已处理，但**业务验证仍未绿**：`1684fe9` 已完成 fail-closed 安全恢复，`6a83abe` 把纯 dry-run 预算调至 720s，02 单次复验越过 360s 后于约 605.4s 落 `VERIFICATION_FAILED` 且安全恢复。`26aa9b1` 已关闭强退/整段重跑路径并补失败 step，但尚未再次碰机验证；不得把部署成功写成 2x5 业务成功。
-2. ~~编号冲突~~ 已解决（2026-07-24 20:01）：飞书 02/03 编号是 07-13 旧数据，已按 serial 锚定改正为 02=REPLACE_SERIAL_02（棕色手机）、03=REPLACE_SERIAL_03（三店），与 seed 的 07-22/07-24 实证一致
-3. `/control/v1/devices` 公开视图不含 routingProfile（排查要看 control.db 或 query-routing.mjs）
+11. ~~编号冲突~~ 已解决（2026-07-24 20:01）：飞书 02/03 编号是 07-13 旧数据，已按 serial 锚定改正为 02=REPLACE_SERIAL_02（棕色手机）、03=REPLACE_SERIAL_03（三店），与 seed 的 07-22/07-24 实证一致
+12. `/control/v1/devices` 公开视图不含 routingProfile（排查要看 control.db 或 query-routing.mjs）
+13. **watchdog 实际驱动者是临时终端循环（2026-07-27 发现）**：launchd `com.xhs.scout-watchdog` 因 macOS TCC 拒绝执行 Desktop 下脚本已被禁用（`.plist.disabled`），当前靠一个手工 `while true; do watchdog.sh; sleep 1800; done` 终端进程（s009 会话）驱动——终端一关 watchdog 就停。待办：把脚本移出 Desktop（或给 bash 授 Full Disk Access）后恢复 launchd 托管。
 
 ## 工具
 
