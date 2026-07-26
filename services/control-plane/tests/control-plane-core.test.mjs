@@ -98,6 +98,51 @@ function fixture({ capabilities, adapter }) {
   };
 }
 
+test("job result keeps bounded diagnostics and drops unrelated adapter output", async () => {
+  const diagnostic = {
+    publishCompose: true,
+    mediaCount: 0,
+    expectedCount: 2,
+    hasAddMore: false,
+    topMedia: {
+      nodeCount: 1,
+      nodes: [{ labelKind: "empty", classKind: "view", bounds: [10, 20, 30, 40], clickable: false }],
+    },
+  };
+  const adapter = {
+    id: "test",
+    async execute() {
+      return {
+        vendorCode: 0,
+        output: {
+          ok: false,
+          step: "images-unverified",
+          diagnostic,
+          privateRawLabel: "must-not-persist",
+        },
+      };
+    },
+    async verify() { return { ok: false, mode: "state" }; },
+    async restore() { return { ok: true }; },
+  };
+  const f = fixture({ capabilities: [manifest("test.diagnostic")], adapter });
+  try {
+    const submitted = f.control.submitJob({
+      idempotencyKey: "bounded-diagnostic",
+      actorId: "agent-a",
+      deviceId: f.devices[0].deviceId,
+      capabilityId: "test.diagnostic",
+      params: {},
+    }).job;
+    const terminal = await f.control.waitForJob(submitted.jobId);
+    assert.equal(terminal.status, "failed");
+    assert.deepEqual(terminal.result.output.diagnostic, diagnostic);
+    assert.equal(Object.hasOwn(terminal.result.output, "privateRawLabel"), false);
+  } finally {
+    await f.close();
+  }
+});
+
 test("different devices run concurrently while one device remains FIFO", async () => {
   const gates = [];
   const starts = [];

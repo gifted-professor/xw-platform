@@ -1689,6 +1689,49 @@ export function analyzeImageUploadState(snapshot, {
   };
 }
 
+// 失败诊断只能暴露顶部媒体区的结构，不保留原始 label，避免把描述或账号文本写入 result。
+export function summarizeImageMediaNodes(snapshot) {
+  const nodes = (snapshot || []).filter((node) => {
+    const b = node?.bounds;
+    return Array.isArray(b)
+      && b.length === 4
+      && b.every(Number.isFinite)
+      && b[1] >= 150
+      && b[3] <= 750;
+  });
+  const labelKind = (label) => {
+    const value = String(label || "");
+    if (/删除图片|鍒犻櫎鍥剧墖|^删除(?:[，,]|$)/.test(value)) return "delete";
+    if (/添加更多|添加图片|添加照片|上传|娣诲姞/.test(value)) return "add";
+    return value ? "other" : "empty";
+  };
+  const classKind = (className) => {
+    if (className === "android.widget.ImageView") return "image";
+    if (className === "android.widget.Button") return "button";
+    if (className === "android.view.View") return "view";
+    return "other";
+  };
+  return {
+    nodeCount: nodes.length,
+    nodes: nodes.slice(0, 60).map((node) => ({
+      labelKind: labelKind(node.label),
+      classKind: classKind(node.className),
+      bounds: node.bounds.map(Number),
+      clickable: node.clickable === true,
+    })),
+  };
+}
+
+function imageMediaDiagnostic(snapshot, imageState) {
+  return {
+    publishCompose: snapshot?.publishCompose === true,
+    mediaCount: Number(imageState?.mediaCount || 0),
+    expectedCount: Number(imageState?.expectedCount || 0),
+    hasAddMore: imageState?.hasAddMore === true,
+    topMedia: summarizeImageMediaNodes(snapshot?.nodes),
+  };
+}
+
 /**
  * 相册顶栏选择器：真机常见「所有文件 / 全部 / 最近项目」，或已切到目标相册名。
  * 返回 { node, alreadySelected }；alreadySelected 时跳过点选。
@@ -3099,6 +3142,7 @@ async function uploadImagesDryRun(op, images, {
         baselineImgCount: baselineMedia,
         expectedImgCount: imageState.expectedCount,
         hasAddMore: imageState.hasAddMore,
+        ...(!imageState.verified ? { diagnostic: imageMediaDiagnostic(finalSnap, imageState) } : {}),
         selectionStrategy: "resume-edit-complete",
         evidence: { final: finalShot },
       };
@@ -3144,6 +3188,7 @@ async function uploadImagesDryRun(op, images, {
           baselineImgCount: baselineMedia,
           expectedImgCount: imageState.expectedCount,
           hasAddMore: imageState.hasAddMore,
+          ...(!imageState.verified ? { diagnostic: imageMediaDiagnostic(finalSnap, imageState) } : {}),
           selectionStrategy: "resume-next-complete",
         };
       }
@@ -3292,6 +3337,7 @@ async function uploadImagesDryRun(op, images, {
       baselineImgCount: baselineMedia,
       expectedImgCount: imageState.expectedCount,
       hasAddMore: imageState.hasAddMore,
+      ...(!verified ? { diagnostic: imageMediaDiagnostic(finalSnap, imageState) } : {}),
       selectionStrategy: albumName ? "isolated-album-exact-count" : "gallery-leading-items",
       selectedAlbum,
       manifest,
@@ -3354,6 +3400,7 @@ export async function imageDryRun(op, {
     openTrace: openTrace
       ? { ok: openTrace.ok, stage: openTrace.stage, step: openTrace.step, layoutSource: openTrace.layoutSource }
       : null,
+    ...(!upload.ok && upload.diagnostic ? { diagnostic: upload.diagnostic } : {}),
     upload,
   };
 }

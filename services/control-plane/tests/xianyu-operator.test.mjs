@@ -40,11 +40,45 @@ import {
   recoverySemanticHints,
   saveLayoutProfile,
   semanticSnapshot,
+  summarizeImageMediaNodes,
   verifyImageManifestDryRun,
   replaceSkuBatchAppNumpadValue,
   skuBatchInputValue,
   shouldScrollAfterSkuValue,
 } from "../scripts/xianyu-operator.mjs";
+
+test("image media diagnostics preserve geometry but redact every raw label", () => {
+  const diagnostic = summarizeImageMediaNodes([
+    {
+      label: "用户私密描述不应落结果",
+      className: "android.view.View",
+      bounds: [60, 500, 900, 650],
+      clickable: false,
+    },
+    {
+      label: "删除图片",
+      className: "android.widget.Button",
+      bounds: [260, 180, 320, 240],
+      clickable: true,
+    },
+    {
+      label: "+添加更多",
+      className: "android.widget.ImageView",
+      bounds: [600, 200, 860, 460],
+      clickable: true,
+    },
+    {
+      label: "页面底部用户文本",
+      className: "android.view.View",
+      bounds: [60, 900, 900, 1100],
+      clickable: false,
+    },
+  ]);
+  assert.equal(diagnostic.nodeCount, 3);
+  assert.deepEqual(diagnostic.nodes.map((node) => node.labelKind), ["other", "delete", "add"]);
+  assert.deepEqual(diagnostic.nodes.map((node) => node.classKind), ["view", "button", "image"]);
+  assert.doesNotMatch(JSON.stringify(diagnostic), /用户私密描述|页面底部用户文本|删除图片|添加更多/);
+});
 
 test("image manifest preflight reads only bounded Pictures paths and reports exact SHA matches", async () => {
   const commands = [];
