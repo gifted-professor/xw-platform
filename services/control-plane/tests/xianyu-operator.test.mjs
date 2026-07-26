@@ -14,6 +14,7 @@ import {
   findHomeTab,
   findPublishEntry,
   findSellTab,
+  findSkuRecoveryClose,
   findSkuBatchEditControls,
   freightOptionTarget,
   freightRowVerified,
@@ -21,11 +22,13 @@ import {
   isBottomTabSelected,
   isEmptyDescriptionField,
   isPublishCompose,
+  isRecoverySafeMain,
   loadLayoutProfile,
   normalizeXwInputText,
   parseDisplayResolution,
   parseAllUiNodes,
   probeBottomTabs,
+  recoverDiscardDryRun,
   saveLayoutProfile,
   semanticSnapshot,
 } from "../scripts/xianyu-operator.mjs";
@@ -34,6 +37,128 @@ test("parseDisplayResolution uses the effective override size", () => {
   assert.deepEqual(parseDisplayResolution("Physical size: 1080x2400\nOverride size: 720x1600"), [720, 1600]);
   assert.deepEqual(parseDisplayResolution("Physical size: 1080x2400"), [1080, 2400]);
   assert.equal(parseDisplayResolution("size unavailable"), null);
+});
+
+const skuRecoveryNodes = [
+  { label: "设置宝贝规格", bounds: [0, 80, 1080, 180] },
+  { label: "关闭,按钮", className: "android.widget.Button", clickable: true, bounds: [920, 84, 1050, 174] },
+  { label: "添加规格类型", bounds: [40, 1500, 1040, 1600] },
+  { label: "下一步 设置价格和库存,按钮", bounds: [40, 2160, 1040, 2280] },
+];
+
+test("SKU recovery close requires a unique, classified top-right close button", () => {
+  const focus = { package: "com.taobao.idlefish", activity: "SkuActivity" };
+  assert.equal(
+    findSkuRecoveryClose(skuRecoveryNodes, { focus, resolution: [1080, 2400] }),
+    skuRecoveryNodes[1],
+  );
+  assert.equal(findSkuRecoveryClose([
+    ...skuRecoveryNodes,
+    { ...skuRecoveryNodes[1], bounds: [800, 84, 900, 174] },
+  ], { focus, resolution: [1080, 2400] }), null);
+  assert.equal(findSkuRecoveryClose([
+    { label: "关闭,按钮", className: "android.widget.Button", clickable: true, bounds: [920, 84, 1050, 174] },
+  ], { focus, resolution: [1080, 2400] }), null);
+});
+
+test("recovery safe main requires MainActivity and the complete bottom bar", () => {
+  const focus = {
+    package: "com.taobao.idlefish",
+    activity: "com.taobao.idlefish.maincontainer.activity.MainActivity",
+  };
+  assert.equal(isRecoverySafeMain({ focus, nodes: device02BottomTabs, resolution: [1080, 2400] }), true);
+  assert.equal(isRecoverySafeMain({ focus, nodes: device02BottomTabs.slice(0, 4), resolution: [1080, 2400] }), false);
+  assert.equal(isRecoverySafeMain({
+    focus,
+    nodes: [...device02BottomTabs, { label: "设置宝贝规格", bounds: [0, 80, 1080, 180] }],
+    resolution: [1080, 2400],
+  }), false);
+  assert.equal(isRecoverySafeMain({
+    focus: { ...focus, activity: "OtherActivity" },
+    nodes: device02BottomTabs,
+    resolution: [1080, 2400],
+  }), false);
+  assert.equal(isRecoverySafeMain({ focus, nodes: device02BottomTabs, resolution: null }), false);
+});
+
+function recoveryXml(nodes) {
+  const escape = (value) => String(value).replace(/&/g, "&amp;").replace(/"/g, "&quot;");
+  return `<hierarchy>${nodes.map((node) => `<node text="" content-desc="${escape(node.label)}" class="${node.className || "android.view.View"}" clickable="${node.clickable === true}" bounds="[${node.bounds[0]},${node.bounds[1]}][${node.bounds[2]},${node.bounds[3]}]" />`).join("")}</hierarchy>`;
+}
+
+test("recoverDiscardDryRun handles the explicit discard dialog and verifies safe main", async () => {
+  const discardDialog = [
+    { label: "不保存", className: "android.widget.Button", clickable: true, bounds: [42, 2143, 524, 2248] },
+    { label: "存草稿", className: "android.widget.Button", clickable: true, bounds: [556, 2143, 1038, 2248] },
+  ];
+  let state = "sku";
+  const taps = [];
+  const op = {
+    serial: "device-02",
+    transport: "gateway",
+    async shellExec(command) { return command === "wm size" ? "Physical size: 1080x2400" : ""; },
+    async currentFocus() {
+      return state === "main"
+        ? { package: "com.taobao.idlefish", activity: "com.taobao.idlefish.maincontainer.activity.MainActivity" }
+        : { package: "com.taobao.idlefish", activity: "SkuActivity" };
+    },
+    async dumpXml() {
+      return recoveryXml(state === "sku" ? skuRecoveryNodes : state === "dialog" ? discardDialog : device02BottomTabs);
+    },
+    async tap(x, y) {
+      taps.push([x, y]);
+      state = state === "sku" ? "dialog" : "main";
+    },
+    async capturePng(path) { return { path, bytes: 100, sha256: "a".repeat(64) }; },
+  };
+  const result = await recoverDiscardDryRun(op, { evidenceDir: "/tmp/xianyu-recovery-test" });
+  assert.equal(result.ok, true);
+  assert.equal(result.safeStateVerified, true);
+  assert.equal(result.savedDraft, false);
+  assert.equal(result.discard.step, "discarded-without-saving-from-recovery-dialog");
+  assert.equal(taps.length, 2);
+  assert.equal(result.evidenceFiles.some((file) => file.label === "xianyu-recovery-final"), true);
+});
+
+test("recoverDiscardDryRun performs zero taps when two fresh snapshots already show safe main", async () => {
+  let taps = 0;
+  const op = {
+    serial: "device-02",
+    transport: "gateway",
+    async shellExec() { return "Physical size: 1080x2400"; },
+    async currentFocus() {
+      return {
+        package: "com.taobao.idlefish",
+        activity: "com.taobao.idlefish.maincontainer.activity.MainActivity",
+      };
+    },
+    async dumpXml() { return recoveryXml(device02BottomTabs); },
+    async tap() { taps += 1; },
+    async capturePng(path) { return { path, bytes: 100, sha256: "c".repeat(64) }; },
+  };
+  const result = await recoverDiscardDryRun(op, { evidenceDir: "/tmp/xianyu-recovery-test" });
+  assert.equal(result.ok, true);
+  assert.equal(result.step, "already-safe-main");
+  assert.equal(result.safeStateVerified, true);
+  assert.equal(taps, 0);
+  assert.equal(result.evidenceFiles.length, 2);
+});
+
+test("recoverDiscardDryRun returns structured failure and best-effort evidence on exception", async () => {
+  const op = {
+    serial: "device-02",
+    transport: "gateway",
+    async shellExec() { return "Physical size: 1080x2400"; },
+    async currentFocus() { return { package: "com.taobao.idlefish", activity: "SkuActivity" }; },
+    async dumpXml() { throw new Error("simulated dump failure"); },
+    async capturePng(path) { return { path, bytes: 100, sha256: "b".repeat(64) }; },
+  };
+  const result = await recoverDiscardDryRun(op, { evidenceDir: "/tmp/xianyu-recovery-test" });
+  assert.equal(result.ok, false);
+  assert.equal(result.step, "exception");
+  assert.equal(result.safeStateVerified, false);
+  assert.equal(result.errorScreenshotCaptured, true);
+  assert.equal(result.evidenceFiles.length, 1);
 });
 
 // 02 号机实测（density 440, 三键导航）：底栏 y 落在 2072–2175，旧硬编码 2180/2320 会 miss。

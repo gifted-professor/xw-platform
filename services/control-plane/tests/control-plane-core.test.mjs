@@ -304,14 +304,16 @@ test("restoration failure quarantines the device", async () => {
 test("audited recovery lease restores a quarantined device exactly once", async () => {
   let restoreCalls = 0;
   let recoveryAuthorization = null;
+  let recoveryAttempt = null;
   let f;
   const adapter = {
     id: "test",
     async execute() { return { vendorCode: 0 }; },
     async verify() { return { ok: true, mode: "state" }; },
-    async restore({ device, leaseAuthorization }) {
+    async restore({ device, leaseAuthorization, recoveryAttempt: attempted }) {
       restoreCalls += 1;
       if (restoreCalls === 1) return { ok: false };
+      recoveryAttempt = attempted;
       recoveryAuthorization = f.state.authorizeLease({
         leaseId: leaseAuthorization.leaseId,
         token: leaseAuthorization.token,
@@ -353,6 +355,7 @@ test("audited recovery lease restores a quarantined device exactly once", async 
     assert.equal(recovered.reused, false);
     assert.equal(recovered.quarantineCleared, true);
     assert.equal(recoveryAuthorization.kind, "recovery");
+    assert.equal(recoveryAttempt, true);
     assert.equal(f.state.getDevice(job.deviceId).quarantined, false);
     assert.equal(f.state.listLeases().length, 0);
     assert.deepEqual(
@@ -414,6 +417,156 @@ test("failed audited recovery keeps the device quarantined", async () => {
       f.state.listJobEvents(job.jobId).some((event) => event.type === "job.recovery.failed"),
       true,
     );
+  } finally {
+    await f.close();
+  }
+});
+
+test("audited recovery cannot clear quarantine when required screenshot evidence is missing", async () => {
+  let restoreCalls = 0;
+  const adapter = {
+    id: "test",
+    async execute() { return { vendorCode: 0 }; },
+    async verify() { return { ok: true, mode: "state" }; },
+    async restore() {
+      restoreCalls += 1;
+      if (restoreCalls === 1) return { ok: false };
+      return { ok: true, safeStateVerified: true, evidenceRequired: true, evidenceFiles: [] };
+    },
+  };
+  const f = fixture({
+    capabilities: [manifest("test.restore", {
+      restoration: { required: true, description: "must restore" },
+    })],
+    adapter,
+  });
+  try {
+    const job = f.control.submitJob({
+      idempotencyKey: "restore-evidence-required",
+      actorId: "agent-a",
+      deviceId: f.devices[0].deviceId,
+      capabilityId: "test.restore",
+      params: {},
+    }).job;
+    assert.equal((await f.control.waitForJob(job.jobId)).status, "recovery_required");
+    await assert.rejects(
+      f.control.recoverJob({
+        jobId: job.jobId,
+        actorId: "recovery-agent",
+        idempotencyKey: "recover-without-evidence",
+      }),
+      (error) => error.code === "RECOVERY_FAILED"
+        && error.details?.causeCode === "RECOVERY_SCREENSHOT_MISSING",
+    );
+    assert.equal(f.state.getDevice(job.deviceId).quarantined, true);
+    assert.equal(f.state.listLeases().length, 0);
+  } finally {
+    await f.close();
+  }
+});
+
+test("visual-gated recovery requires a fresh safe analysis and a zero-action verification", async () => {
+  let restoreCalls = 0;
+  const adapter = {
+    id: "test",
+    async execute() { return { vendorCode: 0 }; },
+    async verify() { return { ok: true, mode: "state" }; },
+    async restore() {
+      restoreCalls += 1;
+      if (restoreCalls === 1) return { ok: false };
+      return {
+        ok: true,
+        safeStateVerified: true,
+        visualConfirmationRequired: true,
+        zeroActionVerified: true,
+      };
+    },
+  };
+  const f = fixture({
+    capabilities: [manifest("test.restore", {
+      restoration: { required: true, description: "must restore" },
+    })],
+    adapter,
+  });
+  try {
+    const job = f.control.submitJob({
+      idempotencyKey: "restore-visual-gate",
+      actorId: "agent-a",
+      deviceId: f.devices[0].deviceId,
+      capabilityId: "test.restore",
+      params: {},
+    }).job;
+    assert.equal((await f.control.waitForJob(job.jobId)).status, "recovery_required");
+    f.state.appendEvent({
+      jobId: job.jobId,
+      runId: job.runId,
+      type: "job.recovery.analysis.recorded",
+      payload: {
+        analysisResult: {
+          inspectionId: "inspection-test",
+          imageSha256: "d".repeat(64),
+          pageClassification: { pageType: "main-safe", safeStateVerified: true, confidence: 0.98 },
+          analysisEvidence: { evidenceId: "evidence-test" },
+        },
+      },
+    });
+    const recovered = await f.control.recoverJob({
+      jobId: job.jobId,
+      actorId: "recovery-agent",
+      idempotencyKey: "recover-with-visual-gate",
+    });
+    assert.equal(recovered.ok, true);
+    assert.equal(recovered.restoration.visualConfirmation.inspectionId, "inspection-test");
+    assert.equal(recovered.restoration.visualConfirmation.confidence, 0.98);
+    assert.equal(f.state.getDevice(job.deviceId).quarantined, false);
+  } finally {
+    await f.close();
+  }
+});
+
+test("visual-gated recovery keeps quarantine when no safe analysis exists", async () => {
+  let restoreCalls = 0;
+  const adapter = {
+    id: "test",
+    async execute() { return { vendorCode: 0 }; },
+    async verify() { return { ok: true, mode: "state" }; },
+    async restore() {
+      restoreCalls += 1;
+      if (restoreCalls === 1) return { ok: false };
+      return {
+        ok: true,
+        safeStateVerified: true,
+        visualConfirmationRequired: true,
+        zeroActionVerified: true,
+      };
+    },
+  };
+  const f = fixture({
+    capabilities: [manifest("test.restore", {
+      restoration: { required: true, description: "must restore" },
+    })],
+    adapter,
+  });
+  try {
+    const job = f.control.submitJob({
+      idempotencyKey: "restore-visual-gate-missing",
+      actorId: "agent-a",
+      deviceId: f.devices[0].deviceId,
+      capabilityId: "test.restore",
+      params: {},
+    }).job;
+    assert.equal((await f.control.waitForJob(job.jobId)).status, "recovery_required");
+    await assert.rejects(
+      f.control.recoverJob({
+        jobId: job.jobId,
+        actorId: "recovery-agent",
+        idempotencyKey: "recover-without-visual-gate",
+      }),
+      (error) => error.code === "RECOVERY_FAILED"
+        && error.details?.causeCode === "RECOVERY_VISUAL_CONFIRMATION_REQUIRED",
+    );
+    assert.equal(f.state.getDevice(job.deviceId).quarantined, true);
+    assert.equal(f.state.listLeases().length, 0);
   } finally {
     await f.close();
   }

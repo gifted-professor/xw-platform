@@ -30,7 +30,11 @@ function evidenceFiles(output) {
     if (!value || typeof value !== "object") return;
     if (typeof value.path === "string" && !seen.has(value.path)) {
       seen.add(value.path);
-      files.push({ path: value.path, kind: "screenshot", label: "xianyu" });
+      files.push({
+        path: value.path,
+        kind: value.kind || "screenshot",
+        label: value.label || "xianyu",
+      });
     }
     Object.values(value).forEach(visit);
   }
@@ -168,17 +172,41 @@ export function createXianyuAdapter({ run = runJsonCommand, operatorPath = defau
       }
       return { ok: false, ambiguous: true, mode: "custom" };
     },
-    async restore({ capability, device, execution, leaseAuthorization }) {
+    async restore({
+      capability,
+      device,
+      execution,
+      evidenceDirectory,
+      leaseAuthorization,
+      recoveryAttempt = false,
+    }) {
       if (!capability.restoration.required) return { ok: true };
       // 已存草稿则不要 discard（草稿即期望副作用）
       if (execution?.output?.savedDraft === true) return { ok: true, skipped: "already-saved-draft" };
       requireFile(operatorPath, capability.id);
       const output = await run(process.execPath, commandArgs({
         script: operatorPath,
-        action: "discard-dry-run",
+        action: recoveryAttempt ? "recover-discard-dry-run" : "discard-dry-run",
         device,
         params: {},
+        evidenceDirectory: recoveryAttempt ? evidenceDirectory : null,
       }), { cwd: root, timeoutMs: 60000, env: operatorEnv(leaseAuthorization) });
+      if (recoveryAttempt) {
+        return {
+          ok: output?.ok === true
+            && output?.safeStateVerified === true
+            && output?.savedDraft === false
+            && output?.stoppedBeforePublish === true,
+          step: output?.step || null,
+          stoppedBeforePublish: output?.stoppedBeforePublish === true,
+          savedDraft: output?.savedDraft === true,
+          safeStateVerified: output?.safeStateVerified === true,
+          evidenceRequired: true,
+          visualConfirmationRequired: true,
+          zeroActionVerified: output?.step === "already-safe-main",
+          evidenceFiles: evidenceFiles(output),
+        };
+      }
       return {
         ok: output?.ok === true && output?.savedDraft === false,
         step: output?.step || null,

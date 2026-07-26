@@ -287,7 +287,7 @@ export class ControlPlane {
       return eventId;
     };
     try {
-      appendRecoveryEvent("job.recovery.started", {
+      const recoveryStartedEventId = appendRecoveryEvent("job.recovery.started", {
         actorId: actorId.trim(),
         idempotencyKey,
         deviceId: job.deviceId,
@@ -307,12 +307,67 @@ export class ControlPlane {
         execution: null,
         verification: null,
         error: null,
+        recoveryAttempt: true,
       });
       if (heartbeatError) throw heartbeatError;
+      const attached = [];
+      for (const file of collectEvidenceFiles(restoration)) {
+        attached.push(await this.evidence.attachFile({
+          job,
+          sourcePath: file.path,
+          kind: file.kind || "adapter",
+          label: file.label,
+        }));
+      }
+      if (restoration?.evidenceRequired === true
+        && !attached.some((item) => item.kind === "screenshot")) {
+        throw new ControlPlaneError(
+          "RECOVERY_SCREENSHOT_MISSING",
+          "device recovery must attach a fresh screenshot before clearing quarantine",
+          { status: 500 },
+        );
+      }
       if (restoration?.ok !== true) {
         throw new ControlPlaneError("RESTORATION_FAILED", "adapter restoration did not verify a safe state", {
           status: 409,
         });
+      }
+      let visualConfirmation = null;
+      if (restoration?.visualConfirmationRequired === true) {
+        const events = this.state.listJobEvents(job.jobId);
+        const safeAnalysis = events.findLast((event) => event.type === "job.recovery.analysis.recorded"
+          && event.eventId < recoveryStartedEventId
+          && event.payload?.analysisResult?.pageClassification?.pageType === "main-safe"
+          && event.payload?.analysisResult?.pageClassification?.safeStateVerified === true);
+        const analysisAgeMs = safeAnalysis ? Date.now() - Date.parse(safeAnalysis.createdAt) : Infinity;
+        const interveningRecovery = safeAnalysis && events.some((event) =>
+          event.type === "job.recovery.started"
+          && event.eventId > safeAnalysis.eventId
+          && event.eventId < recoveryStartedEventId);
+        if (restoration.zeroActionVerified !== true || !safeAnalysis
+          || !Number.isFinite(analysisAgeMs) || analysisAgeMs < 0 || analysisAgeMs > 5 * 60 * 1000
+          || interveningRecovery) {
+          throw new ControlPlaneError(
+            "RECOVERY_VISUAL_CONFIRMATION_REQUIRED",
+            "fresh visual main-page confirmation and a zero-action recovery are required before clearing quarantine",
+            {
+              status: 409,
+              details: {
+                zeroActionVerified: restoration.zeroActionVerified === true,
+                safeAnalysisFound: Boolean(safeAnalysis),
+                analysisFresh: Number.isFinite(analysisAgeMs) && analysisAgeMs >= 0
+                  && analysisAgeMs <= 5 * 60 * 1000,
+                interveningRecovery: Boolean(interveningRecovery),
+              },
+            },
+          );
+        }
+        visualConfirmation = {
+          inspectionId: safeAnalysis.payload.analysisResult.inspectionId,
+          imageSha256: safeAnalysis.payload.analysisResult.imageSha256,
+          confidence: safeAnalysis.payload.analysisResult.pageClassification.confidence,
+          analysisEvidenceId: safeAnalysis.payload.analysisResult.analysisEvidence?.evidenceId || null,
+        };
       }
       clearInterval(heartbeat);
       this.state.releaseLease(lease.leaseId, lease.token);
@@ -323,7 +378,13 @@ export class ControlPlane {
         jobId: job.jobId,
         runId: job.runId,
         deviceId: job.deviceId,
-        restoration: { ok: true },
+        restoration: {
+          ok: true,
+          step: restoration.step || null,
+          safeStateVerified: restoration.safeStateVerified === true,
+          evidenceIds: attached.map((item) => item.evidenceId),
+          visualConfirmation,
+        },
         quarantineCleared: true,
       };
       const successPayload = {

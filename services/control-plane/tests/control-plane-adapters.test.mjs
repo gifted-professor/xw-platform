@@ -88,6 +88,20 @@ test("Xianyu adapter preserves stop-before-publish and discard verification", as
           observation: { pageClassification: { pageType: "unknown", confidence: 0 } },
         };
       }
+      if (args.includes("recover-discard-dry-run")) {
+        return {
+          ok: true,
+          step: "sku-sheet-discarded-to-safe-main",
+          stoppedBeforePublish: true,
+          savedDraft: false,
+          safeStateVerified: true,
+          evidenceFiles: [{
+            path: "C:\\evidence\\recovered.png",
+            kind: "screenshot",
+            label: "xianyu-recovery-final",
+          }],
+        };
+      }
       if (args.includes("discard-dry-run")) return { ok: false, step: "not-on-publish-compose", savedDraft: false };
       if (args.includes("input-dry-run")) {
         return {
@@ -137,6 +151,22 @@ test("Xianyu adapter preserves stop-before-publish and discard verification", as
   assert.equal(restoration.ok, false);
   assert.equal(restoration.step, "not-on-publish-compose");
   assert.equal(calls.some(({ args }) => args.includes("discard-dry-run")), true);
+
+  const recovery = await adapter.restore({
+    capability,
+    device: privateDevice,
+    evidenceDirectory: "C:\\evidence",
+    leaseAuthorization,
+    recoveryAttempt: true,
+  });
+  assert.equal(recovery.ok, true);
+  assert.equal(recovery.safeStateVerified, true);
+  assert.equal(recovery.evidenceRequired, true);
+  assert.equal(recovery.visualConfirmationRequired, true);
+  assert.equal(recovery.zeroActionVerified, false);
+  assert.equal(recovery.evidenceFiles[0].label, "xianyu-recovery-final");
+  assert.equal(calls.at(-1).args.includes("recover-discard-dry-run"), true);
+  assert.equal(calls.at(-1).args.includes("--evidence-dir"), true);
 
   const inspection = await adapter.inspectRecovery({
     capability,

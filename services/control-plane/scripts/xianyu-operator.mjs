@@ -1079,6 +1079,40 @@ export function parseDisplayResolution(value) {
   return [width, height];
 }
 
+export function findSkuRecoveryClose(snapshot, { focus = null, resolution = null } = {}) {
+  const width = Array.isArray(resolution) ? Number(resolution[0]) : 0;
+  const height = Array.isArray(resolution) ? Number(resolution[1]) : 0;
+  if (width <= 0 || height <= 0 || focus?.package !== IDLEFISH_PACKAGE) return null;
+  const classification = classifyXianyuPage({ semanticNodes: snapshot, focus, resolution });
+  if (classification.pageType !== "sku-sheet" || classification.confidence < 0.95) return null;
+  const candidates = snapshot.filter((node) => /^关闭(?:[,，\n].*)?$/.test(String(node.label || "").trim())
+    && node.className === "android.widget.Button"
+    && node.clickable === true
+    && Array.isArray(node.bounds)
+    && node.bounds[0] >= width * 0.72
+    && node.bounds[1] >= 0
+    && node.bounds[2] <= width
+    && node.bounds[3] <= height * 0.16);
+  return candidates.length === 1 ? candidates[0] : null;
+}
+
+export function isRecoverySafeMain({ focus = null, nodes = [], resolution = null } = {}) {
+  const height = Array.isArray(resolution) ? Number(resolution[1]) : 0;
+  if (height <= 0 || focus?.package !== IDLEFISH_PACKAGE
+    || !/MainActivity/.test(String(focus?.activity || ""))) return false;
+  const bottomLabels = nodes
+    .filter((node) => Array.isArray(node.bounds) && node.bounds[1] >= height * 0.82)
+    .map((node) => String(node.label || "").replace(/\s+/g, "").trim());
+  const has = (pattern) => bottomLabels.some((label) => pattern.test(label));
+  const completeBottomBar = has(/^(闲鱼|首页)[,，]/)
+    && has(/^卖闲置(?:$|[,，])/)
+    && has(/^消息[,，]/)
+    && has(/^我的[,，]/);
+  const allLabels = nodes.map((node) => String(node.label || "")).join("\n");
+  const unsafeMarker = /设置宝贝规格|下一步\s*设置价格和库存|不保存|存草稿/.test(allLabels);
+  return completeBottomBar && !unsafeMarker;
+}
+
 function sameFocus(left, right) {
   return Boolean(left?.package && left?.activity
     && left.package === right?.package
@@ -1141,6 +1175,140 @@ export async function inspectRecoveryPage(op, { evidenceDir = EVIDENCE_DIR_DEFAU
       },
     },
   };
+}
+
+export async function recoverDiscardDryRun(op, { evidenceDir = EVIDENCE_DIR_DEFAULT } = {}) {
+  mkdirSync(evidenceDir, { recursive: true });
+  const safeSerial = String(op.serial || "device").replace(/[^A-Za-z0-9_-]/g, "_");
+  const evidenceFiles = [];
+  const capture = async (label) => {
+    const shot = await capturePng(
+      op,
+      join(evidenceDir, `xianyu-recovery-${label}-${Date.now()}-${safeSerial}.png`),
+    );
+    evidenceFiles.push({ path: shot.path, kind: "screenshot", label: `xianyu-recovery-${label}` });
+    return shot;
+  };
+  const fail = (step, extra = {}) => ({
+    ok: false,
+    step,
+    stoppedBeforePublish: true,
+    savedDraft: false,
+    safeStateVerified: false,
+    evidenceRequired: true,
+    evidenceFiles,
+    ...extra,
+  });
+
+  try {
+    const sizeRaw = await op.shellExec("wm size", 8000).catch(() => "");
+    const resolution = parseDisplayResolution(sizeRaw);
+    if (!resolution) return fail("display-size-unavailable");
+
+    let page = await snapshot(op, "xianyu-recovery-before");
+    await capture("before");
+    if (isRecoverySafeMain({ focus: page.focus, nodes: page.nodes, resolution })) {
+      const finalPage = await snapshot(op, "xianyu-recovery-already-safe-final");
+      const finalScreenshot = await capture("final");
+      const safeStateVerified = isRecoverySafeMain({
+        focus: finalPage.focus,
+        nodes: finalPage.nodes,
+        resolution,
+      });
+      return {
+        ok: safeStateVerified,
+        step: safeStateVerified ? "already-safe-main" : "safe-main-not-stable",
+        stoppedBeforePublish: true,
+        savedDraft: false,
+        publishTapped: false,
+        safeStateVerified,
+        evidenceRequired: true,
+        evidenceFiles,
+        finalScreenshot,
+        focus: finalPage.focus,
+        resolution,
+        discard: null,
+      };
+    }
+    const close = findSkuRecoveryClose(page.nodes, { focus: page.focus, resolution });
+    if (!close?.bounds) {
+      return fail("sku-close-not-uniquely-verified", {
+        pageClassification: classifyXianyuPage({ semanticNodes: page.nodes, focus: page.focus, resolution }),
+      });
+    }
+
+    await op.tap(...center(close.bounds));
+    await settle(1000);
+    page = await snapshot(op, "xianyu-recovery-after-sku-close");
+    await capture("after-sku-close");
+
+    let discard = null;
+    const pageClassification = classifyXianyuPage({
+      semanticNodes: page.nodes,
+      focus: page.focus,
+      resolution,
+    });
+    if (pageClassification.pageType === "discard-dialog" && pageClassification.confidence >= 0.99) {
+      const discardCandidates = page.nodes.filter((node) => /^不保存$/m.test(node.label)
+        && node.className === "android.widget.Button"
+        && node.bounds?.[0] < 100 && node.bounds?.[1] >= resolution[1] * 0.82
+        && node.bounds?.[2] < resolution[0] * 0.52);
+      const discardButton = discardCandidates.length === 1 ? findDiscardWithoutSaving(page.nodes) : null;
+      if (!discardButton?.bounds) return fail("discard-button-not-uniquely-verified");
+      await op.tap(...center(discardButton.bounds));
+      await settle(1000);
+      discard = {
+        ok: true,
+        step: "discarded-without-saving-from-recovery-dialog",
+        stoppedBeforePublish: true,
+        savedDraft: false,
+      };
+    } else if (page.focus.package === IDLEFISH_PACKAGE && isPublishCompose(page.nodes)) {
+      discard = await discardDraftDryRun(op);
+      if (discard.ok !== true || discard.savedDraft !== false) {
+        return fail("compose-discard-not-verified", { discard });
+      }
+    } else if (!isRecoverySafeMain({ focus: page.focus, nodes: page.nodes, resolution })) {
+      return fail("unexpected-page-after-sku-close", {
+        focus: page.focus,
+        pageClassification,
+      });
+    }
+
+    const finalPage = await snapshot(op, "xianyu-recovery-final");
+    const finalScreenshot = await capture("final");
+    const safeStateVerified = isRecoverySafeMain({
+      focus: finalPage.focus,
+      nodes: finalPage.nodes,
+      resolution,
+    });
+    return {
+      ok: safeStateVerified,
+      step: safeStateVerified ? "sku-sheet-discarded-to-safe-main" : "safe-main-not-verified",
+      stoppedBeforePublish: true,
+      savedDraft: false,
+      publishTapped: false,
+      safeStateVerified,
+      evidenceRequired: true,
+      evidenceFiles,
+      finalScreenshot,
+      focus: finalPage.focus,
+      resolution,
+      discard,
+    };
+  } catch (error) {
+    let errorScreenshotCaptured = false;
+    try {
+      await capture("error");
+      errorScreenshotCaptured = true;
+    } catch {
+      // Evidence capture is best-effort on transport failure; quarantine remains fail-closed.
+    }
+    return fail("exception", {
+      error: { name: error?.name || "Error", message: String(error?.message || error).slice(0, 300) },
+      errorScreenshotCaptured,
+    });
+  }
 }
 
 function planFromArgv() {
@@ -3302,7 +3470,7 @@ export async function probePage(op, { label = "probe" } = {}) {
 async function main() {
   const command = process.argv.find((value) => [
     "start", "snapshot", "open-publish", "input-dry-run", "image-dry-run", "discard-dry-run",
-    "save-draft-dry-run", "publish-dry-run", "inspect-recovery", "probe",
+    "save-draft-dry-run", "publish-dry-run", "inspect-recovery", "recover-discard-dry-run", "probe",
   ].includes(value)) || "help";
   const serial = arg("--serial");
   const adbPath = arg("--adb", process.env.ADB_PATH || DEFAULT_ADB);
@@ -3318,6 +3486,7 @@ node scripts/xianyu-operator.mjs --serial <serial> input-dry-run --text <临时�
 node scripts/xianyu-operator.mjs --serial <serial> image-dry-run --images '[{{"phonePath":"/sdcard/Pictures/XianyuStaging/a.png","sha256":"..."}}]' --image-album XianyuStaging
 node scripts/xianyu-operator.mjs --serial <serial> discard-dry-run
 node scripts/xianyu-operator.mjs --serial <serial> inspect-recovery --evidence-dir <dir>
+node scripts/xianyu-operator.mjs --serial <serial> recover-discard-dry-run --evidence-dir <dir>
 node scripts/xianyu-operator.mjs --serial <serial> save-draft-dry-run
 node scripts/xianyu-operator.mjs --serial <serial> publish-dry-run --plan <plan.json>
 node scripts/xianyu-operator.mjs --serial <serial> publish-dry-run \\
@@ -3345,6 +3514,7 @@ probe：dump 当前页全部语义节点，用于校准各字段选择器（运�
 open-publish 只进入发布编辑页，绝不点击最终"发布"。
 discard-dry-run 只点击"关闭 → 不保存"，绝不点击"存草稿/发布"。
 inspect-recovery 只读取 focus/语义树并截图，不点击、不清隔离。
+recover-discard-dry-run 仅在严格识别 SKU 规格页后关闭并不保存，完整主界面指纹成立才返回成功。
 传输：--transport gateway|adb（默认 gateway）。gateway 经绿箭网关 ws://127.0.0.1:22222，
   不依赖 adb.exe——adb 枚举不到设备时用 gateway 仍可 dump/tap/输入/截图。`);
     return;
@@ -3403,6 +3573,11 @@ inspect-recovery 只读取 focus/语义树并截图，不点击、不清隔离�
     if (command === "discard-dry-run") console.log(JSON.stringify(await discardDraftDryRun(op), null, 2));
     if (command === "inspect-recovery") {
       console.log(JSON.stringify(await inspectRecoveryPage(op, {
+        evidenceDir: arg("--evidence-dir", EVIDENCE_DIR_DEFAULT),
+      }), null, 2));
+    }
+    if (command === "recover-discard-dry-run") {
+      console.log(JSON.stringify(await recoverDiscardDryRun(op, {
         evidenceDir: arg("--evidence-dir", EVIDENCE_DIR_DEFAULT),
       }), null, 2));
     }
