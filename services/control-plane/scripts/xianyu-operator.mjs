@@ -1695,6 +1695,27 @@ export function findSkuBatchEditControls(snapshot) {
 /** 应用内数字键盘键间隔（同键连按 debounce；99 连点 9 时 180–220ms 会吞键）。 */
 export const APP_NUMPAD_SETTLE_MS = 450;
 
+export function findAppNumpadKey(snapshot, value, resolution = [1080, 2400]) {
+  const width = Number(resolution?.[0] || 0);
+  const height = Number(resolution?.[1] || 0);
+  const ch = String(value ?? "");
+  if (width <= 0 || height <= 0 || !/^[0-9.]$/.test(ch)) return null;
+  const candidates = (snapshot || []).filter((node) => {
+    if (!node?.bounds) return false;
+    const label = String(node.label || "").trim();
+    const labelMatches = ch === "."
+      ? /^(?:小数点[,，]\s*\.|\.)$/.test(label)
+      : label === ch || label === `数字${ch}, ${ch}` || label.startsWith(`数字${ch},`);
+    if (!labelMatches) return false;
+    const [left, top, right, bottom] = node.bounds.map(Number);
+    const nodeHeight = bottom - top;
+    return left >= 0 && right <= width * 0.76
+      && top >= height * 0.6 && bottom <= height * 0.95
+      && nodeHeight > 0 && nodeHeight <= height * 0.1;
+  });
+  return candidates.length === 1 ? candidates[0] : null;
+}
+
 /**
  * 闲鱼应用内数字键盘输入。优先 semantics 数字键（label 为 "0"–"9"/小数点），
  * 否则回退 1080×2400 固定坐标。每键独立 settle，禁止复用陈旧 bounds。
@@ -1702,6 +1723,7 @@ export const APP_NUMPAD_SETTLE_MS = 450;
 export async function typeAppNumpadDigits(op, value, {
   settleMs = APP_NUMPAD_SETTLE_MS,
   fixedFallback = true,
+  resolution = [1080, 2400],
 } = {}) {
   const FIXED = {
     "1": [135, 1668], "2": [405, 1668], "3": [675, 1668],
@@ -1713,18 +1735,7 @@ export async function typeAppNumpadDigits(op, value, {
   for (const ch of String(value ?? "")) {
     if (!/[0-9.]/.test(ch)) continue;
     const snap = await snapshot(op, `app-numpad-${ch}`);
-    let key = (snap.nodes || []).find((n) => {
-      if (!n.bounds) return false;
-      const l = String(n.label || "").trim();
-      if (l !== ch && l !== `数字${ch}, ${ch}` && !l.startsWith(`数字${ch},`)) return false;
-      const [, t, , b] = n.bounds;
-      const h = b - t;
-      // 排除整页 EditText（label 也可能是 "0"/"10"）——键位矮且靠下
-      return t > 1500 && h < 200;
-    });
-    if (!key && ch === ".") {
-      key = (snap.nodes || []).find((n) => /小数点|^\.$/.test(String(n.label || "").trim()) && n.bounds && n.bounds[1] > 1500);
-    }
+    const key = findAppNumpadKey(snap.nodes, ch, resolution);
     if (key?.bounds) {
       await op.tap(...center(key.bounds));
       typed.push({ ch, via: "semantics", bounds: key.bounds });
@@ -1769,10 +1780,7 @@ export async function replaceSkuBatchAppNumpadValue(op, {
   value,
   resolution = [1080, 2400],
   snapshotFn = snapshot,
-  typeDigitsFn = (operator, text) => typeAppNumpadDigits(operator, text, {
-    settleMs: APP_NUMPAD_SETTLE_MS,
-    fixedFallback: false,
-  }),
+  typeDigitsFn = null,
   maxDeletes = 16,
 } = {}) {
   if (!["price", "stock"].includes(field)) {
@@ -1820,7 +1828,12 @@ export async function replaceSkuBatchAppNumpadValue(op, {
     return { ok: false, step: `${field}-clear-unverified`, field, before, afterClear, deletes };
   }
 
-  const typed = await typeDigitsFn(op, expected);
+  const inputDigits = typeDigitsFn || ((operator, text) => typeAppNumpadDigits(operator, text, {
+    settleMs: APP_NUMPAD_SETTLE_MS,
+    fixedFallback: false,
+    resolution,
+  }));
+  const typed = await inputDigits(op, expected);
   if (!typed?.ok) return { ok: false, step: `${field}-numpad-failed`, field, before, deletes, typed };
   state = await snapshotFn(op, `xianyu-sku-${field}-after-input`);
   target = targetOf(state.nodes);

@@ -19,6 +19,7 @@ import {
   findSkuExitConfirm,
   findSkuBatchEditControls,
   findAppNumpadDelete,
+  findAppNumpadKey,
   freightOptionTarget,
   freightRowVerified,
   getScreenHeight,
@@ -96,6 +97,14 @@ test("SKU batch app numpad helpers parse values and require one bounded delete k
   assert.equal(findAppNumpadDelete([{ ...deletion, label: "删除，按钮" }]), null);
   assert.equal(findAppNumpadDelete([{ ...deletion, bounds: [10, 100, 100, 200] }]), null);
   assert.equal(findAppNumpadDelete([deletion, { ...deletion, bounds: [820, 1510, 1070, 1680] }]), null);
+});
+
+test("SKU app numpad key accepts the device-02 first row just above 1500px and rejects content lookalikes", () => {
+  const one = { label: "数字1, 1", bounds: [0, 1490, 270, 1668] };
+  assert.equal(findAppNumpadKey([one], "1"), one);
+  assert.equal(findAppNumpadKey([{ ...one, bounds: [0, 1300, 270, 1478] }], "1"), null);
+  assert.equal(findAppNumpadKey([{ label: "1", bounds: [0, 1490, 900, 1668] }], "1"), null);
+  assert.equal(findAppNumpadKey([{ label: "小数点, .", bounds: [0, 2070, 270, 2250] }], ".")?.label, "小数点, .");
 });
 
 test("SKU batch app numpad replacement clears stale price and stock through the in-app delete key", async () => {
