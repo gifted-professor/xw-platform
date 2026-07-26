@@ -189,3 +189,38 @@ test("production launch assets keep retired legacy UI routes enforced", () => {
   assert.doesNotMatch(worker, /CONTROL_PLANE_LEGACY_MODE\s*=\s*"audit"/);
   assert.match(envExample, /^CONTROL_PLANE_LEGACY_MODE=enforce$/m);
 });
+
+test("router exposes job recovery without returning credentials", async () => {
+  const calls = [];
+  const router = new ControlRouter({
+    control: {
+      async recoverJob(input) {
+        calls.push(input);
+        return {
+          ok: true,
+          reused: false,
+          jobId: input.jobId,
+          runId: "run_public",
+          deviceId: "dev_public",
+          quarantineCleared: true,
+        };
+      },
+    },
+    state: {},
+    capabilities: {},
+    evidence: {},
+  });
+  const result = await router.handle({
+    method: "POST",
+    path: "/control/v1/jobs/job_recovery/recover",
+    body: { actorId: "agent-a", idempotencyKey: "recover-1" },
+  });
+  assert.equal(result.status, 200);
+  assert.deepEqual(calls, [{
+    jobId: "job_recovery",
+    actorId: "agent-a",
+    idempotencyKey: "recover-1",
+  }]);
+  assert.equal(result.body.recovery.quarantineCleared, true);
+  assert.doesNotMatch(JSON.stringify(result.body), /token|runtime/i);
+});

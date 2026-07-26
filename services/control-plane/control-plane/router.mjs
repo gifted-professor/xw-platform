@@ -137,6 +137,20 @@ export class ControlRouter {
     if (method === "POST" && match) {
       return { status: 200, body: { job: publicJob(this.control.cancelJob(decodeURIComponent(match[1]))) } };
     }
+    match = path.match(/^\/control\/v1\/jobs\/([^/]+)\/recover$/);
+    if (method === "POST" && match) {
+      const input = requireBody(body);
+      return {
+        status: 200,
+        body: {
+          recovery: await this.control.recoverJob({
+            jobId: decodeURIComponent(match[1]),
+            actorId: input.actorId,
+            idempotencyKey: input.idempotencyKey,
+          }),
+        },
+      };
+    }
 
     if (method === "POST" && path === "/control/v1/sessions") {
       return { status: 201, body: { session: this.control.createSession(requireBody(body)) } };

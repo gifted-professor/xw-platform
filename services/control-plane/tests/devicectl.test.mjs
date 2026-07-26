@@ -5,6 +5,7 @@ import {
   DEFAULT_REMOTE_REPO,
   decodeForwardedArgv,
   encodeForwardedArgv,
+  main,
   remotePowerShell,
 } from "../control-plane/devicectl.mjs";
 
@@ -41,4 +42,39 @@ test("invalid forwarded argv fails closed", () => {
     () => decodeForwardedArgv(Buffer.from(JSON.stringify({ nope: true })).toString("base64")),
     { code: "CLI_FORWARDED_ARGS_INVALID" },
   );
+});
+
+test("job recover forwards actor and idempotency key to the audited endpoint", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalLog = console.log;
+  const requests = [];
+  console.log = () => {};
+  globalThis.fetch = async (url, options) => {
+    requests.push({ url: String(url), options });
+    return new Response(JSON.stringify({ recovery: { ok: true } }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  try {
+    await main([
+      "--local",
+      "job",
+      "recover",
+      "--job",
+      "job_recovery",
+      "--actor",
+      "agent-a",
+      "--idempotency-key",
+      "recover-1",
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.log = originalLog;
+  }
+  assert.equal(new URL(requests[0].url).pathname, "/control/v1/jobs/job_recovery/recover");
+  assert.deepEqual(JSON.parse(requests[0].options.body), {
+    actorId: "agent-a",
+    idempotencyKey: "recover-1",
+  });
 });

@@ -301,6 +301,124 @@ test("restoration failure quarantines the device", async () => {
   }
 });
 
+test("audited recovery lease restores a quarantined device exactly once", async () => {
+  let restoreCalls = 0;
+  let recoveryAuthorization = null;
+  let f;
+  const adapter = {
+    id: "test",
+    async execute() { return { vendorCode: 0 }; },
+    async verify() { return { ok: true, mode: "state" }; },
+    async restore({ device, leaseAuthorization }) {
+      restoreCalls += 1;
+      if (restoreCalls === 1) return { ok: false };
+      recoveryAuthorization = f.state.authorizeLease({
+        leaseId: leaseAuthorization.leaseId,
+        token: leaseAuthorization.token,
+        deviceId: leaseAuthorization.deviceId,
+        runtimeId: device.runtimeId,
+      });
+      return { ok: true };
+    },
+  };
+  f = fixture({
+    capabilities: [manifest("test.restore", {
+      restoration: { required: true, description: "must restore" },
+    })],
+    adapter,
+  });
+  try {
+    const job = f.control.submitJob({
+      idempotencyKey: "restore-then-recover",
+      actorId: "agent-a",
+      deviceId: f.devices[0].deviceId,
+      capabilityId: "test.restore",
+      params: {},
+    }).job;
+    assert.equal((await f.control.waitForJob(job.jobId)).status, "recovery_required");
+    assert.equal(f.state.getDevice(job.deviceId).quarantined, true);
+    assert.throws(() => f.state.acquireLease({
+      deviceId: job.deviceId,
+      kind: "job",
+      holderId: "job:must-stay-blocked",
+      jobId: job.jobId,
+    }), { code: "DEVICE_QUARANTINED" });
+
+    const recovered = await f.control.recoverJob({
+      jobId: job.jobId,
+      actorId: "recovery-agent",
+      idempotencyKey: "recover-once",
+    });
+    assert.equal(recovered.ok, true);
+    assert.equal(recovered.reused, false);
+    assert.equal(recovered.quarantineCleared, true);
+    assert.equal(recoveryAuthorization.kind, "recovery");
+    assert.equal(f.state.getDevice(job.deviceId).quarantined, false);
+    assert.equal(f.state.listLeases().length, 0);
+    assert.deepEqual(
+      f.state.listJobEvents(job.jobId).filter((event) => event.type.startsWith("job.recovery.")).map((event) => event.type),
+      ["job.recovery.started", "job.recovery.succeeded"],
+    );
+
+    const replay = await f.control.recoverJob({
+      jobId: job.jobId,
+      actorId: "recovery-agent",
+      idempotencyKey: "recover-once",
+    });
+    assert.equal(replay.ok, true);
+    assert.equal(replay.reused, true);
+    assert.equal(restoreCalls, 2);
+  } finally {
+    await f.close();
+  }
+});
+
+test("failed audited recovery keeps the device quarantined", async () => {
+  let restoreCalls = 0;
+  const adapter = {
+    id: "test",
+    async execute() { return { vendorCode: 0 }; },
+    async verify() { return { ok: true, mode: "state" }; },
+    async restore() {
+      restoreCalls += 1;
+      return { ok: false };
+    },
+  };
+  const f = fixture({
+    capabilities: [manifest("test.restore", {
+      restoration: { required: true, description: "must restore" },
+    })],
+    adapter,
+  });
+  try {
+    const job = f.control.submitJob({
+      idempotencyKey: "restore-stays-failed",
+      actorId: "agent-a",
+      deviceId: f.devices[0].deviceId,
+      capabilityId: "test.restore",
+      params: {},
+    }).job;
+    assert.equal((await f.control.waitForJob(job.jobId)).status, "recovery_required");
+    await assert.rejects(
+      f.control.recoverJob({
+        jobId: job.jobId,
+        actorId: "recovery-agent",
+        idempotencyKey: "recover-fails",
+      }),
+      { code: "RECOVERY_FAILED" },
+    );
+    assert.equal(restoreCalls, 2);
+    assert.equal(f.state.getDevice(job.deviceId).quarantined, true);
+    assert.equal(f.state.listLeases().length, 0);
+    assert.equal(
+      f.state.listJobEvents(job.jobId).some((event) => event.type === "job.recovery.failed"),
+      true,
+    );
+  } finally {
+    await f.close();
+  }
+});
+
 test("E1 lab actions require an exclusive canary session and valid token", async () => {
   let executions = 0;
   const adapter = {

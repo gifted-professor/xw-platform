@@ -202,6 +202,172 @@ export class ControlPlane {
     return this.state.cancelJob(jobId);
   }
 
+  async recoverJob({ jobId, actorId, idempotencyKey }) {
+    if (typeof actorId !== "string" || actorId.trim() === "") {
+      throw new ControlPlaneError("ACTOR_REQUIRED", "actorId is required");
+    }
+    if (typeof idempotencyKey !== "string" || idempotencyKey.trim() === "") {
+      throw new ControlPlaneError("IDEMPOTENCY_KEY_REQUIRED", "idempotencyKey is required");
+    }
+    const job = this.state.requireJob(jobId);
+    const prior = this.state.listJobEvents(jobId).find((event) =>
+      ["job.recovery.succeeded", "job.recovery.failed"].includes(event.type)
+      && event.payload?.idempotencyKey === idempotencyKey);
+    if (prior?.type === "job.recovery.succeeded") {
+      return { ...prior.payload.recovery, reused: true };
+    }
+    if (prior?.type === "job.recovery.failed") {
+      throw new ControlPlaneError(
+        "RECOVERY_PREVIOUSLY_FAILED",
+        "this recovery idempotency key already failed; inspect evidence before using a new key",
+        { status: 409, details: { jobId, deviceId: job.deviceId } },
+      );
+    }
+    if (job.status !== "recovery_required") {
+      throw new ControlPlaneError("RECOVERY_NOT_REQUIRED", "job is not recovery_required", {
+        status: 409,
+        details: { jobId, status: job.status },
+      });
+    }
+    const device = this.state.requireDevice(job.deviceId, {
+      includeRuntime: true,
+      requireReady: false,
+    });
+    if (!device.online) {
+      throw new ControlPlaneError("DEVICE_OFFLINE", `${device.alias} is offline`, { status: 409 });
+    }
+    if (!device.quarantined) {
+      throw new ControlPlaneError("DEVICE_NOT_QUARANTINED", `${device.alias} is not quarantined`, {
+        status: 409,
+      });
+    }
+    const capability = this.capabilities.require(job.capabilityId);
+    const adapter = this.adapters.require(capability.implementation.adapter);
+    if (typeof adapter.restore !== "function") {
+      throw new ControlPlaneError("RECOVERY_UNAVAILABLE", "capability adapter has no restoration path", {
+        status: 409,
+      });
+    }
+
+    let lease = this.state.acquireLease({
+      deviceId: job.deviceId,
+      kind: "recovery",
+      holderId: `recovery:${actorId.trim()}`,
+      jobId: job.jobId,
+      ttlMs: this.leaseTtlMs,
+      allowQuarantined: true,
+    });
+    let heartbeatError = null;
+    const heartbeat = setInterval(() => {
+      try {
+        this.state.heartbeatLease(lease.leaseId, lease.token, this.leaseTtlMs);
+      } catch (error) {
+        heartbeatError = error;
+      }
+    }, this.leaseHeartbeatMs);
+    heartbeat.unref?.();
+    const appendRecoveryEvent = (type, payload) => {
+      const eventId = this.state.appendEvent({ jobId: job.jobId, runId: job.runId, type, payload });
+      try {
+        this.evidence.appendEvent(job.runId, {
+          type,
+          jobId: job.jobId,
+          createdAt: new Date().toISOString(),
+          ...payload,
+        });
+      } catch {
+        // SQLite is the durable audit authority; JSONL mirroring is best-effort.
+      }
+      return eventId;
+    };
+    try {
+      appendRecoveryEvent("job.recovery.started", {
+        actorId: actorId.trim(),
+        idempotencyKey,
+        deviceId: job.deviceId,
+      });
+      const restoration = await adapter.restore({
+        job,
+        capability,
+        device,
+        params: job.params,
+        evidenceDirectory: this.evidence.runDirectory(job.runId),
+        leaseAuthorization: {
+          leaseId: lease.leaseId,
+          token: lease.token,
+          deviceId: job.deviceId,
+          controlUrl: this.operatorControlUrl,
+        },
+        execution: null,
+        verification: null,
+        error: null,
+      });
+      if (heartbeatError) throw heartbeatError;
+      if (restoration?.ok !== true) {
+        throw new ControlPlaneError("RESTORATION_FAILED", "adapter restoration did not verify a safe state", {
+          status: 409,
+        });
+      }
+      clearInterval(heartbeat);
+      this.state.releaseLease(lease.leaseId, lease.token);
+      lease = null;
+      const recovery = {
+        ok: true,
+        reused: false,
+        jobId: job.jobId,
+        runId: job.runId,
+        deviceId: job.deviceId,
+        restoration: { ok: true },
+        quarantineCleared: true,
+      };
+      const successPayload = {
+        actorId: actorId.trim(),
+        idempotencyKey,
+        deviceId: job.deviceId,
+        recovery,
+      };
+      this.state.completeDeviceRecovery({
+        deviceId: job.deviceId,
+        jobId: job.jobId,
+        runId: job.runId,
+        payload: successPayload,
+      });
+      try {
+        this.evidence.appendEvent(job.runId, {
+          type: "job.recovery.succeeded",
+          jobId: job.jobId,
+          createdAt: new Date().toISOString(),
+          ...successPayload,
+        });
+      } catch {
+        // The transactional SQLite event remains authoritative.
+      }
+      return recovery;
+    } catch (error) {
+      const cause = asControlError(error, "RECOVERY_FAILED");
+      appendRecoveryEvent("job.recovery.failed", {
+        actorId: actorId.trim(),
+        idempotencyKey,
+        deviceId: job.deviceId,
+        causeCode: cause.code,
+      });
+      throw new ControlPlaneError("RECOVERY_FAILED", "device recovery did not verify a safe state", {
+        status: 409,
+        details: { jobId: job.jobId, deviceId: job.deviceId, causeCode: cause.code },
+        cause,
+      });
+    } finally {
+      clearInterval(heartbeat);
+      if (lease) {
+        try {
+          this.state.releaseLease(lease.leaseId, lease.token);
+        } catch {
+          // Lease expiry remains fail-closed; the device stays quarantined.
+        }
+      }
+    }
+  }
+
   createSession({
     actorId,
     deviceId = null,

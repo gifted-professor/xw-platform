@@ -438,6 +438,29 @@ export class StateStore {
     ).run(this.now(), deviceId);
   }
 
+  completeDeviceRecovery({ deviceId, jobId, runId, payload }) {
+    return this.transaction(() => {
+      const device = this.requireDevice(deviceId, { requireReady: false });
+      if (!device.quarantined) {
+        throw new ControlPlaneError("DEVICE_NOT_QUARANTINED", `${device.alias} is not quarantined`, {
+          status: 409,
+        });
+      }
+      const now = this.now();
+      this.db.prepare(
+        "UPDATE devices SET quarantined=0, quarantine_reason=NULL, updated_at=? WHERE device_id=?",
+      ).run(now, deviceId);
+      const eventId = this.#insertEvent({
+        jobId,
+        runId,
+        type: "job.recovery.succeeded",
+        payload,
+        createdAt: now,
+      });
+      return { eventId, device: this.getDevice(deviceId) };
+    });
+  }
+
   syncCapabilities(registry) {
     const now = this.now();
     this.transaction(() => {
@@ -796,8 +819,28 @@ export class StateStore {
     return expired.length;
   }
 
-  acquireLease({ deviceId, kind, holderId, jobId = null, ttlMs = 60000 }) {
-    this.requireDevice(deviceId);
+  acquireLease({
+    deviceId,
+    kind,
+    holderId,
+    jobId = null,
+    ttlMs = 60000,
+    allowQuarantined = false,
+  }) {
+    const device = this.requireDevice(deviceId, { requireReady: !allowQuarantined });
+    if (allowQuarantined) {
+      if (kind !== "recovery") {
+        throw new ControlPlaneError("RECOVERY_LEASE_REQUIRED", "only recovery leases may access quarantine", {
+          status: 403,
+        });
+      }
+      if (!device.online) {
+        throw new ControlPlaneError("DEVICE_OFFLINE", `${device.alias} is offline`, { status: 409 });
+      }
+      if (!device.quarantined) {
+        throw new ControlPlaneError("DEVICE_NOT_QUARANTINED", `${device.alias} is not quarantined`, { status: 409 });
+      }
+    }
     this.cleanupExpiredLeases();
     const token = newId("lease_token");
     const tokenHash = sha256(token);
@@ -868,7 +911,18 @@ export class StateStore {
         details: { leaseDeviceId: lease.deviceId, requestedDeviceId: deviceId },
       });
     }
-    const device = this.requireDevice(deviceId, { includeRuntime: true });
+    const device = this.requireDevice(deviceId, {
+      includeRuntime: true,
+      requireReady: lease.kind !== "recovery",
+    });
+    if (lease.kind === "recovery") {
+      if (!device.online) {
+        throw new ControlPlaneError("DEVICE_OFFLINE", `${device.alias} is offline`, { status: 409 });
+      }
+      if (!device.quarantined) {
+        throw new ControlPlaneError("DEVICE_NOT_QUARANTINED", `${device.alias} is not quarantined`, { status: 409 });
+      }
+    }
     if (typeof runtimeId !== "string" || runtimeId === "" || device.runtimeId !== runtimeId) {
       throw new ControlPlaneError("LEASE_RUNTIME_MISMATCH", "lease is not valid for the requested runtime", {
         status: 409,
