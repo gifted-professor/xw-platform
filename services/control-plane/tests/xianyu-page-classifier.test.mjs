@@ -148,6 +148,26 @@ test("classifies the fresh device-02 size-spec sheet fingerprint", () => {
   assert.ok(result.confidence >= 0.9);
 });
 
+test("classifies the device-02 batch price-stock sub-sheet fingerprint", () => {
+  const result = classifyXianyuPage({
+    resolution,
+    focus: {
+      package: "com.taobao.idlefish",
+      activity: "com.idlefish.flutterbridge.flutterboost.boost.FishFlutterBoostTransparencyActivity",
+    },
+    elements: [
+      element("设置价格和库存", [335, 175, 750, 285]),
+      element("选中的规格 S 蓝色 | S 白色 | M 蓝色 | M 白色", [65, 390, 1015, 650]),
+      element("价格, 价格", [65, 900, 250, 1025]),
+      element("库存, 库存", [65, 1055, 250, 1190]),
+      element("关闭,按钮", [955, 185, 1045, 280]),
+    ],
+  });
+  assert.equal(result.pageType, "sku-sheet");
+  assert.equal(result.safeStateVerified, false);
+  assert.ok(result.confidence >= 0.95);
+});
+
 test("returns unknown for weak or conflicting evidence", () => {
   const result = classifyXianyuPage({
     resolution,

@@ -95,6 +95,20 @@ export function classifyXianyuPage({
   const price = matching(entries, /(^|\s)价格($|\s)|售价/);
   const skuMarker = matching(entries, /设置宝贝规格|添加规格类型|批量设置|商品规格|销售属性|规格名称|规格值/);
   const combinedPriceStock = matching(entries, /价格.{0,12}库存|库存.{0,12}价格/);
+  const batchPriceStockTitle = matching(entries, /^设置价格和库存$/);
+  const selectedSpecs = matching(entries, /^选中的规格(?:\s|$)/);
+  const batchPriceField = matching(entries, /^价格(?:[,，\s]|$)/);
+  const batchStockField = matching(entries, /^库存(?:[,，\s]|$)/);
+  if (batchPriceStockTitle.length && selectedSpecs.length
+    && batchPriceField.length && batchStockField.length) {
+    return result(
+      "sku-sheet",
+      0.98,
+      [...batchPriceStockTitle, ...selectedSpecs, ...batchPriceField, ...batchStockField],
+      ["selected SKU combinations and batch price/stock fields are present"],
+      sourceCounts,
+    );
+  }
   if ((stock.length && price.length && skuMarker.length)
     || (skuMarker.length && combinedPriceStock.length)) {
     return result(

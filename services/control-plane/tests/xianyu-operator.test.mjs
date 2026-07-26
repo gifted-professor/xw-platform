@@ -105,6 +105,24 @@ test("SKU recovery close requires a unique, classified top-right close button", 
   ], { focus, resolution: [1080, 2400] }), null);
 });
 
+test("SKU recovery recognizes the device-02 batch price-stock sub-sheet", () => {
+  const focus = { package: "com.taobao.idlefish", activity: "SkuActivity" };
+  const close = {
+    label: "关闭,按钮",
+    className: "android.widget.Button",
+    clickable: true,
+    bounds: [920, 84, 1050, 174],
+  };
+  const nodes = [
+    { label: "设置价格和库存", bounds: [300, 80, 800, 180] },
+    close,
+    { label: "选中的规格 S 蓝色 | S 白色 | M 蓝色 | M 白色", bounds: [40, 300, 1040, 650] },
+    { label: "价格, 价格", bounds: [40, 850, 220, 980] },
+    { label: "库存, 库存", bounds: [40, 1020, 220, 1150] },
+  ];
+  assert.equal(findSkuRecoveryClose(nodes, { focus, resolution: [1080, 2400] }), close);
+});
+
 test("recovery safe main requires MainActivity and the complete bottom bar", () => {
   const focus = {
     package: "com.taobao.idlefish",
