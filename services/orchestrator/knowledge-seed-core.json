@@ -1,0 +1,99 @@
+[
+  {
+    "id": "xhs-editor-lost-after-input",
+    "app": "xhs",
+    "category": "pitfall",
+    "title": "评论编辑器中途 dismiss",
+    "content": "症状：commentOnOpenNote 在 tap 发送前 dump 发现 commentEditor(EditText) 已不存在，返回 editorLostAfterInput。某些 feed 笔记偶发触发，换笔记就穿透，非设备特异性。主因是空 EditText 上 48× KEYCODE_DEL(clearFirst) 触发 dismiss——clearFirst 必须保持默认 false。根治方向：失焦后重新 tap 占位条重开编辑器重试一次。",
+    "verifiedBy": []
+  },
+  {
+    "id": "xhs-note-comment-count-null",
+    "app": "xhs",
+    "category": "pitfall",
+    "title": "图文评论计数取错导致 verified 假阴性",
+    "content": "图文 noteCommentCount 找不到「共N条评论」header 时，绝不能 fallback 到底部条最右 numeric——那是视频 DetailFeed 的规律，图文会取到非评论值。现行规则：只信 header，取不到返回 null → countUnavailable，不发、回首页、skip 找下一篇（用户拍板）。若 countUnavailable 频发导致吞吐下降，需做滚动回 header 策略。",
+    "verifiedBy": []
+  },
+  {
+    "id": "xhs-dump-incomplete-video",
+    "app": "xhs",
+    "category": "pitfall",
+    "title": "视频自动播放是 dump 天敌",
+    "content": "uiautomator 报 could not get idle state，连 feed 内联视频预览都让 dump 失败。缓解组合：dump() 加 settleMs 预等 + idle-fail 信号检测 + 2 次重试(400→600ms)；openCard 开到 DetailFeed 先 tap center 暂停视频；feedDump 失败就小滚移出视频再重试。视频笔记评论走 NoteCommentActivity 路径可绕开。",
+    "verifiedBy": []
+  },
+  {
+    "id": "xhs-large-count-like-delta",
+    "app": "xhs",
+    "category": "pitfall",
+    "title": "大计数点赞 delta 不可验是舍入限制",
+    "content": "视频笔记 like「10万」tap 成功但 count delta 恒为 0，是平台舍入呈现限制，不是 bug。verifyCommentSent 用 verified:false/method:none 明确标注未实证，绝不撒谎。无法消除，只能靠 textScan 等次级信号。",
+    "verifiedBy": []
+  },
+  {
+    "id": "xiaowei-ws-single-instance-lock",
+    "app": "xiaowei",
+    "category": "pitfall",
+    "title": "小薇 WS 22222 单实例并发即崩",
+    "content": "4 路并发建连会把小薇 ws://127.0.0.1:22222 搞崩(停听)，只能用户在 Windows 桌面手动重启(session 0 起不来 Tauri GUI)。所有 WS 调用必须走 withXwLock 文件锁：os.tmpdir()/xw-ws-22222.lock，O_EXCL 互斥 + 30s mtime 陈旧检测 + 400-800ms 抖动退避。单实例按 devices:serial 字段路由，无需多实例。",
+    "verifiedBy": []
+  },
+  {
+    "id": "infra-persistent-vs-oneshot-shell",
+    "app": "infra",
+    "category": "pitfall",
+    "title": "持久 shell 超时毒化 vs one-shot 兜底",
+    "content": "serve 的持久 adb shell 一次慢命令(如 dumpsys window 偶发慢)就级联毒化整条通道：超时不杀 shell 会让迟到 marker 污染下一条。已修：exec 超时 _poison() 杀 shell 清 buf 自动重启 + currentFocus one-shot 兜底。排障铁律：/primitive focus 超时先别拔 USB，用 one-shot adb shell dumpsys window 验证秒回就是通道问题不是设备问题。",
+    "verifiedBy": []
+  },
+  {
+    "id": "xhs-ime-restore-after-send",
+    "app": "xhs",
+    "category": "pitfall",
+    "title": "IME 还原必须延迟到发送之后",
+    "content": "评论链路顺序必须是 selectIme(小薇)→输中文→tap 发送→selectIme(SogouIME)。若在 finally 里发送前切回 SogouIME，NoteCommentActivity 失焦关闭，sendButton dump 时编辑器没了评论丢弃。自主模式 done 不自动 restoreIme，验完务必 4 台手动切回 com.sohu.inputmethod.sogou.xiaomi/.SogouIME。",
+    "verifiedBy": []
+  },
+  {
+    "id": "infra-windows-encoding-traps",
+    "app": "infra",
+    "category": "pitfall",
+    "title": "Windows 路径/编码/stderr 连环坑",
+    "content": "①家目录 C:\\Users\\windows 10 带空格；②.PS1 命令行禁传中文和 raw JSON（cmd 吞引号、GBK 乱码污染），用 chunkpush 分块 base64 传文件 + 双端 sha256 校验；③bridge exec 的 $ErrorActionPreference=Stop 会把原生命令首条 stderr 变终止错误——远程 node 脚本禁 console.error，必要时 node --no-warnings；④node Windows stdout 中文经 bridge 捕获显示 mojibake 是假象，内存/落盘 JSON 是干净 UTF-8，校验用 bridge fetch 拉回本地读。",
+    "verifiedBy": []
+  },
+  {
+    "id": "xhs-comment-latency-target",
+    "app": "xhs",
+    "category": "unknown",
+    "title": "单条评论延迟 5-8s 目标未达",
+    "content": "现状：真评论 grok ~12s，机制地板 7.3s(scroll 3.4 + box 2.7 + input 1.2)，LLM 已优化到 0.9s。最大杠杆：复用 scrollToComments 的 dump 顺带找 commentBox，省掉 before-comment-box 的 2.5s dump → 地板可到 ~5s。IME 切换是另一大块，可考虑 bridge IME 常驻不切。--fast preset 可到 ~9s 但封号风险升，默认关。",
+    "verifiedBy": []
+  },
+  {
+    "id": "xhs-h6nn-slow-warmup",
+    "app": "xhs",
+    "scope": "device:REPLACE_SERIAL_04",
+    "category": "unknown",
+    "title": "H6NN 慢热评论量长期偏低",
+    "content": "H6NN(04 二店) editorLostAfterInput 偶发率明显高于另 3 台，评论 cumC 长期垫底（首轮前 7 loop 全撞，loop 8 才破蛋）。不是设备坏：like/favorite 正常。可能跟它停微信太久刚拉回 xhs 的状态有关，多跑几轮观察是否稳定上量。",
+    "verifiedBy": []
+  },
+  {
+    "id": "xhs-comment-cap-one-per-loop",
+    "app": "xhs",
+    "category": "recipe",
+    "title": "真评论必须 comment-cap 1",
+    "content": "task-runner --comment-cap 代码默认是 2，但每圈 2 条会触发小红书风控。跑真评论必须显式传 --comment-cap 1（每圈 1 条）。自主模式同理 cap 1。",
+    "verifiedBy": []
+  },
+  {
+    "id": "xhs-primitive-timeout-90s",
+    "app": "xhs",
+    "category": "recipe",
+    "title": "评论原语 90s 超时内绝不重试",
+    "content": "/primitive 评论链路要 15-40s，超时阈值 90s（探针 metrics/focus 是 5s）。90s 内没返回就重试评论原语会双发真评论——必须等它返回看 ok 字段。带货笔记(detailfeed)评论会 fast-fail detailfeedUnsupported，属正常 skip 不是故障。",
+    "verifiedBy": []
+  }
+]
