@@ -30,6 +30,8 @@
 - **watchdog 冷却期吞变更修复**：冷却期跳过 kimi 时不再推进 lastSha/flags（此前被抑制的 commit 永远不会被验收——22:58 那轮已实际吞掉 `8cf9e08..0686247`，state 已回拨补验收）；kimi rc≠0 也不消费变更。
 - **本目录 git 化**：`git init`（main），`.gitignore` 隔离日志/截图/.bak/runtime；首 commit `9fc0247` 记录改造前 Windows 部署 SHA `96ed8316…` 与新版 SHA 锚点。调试截图已删，旧 .bak 移入 `runtime/backups/`。
 - **测试**：13/13（node --test，新增 per-device 语义、TTL stale、human/agent/loopback 权限矩阵、LEGACY 回归、审计断言）。
+- **部署实证（2026-07-27 00:08 CST 完成切换）**：Windows registry.mjs SHA256 `780054dc65bc1d8aeb2b2198a1839f408373b262d57e367ceab350861ca1836a`（旧版备份 `backups\registry.mjs.pre-p0-20260727`）。legacy soak 通过后以 `-HumanToken` 原子重装任务：State Running、`StopOnIdleEnd=false`、**BootTrigger 已注册**（此前任务无任何触发器）。验收矩阵全过：loopback/agent token POST approve=**403**、human token 无 confirm=**400**、human token+confirm 穿透控制面（fake-job 404 如实代理）且 `approval_audit` 落行（actor=human:console 凭证推导）、`?token=<human>`=**303**、agent token 读=200、loopback 知识库读=200、sync-feishu lastIdentitySync 切换后继续推进。生产 v2 实测：01/02/04 `ready=true`/`unresolvedFailure=none`（旧失败不再误导），03 `ready=false`/`unresolved=ADAPTER_FAILED`/隔离如实。human token 在 Windows 任务参数里（`schtasks /query /tn XhsDeviceRegistry /v` 可查回）。坑：`schtasks /end` 杀不掉旧 node（22144 曾继续占 17930 服务 v1），需 netstat 定位 PID 后定点 taskkill；ssh 进 Windows 默认 PowerShell，curl JSON body 要 scp 临时文件。**未做真实重启 soak**（会打断控制面/网关/手机 serve，留待下次维护窗口顺带验证 BootTrigger 实效）。
+- **知识库留痕**：`registry-token-split-migration-20260727`（recipe，verifyMode=replay，含迁移顺序与两个坑）。
 
 ### 闲鱼标准草稿链路（2026-07-26）
 
