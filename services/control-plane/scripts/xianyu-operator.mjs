@@ -1654,23 +1654,49 @@ export function analyzeImageUploadState(snapshot, {
   picked = 0,
   publishCompose = true,
 } = {}) {
-  const topMediaNodes = (snapshot || []).filter((node) => {
+  const isAddTile = (node) => /添加|上传|娣诲姞鍥剧墖/.test(String(node?.label || ""));
+  const isLargeTopTile = (node) => {
     const b = node?.bounds;
     return !!b
       && b[1] >= 150
       && b[3] <= 750
-      && node.className === "android.widget.ImageView"
-      && node.clickable
       && b[2] - b[0] >= 180
       && b[3] - b[1] >= 180;
-  });
-  const isAddTile = (node) => /添加|上传|娣诲姞鍥剧墖/.test(String(node?.label || ""));
+  };
+  const topMediaNodes = (snapshot || []).filter((node) => isLargeTopTile(node)
+    && node.className === "android.widget.ImageView"
+    && node.clickable);
   const deleteTiles = topMediaNodes.filter((node) =>
     /删除图片|鍒犻櫎鍥剧墖/.test(String(node?.label || "")));
   // 中文语义新鲜时按「删除图片」精确计数；乱码/无 label 时退到同一顶部媒体行的方形
   // ImageView 结构计数，并排除「添加图片」tile。
-  const mediaCount = deleteTiles.length
+  const legacyMediaCount = deleteTiles.length
     || topMediaNodes.filter((node) => !isAddTile(node)).length;
+  // 04 真机的 Flutter semantics 把已选媒体暴露成同排的大 Button，而非 ImageView。
+  // 只有存在带「添加」语义的同尺寸锚点时，才把其同排、位于锚点左侧的可点击 Button
+  // 作为媒体 tile；没有 add 锚点则保持 fail-closed，避免把发布页普通按钮误计为图片。
+  const addButtonTiles = (snapshot || []).filter((node) => isLargeTopTile(node)
+    && node.className === "android.widget.Button"
+    && isAddTile(node));
+  const buttonMediaCount = addButtonTiles.reduce((best, addNode) => {
+    const [addLeft, addTop, addRight, addBottom] = addNode.bounds;
+    const addWidth = addRight - addLeft;
+    const addHeight = addBottom - addTop;
+    const count = (snapshot || []).filter((node) => {
+      const b = node?.bounds;
+      if (!isLargeTopTile(node)
+        || node.className !== "android.widget.Button"
+        || node.clickable !== true
+        || isAddTile(node)) return false;
+      return b[2] <= addLeft
+        && Math.abs(b[1] - addTop) <= 48
+        && Math.abs(b[3] - addBottom) <= 48
+        && Math.abs((b[2] - b[0]) - addWidth) <= 64
+        && Math.abs((b[3] - b[1]) - addHeight) <= 64;
+    }).length;
+    return Math.max(best, count);
+  }, 0);
+  const mediaCount = legacyMediaCount || buttonMediaCount;
   const expectedCount = Number(baselineCount || 0) + Number(picked || 0);
   const hasAddMore = (snapshot || []).some((node) =>
     !!node?.bounds

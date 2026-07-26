@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   APP_NUMPAD_SETTLE_MS,
+  analyzeImageUploadState,
   boundsClose,
   createStickyXiaoweiInputSession,
   createStepSupervisor,
@@ -46,6 +47,23 @@ import {
   skuBatchInputValue,
   shouldScrollAfterSkuValue,
 } from "../scripts/xianyu-operator.mjs";
+
+test("image upload state counts 04 button tiles only when anchored by the add tile", () => {
+  const nodes = [
+    { label: "媒体一", className: "android.widget.Button", bounds: [74, 257, 378, 561], clickable: true },
+    { label: "媒体二", className: "android.widget.Button", bounds: [388, 257, 692, 561], clickable: true },
+    { label: "添加图片", className: "android.widget.Button", bounds: [703, 257, 1007, 561], clickable: false },
+  ];
+  assert.deepEqual(analyzeImageUploadState(nodes, { picked: 2, publishCompose: true }), {
+    verified: true,
+    mediaCount: 2,
+    expectedCount: 2,
+    hasAddMore: true,
+  });
+
+  const unrelatedButtons = nodes.slice(0, 2);
+  assert.equal(analyzeImageUploadState(unrelatedButtons, { picked: 2, publishCompose: true }).mediaCount, 0);
+});
 
 test("image media diagnostics preserve geometry but redact every raw label", () => {
   const diagnostic = summarizeImageMediaNodes([
