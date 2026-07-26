@@ -605,7 +605,7 @@ export class StateStore {
         authorityNodeId,
         capability,
         placementRequest,
-        invocation: "job",
+        invocation: sessionId ? "session_action" : "job",
         canary,
         advisory: false,
       });

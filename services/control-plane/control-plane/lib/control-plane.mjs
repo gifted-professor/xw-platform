@@ -227,6 +227,14 @@ export class ControlPlane {
   }
 
   releaseSession(sessionId, token) {
+    const session = this.state.validateSession(sessionId, token);
+    if (this.activeJobs.has(session.deviceId)) {
+      throw new ControlPlaneError(
+        "SESSION_ACTION_RUNNING",
+        "cannot release a session while its action is running",
+        { status: 423, details: { sessionId } },
+      );
+    }
     return this.state.releaseSession(sessionId, token);
   }
 
@@ -252,6 +260,13 @@ export class ControlPlane {
         { status: 403 },
       );
     }
+    if (this.activeJobs.has(session.deviceId)) {
+      throw new ControlPlaneError(
+        "DEVICE_BUSY",
+        "device already has an action in progress",
+        { status: 423, details: { sessionId } },
+      );
+    }
     this.evidence.assertCapacity({ externalEffect: false });
     const created = this.state.createJob({
       idempotencyKey,
@@ -268,6 +283,13 @@ export class ControlPlane {
       externalEffect: false,
     });
     if (created.reused) {
+      if (created.job.sessionId !== sessionId) {
+        throw new ControlPlaneError(
+          "IDEMPOTENCY_CONFLICT",
+          "idempotency key belongs to a different session",
+          { status: 409, details: { jobId: created.job.jobId } },
+        );
+      }
       return {
         ...created.job,
         storage: this.evidence.storageForRun(created.job.runId),
@@ -275,10 +297,17 @@ export class ControlPlane {
     }
     const device = this.state.requireDevice(session.deviceId);
     this.evidence.initializeRun({ job: created.job, device });
-    const job = await this.#runJob(created.job, {
+    const promise = this.#runJob(created.job, {
       lease: { leaseId: session.leaseId, token },
       releaseLease: false,
+    }).finally(() => {
+      if (this.activeJobs.get(session.deviceId) === promise) {
+        this.activeJobs.delete(session.deviceId);
+      }
+      if (this.started) queueMicrotask(() => void this.pump());
     });
+    this.activeJobs.set(session.deviceId, promise);
+    const job = await promise;
     return {
       ...job,
       storage: this.evidence.storageForRun(job.runId),

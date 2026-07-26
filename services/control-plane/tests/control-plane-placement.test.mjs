@@ -282,6 +282,13 @@ test("canary-only capabilities can be auto-routed only into canary sessions", as
       actorId: "agent-a",
       capabilityId: "test.lab",
     }), { code: "CANARY_SESSION_REQUIRED", status: 403 });
+    assert.throws(() => f.state.createJob({
+      idempotencyKey: "lab-job-placement",
+      actorId: "agent-a",
+      authorityNodeId,
+      capability: f.registry.require("test.lab"),
+      canary: true,
+    }), { code: "NO_ELIGIBLE_DEVICE", status: 409 });
     session = f.control.createSession({
       actorId: "agent-a",
       capabilityId: "test.lab",

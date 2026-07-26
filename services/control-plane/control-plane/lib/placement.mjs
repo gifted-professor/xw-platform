@@ -73,7 +73,9 @@ export function normalizePlacementRequest({ deviceId = null, placement = {} } = 
 
 export function assertCapabilityRoutable(capability, { invocation = "job", canary = false } = {}) {
   const availability = capability.availability ?? "implemented";
-  const canaryRoutable = availability === "canary_only" && invocation === "session" && canary;
+  const canaryRoutable = availability === "canary_only"
+    && ["session", "session_action"].includes(invocation)
+    && canary;
   if (!ROUTABLE_AVAILABILITY.has(availability) && !canaryRoutable) {
     throw new ControlPlaneError(
       "NO_ELIGIBLE_DEVICE",
@@ -114,7 +116,8 @@ export function selectPlacement({
     if (!requiredTags.every((tag) => profile.tags.includes(tag))) return false;
     return true;
   });
-  const eligible = invocation === "session"
+  const acquiringSession = invocation === "session";
+  const eligible = acquiringSession
     ? matching.filter((candidate) => candidate.effectiveLoad === 0)
     : matching;
 
@@ -125,7 +128,7 @@ export function selectPlacement({
   ));
   const selected = eligible[0];
   if (!selected) {
-    const code = invocation === "session" && matching.length > 0 ? "DEVICE_BUSY" : "NO_ELIGIBLE_DEVICE";
+    const code = acquiringSession && matching.length > 0 ? "DEVICE_BUSY" : "NO_ELIGIBLE_DEVICE";
     throw new ControlPlaneError(
       code,
       code === "DEVICE_BUSY" ? "all eligible devices are busy" : "no device satisfies the placement request",
@@ -138,7 +141,7 @@ export function selectPlacement({
 
   return {
     mode: placementRequest.mode,
-    decision: selected.effectiveLoad > 0 ? "queue" : "dispatchable",
+    decision: selected.effectiveLoad > 0 && invocation !== "session_action" ? "queue" : "dispatchable",
     selectedNodeId: selected.nodeId,
     selectedDeviceId: selected.deviceId,
     selectedDevice: {
@@ -154,5 +157,6 @@ export function selectPlacement({
     selector: placementRequest.placement,
     assignedAt: new Date(now).toISOString(),
     advisory,
+    ...(invocation === "session_action" ? { reusesSessionLease: true } : {}),
   };
 }

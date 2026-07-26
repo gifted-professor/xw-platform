@@ -312,6 +312,7 @@ test("E1 lab actions require an exclusive canary session and valid token", async
   const lab = manifest("test.lab", {
     maturity: "E1",
     automationPolicy: { mode: "lab_only", canaryOnly: true },
+    availability: "canary_only",
   });
   const f = fixture({ capabilities: [lab], adapter });
   try {
@@ -341,9 +342,92 @@ test("E1 lab actions require an exclusive canary session and valid token", async
       params: {},
     });
     assert.equal(job.status, "succeeded");
+    assert.equal(job.routeDecision.decision, "dispatchable");
+    assert.equal(job.routeDecision.activeLease, true);
+    assert.equal(job.routeDecision.reusesSessionLease, true);
+    assert.equal(job.deviceId, session.deviceId);
+    assert.equal(executions, 1);
+    const replay = await f.control.executeSessionAction(session.sessionId, session.token, {
+      idempotencyKey: "lab-action",
+      capabilityId: lab.id,
+      params: {},
+    });
+    assert.equal(replay.jobId, job.jobId);
     assert.equal(executions, 1);
     assert.equal(f.control.releaseSession(session.sessionId, session.token).released, true);
+    const nonCanarySession = f.control.createSession({
+      actorId: "agent-b",
+      deviceId: f.devices[1].deviceId,
+    });
+    await assert.rejects(
+      f.control.executeSessionAction(nonCanarySession.sessionId, nonCanarySession.token, {
+        idempotencyKey: "lab-without-canary",
+        capabilityId: lab.id,
+        params: {},
+      }),
+      { code: "CANARY_SESSION_REQUIRED", status: 403 },
+    );
+    assert.equal(f.control.releaseSession(nonCanarySession.sessionId, nonCanarySession.token).released, true);
   } finally {
+    await f.close();
+  }
+});
+
+test("session actions are serialized per device and an active action blocks release", async () => {
+  const gate = deferred();
+  let executions = 0;
+  const adapter = {
+    id: "test",
+    async execute() {
+      executions += 1;
+      await gate.promise;
+      return { vendorCode: 0 };
+    },
+    async verify() { return { ok: true, mode: "state" }; },
+    async restore() { return { ok: true }; },
+  };
+  const lab = manifest("test.lab", {
+    maturity: "E1",
+    automationPolicy: { mode: "lab_only", canaryOnly: true },
+    availability: "canary_only",
+  });
+  const f = fixture({ capabilities: [lab], adapter });
+  let session;
+  try {
+    session = f.control.createSession({
+      actorId: "agent-a",
+      deviceId: f.devices[0].deviceId,
+      canary: true,
+    });
+    const running = f.control.executeSessionAction(session.sessionId, session.token, {
+      idempotencyKey: "lab-running",
+      capabilityId: lab.id,
+      params: {},
+    });
+    await until(() => executions === 1);
+    assert.equal(f.control.activeJobs.has(session.deviceId), true);
+    await assert.rejects(
+      f.control.executeSessionAction(session.sessionId, session.token, {
+        idempotencyKey: "lab-overlap",
+        capabilityId: lab.id,
+        params: {},
+      }),
+      { code: "DEVICE_BUSY", status: 423 },
+    );
+    assert.throws(
+      () => f.control.releaseSession(session.sessionId, session.token),
+      { code: "SESSION_ACTION_RUNNING", status: 423 },
+    );
+    gate.resolve();
+    assert.equal((await running).status, "succeeded");
+    assert.equal(f.control.activeJobs.has(session.deviceId), false);
+    assert.equal(f.control.releaseSession(session.sessionId, session.token).released, true);
+    session = null;
+  } finally {
+    gate.resolve();
+    if (session) {
+      try { f.control.releaseSession(session.sessionId, session.token); } catch {}
+    }
     await f.close();
   }
 });
