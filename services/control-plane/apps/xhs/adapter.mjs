@@ -9,14 +9,27 @@ function endpoint(device) {
   return `http://127.0.0.1:${port}/`;
 }
 
+function leaseHeaders(leaseAuthorization) {
+  if (!leaseAuthorization?.leaseId || !leaseAuthorization?.token || !leaseAuthorization?.deviceId) {
+    throw new ControlPlaneError("LEASE_CONTEXT_REQUIRED", "XHS adapter requires an active control-plane lease", {
+      status: 500,
+    });
+  }
+  return {
+    "x-control-lease-id": leaseAuthorization.leaseId,
+    "x-control-token": leaseAuthorization.token,
+    "x-control-device-id": leaseAuthorization.deviceId,
+  };
+}
+
 export function createXhsAdapter({ fetchImpl = globalThis.fetch } = {}) {
   return {
     id: "xhs",
-    async execute({ capability, device, params }) {
+    async execute({ capability, device, params, leaseAuthorization }) {
       const response = await postJson(
         endpoint(device),
         { action: capability.implementation.action, ...params },
-        { timeoutMs: capability.timeoutMs, fetchImpl },
+        { timeoutMs: capability.timeoutMs, fetchImpl, headers: leaseHeaders(leaseAuthorization) },
       );
       const result = response.result;
       // serve 外层恒为 HTTP 200 ok:true，内层 result.ok===false 才是动作被拒绝
@@ -62,15 +75,18 @@ export function createXhsAdapter({ fetchImpl = globalThis.fetch } = {}) {
       }
       return { ok: false, ambiguous: true, mode: "custom" };
     },
-    async restore({ capability, device }) {
+    async restore({ capability, device, leaseAuthorization }) {
       if (!capability.restoration.required) return { ok: true };
+      const headers = leaseHeaders(leaseAuthorization);
       const restoreIme = await postJson(endpoint(device), { action: "restoreIme" }, {
         timeoutMs: 30000,
         fetchImpl,
+        headers,
       });
       const home = await postJson(endpoint(device), { action: "backToFeed", maxBack: 5 }, {
         timeoutMs: 30000,
         fetchImpl,
+        headers,
       });
       return { ok: restoreIme.ok !== false && home.ok !== false };
     },

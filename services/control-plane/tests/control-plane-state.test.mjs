@@ -105,6 +105,42 @@ test("exclusive leases reject a second actor and validate tokens", () => {
   }
 });
 
+test("operator authorization binds a lease to both public device and private runtime", () => {
+  const root = tempRoot();
+  const { state, device } = setup(join(root, "control.db"));
+  try {
+    const lease = state.acquireLease({
+      deviceId: device.deviceId,
+      kind: "job",
+      holderId: "job:test",
+      jobId: "job:test",
+    });
+    const authorized = state.authorizeLease({
+      leaseId: lease.leaseId,
+      token: lease.token,
+      deviceId: device.deviceId,
+      runtimeId: "private-runtime-id",
+    });
+    assert.equal(authorized.deviceId, device.deviceId);
+    assert.equal(Object.hasOwn(authorized, "token"), false);
+    assert.throws(() => state.authorizeLease({
+      leaseId: lease.leaseId,
+      token: lease.token,
+      deviceId: device.deviceId,
+      runtimeId: "other-runtime",
+    }), { code: "LEASE_RUNTIME_MISMATCH", status: 409 });
+    assert.throws(() => state.authorizeLease({
+      leaseId: lease.leaseId,
+      token: "wrong-token",
+      deviceId: device.deviceId,
+      runtimeId: "private-runtime-id",
+    }), { code: "LEASE_TOKEN_INVALID", status: 403 });
+  } finally {
+    state.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("restart marks in-flight work recovery_required and quarantines its device", () => {
   const root = tempRoot();
   const path = join(root, "control.db");

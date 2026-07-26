@@ -157,6 +157,48 @@ test("different devices run concurrently while one device remains FIFO", async (
   }
 });
 
+test("adapter execution receives a device-bound lease credential without persisting the token", async () => {
+  const seen = [];
+  let f;
+  const adapter = {
+    id: "test",
+    async execute({ device, leaseAuthorization }) {
+      const authorized = f.state.authorizeLease({
+        leaseId: leaseAuthorization.leaseId,
+        token: leaseAuthorization.token,
+        deviceId: leaseAuthorization.deviceId,
+        runtimeId: device.runtimeId,
+      });
+      seen.push({ device, leaseAuthorization, authorized });
+      return { vendorCode: 0, output: { ok: true } };
+    },
+    async verify() { return { ok: true, mode: "state" }; },
+    async restore() { return { ok: true }; },
+  };
+  f = fixture({ capabilities: [manifest("test.lease-context")], adapter });
+  try {
+    const submitted = f.control.submitJob({
+      idempotencyKey: "lease-context",
+      actorId: "agent-a",
+      deviceId: f.devices[0].deviceId,
+      capabilityId: "test.lease-context",
+      params: {},
+    }).job;
+    const finished = await f.control.waitForJob(submitted.jobId);
+    assert.equal(finished.status, "succeeded");
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].leaseAuthorization.deviceId, f.devices[0].deviceId);
+    assert.equal(seen[0].authorized.deviceId, f.devices[0].deviceId);
+    assert.doesNotMatch(JSON.stringify(finished), new RegExp(seen[0].leaseAuthorization.token));
+    assert.doesNotMatch(
+      JSON.stringify(f.evidence.getManifest(submitted.runId)),
+      new RegExp(seen[0].leaseAuthorization.token),
+    );
+  } finally {
+    await f.close();
+  }
+});
+
 test("external effects wait for approval before entering the queue", async () => {
   let executions = 0;
   const adapter = {

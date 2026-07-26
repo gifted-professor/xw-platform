@@ -3,6 +3,9 @@ import { pathToFileURL } from "node:url";
 
 import { ControlPlaneError, errorBody } from "./lib/errors.mjs";
 
+export const DEFAULT_REMOTE_REPO = "C:\\Users\\Public\\xhs-routing-v1-1";
+const FORWARDED_ARGV_FLAG = "--forwarded-argv-base64";
+
 function option(argv, name, fallback = undefined) {
   const index = argv.indexOf(name);
   return index >= 0 ? argv[index + 1] : fallback;
@@ -67,24 +70,39 @@ async function requestJson(baseUrl, method, path, body) {
   return result;
 }
 
-function remotePowerShell(repo, encodedArgs, expectedHost) {
+export function encodeForwardedArgv(argv) {
+  if (!Array.isArray(argv) || argv.some((value) => typeof value !== "string")) {
+    throw new ControlPlaneError("CLI_FORWARDED_ARGS_INVALID", "forwarded arguments must be strings");
+  }
+  return Buffer.from(JSON.stringify(argv), "utf8").toString("base64");
+}
+
+export function decodeForwardedArgv(encoded) {
+  try {
+    const decoded = JSON.parse(Buffer.from(String(encoded || ""), "base64").toString("utf8"));
+    if (!Array.isArray(decoded) || decoded.some((value) => typeof value !== "string")) throw new Error("not string[]");
+    return decoded;
+  } catch {
+    throw new ControlPlaneError("CLI_FORWARDED_ARGS_INVALID", "forwarded arguments are invalid");
+  }
+}
+
+export function remotePowerShell(repo, encodedArgs, expectedHost) {
   const quote = (value) => String(value).replace(/'/g, "''");
   return [
     `$actualHost=[System.Net.Dns]::GetHostName()`,
     `if ($actualHost -ine '${quote(expectedHost)}') { throw "authority host mismatch: $actualHost" }`,
     `$repo='${quote(repo)}'`,
     `Set-Location -LiteralPath $repo`,
-    `$json=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encodedArgs}'))`,
-    `$forward=@(ConvertFrom-Json $json)`,
-    `& node 'control-plane\\devicectl.mjs' '--local' @forward`,
+    `& node 'control-plane\\devicectl.mjs' '--local' '${FORWARDED_ARGV_FLAG}' '${quote(encodedArgs)}'`,
     `exit $LASTEXITCODE`,
   ].join("; ");
 }
 
 function runRemote(argv, alias) {
-  const repo = process.env.DEVICECTL_REMOTE_REPO || "C:\\Users\\windows 10\\Desktop\\coding\\control_Test\\xhs-device-agent";
+  const repo = process.env.DEVICECTL_REMOTE_REPO || DEFAULT_REMOTE_REPO;
   const expectedHost = process.env.CONTROL_PLANE_EXPECTED_HOST || "DESKTOP-3I1EVHE";
-  const encodedArgs = Buffer.from(JSON.stringify(argv), "utf8").toString("base64");
+  const encodedArgs = encodeForwardedArgv(argv);
   return new Promise((resolve, reject) => {
     const child = spawn("ssh", [
       alias,
@@ -116,6 +134,13 @@ function help() {
 }
 
 export async function main(argv = process.argv.slice(2)) {
+  const forwardedArgv = option(argv, FORWARDED_ARGV_FLAG);
+  if (forwardedArgv !== undefined) {
+    if (!flag(argv, "--local")) {
+      throw new ControlPlaneError("CLI_FORWARDED_ARGS_INVALID", `${FORWARDED_ARGV_FLAG} is remote-internal only`);
+    }
+    argv = ["--local", ...decodeForwardedArgv(forwardedArgv)];
+  }
   const sshAlias = option(argv, "--ssh");
   if (sshAlias && !flag(argv, "--local")) {
     const forwarded = argv.filter((value, index) => value !== "--ssh" && argv[index - 1] !== "--ssh");

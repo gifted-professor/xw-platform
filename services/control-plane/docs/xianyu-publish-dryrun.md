@@ -13,26 +13,28 @@
 | 3 | 传图 | `image_dry_run`；相册 Name·count + SHA |
 | 4 | 规格 + 批量价库 | `full_dry_run` + `skuSpecs` + `calibrated.sku`：**只键入不点推荐 chip**；数字键盘键间隔 ≥450ms；右下角确定 |
 | 5 | 发货方式 | `freightTemplate: "包邮"` + `calibrated.freight`；多行块按行心点 |
-| 6 | 存草稿（可选） | `save_draft_dry_run` 或 `full_dry_run` 的 `saveDraft: true` |
+| 6 | 存草稿（独立副作用） | `full_draft_dry_run` 或 `save_draft_dry_run`；必须走控制面审批 job |
 
 ```bash
-# 整表标准草稿（校准字段全开 + 终点存草稿）
-node scripts/xianyu-operator.mjs --serial REPLACE_SERIAL_01 --transport gateway publish-dry-run \
-  --description "..." \
-  --sku-specs '{"颜色":["蓝色","紫色"],"尺码":["S","M","L","XL","2XL"]}' \
-  --sku-price 99 --sku-stock 10 \
-  --freight-template 包邮 \
-  --images '[...]' --image-album XianyuStg2 \
-  --calibrated sku,freight,image \
-  --save-draft
+# 纯整表 dry-run：不会存草稿，控制面自动 lease
+node control-plane/devicectl.mjs --ssh xhs-windows job submit \
+  --actor <agent-id> \
+  --capability xianyu.publish.full_dry_run \
+  --idempotency-key <unique-key> \
+  --params '<json>'
 
-# 仅存草稿（已在编辑页）
-node scripts/xianyu-operator.mjs --serial REPLACE_SERIAL_01 --transport gateway save-draft-dry-run
+# 完整标准草稿：会先进入 waiting_approval，批准后才保存草稿
+node control-plane/devicectl.mjs --ssh xhs-windows job submit \
+  --actor <agent-id> \
+  --capability xianyu.publish.full_draft_dry_run \
+  --idempotency-key <unique-key> \
+  --params '<json>'
 ```
 
 控制面 capability：
 
-- `xianyu.publish.full_dry_run` — 整表剧本（参数见 capabilities.json）
+- `xianyu.publish.full_dry_run` — 纯整表剧本，永不存草稿
+- `xianyu.publish.full_draft_dry_run` — 整表后存一个草稿，external_effect + approval
 - `xianyu.publish.save_draft_dry_run` — 仅存草稿
 
 **红线：** 永不点最终「发布」。存草稿会写用户草稿箱，restore 不再 discard。
@@ -57,6 +59,9 @@ Agent 执行 ≠ 死脚本：`publishDryRun` 内置 `createStepSupervisor`：
 
 ## 通用应用命令
 
+这些绿箭直调命令同样只用于有书面原因的 lab 诊断；运行前必须设置
+`XHS_ALLOW_BYPASS=1` 和 `XHS_BYPASS_REASON`，不能作为生产验收证据。
+
 ```powershell
 $env:LVJIAN_DEVICE='REPLACE_SERIAL_01'
 node scripts/greenarrow-api.mjs start-apk com.taobao.idlefish
@@ -67,6 +72,10 @@ node scripts/greenarrow-api.mjs apk-list
 `start-xhs` 保持兼容。包名必须符合 Android 包名格式，缺失或非法时 fail-closed。
 
 ## 闲鱼发布页试运行
+
+以下直调命令只保留给明确记录的离线/lab 诊断，生产验收必须改用上面的
+`devicectl job/session`。直调时缺少有效 lease 会被硬闸拒绝；实验旁路还需
+同时设置 `XHS_ALLOW_BYPASS=1` 与 `XHS_BYPASS_REASON`，且结果不计入生产验收。
 
 ```powershell
 node scripts/xianyu-operator.mjs --serial REPLACE_SERIAL_01 snapshot
@@ -90,7 +99,7 @@ node scripts/xianyu-operator.mjs --serial REPLACE_SERIAL_01 discard-dry-run
 ## 现场前置条件
 
 - 目标设备 `/status.running=false`。
-- `/agent/state.active=false`，随后使用独立 id takeover。
+- 控制面 route 可用，目标设备 lease 在 `/control/v1/leases` 可见。
 - 闲鱼包已安装。
 - 当前操作已获授权；真发布、选图、保存草稿和聊天仍需单独授权。
 

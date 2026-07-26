@@ -141,7 +141,7 @@
           "freightPrice": { "type": "number" },
           "images": { "type": "array" },
           "imageAlbum": { "type": "string" },
-          "saveDraft": { "type": "boolean" },
+          "saveDraft": { "type": "boolean", "enum": [false] },
           "calibrated": {
             "type": "object",
             "description": "二级页校准开关；标准草稿链路建议 sku/freight/image=true"
@@ -153,15 +153,15 @@
       "preconditions": [
         "PR #11 xianyu-operator implementation is present",
         "publish compose page reachable",
-        "标准草稿链路（2026-07-26）：规格值只键入不点推荐 chip；批量价库应用内数字键盘键间隔≥450ms；包邮用多行块行心点击；终点可选 saveDraft"
+        "纯 dry-run：规格值只键入不点推荐 chip；批量价库应用内数字键盘键间隔≥450ms；包邮用多行块行心点击；终点必须丢弃且不得存草稿"
       ],
       "verification": {
         "mode": "state",
-        "description": "publish-dry-run completes with stoppedBeforePublish=true; savedDraft only if saveDraft=true"
+        "description": "publish-dry-run completes with stoppedBeforePublish=true and never writes a draft"
       },
       "restoration": {
         "required": true,
-        "description": "若未 saveDraft：discard without saving。若已 saveDraft：不 discard（草稿已是期望副作用）"
+        "description": "discard without saving and return to a safe page"
       },
       "timeoutMs": 360000,
       "idempotency": "replay_safe",
@@ -176,13 +176,68 @@
     },
     {
       "schemaVersion": 1,
+      "id": "xianyu.publish.full_draft_dry_run",
+      "appId": "xianyu",
+      "packageName": "com.taobao.idlefish",
+      "versionRange": "observed",
+      "maturity": "E2",
+      "risk": "R1",
+      "resources": ["device", "transport:xiaowei:22222"],
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "description": { "type": "string" },
+          "price": { "type": "number" },
+          "skuPrice": { "type": "number" },
+          "skuStock": { "type": "string" },
+          "skuSpecs": { "type": "object" },
+          "skuReplaceExisting": { "type": "boolean" },
+          "freightTemplate": { "type": "string" },
+          "freightPrice": { "type": "number" },
+          "images": { "type": "array" },
+          "imageAlbum": { "type": "string" },
+          "saveDraft": { "type": "boolean", "enum": [true] },
+          "calibrated": {
+            "type": "object",
+            "description": "二级页校准开关；标准草稿链路建议 sku/freight/image=true"
+          }
+        },
+        "additionalProperties": true
+      },
+      "outputSchema": { "type": "object" },
+      "preconditions": [
+        "xianyu.publish.full_dry_run is implemented and calibrated",
+        "writes one user-visible draft but never taps final publish",
+        "must enter through an approved control-plane job"
+      ],
+      "verification": {
+        "mode": "state",
+        "description": "full chain completes with savedDraft=true, stoppedBeforePublish=true, and publishTapped!=true"
+      },
+      "restoration": {
+        "required": true,
+        "description": "discard on pre-save failure; once saved, retain the intended draft and do not publish"
+      },
+      "timeoutMs": 360000,
+      "idempotency": "external_effect",
+      "automationPolicy": { "mode": "approval_required" },
+      "implementation": { "adapter": "xianyu", "action": "full-draft-dry-run" },
+      "evidence": [
+        "xianyu.publish.full_dry_run",
+        "2026-07-26 save-draft close-dialog path",
+        "agent-entry-v1 lease-visible requirement"
+      ],
+      "availability": "implemented"
+    },
+    {
+      "schemaVersion": 1,
       "id": "xianyu.publish.save_draft_dry_run",
       "appId": "xianyu",
       "packageName": "com.taobao.idlefish",
       "versionRange": "observed",
       "maturity": "E2",
       "risk": "R1",
-      "resources": ["device"],
+      "resources": ["device", "transport:xiaowei:22222"],
       "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
       "outputSchema": { "type": "object" },
       "preconditions": [

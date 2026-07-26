@@ -1,3 +1,5 @@
+import { requireRecordedLabBypass } from "../control-plane/lib/operator-access.mjs";
+
 const WS_URL = "ws://127.0.0.1:22222/";
 const DEFAULT_DEVICE = "";
 
@@ -43,6 +45,7 @@ function requirePackageName(value, command) {
 
 async function main() {
   const [command = "help", ...args] = process.argv.slice(2);
+  if (command !== "help") requireRecordedLabBypass("greenarrow-api");
   const device = process.env.LVJIAN_DEVICE || DEFAULT_DEVICE;
   if (!device && !["help", "list"].includes(command)) {
     throw new Error("请先设置环境变量 LVJIAN_DEVICE");

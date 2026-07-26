@@ -3265,12 +3265,24 @@ publish-dry-run：在发布编辑页整表填写（标题/描述/价格/分类/�
 probe：dump 当前页全部语义节点，用于校准各字段选择器（运费/退货地址/SKU/图片二级页结构）。
 open-publish 只进入发布编辑页，绝不点击最终"发布"。
 discard-dry-run 只点击"关闭 → 不保存"，绝不点击"存草稿/发布"。
-传输：--transport adb|gateway（默认 adb）。gateway 经绿箭网关 ws://127.0.0.1:22222，
+传输：--transport gateway|adb（默认 gateway）。gateway 经绿箭网关 ws://127.0.0.1:22222，
   不依赖 adb.exe——adb 枚举不到设备时用 gateway 仍可 dump/tap/输入/截图。`);
     return;
   }
 
-  const transport = arg("--transport", "adb") === "gateway" ? "gateway" : "adb";
+  const transport = arg("--transport", "gateway") === "adb" ? "adb" : "gateway";
+  if (transport === "adb") {
+    const bypassReason = String(process.env.XHS_BYPASS_REASON || "").trim();
+    if (process.env.XHS_ALLOW_BYPASS !== "1" || !bypassReason) {
+      throw new Error("direct ADB transport is lab-only; use control-plane gateway job/session or set XHS_ALLOW_BYPASS=1 with XHS_BYPASS_REASON");
+    }
+    console.error(JSON.stringify({
+      event: "operator.lease-bypass",
+      source: "xianyu-operator.adb",
+      reason: bypassReason.slice(0, 200),
+      at: new Date().toISOString(),
+    }));
+  }
   const useHttpApi = process.argv.includes("--http-api");
   const deviceAlias = arg("--device-alias", "04");
   const op = transport === "gateway"

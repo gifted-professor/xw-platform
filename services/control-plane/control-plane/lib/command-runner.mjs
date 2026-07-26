@@ -89,12 +89,16 @@ export function runJsonCommand(command, args, {
   });
 }
 
-export async function postJson(url, body, { timeoutMs = 30000, fetchImpl = globalThis.fetch } = {}) {
+export async function postJson(url, body, {
+  timeoutMs = 30000,
+  fetchImpl = globalThis.fetch,
+  headers = {},
+} = {}) {
   let response;
   try {
     response = await fetchImpl(url, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...headers },
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(timeoutMs),
     });

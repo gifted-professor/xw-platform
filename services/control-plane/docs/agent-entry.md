@@ -4,6 +4,10 @@ This is the mandatory front door for every agent that needs to inspect or
 operate a phone. Do not select a private runtime ID and do not call a device,
 APP operator, port `22222`, or legacy UI route directly.
 
+The production checkout is `C:\Users\Public\xhs-routing-v1-1`. The Mac
+`devicectl --ssh` wrapper forwards arguments as opaque base64, so nested JSON
+parameters reach Windows without PowerShell reparsing.
+
 ## 1. Inspect authority
 
 Run from Mac through the configured SSH identity:
@@ -87,3 +91,38 @@ be returned by public APIs or committed to Git.
 External communication, publishing, commenting, following, deleting, login,
 payment, and account changes still require the confirmation rules in
 `AGENTS.md`. Route assignment is resource authority, not action authorization.
+
+## 6. Operator hard gate and concurrency
+
+The control plane passes a short-lived lease credential to an APP adapter. A
+gateway operator must authorize that credential against the loopback control
+plane before its first device request. Authorization is bound to all three of:
+
+- lease ID and token;
+- public control-plane device ID;
+- private runtime serial selected by the control plane.
+
+A lease for one phone cannot authorize another phone. Lease credentials remain
+in child-process environment only; do not put them in argv, JSON output,
+evidence, docs, or logs.
+
+Different agents may hold leases for different phones and their jobs may
+advance concurrently. Xiaowei port `22222` is one shared transport, so every WS
+request also uses the cross-process transport lock. This serializes only the
+short gateway request, not the whole multi-step phone job.
+
+Direct `GatewayOperator.start()` without a valid lease fails closed. The only
+lab exception requires both `XHS_ALLOW_BYPASS=1` and a non-empty
+`XHS_BYPASS_REASON`; it emits a structured audit warning and is never a valid
+production acceptance path.
+
+## 7. Dry-run versus draft side effect
+
+- `xianyu.publish.full_dry_run` never saves a draft and rejects
+  `saveDraft:true`.
+- `xianyu.publish.full_draft_dry_run` runs the full chain and saves one draft.
+  It is an `external_effect` capability and enters `waiting_approval` before it
+  may execute.
+- `xianyu.publish.save_draft_dry_run` remains the narrow save-only effect.
+
+No capability in this group may tap the final publish action.

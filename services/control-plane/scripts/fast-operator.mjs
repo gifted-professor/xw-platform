@@ -22,6 +22,7 @@ import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 import { acquireTransportLock } from "../control-plane/lib/xiaowei-transport.mjs";
+import { ControlPlaneError } from "../control-plane/lib/errors.mjs";
 
 // 跨进程文件锁串行化小薇 WS 访问：xiaowei 单实例 WS accept 串行，多设备并发建连会持续 connection failed
 // （非瞬时，retry 无效）。4 个 task-runner 进程抢同一 lock 文件，O_EXCL 互斥，每次只 1 路连 22222。
@@ -1340,6 +1341,15 @@ function arg(name, fallback) {
 }
 
 async function demoScroll(N) {
+  const bypassReason = String(process.env.XHS_BYPASS_REASON || "").trim();
+  if (process.env.XHS_ALLOW_BYPASS !== "1" || !bypassReason) {
+    throw new ControlPlaneError(
+      "CONTROL_LEASE_REQUIRED",
+      "direct demo-scroll is lab-only and requires XHS_ALLOW_BYPASS=1 plus XHS_BYPASS_REASON",
+      { status: 423 },
+    );
+  }
+  console.error(JSON.stringify({ event: "operator.lease-bypass", source: "fast-operator.demo-scroll", reason: bypassReason.slice(0, 200), at: new Date().toISOString() }));
   const adb = arg("--adb");
   const serial = arg("--serial");
   if (!adb || !serial) throw new Error("usage: --adb <path> --serial <serial> demo-scroll <N>");
@@ -1354,6 +1364,54 @@ async function demoScroll(N) {
   }
   console.log(JSON.stringify({ phase: "done", totalMs: Date.now() - t0, perScrollMs: Math.round((Date.now() - t0) / N), metrics: op.metricsSummary() }));
   await op.close();
+}
+
+export async function authorizeServeRequest({
+  headers = {},
+  runtimeId,
+  fetchImpl = globalThis.fetch,
+  env = process.env,
+} = {}) {
+  const leaseId = headers["x-control-lease-id"];
+  const token = headers["x-control-token"];
+  const deviceId = headers["x-control-device-id"];
+  if (!leaseId || !token || !deviceId) {
+    const bypassReason = String(env.XHS_BYPASS_REASON || "").trim();
+    if (env.XHS_ALLOW_BYPASS === "1" && bypassReason) {
+      console.error(JSON.stringify({ event: "operator.lease-bypass", source: "fast-operator.serve", reason: bypassReason.slice(0, 200), at: new Date().toISOString() }));
+      return { authorized: true, bypass: true };
+    }
+    throw new ControlPlaneError("CONTROL_LEASE_REQUIRED", "fast-operator request requires an active control-plane lease", {
+      status: 423,
+    });
+  }
+  let response;
+  try {
+    response = await fetchImpl(new URL(
+      "/control/v1/leases/authorize",
+      env.XHS_OPERATOR_CONTROL_URL || "http://127.0.0.1:17920",
+    ), {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-control-token": token },
+      body: JSON.stringify({ leaseId, deviceId, runtimeId }),
+      signal: AbortSignal.timeout(5000),
+    });
+  } catch (error) {
+    throw new ControlPlaneError("CONTROL_LEASE_AUTH_UNAVAILABLE", "unable to authorize fast-operator lease", {
+      status: 503,
+      cause: error,
+    });
+  }
+  let result;
+  try { result = await response.json(); } catch { result = null; }
+  if (!response.ok || result?.authorized !== true) {
+    throw new ControlPlaneError(
+      result?.error?.code || "CONTROL_LEASE_REJECTED",
+      result?.error?.message || "fast-operator lease was rejected",
+      { status: response.status || 403, details: result?.error?.details || {} },
+    );
+  }
+  return result;
 }
 
 function applyCommentFlags(opP) {
@@ -1384,15 +1442,24 @@ function serve(port) {
   const adb = arg("--adb");
   const serial = arg("--serial");
   if (!adb || !serial) throw new Error("usage: --adb <path> --serial <serial> serve [--port N]");
-  const opP = applyCommentFlags(new FastOperator({ adbPath: adb, serial }).start());
+  // Do not open an ADB session while the serve is merely listening. The first
+  // authorized request starts the shared operator; rejected requests must not
+  // touch the device as a side effect of metrics/error reporting.
+  let opP = null;
+  const getOp = () => {
+    if (!opP) opP = applyCommentFlags(new FastOperator({ adbPath: adb, serial }).start());
+    return opP;
+  };
   const server = createServer(async (req, res) => {
     if (req.method !== "POST") { res.writeHead(405); return res.end("405"); }
     let body = "";
     for await (const c of req) body += c;
     let q;
     try { q = JSON.parse(body || "{}"); } catch { res.writeHead(400); return res.end("bad json"); }
-    const op = await opP;
+    let op = null;
     try {
+      await authorizeServeRequest({ headers: req.headers, runtimeId: serial });
+      op = await getOp();
       let out;
       switch (q.action) {
         case "focus": out = await op.currentFocus(); break;
@@ -1515,8 +1582,10 @@ function serve(port) {
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ ok: true, result: out, metrics: op.metricsSummary() }));
     } catch (e) {
-      res.writeHead(500, { "content-type": "application/json" });
-      res.end(JSON.stringify({ ok: false, error: e.message, metrics: op.metricsSummary() }));
+      let metrics = {};
+      try { metrics = op?.metricsSummary?.() || {}; } catch {}
+      res.writeHead(e?.status || 500, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: false, error: { code: e?.code || "OPERATOR_ERROR", message: e.message }, metrics }));
     }
   });
   server.listen(port, "127.0.0.1", () => console.log(JSON.stringify({ phase: "serving", port, serial })));

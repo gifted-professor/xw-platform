@@ -7,6 +7,21 @@ import { ControlPlaneError } from "../../control-plane/lib/errors.mjs";
 const root = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 const defaultScript = join(root, "scripts", "xianyu-operator.mjs");
 
+function operatorEnv(leaseAuthorization) {
+  if (!leaseAuthorization?.leaseId || !leaseAuthorization?.token || !leaseAuthorization?.deviceId) {
+    throw new ControlPlaneError("LEASE_CONTEXT_REQUIRED", "Xianyu adapter requires an active control-plane lease", {
+      status: 500,
+    });
+  }
+  return {
+    ...process.env,
+    XHS_OPERATOR_LEASE_ID: leaseAuthorization.leaseId,
+    XHS_OPERATOR_LEASE_TOKEN: leaseAuthorization.token,
+    XHS_OPERATOR_DEVICE_ID: leaseAuthorization.deviceId,
+    XHS_OPERATOR_CONTROL_URL: leaseAuthorization.controlUrl || "http://127.0.0.1:17920",
+  };
+}
+
 function evidenceFiles(output) {
   const files = [];
   const seen = new Set();
@@ -28,7 +43,7 @@ function commandArgs({ script, action, device, params }) {
     throw new ControlPlaneError("DEVICE_RUNTIME_ID_MISSING", "Xianyu adapter needs a private runtime ID", { status: 503 });
   }
   // Map capability action name to operator CLI command.
-  const command = action === "full-dry-run" ? "publish-dry-run"
+  const command = ["full-dry-run", "full-draft-dry-run"].includes(action) ? "publish-dry-run"
     : action === "image-dry-run" ? "image-dry-run"
       : action === "save-draft-dry-run" ? "save-draft-dry-run"
         : action;
@@ -52,7 +67,7 @@ function commandArgs({ script, action, device, params }) {
   if (params.imageAlbum !== undefined) args.push("--image-album", String(params.imageAlbum));
   if (params.maxImages !== undefined) args.push("--max-images", String(params.maxImages));
   if (params.attributes !== undefined) args.push("--attributes", JSON.stringify(params.attributes));
-  if (params.saveDraft === true) args.push("--save-draft");
+  if (action === "full-draft-dry-run" || params.saveDraft === true) args.push("--save-draft");
   // calibrated: true | "all" | "image" | "sku,freight,image" | { sku:true, freight:true, ... }
   if (params.calibrated === true || params.calibrated === "all") {
     if (command === "publish-dry-run") args.push("--calibrated", "all");
@@ -81,14 +96,14 @@ function commandArgs({ script, action, device, params }) {
 export function createXianyuAdapter({ run = runJsonCommand, operatorPath = defaultScript } = {}) {
   return {
     id: "xianyu",
-    async execute({ capability, device, params }) {
+    async execute({ capability, device, params, leaseAuthorization }) {
       requireFile(operatorPath, capability.id);
       const output = await run(process.execPath, commandArgs({
         script: operatorPath,
         action: capability.implementation.action,
         device,
         params,
-      }), { cwd: root, timeoutMs: capability.timeoutMs });
+      }), { cwd: root, timeoutMs: capability.timeoutMs, env: operatorEnv(leaseAuthorization) });
       return { vendorCode: 0, output, evidenceFiles: evidenceFiles(output) };
     },
     async verify({ capability, execution }) {
@@ -123,13 +138,21 @@ export function createXianyuAdapter({ run = runJsonCommand, operatorPath = defau
         };
       }
       if (capability.implementation.action === "full-dry-run") {
-        // 默认不存草稿；若跑了 saveDraft 步骤则要求 savedDraft=true
-        const draftStep = output?.steps?.saveDraft;
-        const draftOk = draftStep
-          ? (output?.savedDraft === true && draftStep.ok === true)
-          : output?.savedDraft !== true;
         return {
-          ok: output?.ok === true && output?.stoppedBeforePublish === true && draftOk,
+          ok: output?.ok === true
+            && output?.stoppedBeforePublish === true
+            && output?.savedDraft !== true
+            && !output?.steps?.saveDraft,
+          mode: "state",
+        };
+      }
+      if (capability.implementation.action === "full-draft-dry-run") {
+        return {
+          ok: output?.ok === true
+            && output?.stoppedBeforePublish === true
+            && output?.savedDraft === true
+            && output?.steps?.saveDraft?.ok === true
+            && output?.publishTapped !== true,
           mode: "state",
         };
       }
@@ -144,7 +167,7 @@ export function createXianyuAdapter({ run = runJsonCommand, operatorPath = defau
       }
       return { ok: false, ambiguous: true, mode: "custom" };
     },
-    async restore({ capability, device, execution }) {
+    async restore({ capability, device, execution, leaseAuthorization }) {
       if (!capability.restoration.required) return { ok: true };
       // 已存草稿则不要 discard（草稿即期望副作用）
       if (execution?.output?.savedDraft === true) return { ok: true, skipped: "already-saved-draft" };
@@ -154,7 +177,7 @@ export function createXianyuAdapter({ run = runJsonCommand, operatorPath = defau
         action: "discard-dry-run",
         device,
         params: {},
-      }), { cwd: root, timeoutMs: 60000 });
+      }), { cwd: root, timeoutMs: 60000, env: operatorEnv(leaseAuthorization) });
       return { ok: output?.ok === true && output?.savedDraft === false };
     },
   };

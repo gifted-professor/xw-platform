@@ -22,7 +22,7 @@ export function createVisionAdapter({
 } = {}) {
   return {
     id: "vision",
-    async execute({ capability, device, params }) {
+    async execute({ capability, device, params, leaseAuthorization }) {
       if (capability.implementation.action !== "resolve-tap-dry-run") {
         throw new ControlPlaneError("VISION_ACTION_UNKNOWN", `unknown action ${capability.implementation.action}`, { status: 400 });
       }
@@ -60,7 +60,7 @@ export function createVisionAdapter({
         }
         const { GatewayOperator } = await import(pathToFileURL(join(root, "scripts/gateway-operator.mjs")).href);
         const GO = GatewayOperatorClass || GatewayOperator;
-        op = await new GO({ serial: device.runtimeId }).start();
+        op = await new GO({ serial: device.runtimeId, leaseAuthorization }).start();
         try {
           const { snapshot, center } = await import(pathToFileURL(join(root, "scripts/xianyu-operator.mjs")).href);
           const snap = await snapshot(op, "vision-resolve");
@@ -172,7 +172,7 @@ export function createVisionAdapter({
         }
         const { GatewayOperator } = await import(pathToFileURL(join(root, "scripts/gateway-operator.mjs")).href);
         const GO = GatewayOperatorClass || GatewayOperator;
-        op = await new GO({ serial: device.runtimeId }).start();
+        op = await new GO({ serial: device.runtimeId, leaseAuthorization }).start();
         try {
           const [x, y] = resolved.target.center;
           await op.tap(x, y);

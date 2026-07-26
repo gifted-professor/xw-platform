@@ -16,6 +16,9 @@ import { readFileSync, existsSync, readdirSync, renameSync, mkdirSync } from "no
 import { createHash } from "node:crypto";
 import { join, dirname } from "node:path";
 
+import { ControlPlaneError } from "../control-plane/lib/errors.mjs";
+import { XiaoweiTransport } from "../control-plane/lib/xiaowei-transport.mjs";
+
 const DEFAULT_WS = "ws://127.0.0.1:22222/";
 const BRIDGE_IME = "com.android.xwkeyboard/.XwIME";
 
@@ -34,7 +37,16 @@ export function parseFocusOutput(output) {
 }
 
 export class GatewayOperator {
-  constructor({ serial, xwWs = DEFAULT_WS, pacer = null } = {}) {
+  constructor({
+    serial,
+    xwWs = DEFAULT_WS,
+    pacer = null,
+    leaseAuthorization = null,
+    fetchImpl = globalThis.fetch,
+    transportClient = null,
+    allowBypass = process.env.XHS_ALLOW_BYPASS === "1",
+    bypassReason = process.env.XHS_BYPASS_REASON || "",
+  } = {}) {
     if (!serial) throw new Error("GatewayOperator 缺 serial");
     this.serial = serial;
     this.xwWs = xwWs;
@@ -46,9 +58,20 @@ export class GatewayOperator {
     this.metrics = { actions: 0, dumps: 0, scrolls: 0, taps: 0, totalDumpMs: 0, totalScrollMs: 0 };
     this._priorIme = null;
     this._chain = Promise.resolve(); // 串行化 WS（单设备顺序调用，避免并发 accept 失败）
+    this._fetch = fetchImpl;
+    this._allowBypass = allowBypass;
+    this._bypassReason = String(bypassReason || "").trim();
+    this._leaseAuthorization = leaseAuthorization || {
+      leaseId: process.env.XHS_OPERATOR_LEASE_ID,
+      token: process.env.XHS_OPERATOR_LEASE_TOKEN,
+      deviceId: process.env.XHS_OPERATOR_DEVICE_ID,
+      controlUrl: process.env.XHS_OPERATOR_CONTROL_URL || "http://127.0.0.1:17920",
+    };
+    this._xiaoweiTransport = transportClient || new XiaoweiTransport({ url: xwWs });
   }
 
   async start() {
+    await this.authorizeLease();
     // 探活：跑一条 echo；失败说明网关/设备不可达，fail-fast。
     const out = await this.shellExec("echo gateway-ready", 8000).catch(() => null);
     if (out == null || !String(out).includes("gateway-ready")) {
@@ -57,32 +80,77 @@ export class GatewayOperator {
     return this;
   }
 
+  async authorizeLease() {
+    const auth = this._leaseAuthorization || {};
+    const hasLeaseContext = Boolean(auth.leaseId && auth.token && auth.deviceId);
+    if (!hasLeaseContext && this._allowBypass) {
+      if (!this._bypassReason) {
+        throw new ControlPlaneError(
+          "CONTROL_BYPASS_REASON_REQUIRED",
+          "XHS_ALLOW_BYPASS=1 also requires XHS_BYPASS_REASON for an auditable lab exception",
+          { status: 403 },
+        );
+      }
+      console.error(JSON.stringify({
+        event: "operator.lease-bypass",
+        reason: this._bypassReason.slice(0, 200),
+        at: new Date().toISOString(),
+      }));
+      return { authorized: true, bypass: true };
+    }
+    if (!hasLeaseContext) {
+      throw new ControlPlaneError(
+        "CONTROL_LEASE_REQUIRED",
+        "GatewayOperator requires an active control-plane lease; use job/session or XHS_ALLOW_BYPASS=1 for an explicitly recorded lab bypass",
+        { status: 423 },
+      );
+    }
+    let response;
+    try {
+      response = await this._fetch(new URL("/control/v1/leases/authorize", auth.controlUrl || "http://127.0.0.1:17920"), {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-control-token": auth.token,
+        },
+        body: JSON.stringify({
+          leaseId: auth.leaseId,
+          deviceId: auth.deviceId,
+          runtimeId: this.serial,
+        }),
+        signal: AbortSignal.timeout(5000),
+      });
+    } catch (error) {
+      throw new ControlPlaneError("CONTROL_LEASE_AUTH_UNAVAILABLE", "unable to authorize operator lease", {
+        status: 503,
+        cause: error,
+      });
+    }
+    let result;
+    try { result = await response.json(); } catch { result = null; }
+    if (!response.ok || result?.authorized !== true) {
+      throw new ControlPlaneError(
+        result?.error?.code || "CONTROL_LEASE_REJECTED",
+        result?.error?.message || "operator lease was rejected",
+        { status: response.status || 403, details: result?.error?.details || {} },
+      );
+    }
+    return result;
+  }
+
   async close() { /* WS 一连接一请求，无需关闭长连 */ }
 
   // 单请求一连接：发 {action, devices:serial, data}，首条消息即响应，code===10000=SUCCESS。
   async xiaoweiInvoke(action, data, timeoutMs = 15000) {
-    const req = { action, devices: this.serial };
-    if (data != null) req.data = data;
-    // 串行化：网关单实例 accept 串行，同设备并发会偶发 connection failed。
-    const run = () => new Promise((resolve, reject) => {
-      const ws = new WebSocket(this.xwWs);
-      let settled = false;
-      const finish = (fn, v) => { if (settled) return; settled = true; clearTimeout(t); try { ws.close(); } catch {} fn(v); };
-      const t = setTimeout(() => finish(reject, new Error(`gateway WS timeout (${timeoutMs}ms) action=${action}`)), timeoutMs);
-      ws.addEventListener("open", () => { try { ws.send(JSON.stringify(req)); } catch (e) { finish(reject, e); } });
-      ws.addEventListener("message", (e) => {
-        let r; try { r = JSON.parse(String(e.data)); } catch { return finish(reject, new Error("gateway WS malformed response")); }
-        finish(resolve, r);
-      });
-      ws.addEventListener("error", () => finish(reject, new Error(`gateway WS connection failed action=${action}`)));
-    });
-    // 最多 3 次重试（连接失败/超时），malformed 不重试。
+    const request = { action, devices: this.serial, ...(data != null ? { data } : {}) };
+    // XiaoweiTransport 使用跨进程文件锁。不同手机可由不同 Agent 同时推进，
+    // 但共享的 22222 单实例每一条 WS 请求都严格互斥，避免并发建连击穿网关。
     let lastErr;
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      try { return await run(); }
+      try { return await this._xiaoweiTransport.invoke(request, { timeoutMs }); }
       catch (e) {
         lastErr = e;
-        if (e.message.includes("malformed")) throw e;
+        if (e.code === "XIAOWEI_MALFORMED_RESPONSE") throw e;
         if (attempt < 2) await new Promise((r) => setTimeout(r, 400));
       }
     }

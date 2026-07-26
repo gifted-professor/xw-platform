@@ -857,6 +857,26 @@ export class StateStore {
     return publicLease(row);
   }
 
+  authorizeLease({ leaseId, token, deviceId, runtimeId }) {
+    const lease = this.validateLease(leaseId, token);
+    if (typeof deviceId !== "string" || deviceId.trim() === "") {
+      throw new ControlPlaneError("LEASE_DEVICE_REQUIRED", "deviceId is required for operator authorization");
+    }
+    if (lease.deviceId !== deviceId) {
+      throw new ControlPlaneError("LEASE_DEVICE_MISMATCH", "lease does not own the requested device", {
+        status: 409,
+        details: { leaseDeviceId: lease.deviceId, requestedDeviceId: deviceId },
+      });
+    }
+    const device = this.requireDevice(deviceId, { includeRuntime: true });
+    if (typeof runtimeId !== "string" || runtimeId === "" || device.runtimeId !== runtimeId) {
+      throw new ControlPlaneError("LEASE_RUNTIME_MISMATCH", "lease is not valid for the requested runtime", {
+        status: 409,
+      });
+    }
+    return lease;
+  }
+
   heartbeatLease(leaseId, token, ttlMs = 60000) {
     this.validateLease(leaseId, token);
     const now = this.now();

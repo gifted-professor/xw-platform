@@ -7,6 +7,7 @@ import { createXhsAdapter } from "../apps/xhs/adapter.mjs";
 import { createXianyuAdapter } from "../apps/xianyu/adapter.mjs";
 import { createXiaoweiAdapter } from "../apps/xiaowei/adapter.mjs";
 import { CapabilityRegistry } from "../control-plane/lib/capability-registry.mjs";
+import { evaluateCapabilityPolicy } from "../control-plane/lib/policy.mjs";
 
 const registry = CapabilityRegistry.load(fileURLToPath(new URL("../apps", import.meta.url)));
 const privateDevice = {
@@ -16,12 +17,18 @@ const privateDevice = {
   runtimeId: "private-runtime-id",
   metadata: { xhsServePort: 17895, adbPath: "adb.exe" },
 };
+const leaseAuthorization = {
+  leaseId: "lease-test",
+  token: "lease-token-secret",
+  deviceId: privateDevice.deviceId,
+  controlUrl: "http://127.0.0.1:17920",
+};
 
 test("XHS adapter uses a per-device loopback serve and fail-closed verifier", async () => {
   const calls = [];
   const adapter = createXhsAdapter({
     fetchImpl: async (url, options) => {
-      calls.push({ url, body: JSON.parse(options.body) });
+      calls.push({ url, body: JSON.parse(options.body), headers: options.headers });
       return new Response(JSON.stringify({
         ok: true,
         result: { cards: [] },
@@ -30,10 +37,13 @@ test("XHS adapter uses a per-device loopback serve and fail-closed verifier", as
     },
   });
   const capability = registry.require("xhs.observe.feed");
-  const execution = await adapter.execute({ capability, device: privateDevice, params: {} });
+  const execution = await adapter.execute({ capability, device: privateDevice, params: {}, leaseAuthorization });
   assert.equal(new URL(calls[0].url).hostname, "127.0.0.1");
   assert.equal(new URL(calls[0].url).port, "17895");
   assert.equal(calls[0].body.action, "feedCards");
+  assert.equal(calls[0].headers["x-control-lease-id"], leaseAuthorization.leaseId);
+  assert.equal(calls[0].headers["x-control-token"], leaseAuthorization.token);
+  assert.equal(calls[0].headers["x-control-device-id"], leaseAuthorization.deviceId);
   assert.deepEqual(await adapter.verify({ capability, execution }), { ok: true, mode: "state" });
 
   const send = registry.require("xhs.comment.send");
@@ -53,7 +63,7 @@ test("XHS adapter surfaces inner serve rejection instead of masking it as verifi
   });
   const send = registry.require("xhs.comment.send");
   await assert.rejects(
-    adapter.execute({ capability: send, device: privateDevice, params: { text: "probe" } }),
+    adapter.execute({ capability: send, device: privateDevice, params: { text: "probe" }, leaseAuthorization }),
     (error) => {
       assert.equal(error.code, "ADAPTER_ACTION_REJECTED");
       assert.equal(error.details.step, "notOnNote");
@@ -67,8 +77,8 @@ test("Xianyu adapter preserves stop-before-publish and discard verification", as
   const fakeOperator = fileURLToPath(new URL("../package.json", import.meta.url));
   const adapter = createXianyuAdapter({
     operatorPath: fakeOperator,
-    run: async (_command, args) => {
-      calls.push(args);
+    run: async (_command, args, options) => {
+      calls.push({ args, options });
       if (args.includes("discard-dry-run")) return { ok: true, savedDraft: false };
       if (args.includes("input-dry-run")) {
         return {
@@ -91,6 +101,18 @@ test("Xianyu adapter preserves stop-before-publish and discard verification", as
           upload: { ok: true, step: "images-uploaded", picked: 2, imgCount: 2 },
         };
       }
+      if (args.includes("--save-draft")) {
+        return {
+          ok: true,
+          stoppedBeforePublish: true,
+          savedDraft: true,
+          publishTapped: false,
+          steps: { saveDraft: { ok: true } },
+        };
+      }
+      if (args.includes("publish-dry-run")) {
+        return { ok: true, stoppedBeforePublish: true, savedDraft: false, steps: {} };
+      }
       return { ok: true };
     },
   });
@@ -99,10 +121,11 @@ test("Xianyu adapter preserves stop-before-publish and discard verification", as
     capability,
     device: privateDevice,
     params: { text: "probe" },
+    leaseAuthorization,
   });
   assert.equal((await adapter.verify({ capability, execution })).ok, true);
-  assert.equal((await adapter.restore({ capability, device: privateDevice })).ok, true);
-  assert.equal(calls.some((args) => args.includes("discard-dry-run")), true);
+  assert.equal((await adapter.restore({ capability, device: privateDevice, leaseAuthorization })).ok, true);
+  assert.equal(calls.some(({ args }) => args.includes("discard-dry-run")), true);
 
   const imageCap = registry.require("xianyu.publish.image_dry_run");
   const imageExec = await adapter.execute({
@@ -112,9 +135,47 @@ test("Xianyu adapter preserves stop-before-publish and discard verification", as
       images: [{ phonePath: "/sdcard/Pictures/XianyuStaging/a.png", sha256: "a".repeat(64) }],
       imageAlbum: "XianyuStaging",
     },
+    leaseAuthorization,
   });
   assert.equal((await adapter.verify({ capability: imageCap, execution: imageExec })).ok, true);
-  assert.equal(calls.some((args) => args.includes("image-dry-run")), true);
+  assert.equal(calls.some(({ args }) => args.includes("image-dry-run")), true);
+
+  const fullCap = registry.require("xianyu.publish.full_dry_run");
+  assert.throws(
+    () => registry.validateParams(fullCap.id, { saveDraft: true }),
+    { code: "PARAMS_SCHEMA_INVALID" },
+  );
+  const fullExec = await adapter.execute({
+    capability: fullCap,
+    device: privateDevice,
+    params: { saveDraft: false },
+    leaseAuthorization,
+  });
+  assert.equal((await adapter.verify({ capability: fullCap, execution: fullExec })).ok, true);
+  assert.equal(calls.at(-1).args.includes("--save-draft"), false);
+
+  const fullDraftCap = registry.require("xianyu.publish.full_draft_dry_run");
+  assert.deepEqual(evaluateCapabilityPolicy(fullDraftCap), {
+    approvalRequired: true,
+    externalEffect: true,
+  });
+  const draftExec = await adapter.execute({
+    capability: fullDraftCap,
+    device: privateDevice,
+    params: {},
+    leaseAuthorization,
+  });
+  assert.equal(calls.at(-1).args.includes("--save-draft"), true);
+  assert.equal((await adapter.verify({ capability: fullDraftCap, execution: draftExec })).ok, true);
+  assert.deepEqual(
+    await adapter.restore({ capability: fullDraftCap, device: privateDevice, execution: draftExec, leaseAuthorization }),
+    { ok: true, skipped: "already-saved-draft" },
+  );
+
+  for (const call of calls) {
+    assert.equal(call.options.env.XHS_OPERATOR_LEASE_TOKEN, leaseAuthorization.token);
+    assert.doesNotMatch(JSON.stringify(call.args), /lease-token-secret/);
+  }
 });
 
 test("WeChat adapter requires title match and baseline restoration", async () => {

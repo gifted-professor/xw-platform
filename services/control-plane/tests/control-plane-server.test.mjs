@@ -87,6 +87,45 @@ test("HTTP API is loopback-oriented, emits no CORS header, and redacts runtime I
     assert.equal(nodes.nodes[0].readyDevices, 1);
     assert.doesNotMatch(JSON.stringify(nodes), /never-expose|runtimeId|routingProfile/);
 
+    const operatorLease = state.acquireLease({
+      deviceId: device.deviceId,
+      kind: "job",
+      holderId: "job:operator-auth-test",
+      jobId: "job:operator-auth-test",
+    });
+    const authorizeResponse = await fetch(`http://127.0.0.1:${port}/control/v1/leases/authorize`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-control-token": operatorLease.token,
+      },
+      body: JSON.stringify({
+        leaseId: operatorLease.leaseId,
+        deviceId: device.deviceId,
+        runtimeId: "never-expose",
+      }),
+    });
+    assert.equal(authorizeResponse.status, 200);
+    const authorizeBody = await authorizeResponse.json();
+    assert.equal(authorizeBody.authorized, true);
+    assert.doesNotMatch(JSON.stringify(authorizeBody), /never-expose|runtimeId|lease_token/);
+
+    const wrongRuntimeResponse = await fetch(`http://127.0.0.1:${port}/control/v1/leases/authorize`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-control-token": operatorLease.token,
+      },
+      body: JSON.stringify({
+        leaseId: operatorLease.leaseId,
+        deviceId: device.deviceId,
+        runtimeId: "wrong-runtime",
+      }),
+    });
+    assert.equal(wrongRuntimeResponse.status, 409);
+    assert.equal((await wrongRuntimeResponse.json()).error.code, "LEASE_RUNTIME_MISMATCH");
+    state.releaseLease(operatorLease.leaseId, operatorLease.token);
+
     const beforeJobs = state.db.prepare("SELECT COUNT(*) AS count FROM jobs").get().count;
     const planResponse = await fetch(`http://127.0.0.1:${port}/control/v1/routes/plan`, {
       method: "POST",

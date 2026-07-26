@@ -69,6 +69,29 @@ export class ControlRouter {
       return { status: 200, body: { leases: this.state.listLeases() } };
     }
 
+    if (method === "POST" && path === "/control/v1/leases/authorize") {
+      const input = requireBody(body);
+      const lease = this.state.authorizeLease({
+        leaseId: input.leaseId,
+        token: tokenOf(input, headers),
+        deviceId: input.deviceId,
+        runtimeId: input.runtimeId,
+      });
+      return {
+        status: 200,
+        body: {
+          ok: true,
+          authorized: true,
+          lease: {
+            leaseId: lease.leaseId,
+            deviceId: lease.deviceId,
+            kind: lease.kind,
+            expiresAt: lease.expiresAt,
+          },
+        },
+      };
+    }
+
     let match = path.match(/^\/control\/v1\/jobs\/([^/]+)$/);
     if (method === "GET" && match) {
       return { status: 200, body: { job: publicJob(this.state.requireJob(decodeURIComponent(match[1]))) } };

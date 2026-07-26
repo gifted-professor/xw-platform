@@ -2,6 +2,11 @@
 
 - Read `docs/agent-entry.md` before any device task and use `devicectl route plan`,
   `job submit`, or a leased session as the only device-operation entry.
+- Gateway-backed operators require a control-plane lease bound to the exact
+  device runtime. A lab bypass requires `XHS_ALLOW_BYPASS=1` plus a recorded
+  `XHS_BYPASS_REASON`; bypass runs never count as production acceptance.
+- Different devices may run concurrently, but all Xiaowei `22222` requests
+  must use the shared cross-process transport lock.
 - Read `skills/xhs-device-operator/SKILL.md` before operating devices.
 - Never choose a runtime device ID or call a direct UI/vendor script outside the
   control-plane audit/canary rules.

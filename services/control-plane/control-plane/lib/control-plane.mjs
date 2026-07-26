@@ -57,6 +57,7 @@ export class ControlPlane {
     adapters,
     evidence,
     authorityNodeId = "DESKTOP-3I1EVHE",
+    operatorControlUrl = process.env.CONTROL_PLANE_INTERNAL_URL || "http://127.0.0.1:17920",
     transportStatus = inspectTransportLock,
     schedulerIntervalMs = 100,
     leaseTtlMs = 60000,
@@ -67,6 +68,7 @@ export class ControlPlane {
     this.adapters = adapters instanceof AdapterRegistry ? adapters : new AdapterRegistry(adapters);
     this.evidence = evidence;
     this.authorityNodeId = authorityNodeId;
+    this.operatorControlUrl = operatorControlUrl;
     this.transportStatus = transportStatus;
     this.schedulerIntervalMs = schedulerIntervalMs;
     this.leaseTtlMs = leaseTtlMs;
@@ -350,6 +352,15 @@ export class ControlPlane {
       params: job.params,
       evidenceDirectory: this.evidence.runDirectory(job.runId),
     };
+    const authorizedContext = {
+      ...context,
+      leaseAuthorization: {
+        leaseId: lease.leaseId,
+        token: lease.token,
+        deviceId: job.deviceId,
+        controlUrl: this.operatorControlUrl,
+      },
+    };
     const heartbeat = setInterval(() => {
       try {
         this.state.heartbeatLease(lease.leaseId, lease.token, this.leaseTtlMs);
@@ -362,7 +373,7 @@ export class ControlPlane {
     try {
       job = this.state.transitionJob(job.jobId, "running");
       this.evidence.appendEvent(job.runId, { type: "job.running", jobId: job.jobId, createdAt: new Date().toISOString() });
-      execution = await adapter.execute(context);
+      execution = await adapter.execute(authorizedContext);
       if (heartbeatError) throw heartbeatError;
 
       job = this.state.transitionJob(job.jobId, "verifying");
@@ -390,7 +401,7 @@ export class ControlPlane {
       });
       this.evidence.appendEvent(job.runId, { type: "job.restoring", jobId: job.jobId, createdAt: new Date().toISOString() });
       restoration = adapter.restore
-        ? await adapter.restore({ ...context, execution, verification, error: primaryError })
+        ? await adapter.restore({ ...authorizedContext, execution, verification, error: primaryError })
         : { ok: !capability.restoration.required };
       if (capability.restoration.required && restoration?.ok === false) {
         throw new ControlPlaneError("RESTORATION_FAILED", "adapter restoration failed", { status: 409 });
