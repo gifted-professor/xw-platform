@@ -1739,6 +1739,104 @@ export async function typeAppNumpadDigits(op, value, {
   return { ok: true, typed };
 }
 
+export function findAppNumpadDelete(snapshot, resolution = [1080, 2400]) {
+  const width = Number(resolution?.[0] || 0);
+  const height = Number(resolution?.[1] || 0);
+  if (width <= 0 || height <= 0) return null;
+  const candidates = (snapshot || []).filter((node) => {
+    if (String(node?.label || "").trim() !== "删除" || !node?.bounds) return false;
+    const [left, top, right, bottom] = node.bounds.map(Number);
+    return left >= width * 0.7 && right <= width
+      && top >= height * 0.55 && bottom <= height * 0.8;
+  });
+  return candidates.length === 1 ? candidates[0] : null;
+}
+
+export function skuBatchInputValue(node, { decimal = false } = {}) {
+  const label = String(node?.label || "")
+    .replace(/[,，]编辑框.*$/, "")
+    .replace(/[¥￥\s]/g, "");
+  const match = decimal ? label.match(/\d+(?:\.\d+)?/) : label.match(/\d+/);
+  return match ? match[0] : "";
+}
+
+/**
+ * 批量价库页使用闲鱼自己的数字键盘；Android KEYCODE_DEL 不会可靠清掉 Flutter 字段。
+ * 每次先重新 dump + 聚焦目标字段，再逐次点击应用内唯一“删除”键并回读为空，最后输入并精确回读。
+ */
+export async function replaceSkuBatchAppNumpadValue(op, {
+  field,
+  value,
+  resolution = [1080, 2400],
+  snapshotFn = snapshot,
+  typeDigitsFn = (operator, text) => typeAppNumpadDigits(operator, text, {
+    settleMs: APP_NUMPAD_SETTLE_MS,
+    fixedFallback: false,
+  }),
+  maxDeletes = 16,
+} = {}) {
+  if (!["price", "stock"].includes(field)) {
+    return { ok: false, step: "invalid-field", field };
+  }
+  const expected = String(value ?? "").replace(field === "price" ? /[^\d.]/g : /[^\d]/g, "");
+  if (!expected) return { ok: false, step: "empty-expected", field };
+  const decimal = field === "price";
+  const targetOf = (nodes) => {
+    const controls = findSkuBatchEditControls(nodes);
+    return field === "price" ? controls.priceInput : controls.stockInput;
+  };
+
+  let state = await snapshotFn(op, `xianyu-sku-${field}-focus-before`);
+  let target = targetOf(state.nodes);
+  if (!target?.bounds) return { ok: false, step: `${field}-input-missing`, field };
+  await op.tap(...center(target.bounds));
+  await settle(500);
+  state = await snapshotFn(op, `xianyu-sku-${field}-focused`);
+  target = targetOf(state.nodes);
+  if (!target?.bounds) return { ok: false, step: `${field}-input-missing-after-focus`, field };
+  const focusedInputs = state.nodes.filter((node) => /EditText/.test(String(node?.className || "")) && node.focused);
+  if (focusedInputs.length === 1 && focusedInputs[0] !== target) {
+    return { ok: false, step: `${field}-focus-mismatch`, field };
+  }
+
+  let before = skuBatchInputValue(target, { decimal });
+  let deletes = 0;
+  while (skuBatchInputValue(target, { decimal }) && deletes < maxDeletes) {
+    const deleteKey = findAppNumpadDelete(state.nodes, resolution);
+    if (!deleteKey?.bounds) {
+      return { ok: false, step: `${field}-delete-key-missing`, field, before, deletes };
+    }
+    await op.tap(...center(deleteKey.bounds));
+    deletes += 1;
+    await settle(APP_NUMPAD_SETTLE_MS);
+    state = await snapshotFn(op, `xianyu-sku-${field}-delete-${deletes}`);
+    target = targetOf(state.nodes);
+    if (!target?.bounds) {
+      return { ok: false, step: `${field}-input-lost-during-clear`, field, before, deletes };
+    }
+  }
+  const afterClear = skuBatchInputValue(target, { decimal });
+  if (afterClear) {
+    return { ok: false, step: `${field}-clear-unverified`, field, before, afterClear, deletes };
+  }
+
+  const typed = await typeDigitsFn(op, expected);
+  if (!typed?.ok) return { ok: false, step: `${field}-numpad-failed`, field, before, deletes, typed };
+  state = await snapshotFn(op, `xianyu-sku-${field}-after-input`);
+  target = targetOf(state.nodes);
+  const actual = skuBatchInputValue(target, { decimal });
+  return {
+    ok: actual === expected,
+    step: actual === expected ? `${field}-replaced` : `${field}-value-unverified`,
+    field,
+    expected,
+    actual,
+    before,
+    deletes,
+    typed,
+  };
+}
+
 export function skuPriceRowEvidence(snapshot, { price, stock } = {}) {
   const priceText = String(price ?? "").replace(/[^\d.]/g, "");
   const stockText = String(stock ?? "").replace(/[^\d]/g, "");
@@ -2393,7 +2491,6 @@ export async function fillSkuSpecs(op, specs, stock, {
     return { ok: false, step: "sku-needs-calibration", implemented: false, rowBounds: row.bounds };
   }
   const safeSerial = String(op.serial).replace(/[^A-Za-z0-9_-]/g, "_");
-  const typeNumKB = async (str) => typeAppNumpadDigits(op, str, { settleMs: APP_NUMPAD_SETTLE_MS });
   const cleanup = async () => { for (let i = 0; i < 3; i += 1) { await op.back().catch(() => null); await settle(600); } };
   const dimResults = [];
   // 同一批 SKU 文本只切一次 XwIME，全部值完成后再还原；逐值切换会让 2×5 路径逼近超时。
@@ -2600,82 +2697,38 @@ function isDimTitle(label, dimName) {
     }
     const priceStr = String(price || "").replace(/[^\d.]/g, "");
     const stockStr = String(stock ?? "").replace(/[^\d]/g, "");
-    // 批量 sheet 的 EditText 常带旧值（02 实证：库存残留 40 → 列表显示 库存40件）
-    // 光标常在开头，单纯 KEYCODE_DEL(退格) 无效 → 先 MOVE_END 再退格，再 FORWARD_DEL 兜底。
-    const clearFocusedDigits = async (times = 12) => {
-      await op.shellExec("input keyevent KEYCODE_MOVE_END", 3000).catch(() => null);
-      await settle(80);
-      for (let i = 0; i < times; i += 1) {
-        await op.shellExec("input keyevent KEYCODE_DEL", 3000).catch(() => null);
-        await settle(40);
-      }
-      await op.shellExec("input keyevent KEYCODE_MOVE_HOME", 3000).catch(() => null);
-      await settle(60);
-      for (let i = 0; i < times; i += 1) {
-        await op.shellExec("input keyevent KEYCODE_FORWARD_DEL", 3000).catch(() => null);
-        await settle(40);
-      }
-    };
+    const wmSize = await op.shellExec("wm size", 8000).catch(() => "");
+    const resolution = parseDisplayResolution(wmSize);
+    if (!resolution) {
+      await cleanup();
+      return { ok: false, step: "sku-display-size-unverified", implemented: true, dimResults };
+    }
     if (priceStr) {
-      await op.tap(...center(controls.priceInput.bounds));
-      await settle(500);
-      await clearFocusedDigits(12);
-      const priceTyped = await typeNumKB(priceStr);
+      const priceTyped = await replaceSkuBatchAppNumpadValue(op, {
+        field: "price",
+        value: priceStr,
+        resolution,
+      });
       if (!priceTyped.ok) {
         await cleanup();
-        return { ok: false, step: "sku-price-numpad-failed", implemented: true, priceTyped, dimResults };
+        return { ok: false, step: `sku-${priceTyped.step}`, implemented: true, priceTyped, dimResults };
       }
     }
     await settle(350);
-    const stockCenter = center(controls.stockInput.bounds);
-    await op.tap(...stockCenter);
-    await settle(600);
     if (stockStr) {
-      // 按当前 label 位数精确退格（02：label「40」需 2 次 END+DEL，再打 10）
-      const readStockDigits = async () => {
-        const s = await snapshot(op, "xianyu-sku-stock-read");
-        return String(findSkuBatchEditControls(s.nodes).stockInput?.label || "").replace(/[^\d]/g, "");
-      };
-      let cur = await readStockDigits();
-      await op.shellExec("input keyevent KEYCODE_MOVE_END", 3000).catch(() => null);
-      await settle(80);
-      for (let i = 0; i < Math.max(cur.length + 4, 8); i += 1) {
-        await op.shellExec("input keyevent KEYCODE_DEL", 3000).catch(() => null);
-        await settle(50);
-      }
-      let stockTyped = await typeNumKB(stockStr);
+      const stockTyped = await replaceSkuBatchAppNumpadValue(op, {
+        field: "stock",
+        value: stockStr,
+        resolution,
+      });
       if (!stockTyped.ok) {
-        await cleanup();
-        return { ok: false, step: "sku-stock-numpad-failed", implemented: true, stockTyped, dimResults };
-      }
-      cur = await readStockDigits();
-      if (cur !== stockStr) {
-        // 兜底：小薇 IME 覆写（clearFirst）
-        await op.tap(...stockCenter);
-        await settle(400);
-        try {
-          const audit = await op.inputTextViaXiaowei(stockStr, {
-            clearFirst: true,
-            deferRestore: true,
-            refocus: async () => { await op.tap(...stockCenter); },
-          });
-          if (typeof audit?.restore === "function") await audit.restore().catch(() => null);
-        } catch {
-          /* IME 失败再试 numpad */
-          await clearFocusedDigits(16);
-          stockTyped = await typeNumKB(stockStr);
-        }
-        cur = await readStockDigits();
-      }
-      if (cur !== stockStr) {
         await cleanup();
         return {
           ok: false,
-          step: "sku-stock-value-unverified",
+          step: `sku-${stockTyped.step}`,
           implemented: true,
           expectedStock: stockStr,
-          stockLabel: cur,
-          afterStrategies: ["del-numpad", "xiaowei-or-numpad"],
+          stockTyped,
           dimResults,
         };
       }

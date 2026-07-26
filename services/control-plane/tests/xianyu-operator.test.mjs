@@ -18,6 +18,7 @@ import {
   findSkuRecoveryClose,
   findSkuExitConfirm,
   findSkuBatchEditControls,
+  findAppNumpadDelete,
   freightOptionTarget,
   freightRowVerified,
   getScreenHeight,
@@ -36,6 +37,8 @@ import {
   recoverySemanticHints,
   saveLayoutProfile,
   semanticSnapshot,
+  replaceSkuBatchAppNumpadValue,
+  skuBatchInputValue,
   shouldScrollAfterSkuValue,
 } from "../scripts/xianyu-operator.mjs";
 
@@ -83,6 +86,57 @@ test("parseDisplayResolution uses the effective override size", () => {
   assert.deepEqual(parseDisplayResolution("Physical size: 1080x2400\nOverride size: 720x1600"), [720, 1600]);
   assert.deepEqual(parseDisplayResolution("Physical size: 1080x2400"), [1080, 2400]);
   assert.equal(parseDisplayResolution("size unavailable"), null);
+});
+
+test("SKU batch app numpad helpers parse values and require one bounded delete key", () => {
+  assert.equal(skuBatchInputValue({ label: "¥45.64,编辑框" }, { decimal: true }), "45.64");
+  assert.equal(skuBatchInputValue({ label: "¥5,编辑框" }), "5");
+  const deletion = { label: "删除", bounds: [810, 1500, 1080, 1690] };
+  assert.equal(findAppNumpadDelete([deletion]), deletion);
+  assert.equal(findAppNumpadDelete([{ ...deletion, label: "删除，按钮" }]), null);
+  assert.equal(findAppNumpadDelete([{ ...deletion, bounds: [10, 100, 100, 200] }]), null);
+  assert.equal(findAppNumpadDelete([deletion, { ...deletion, bounds: [820, 1510, 1070, 1680] }]), null);
+});
+
+test("SKU batch app numpad replacement clears stale price and stock through the in-app delete key", async () => {
+  const values = { price: "45.64", stock: "5" };
+  let active = null;
+  const priceBounds = [180, 760, 1000, 880];
+  const stockBounds = [180, 900, 1000, 1020];
+  const deleteBounds = [810, 1500, 1080, 1690];
+  const centerOf = (bounds) => [(bounds[0] + bounds[2]) / 2, (bounds[1] + bounds[3]) / 2];
+  const samePoint = (point, bounds) => JSON.stringify(point) === JSON.stringify(centerOf(bounds));
+  const nodes = () => [
+    { label: `¥${values.price},编辑框`, className: "android.widget.EditText", focused: active === "price", bounds: priceBounds },
+    { label: `¥${values.stock},编辑框`, className: "android.widget.EditText", focused: active === "stock", bounds: stockBounds },
+    { label: "删除", bounds: deleteBounds },
+    { label: "确定, 确定", bounds: [810, 1870, 1080, 2250] },
+  ];
+  const op = {
+    async tap(x, y) {
+      const point = [x, y];
+      if (samePoint(point, priceBounds)) active = "price";
+      else if (samePoint(point, stockBounds)) active = "stock";
+      else if (samePoint(point, deleteBounds) && active) values[active] = values[active].slice(0, -1);
+    },
+  };
+  const snapshotFn = async () => ({ nodes: nodes() });
+  const typeDigitsFn = async (_op, text) => {
+    values[active] += String(text);
+    return { ok: true, typed: [...String(text)] };
+  };
+
+  const price = await replaceSkuBatchAppNumpadValue(op, {
+    field: "price", value: "12.34", snapshotFn, typeDigitsFn,
+  });
+  const stock = await replaceSkuBatchAppNumpadValue(op, {
+    field: "stock", value: "2", snapshotFn, typeDigitsFn,
+  });
+  assert.equal(price.ok, true);
+  assert.equal(price.deletes, 5);
+  assert.equal(stock.ok, true);
+  assert.equal(stock.deletes, 1);
+  assert.deepEqual(values, { price: "12.34", stock: "2" });
 });
 
 const skuRecoveryNodes = [
