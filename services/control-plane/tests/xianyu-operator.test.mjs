@@ -182,6 +182,38 @@ test("recoverDiscardDryRun handles the explicit discard dialog and verifies safe
   assert.equal(result.evidenceFiles.some((file) => file.label === "xianyu-recovery-final"), true);
 });
 
+test("recoverDiscardDryRun resumes safely when recovery starts on the discard dialog", async () => {
+  const discardDialog = [
+    { label: "不保存", className: "android.widget.Button", clickable: true, bounds: [42, 1980, 524, 2130] },
+    { label: "存草稿", className: "android.widget.Button", clickable: true, bounds: [556, 1980, 1038, 2130] },
+  ];
+  let state = "dialog";
+  const taps = [];
+  const op = {
+    serial: "device-02",
+    transport: "gateway",
+    async shellExec(command) { return command === "wm size" ? "Physical size: 1080x2400" : ""; },
+    async currentFocus() {
+      return state === "main"
+        ? { package: "com.taobao.idlefish", activity: "com.taobao.idlefish.maincontainer.activity.MainActivity" }
+        : { package: "com.taobao.idlefish", activity: "FishFlutterBoostActivity" };
+    },
+    async dumpXml() { return recoveryXml(state === "dialog" ? discardDialog : device02BottomTabs); },
+    async tap(x, y) {
+      taps.push([x, y]);
+      state = "main";
+    },
+    async capturePng(path) { return { path, bytes: 100, sha256: "d".repeat(64) }; },
+  };
+
+  const result = await recoverDiscardDryRun(op, { evidenceDir: "/tmp/xianyu-recovery-test" });
+  assert.equal(result.ok, true);
+  assert.equal(result.step, "discard-dialog-discarded-to-safe-main");
+  assert.equal(result.savedDraft, false);
+  assert.equal(result.discard.step, "discarded-without-saving-from-recovery-dialog");
+  assert.equal(taps.length, 1);
+});
+
 test("recoverDiscardDryRun performs zero taps when two fresh snapshots already show safe main", async () => {
   let taps = 0;
   const op = {

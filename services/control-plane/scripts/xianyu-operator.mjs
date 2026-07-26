@@ -382,12 +382,17 @@ export function isEmptyDescriptionField(node) {
   return /描述.*宝贝.*品牌型号.*货品来源|描述.*品牌型号.*货品来源/s.test(label);
 }
 
-export function findDiscardWithoutSaving(snapshot) {
+export function findDiscardWithoutSaving(snapshot, { resolution = [1080, 2400] } = {}) {
   // xianyuDump 会先 pull 原始 UTF-8 XML，所以这里只接受语义层的精确文字。
   // Windows 控制台如何显示不参与决策；识别不到就 fail-closed，绝不按坐标猜。
-  return snapshot.find((node) => /^不保存$/m.test(node.label)
+  const width = Number(resolution?.[0]) || 1080;
+  const height = Number(resolution?.[1]) || 2400;
+  const candidates = snapshot.filter((node) => /^不保存$/m.test(node.label)
     && node.className === "android.widget.Button"
-    && node.bounds?.[0] < 100 && node.bounds?.[1] >= 2050 && node.bounds?.[2] < 550) || null;
+    && node.bounds?.[0] < width * 0.1
+    && node.bounds?.[1] >= height * 0.82
+    && node.bounds?.[2] < width * 0.52);
+  return candidates.length === 1 ? candidates[0] : null;
 }
 
 function findPublishMenuEntryByLayout(snapshot) {
@@ -1262,30 +1267,40 @@ export async function recoverDiscardDryRun(op, { evidenceDir = EVIDENCE_DIR_DEFA
         discard: null,
       };
     }
-    const close = findSkuRecoveryClose(page.nodes, { focus: page.focus, resolution });
-    if (!close?.bounds) {
-      return fail("sku-close-not-uniquely-verified", {
-        pageClassification: classifyXianyuPage({ semanticNodes: page.nodes, focus: page.focus, resolution }),
-      });
-    }
-
-    await op.tap(...center(close.bounds));
-    await settle(1000);
-    page = await snapshot(op, "xianyu-recovery-after-sku-close");
-    await capture("after-sku-close");
-
     let discard = null;
-    const pageClassification = classifyXianyuPage({
+    let recoverySource = "sku-sheet";
+    let pageClassification = classifyXianyuPage({
       semanticNodes: page.nodes,
       focus: page.focus,
       resolution,
     });
+    if (pageClassification.pageType !== "discard-dialog" || pageClassification.confidence < 0.99) {
+      const close = findSkuRecoveryClose(page.nodes, { focus: page.focus, resolution });
+      if (!close?.bounds) {
+        return fail("sku-close-not-uniquely-verified", { pageClassification });
+      }
+
+      await op.tap(...center(close.bounds));
+      await settle(1000);
+      page = await snapshot(op, "xianyu-recovery-after-sku-close");
+      await capture("after-sku-close");
+      pageClassification = classifyXianyuPage({
+        semanticNodes: page.nodes,
+        focus: page.focus,
+        resolution,
+      });
+    } else {
+      recoverySource = "discard-dialog";
+    }
+
     if (pageClassification.pageType === "discard-dialog" && pageClassification.confidence >= 0.99) {
       const discardCandidates = page.nodes.filter((node) => /^不保存$/m.test(node.label)
         && node.className === "android.widget.Button"
         && node.bounds?.[0] < 100 && node.bounds?.[1] >= resolution[1] * 0.82
         && node.bounds?.[2] < resolution[0] * 0.52);
-      const discardButton = discardCandidates.length === 1 ? findDiscardWithoutSaving(page.nodes) : null;
+      const discardButton = discardCandidates.length === 1
+        ? findDiscardWithoutSaving(page.nodes, { resolution })
+        : null;
       if (!discardButton?.bounds) return fail("discard-button-not-uniquely-verified");
       await op.tap(...center(discardButton.bounds));
       await settle(1000);
@@ -1316,7 +1331,7 @@ export async function recoverDiscardDryRun(op, { evidenceDir = EVIDENCE_DIR_DEFA
     });
     return {
       ok: safeStateVerified,
-      step: safeStateVerified ? "sku-sheet-discarded-to-safe-main" : "safe-main-not-verified",
+      step: safeStateVerified ? `${recoverySource}-discarded-to-safe-main` : "safe-main-not-verified",
       stoppedBeforePublish: true,
       savedDraft: false,
       publishTapped: false,
