@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { CapabilityRegistry } from "../control-plane/lib/capability-registry.mjs";
 import { AdapterRegistry, ControlPlane } from "../control-plane/lib/control-plane.mjs";
 import { EvidenceStore } from "../control-plane/lib/evidence-store.mjs";
+import { ControlPlaneError } from "../control-plane/lib/errors.mjs";
 import { StateStore } from "../control-plane/lib/state-store.mjs";
 
 const tempBase = fileURLToPath(new URL("../control-plane/runtime", import.meta.url));
@@ -722,7 +723,14 @@ test("failed recovery inspection releases its lease and preserves quarantine", a
     async execute() { return { vendorCode: 0 }; },
     async verify() { return { ok: true, mode: "state" }; },
     async restore() { return { ok: false }; },
-    async inspectRecovery() { return { ok: false, step: "capture-failed" }; },
+    async inspectRecovery() {
+      throw new ControlPlaneError("ADAPTER_FAILED", "adapter process failed", {
+        details: {
+          adapterCode: "GATEWAY_DEVICE_PROBE_FAILED",
+          privateMessage: "must not escape",
+        },
+      });
+    },
   };
   const f = fixture({
     capabilities: [manifest("test.restore", {
@@ -743,7 +751,9 @@ test("failed recovery inspection releases its lease and preserves quarantine", a
       jobId: job.jobId,
       actorId: "inspection-agent",
       idempotencyKey: "inspect-fails",
-    }), { code: "RECOVERY_INSPECTION_FAILED" });
+    }), (error) => error.code === "RECOVERY_INSPECTION_FAILED"
+      && error.details?.adapterCode === "GATEWAY_DEVICE_PROBE_FAILED"
+      && !JSON.stringify(error.details).includes("must not escape"));
     await assert.rejects(f.control.inspectRecovery({
       jobId: job.jobId,
       actorId: "inspection-agent",
@@ -751,6 +761,10 @@ test("failed recovery inspection releases its lease and preserves quarantine", a
     }), { code: "RECOVERY_INSPECTION_PREVIOUSLY_FAILED" });
     assert.equal(f.state.getDevice(job.deviceId).quarantined, true);
     assert.equal(f.state.listLeases().length, 0);
+    const failedEvent = f.state.listJobEvents(job.jobId)
+      .find((event) => event.type === "job.recovery.inspect.failed");
+    assert.equal(failedEvent.payload.adapterCode, "GATEWAY_DEVICE_PROBE_FAILED");
+    assert.equal(JSON.stringify(failedEvent.payload).includes("must not escape"), false);
   } finally {
     await f.close();
   }

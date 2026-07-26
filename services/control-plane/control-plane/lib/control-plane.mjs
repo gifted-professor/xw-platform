@@ -8,6 +8,11 @@ function collectEvidenceFiles(...values) {
   return values.flatMap((value) => Array.isArray(value?.evidenceFiles) ? value.evidenceFiles : []);
 }
 
+function boundedAdapterCode(error) {
+  const value = error?.details?.adapterCode;
+  return typeof value === "string" && /^[A-Z0-9_]{1,96}$/.test(value) ? value : null;
+}
+
 function resultSummary(execution, verification, restoration, error = null) {
   const out = execution?.output;
   return {
@@ -638,11 +643,13 @@ export class ControlPlane {
       return inspection;
     } catch (error) {
       const cause = asControlError(error, "RECOVERY_INSPECTION_FAILED");
+      const adapterCode = boundedAdapterCode(cause);
       appendInspectionEvent("job.recovery.inspect.failed", {
         actorId: actorId.trim(),
         idempotencyKey: normalizedIdempotencyKey,
         deviceId: job.deviceId,
         causeCode: cause.code,
+        adapterCode,
         step: cause.details?.step || null,
       });
       throw new ControlPlaneError(
@@ -650,7 +657,7 @@ export class ControlPlane {
         "read-only recovery inspection did not produce durable evidence",
         {
           status: 409,
-          details: { jobId: job.jobId, deviceId: job.deviceId, causeCode: cause.code },
+          details: { jobId: job.jobId, deviceId: job.deviceId, causeCode: cause.code, adapterCode },
           cause,
         },
       );
