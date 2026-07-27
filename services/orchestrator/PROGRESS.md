@@ -1,6 +1,6 @@
 # xhs-registry 进度
 
-> 最后更新：2026-07-27 12:30 CST（discard-dry-run relaunch 修通 03 service-compose restoration → 4 机并发 full_dry_run **4/4 全绿**；fleet ready 4/4。当前 active blocker：无硬隔离；compose 精细 a11y 退出仍可选优化 backlog）
+> 最后更新：2026-07-27 13:30 CST（**方案 A 真源收口**：PR #14+#15 已并入 GitHub `main`；生产代码真源 = `main` @ `1f7ae22`。此前 4 机并发 4/4 全绿。当前 active blocker：无硬隔离）
 
 ## 一句话现状（北极星，所有 agent 必读）
 
@@ -8,6 +8,7 @@
 **当前阶段**：基础设施已建成（身份/审批闸/知识库/scout 骨架/多模型路由/无人值守验收/手机面板），业务刚点火（首例控制面真评论 2026-07-24 已发出）。
 **路线**：不等建设完，小步真跑——本周每天 2-3 条真评论走控制面+人审批攒实证；近期 scout 自动巡航啃配方积压 + 闲鱼上架接通；中期微信客服 + R2 审批降级抽检；远期手机池扩容 + v1.2 调度内核。
 **路径裁决**：控制面 job + 审批闸是唯一权威业务入口；task-runner/dashboard 是已退役的历史主力（实证保留）。
+**代码真源（2026-07-27 方案 A）**：GitHub `gifted-professor/xhs-device-agent` 的 **`main`** 是唯一权威。已合并 PR [#14](https://github.com/gifted-professor/xhs-device-agent/pull/14)（control-plane → main，merge `2923bef`）+ [#15](https://github.com/gifted-professor/xhs-device-agent/pull/15)（placement-entry v1.1 + 闲鱼恢复/4 机并发 → main，merge **`1f7ae22`**）。业务 tip `953d187`（discard-dry-run relaunch）已在 main 祖先链上。约定：新活从 `main` 拉短分支；禁止再往 `agent/placement-entry-v1-1-20260724` 长支无限堆；Windows `C:\Users\Public\xhs-routing-v1-1` 应对齐 `main`（`git checkout main && git pull`，`task-launch.json` gitCommit = **完整 40 字符** `git rev-parse HEAD`）。旧 draft 长支可留作考古，不再当生产入口。
 **Agent 入口（2026-07-26 已落地并通过四机 Phase A）**：碰机必须 `session acquire` / `job submit`（lease 可见）。`GatewayOperator`、XHS serve、旧 task-runner/greenarrow 直调均 fail-closed；退役 dashboard 的 legacy guard 默认也已切到 `enforce`。实验旁路必须同时设置 `XHS_ALLOW_BYPASS=1` 和非空 `XHS_BYPASS_REASON`，且不计生产验收。lease 授权同时绑定 public device id 与 private runtime id。`a982374` 已修复 canary session action 误按普通 job 路由的问题；01 canary 与 01–04 四 lease + 并发 `imeList` 均通过，最终 leases/pending 归零。完整交接见 **`HANDOFF-2026-07-26-agent-entry-xianyu-verify.md`**。
 
 ### Agent 统一入口与占用控制台（2026-07-26 20:39 CST）
