@@ -422,6 +422,12 @@ export class ControlPlane {
         idempotencyKey,
         deviceId: job.deviceId,
         causeCode: cause.code,
+        // 诊断：把 operator 的 errorCode + stdout/stderr 片段落进 control.db 事件，
+        // 否则 03 这类 recover 崩溃只剩 causeCode=ADAPTER_FAILED，远端无从知道 operator 真实报错。
+        adapterCode: cause.details?.adapterCode ?? null,
+        adapterExitCode: cause.details?.exitCode ?? null,
+        adapterStdout: cause.details?.stdoutSnippet ?? null,
+        adapterStderr: cause.details?.stderrSnippet ?? null,
       });
       throw new ControlPlaneError("RECOVERY_FAILED", "device recovery did not verify a safe state", {
         status: 409,
