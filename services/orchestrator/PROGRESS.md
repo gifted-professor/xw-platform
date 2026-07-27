@@ -1,6 +1,6 @@
 # xhs-registry 进度
 
-> 最后更新：2026-07-27 13:40 CST（方案 A main 真源已收口；过时 knowledge active_blocker 三条已 resolved；Agents.md 补默认链路+跨机并发。agent-entry active blockers=none；4 ready）
+> 最后更新：2026-07-27 14:00 CST（**快路径**：`ops/conc4-full-dry-run.mjs` 四机并发一键入口；AGENTS 复用流程表+双路径契约。不增硬闸。agent-entry blockers=none；main@1f7ae22）
 
 ## 一句话现状（北极星，所有 agent 必读）
 

@@ -21,11 +21,30 @@
    `node control-plane/devicectl.mjs --ssh xhs-windows job submit --capability <id> --actor <actor> --idempotency-key <key> [--device <devId>] --params '<json>'`  
    状态：`job status --job <id>`；路由预览：`route plan ...`。
 3. **只对 `ready=yes` 且 `lease=free` 的设备提交**；非 ready 先恢复（`job recover` / `ops/recover-main-safe.mjs`），禁止旁路清隔离。
-4. **跨机并发（允许且已 4/4 实证）**：对 01–04 **各发一个** `job submit`（不同 deviceId / 幂等键），控制面按设备并行泵；共享小薇 `22222` 会串行化网关请求但不死锁。  
-   - 配方：`campaign/fixtures/{01,02,03,04}-full.json` + 知识库 `xianyu-4machine-concurrency-4of4-20260727`  
-   - **禁止**同机并行两个重业务 job；**禁止**无 lease 四机干跑。  
+4. **跨机并发（允许且已 4/4 实证）**：**默认** `node ops/conc4-full-dry-run.mjs --actor <you>-conc4`（内置 live 预检 + 四路 submit + poll）。  
+   - fixture：`campaign/fixtures/{01,02,03,04}-full.json`；证据知识库 `xianyu-4machine-concurrency-4of4-20260727`  
+   - **禁止**同机并行两个重业务 job；**禁止**无 lease 四机干跑。手拼 devicectl 仅调试用。  
    - fixture 分层是刻意的：02 为 5×2 尺码×颜色，01/03/04 多为单维颜色。
 5. **恢复**：job 末 restoration 已有 discard-dry-run relaunch 兜底（main 含 `953d187`）；quarantine 清隔离仍走 recover + 视觉 main-safe 硬闸（见 `ops/recover-main-safe.mjs`）。
+
+## 环境双路径（三行契约）
+
+1. **Mac**（本仓 `xhs-registry` + GPFS 上 `devicectl.mjs`）= 脚本客户端、fixture、留痕；**不要** curl Mac `localhost:17930`。
+2. **Windows**（`C:\Users\Public\xhs-routing-v1-1` @ **`main`** + 17920/17930）= 唯一业务执行码与 registry/控制面。
+3. job 对错只看 Windows HEAD / task-launch 全 hash；Mac checkout 脏不代表未部署。
+
+## 复用流程表（默认油门；手拼仍允许）
+
+| 要做的事 | 默认命令（cwd = 本仓 xhs-registry，除非注明） |
+|----------|-----------------------------------------------|
+| 看 live | `ssh xhs-windows 'curl.exe -s http://127.0.0.1:17930/agent-entry.md'` |
+| **4 机 full_dry_run 并发** | `node ops/conc4-full-dry-run.mjs --actor <you>-conc4` |
+| 同上只预检 | `node ops/conc4-full-dry-run.mjs --actor <you>-conc4 --dry-run` |
+| 隔离后 main-safe 清 | `node ops/recover-main-safe.mjs --job <jobId> --actor <you>` |
+| 单机 campaign 步 | `campaign/step.sh`（单机）；四机并发**优先** conc4 脚本 |
+| 手拼调试 | `node <gpfs>/control-plane/devicectl.mjs --ssh xhs-windows job submit …` |
+
+同一流程成功 ≥2 次 → 应收成 `ops/` 脚本；之后默认跑脚本，不靠拼 5 份文档。
 
 ## 第一步：建立全局认知（必读，按序）
 
