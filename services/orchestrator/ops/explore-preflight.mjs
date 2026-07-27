@@ -7,6 +7,7 @@
 // exit: 0 可开工 | 2 舰队/设备不行 | 4 客户端/SSH
 
 import { execFileSync } from "node:child_process";
+// execFileSync used for netstat probe too
 
 const argv = process.argv.slice(2);
 const opt = (n, fb = null) => {
@@ -22,7 +23,8 @@ if (flag("--help") || flag("-h")) {
   1) registry 17930 /control health 17920
   2) agent-entry: 目标 ready + 未隔离 + lease free
   3) control devices online
-  4) 可选 17910 device/v1/devices（--require-17910 时不通=失败；默认探测并打印）
+  4) 小薇 22222 端口 LISTEN（交互 ops 依赖它，不通=失败）
+  5) 可选 17910 device/v1/devices（--require-17910 时不通=失败；默认只警告）
 
 exit: 0 ok | 2 fleet/device | 4 client/ssh`);
   process.exit(0);
@@ -123,12 +125,27 @@ try {
     problems.push(`control devices: ${e.message}`);
   }
 
-  // 4) 17910
-  let xw = null;
+  // 4) Xiaowei 22222（tap/dump/screenshot 真通道）
   try {
-    xw = JSON.parse(sshCurl("http://127.0.0.1:17910/device/v1/devices"));
+    const listen = execFileSync(
+      "ssh",
+      [SSH, "cmd", "/c", "netstat -ano | findstr 22222"],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+    );
+    if (!/LISTENING/i.test(listen) && !/22222/.test(listen)) {
+      problems.push("xiaowei 22222 未检测到 LISTEN（交互 ops 不可用）");
+    } else {
+      log("  22222: detected");
+    }
+  } catch (e) {
+    problems.push(`xiaowei 22222 探测失败: ${String(e.message || e).slice(0, 120)}`);
+  }
+
+  // 5) 17910 optional
+  try {
+    const xw = JSON.parse(sshCurl("http://127.0.0.1:17910/device/v1/devices"));
     const aliases = (xw.devices || []).map((d) => d.alias);
-    log(`  17910 devices: [${aliases.join(",")}]`);
+    log(`  17910 devices: [${aliases.join(",")}]（可选旁证，非交互依赖）`);
     if (REQUIRE_17910) {
       if (xw.ok !== true) problems.push("17910 ok!=true");
       if (!aliases.includes(ALIAS)) problems.push(`${ALIAS}: 不在 17910 device list`);

@@ -1,6 +1,6 @@
 # xhs-registry 进度
 
-> 最后更新：2026-07-27 15:00 CST（**Explorer Mode v2**：`modes/explorer.md` + `ops/explore-preflight.mjs` + `ops/screenshot-and-analyze.mjs`；dump 优先/vision 限次/外部 timeout。GitHub private xhs-registry；控制面 `xhs-device-agent` main@1f7ae22）
+> 最后更新：2026-07-27 15:20 CST（Explorer **交互油门**：`ops/tap|dump-ui|focus|launch-app.mjs` + `_win-xiaowei` 走 22222；不绑 17910。GitHub xhs-registry；控制面 main@1f7ae22）
 
 ## 一句话现状（北极星，所有 agent 必读）
 

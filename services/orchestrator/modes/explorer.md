@@ -24,12 +24,17 @@ ssh xhs-windows 'curl.exe -s http://127.0.0.1:17920/control/v1/health'
 ssh xhs-windows 'curl.exe -s http://127.0.0.1:17930/agent-entry.md'
 ```
 
-截屏到本地（**禁止**手搓「写脚本→scp→adb→拉图」）：
+截屏 / dump / tap / 开 App（**禁止**手搓临时脚本；**不依赖 17910**，走小薇 22222）：
 
 ```bash
-node ops/screenshot-and-analyze.mjs --alias 01
-# 输出一行 SHOT=/path/to.png
+node ops/screenshot-and-analyze.mjs --alias 01   # SHOT=/path.png
+node ops/dump-ui.mjs --alias 01                  # DUMP=/path.xml
+node ops/focus.mjs --alias 01                    # FOCUS=pkg/activity
+node ops/tap.mjs --alias 01 --x 540 --y 1200     # TAP=ok
+node ops/launch-app.mjs --alias 01 --package com.taobao.idlefish
 ```
+
+> 以上是 **Explorer lab 通道**（22222）。生产业务仍用 job/session；探索可用，不用于 R2 外发。
 
 ---
 
@@ -53,7 +58,7 @@ node ops/screenshot-and-analyze.mjs --alias 01
 - 读 agent-entry / knowledge / capabilities  
 - 写 knowledge（recipe / pitfall / unknown）  
 - R0/R1 job（observe、`*_dry_run` 等 automatic）  
-- 上表两个 ops 工具  
+- Explorer ops：preflight / screenshot / **dump-ui / tap / focus / launch-app**（lab 22222）  
 - session canary（若 capability 要求且 lease 可见）  
 
 ---
@@ -64,10 +69,10 @@ node ops/screenshot-and-analyze.mjs --alias 01
 |------|------|
 | live 状态 | `GET …:17930/api/agent-entry` |
 | 能力目录 | `GET …:17930/api/capabilities` 或控制面 |
-| 碰机 | `node <gpfs>/control-plane/devicectl.mjs --ssh xhs-windows job submit …` |
-| 观测 | `xhs.observe.*` / `xianyu.observe.snapshot` / `wechat.observe.*` |
-| 已知剧本回归 | **Runner**：`ops/conc4-full-dry-run.mjs`（不是 Explorer） |
-| 截屏 | `ops/screenshot-and-analyze.mjs` |
+| 生产碰机 | `devicectl job/session` 正道 |
+| 探索交互 | `ops/tap\|dump-ui\|focus\|launch-app\|screenshot-and-analyze.mjs`（**22222**，不绑 17910） |
+| 观测 capability | `xhs.observe.*` / `xianyu.observe.snapshot` / `wechat.observe.*` |
+| 已知剧本回归 | **Runner**：`ops/conc4-full-dry-run.mjs` |
 
 ---
 
