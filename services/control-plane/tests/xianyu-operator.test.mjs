@@ -10,6 +10,7 @@ import {
   createStickyXiaoweiInputSession,
   createStepSupervisor,
   descriptionContains,
+  discardDraftDryRun,
   findDiscardWithoutSaving,
   findDescriptionField,
   findFreightOptionBlock,
@@ -1074,5 +1075,118 @@ test("recoverDiscardDryRun relaunches to safe main when delicate recovery cannot
   assert.equal(result.step, "relaunched-to-safe-main");
   assert.equal(result.safeStateVerified, true);
   assert.equal(result.savedDraft, false);
+  assert.equal(taps.length, 0);
+});
+
+test("discardDraftDryRun relaunches when service compose has no unique close/discard a11y", async () => {
+  // job 末 restoration 走 discard-dry-run（非 recover）。03 服务类 compose：
+  // isPublishCompose 可能为 true，但顶栏 X /「不保存」a11y 认不出 → 必须 startIdlefish 兜底。
+  const serviceCompose = [
+    { label: "发布，按钮, 发布", className: "android.view.View", bounds: [880, 94, 1080, 178] },
+    { label: "分类/预计工期/售后服务/等", bounds: [74, 760, 1006, 870] },
+    { label: "商品规格, 已设置2个规格", bounds: [74, 1650, 1006, 1770] },
+    { label: "价格和库存, ¥12.34、库存4", bounds: [74, 1790, 1006, 1910] },
+    { label: "发货方式, 包邮", bounds: [74, 1910, 1006, 2030] },
+  ];
+  let started = false;
+  const taps = [];
+  const shell = [];
+  const op = {
+    serial: "device-03",
+    transport: "gateway",
+    async shellExec(command) {
+      shell.push(command);
+      if (command === "wm size") return "Physical size: 1080x2400";
+      if (command.startsWith("am start") || command.includes("force-stop")) started = true;
+      return "";
+    },
+    async currentFocus() {
+      return started
+        ? { package: "com.taobao.idlefish", activity: "com.taobao.idlefish.maincontainer.activity.MainActivity" }
+        : { package: "com.taobao.idlefish", activity: "FishFlutterBoostActivity" };
+    },
+    async dumpXml() {
+      return recoveryXml(started ? device02BottomTabs : serviceCompose);
+    },
+    async tap(x, y) { taps.push([x, y]); },
+  };
+
+  const result = await discardDraftDryRun(op);
+  assert.equal(result.ok, true);
+  assert.equal(result.step, "relaunched-to-safe-main");
+  assert.equal(result.savedDraft, false);
+  assert.equal(result.fallbackFrom, "close-button");
+  assert.equal(taps.length, 0);
+  assert.equal(shell.some((c) => /force-stop/.test(c)), true);
+  assert.equal(shell.some((c) => /am start/.test(c)), true);
+});
+
+test("discardDraftDryRun closes via explicit 不保存 when a11y is unique", async () => {
+  const compose = [
+    { label: "关闭", className: "android.widget.Button", clickable: true, bounds: [0, 80, 100, 180] },
+    { label: "发布", className: "android.widget.Button", bounds: [880, 94, 1080, 178] },
+    { label: "宝贝描述", bounds: [50, 300, 1000, 500] },
+    { label: "价格", bounds: [50, 900, 1000, 1050] },
+    { label: "添加图片", bounds: [50, 200, 200, 350] },
+  ];
+  const dialog = [
+    { label: "不保存", className: "android.widget.Button", clickable: true, bounds: [42, 2143, 524, 2248] },
+    { label: "存草稿", className: "android.widget.Button", clickable: true, bounds: [556, 2143, 1038, 2248] },
+  ];
+  let state = "compose";
+  const taps = [];
+  const op = {
+    serial: "device-01",
+    transport: "gateway",
+    async shellExec(command) {
+      if (command === "wm size") return "Physical size: 1080x2400";
+      if (command.includes("force-stop") || command.startsWith("am start")) {
+        throw new Error("should not relaunch when discard path works");
+      }
+      return "";
+    },
+    async currentFocus() {
+      return state === "main"
+        ? { package: "com.taobao.idlefish", activity: "com.taobao.idlefish.maincontainer.activity.MainActivity" }
+        : { package: "com.taobao.idlefish", activity: "FishFlutterBoostActivity" };
+    },
+    async dumpXml() {
+      return recoveryXml(state === "compose" ? compose : state === "dialog" ? dialog : device02BottomTabs);
+    },
+    async tap() {
+      taps.push(state);
+      state = state === "compose" ? "dialog" : "main";
+    },
+  };
+
+  const result = await discardDraftDryRun(op);
+  assert.equal(result.ok, true);
+  assert.equal(result.step, "discarded-without-saving");
+  assert.equal(result.savedDraft, false);
+  assert.equal(taps.length, 2);
+});
+
+test("discardDraftDryRun treats already-safe main as success without taps", async () => {
+  const taps = [];
+  const op = {
+    serial: "device-03",
+    transport: "gateway",
+    async shellExec(command) {
+      if (command === "wm size") return "Physical size: 1080x2400";
+      if (command.includes("force-stop") || command.startsWith("am start")) {
+        throw new Error("should not relaunch when already safe main");
+      }
+      return "";
+    },
+    async currentFocus() {
+      return { package: "com.taobao.idlefish", activity: "com.taobao.idlefish.maincontainer.activity.MainActivity" };
+    },
+    async dumpXml() { return recoveryXml(device02BottomTabs); },
+    async tap(x, y) { taps.push([x, y]); },
+  };
+  const result = await discardDraftDryRun(op);
+  assert.equal(result.ok, true);
+  assert.equal(result.step, "already-on-safe-main");
+  assert.equal(result.safeStateVerified, true);
   assert.equal(taps.length, 0);
 });

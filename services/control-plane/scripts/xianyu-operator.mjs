@@ -981,46 +981,119 @@ export async function inputDryRun(op, {
   };
 }
 
+/**
+ * job 末尾 restoration 用的 discard-dry-run。
+ * 优先：compose 顶栏关闭 →「不保存」精确点选。
+ * 兜底：精细路径任一 fail-closed 时 startIdlefish 强制回主页（force-stop 弃未存草稿，
+ * 无发布无保存）——覆盖 03 服务类目 compose 等 a11y 认不出关闭/不保存的机型差异。
+ * 与 recoverDiscardDryRun 的 relaunch 兜底语义一致，但本路径无 visualConfirmation 硬闸
+ * （adapter 非 recoveryAttempt 只看 ok && !savedDraft）。
+ */
 export async function discardDraftDryRun(op) {
+  const sizeRaw = await op.shellExec("wm size", 8000).catch(() => "");
+  const resolution = parseDisplayResolution(sizeRaw) || [1080, 2400];
+
+  const relaunchFallback = async (step, extra = {}) => {
+    await startIdlefish(op);
+    const page = await snapshot(op, "xianyu-discard-after-relaunch");
+    const safe = isRecoverySafeMain({
+      focus: page.focus,
+      nodes: page.nodes,
+      resolution,
+    });
+    const onMain = page.focus?.package === IDLEFISH_PACKAGE
+      && /MainActivity/.test(String(page.focus?.activity || ""));
+    return {
+      ok: safe || onMain,
+      step: safe ? "relaunched-to-safe-main" : (onMain ? "relaunched-to-main-activity" : step),
+      stoppedBeforePublish: true,
+      savedDraft: false,
+      publishTapped: false,
+      safeStateVerified: safe,
+      focus: page.focus,
+      fallbackFrom: step,
+      ...extra,
+    };
+  };
+
   let before = await snapshot(op, "xianyu-discard-before");
   const overlay = await returnFromXianyuChatOverlay(op, before);
   if (!overlay.ok) {
-    return { ok: false, step: "chat-overlay-back-unverified", stoppedBeforePublish: true };
+    return await relaunchFallback("chat-overlay-back-unverified");
   }
   before = overlay.page;
-  if (before.focus.package !== IDLEFISH_PACKAGE || !isPublishCompose(before.nodes)) {
-    return { ok: false, step: "not-on-publish-compose", stoppedBeforePublish: true };
+
+  // 已在主页：job 末 restoration 也算成功（无需再 discard）。
+  if (isRecoverySafeMain({ focus: before.focus, nodes: before.nodes, resolution })) {
+    return {
+      ok: true,
+      step: "already-on-safe-main",
+      stoppedBeforePublish: true,
+      savedDraft: false,
+      publishTapped: false,
+      safeStateVerified: true,
+      focus: before.focus,
+    };
   }
-  const close = before.nodes.find((node) => node.className === "android.widget.Button"
-    && node.bounds?.[0] === 0 && node.bounds?.[1] < 200 && node.bounds?.[2] < 120);
-  if (!close?.bounds) return { ok: false, step: "close-button", stoppedBeforePublish: true };
+
+  if (before.focus.package !== IDLEFISH_PACKAGE || !isPublishCompose(before.nodes)) {
+    // 不在 compose（含服务类目页 isPublishCompose 假阴性、或已漂到其它闲鱼子页）→ relaunch。
+    return await relaunchFallback("not-on-publish-compose", {
+      focus: before.focus,
+      publishCompose: isPublishCompose(before.nodes),
+    });
+  }
+
+  // 顶栏关闭：Button 优先；部分 Flutter/服务类目页用可点 View 画 X。
+  // 必须唯一，绝不盲点。
+  const closeCandidates = before.nodes.filter((node) => {
+    const b = node.bounds;
+    if (!Array.isArray(b) || b[0] > 10 || b[1] >= 220 || b[2] >= 140) return false;
+    const w = b[2] - b[0];
+    const h = b[3] - b[1];
+    if (w < 40 || w > 160 || h < 40 || h > 160) return false;
+    return node.className === "android.widget.Button"
+      || (node.clickable === true && (node.className === "android.view.View"
+        || /Image|Button|View/.test(String(node.className || ""))));
+  });
+  const close = closeCandidates.length === 1
+    ? closeCandidates[0]
+    : before.nodes.find((node) => node.className === "android.widget.Button"
+      && node.bounds?.[0] === 0 && node.bounds?.[1] < 200 && node.bounds?.[2] < 120);
+  if (!close?.bounds) return await relaunchFallback("close-button");
   await op.tap(...center(close.bounds));
   await settle(800);
   const confirm = await snapshot(op, "xianyu-discard-confirm");
-  const discard = findDiscardWithoutSaving(confirm.nodes);
+  const discard = findDiscardWithoutSaving(confirm.nodes, { resolution });
   if (!discard?.bounds) {
     // 空表或仅改了不触发草稿的字段时，闲鱼会直接关闭而不弹「不保存」。
-    // 只有新鲜 focus 已回 MainActivity 才接受该分支；仍在 Flutter 页则继续 fail-closed。
+    // 只有新鲜 focus 已回 MainActivity 才接受该分支；否则 relaunch 兜底。
     const focus = confirm.focus || await op.currentFocus();
     const closedWithoutPrompt = focus.package === IDLEFISH_PACKAGE && /MainActivity/.test(focus.activity || "");
+    if (closedWithoutPrompt) {
+      return {
+        ok: true,
+        step: "closed-empty-without-saving",
+        stoppedBeforePublish: true,
+        savedDraft: false,
+        focus,
+      };
+    }
+    return await relaunchFallback("discard-button", { focus });
+  }
+  await op.tap(...center(discard.bounds));
+  await settle(1000);
+  const focus = await op.currentFocus();
+  if (focus.package === IDLEFISH_PACKAGE && /MainActivity/.test(focus.activity || "")) {
     return {
-      ok: closedWithoutPrompt,
-      step: closedWithoutPrompt ? "closed-empty-without-saving" : "discard-button",
+      ok: true,
+      step: "discarded-without-saving",
       stoppedBeforePublish: true,
       savedDraft: false,
       focus,
     };
   }
-  await op.tap(...center(discard.bounds));
-  await settle(1000);
-  const focus = await op.currentFocus();
-  return {
-    ok: focus.package === IDLEFISH_PACKAGE && /MainActivity/.test(focus.activity || ""),
-    step: "discarded-without-saving",
-    stoppedBeforePublish: true,
-    savedDraft: false,
-    focus,
-  };
+  return await relaunchFallback("discard-did-not-reach-main", { focus });
 }
 
 // 草稿恢复框处置（2026-07-23 实证）：闲鱼对未保存的编辑会自动存草稿，下次进发布页弹
