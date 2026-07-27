@@ -1961,6 +1961,69 @@ export function findSkuSelectAll(snapshot) {
     && /全选$/.test(String(node.label || "").trim())) || null;
 }
 
+/**
+ * sku-select-all-missing 失败侧诊断：把价库/批量页上含「全选」的 label 原文与页面指纹
+ * 放进 job result，避免手推 Explorer 卡在规格输入页。有界截断，不含用户商品正文。
+ */
+export function summarizeSkuSelectAllMiss(snapshot) {
+  const nodes = Array.isArray(snapshot) ? snapshot : [];
+  const labelOf = (node) => String(node?.label || "").trim();
+  const labels = nodes.map(labelOf).filter(Boolean);
+  const withSelectAll = [];
+  const seen = new Set();
+  for (const label of labels) {
+    if (!/全选/.test(label) || seen.has(label)) continue;
+    seen.add(label);
+    withSelectAll.push(label.slice(0, 160));
+    if (withSelectAll.length >= 20) break;
+  }
+  const selectAllCandidates = nodes
+    .filter((node) => /全选/.test(labelOf(node)))
+    .slice(0, 12)
+    .map((node) => ({
+      label: labelOf(node).slice(0, 160),
+      bounds: Array.isArray(node?.bounds) ? node.bounds.map(Number) : null,
+      clickable: node?.clickable === true,
+      className: String(node?.className || "").slice(0, 80),
+      matchesFindSkuSelectAll: !!findSkuSelectAll([node]),
+    }));
+  const almostRelatedLabels = [];
+  const almostSeen = new Set();
+  for (const label of labels) {
+    if (/全选/.test(label)) continue;
+    if (!/(?:全|选|批量|已选)/.test(label)) continue;
+    if (almostSeen.has(label)) continue;
+    almostSeen.add(label);
+    almostRelatedLabels.push(label.slice(0, 80));
+    if (almostRelatedLabels.length >= 20) break;
+  }
+  const clickableLabelsSample = [];
+  const clickSeen = new Set();
+  for (const node of nodes) {
+    if (!node?.bounds || node.clickable !== true) continue;
+    const label = labelOf(node);
+    if (!label || clickSeen.has(label)) continue;
+    clickSeen.add(label);
+    clickableLabelsSample.push(label.slice(0, 80));
+    if (clickableLabelsSample.length >= 25) break;
+  }
+  return {
+    kind: "sku-select-all-missing",
+    nodeCount: nodes.length,
+    labelsWithSelectAll: withSelectAll,
+    selectAllCandidates,
+    markers: {
+      cancelBatch: labels.some((label) => /取消批量设置/.test(label)),
+      batchEntry: labels.some((label) => /批量设置价格和库存/.test(label)),
+      selectedCount: selectedSkuCount(nodes),
+      nextOrPriceStock: labels.some((label) => /下一步|设置价格和库存|价格和库存/.test(label)),
+      specsPage: labels.some((label) => /设置宝贝规格/.test(label)),
+    },
+    almostRelatedLabels,
+    clickableLabelsSample,
+  };
+}
+
 export function selectedSkuCount(snapshot) {
   for (const node of snapshot || []) {
     const match = String(node?.label || "").trim().match(/^已选\s*(\d+)$/);
@@ -3017,8 +3080,18 @@ function isDimTitle(label, dimName) {
     const expectedRows = expectedSkuCombinationCount(specs);
     const selectAll = findSkuSelectAll(pp.nodes);
     if (!selectAll?.bounds) {
+      // 失败侧必带 selectAllMiss：03 等机型 a11y 差一个逗号时，job result 即证据，无需手推价库页
+      skuDebugDump("price-page-select-all-miss", pp.nodes);
+      const selectAllMiss = summarizeSkuSelectAllMiss(pp.nodes);
       await cleanup();
-      return { ok: false, step: "sku-select-all-missing", implemented: true, expectedRows, dimResults };
+      return {
+        ok: false,
+        step: "sku-select-all-missing",
+        implemented: true,
+        expectedRows,
+        dimResults,
+        selectAllMiss,
+      };
     }
     await op.tap(...center(selectAll.bounds));
     await settle(1000);
