@@ -1647,9 +1647,15 @@ function planFromArgv() {
   const skuSpecsRaw = arg("--sku-specs");
   const imagesRaw = arg("--images");
   const attributesRaw = arg("--attributes");
+  const descLinesRaw = arg("--description-lines");
   const plan = {
     title: arg("--title") || null,
     description: arg("--description") || null,
+    // 多行描述（2026-07-28）：与 adapter 三字段+descriptionLines 对齐，resolveDescriptionLines 组装逐行
+    descriptionPrefix: arg("--description-prefix") || null,
+    productTitle: arg("--product-title") || null,
+    descriptionBody: arg("--description-body") || null,
+    descriptionLines: descLinesRaw ? JSON.parse(descLinesRaw) : null,
     price: arg("--price") || null,
     originalPrice: arg("--original-price") || null,
     category: arg("--category") || null,

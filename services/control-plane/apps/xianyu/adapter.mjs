@@ -55,6 +55,12 @@ function commandArgs({ script, action, device, params, evidenceDirectory = null 
   if (params.text !== undefined) args.push("--text", String(params.text));
   // publish-dry-run / image-dry-run params
   if (params.description !== undefined) args.push("--description", String(params.description));
+  // 多行描述（2026-07-28）：descriptionPrefix+productTitle+descriptionBody 三字段组装逐行，
+  // 或 descriptionLines 数组直传。adapter 之前只转 description 单串 → 三字段被丢、描述步被跳过。
+  if (params.descriptionPrefix !== undefined) args.push("--description-prefix", String(params.descriptionPrefix));
+  if (params.productTitle !== undefined) args.push("--product-title", String(params.productTitle));
+  if (params.descriptionBody !== undefined) args.push("--description-body", String(params.descriptionBody));
+  if (params.descriptionLines !== undefined) args.push("--description-lines", JSON.stringify(params.descriptionLines));
   if (params.price !== undefined) args.push("--price", String(params.price));
   if (params.skuPrice !== undefined) args.push("--sku-price", String(params.skuPrice));
   if (params.skuStock !== undefined) args.push("--sku-stock", String(params.skuStock));
