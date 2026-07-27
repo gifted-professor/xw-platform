@@ -391,6 +391,15 @@ test("recovery safe main requires MainActivity and the complete bottom bar", () 
     resolution: [1080, 2400],
   }), false);
   assert.equal(isRecoverySafeMain({ focus, nodes: device02BottomTabs, resolution: null }), false);
+  // 03 号机实测：a11y 把「消息」tab 暴露成裸 "消息"（无「消息，未选中状态」描述节点）。
+  // 旧正则 /^消息[,，]/ 会 false-negative 拒掉；修正后 (?:$|[,，]) 接受裸标签。
+  const device03BareMessageTabs = [
+    { label: "闲鱼，未读消息数0，选中状态", bounds: [90, 2322, 146, 2355], clickable: true },
+    { label: "卖闲置", bounds: [430, 2241, 650, 2355], clickable: true },
+    { label: "消息", bounds: [728, 2322, 787, 2355], clickable: true },
+    { label: "我的，未选中状态", bounds: [926, 2323, 982, 2354], clickable: true },
+  ];
+  assert.equal(isRecoverySafeMain({ focus, nodes: device03BareMessageTabs, resolution: [1080, 2400] }), true);
 });
 
 test("compose recovery never force-stops when Xianyu is already on a child page", async () => {

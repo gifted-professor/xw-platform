@@ -1260,9 +1260,11 @@ export function isRecoverySafeMain({ focus = null, nodes = [], resolution = null
     .filter((node) => Array.isArray(node.bounds) && node.bounds[1] >= height * 0.82)
     .map((node) => String(node.label || "").replace(/\s+/g, "").trim());
   const has = (pattern) => bottomLabels.some((label) => pattern.test(label));
+  // 底栏四锚点。卖闲置/消息 用 (?:$|[,，]) 接受裸标签——部分机型 a11y
+  // 把「消息」tab 暴露成裸 "消息"（无 "消息，未选中状态" 描述节点），只认逗号会 false-negative。
   const completeBottomBar = has(/^(闲鱼|首页)[,，]/)
     && has(/^卖闲置(?:$|[,，])/)
-    && has(/^消息[,，]/)
+    && has(/^消息(?:$|[,，])/)
     && has(/^我的[,，]/);
   const allLabels = nodes.map((node) => String(node.label || "")).join("\n");
   const unsafeMarker = /设置宝贝规格|下一步\s*设置价格和库存|不保存|存草稿/.test(allLabels);
