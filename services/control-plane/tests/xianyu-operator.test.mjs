@@ -1001,3 +1001,78 @@ test("createStepSupervisor keeps progress events off stdout", async () => {
   assert.ok(stderr.length >= 2);
   assert.ok(stderr.every((line) => JSON.parse(line).event === "supervisor"));
 });
+
+test("recoverDiscardDryRun relaunches to safe main when 闲鱼 is not in foreground (dialer)", async () => {
+  // 03 漂到拨号盘：focus 不是闲鱼。restore() 必须自己 startIdlefish 回主页，零人工 tap。
+  const dialerNodes = [
+    { label: "1", bounds: [100, 1500, 300, 1700] },
+    { label: "2", bounds: [400, 1500, 600, 1700] },
+    { label: "呼叫", bounds: [430, 1900, 650, 2050], clickable: true },
+  ];
+  let started = false;
+  const taps = [];
+  const op = {
+    serial: "device-03",
+    transport: "gateway",
+    async shellExec(command) {
+      if (command === "wm size") return "Physical size: 1080x2400";
+      if (command.startsWith("am start")) started = true;
+      return "";
+    },
+    async currentFocus() {
+      return started
+        ? { package: "com.taobao.idlefish", activity: "com.taobao.idlefish.maincontainer.activity.MainActivity" }
+        : { package: "com.android.contacts", activity: "TwelveKeyDialer" };
+    },
+    async dumpXml() {
+      return recoveryXml(started ? device02BottomTabs : dialerNodes);
+    },
+    async tap(x, y) { taps.push([x, y]); },
+    async capturePng(path) { return { path, bytes: 100, sha256: "f".repeat(64) }; },
+  };
+
+  const result = await recoverDiscardDryRun(op, { evidenceDir: "/tmp/xianyu-recovery-test" });
+  assert.equal(result.ok, true);
+  assert.equal(result.step, "relaunched-to-safe-main");
+  assert.equal(result.safeStateVerified, true);
+  assert.equal(result.savedDraft, false);
+  assert.equal(taps.length, 0);
+  assert.equal(result.evidenceFiles.some((f) => f.label === "xianyu-recovery-after-relaunch"), true);
+});
+
+test("recoverDiscardDryRun relaunches to safe main when delicate recovery cannot handle the page", async () => {
+  // 03 服务类目 compose：闲鱼在前台但精细路径认不出该页 → 命中 unexpected-page 兜底，relaunch 回主页。
+  const serviceComposeNodes = [
+    { label: "服务类目", bounds: [40, 200, 1040, 400] },
+    { label: "预计工期", bounds: [40, 500, 1040, 700] },
+    { label: "售后服务", bounds: [40, 800, 1040, 1000] },
+  ];
+  let started = false;
+  const taps = [];
+  const op = {
+    serial: "device-03",
+    transport: "gateway",
+    async shellExec(command) {
+      if (command === "wm size") return "Physical size: 1080x2400";
+      if (command.startsWith("am start")) started = true;
+      return "";
+    },
+    async currentFocus() {
+      return started
+        ? { package: "com.taobao.idlefish", activity: "com.taobao.idlefish.maincontainer.activity.MainActivity" }
+        : { package: "com.taobao.idlefish", activity: "FishFlutterBoostActivity" };
+    },
+    async dumpXml() {
+      return recoveryXml(started ? device02BottomTabs : serviceComposeNodes);
+    },
+    async tap(x, y) { taps.push([x, y]); },
+    async capturePng(path) { return { path, bytes: 100, sha256: "g".repeat(64) }; },
+  };
+
+  const result = await recoverDiscardDryRun(op, { evidenceDir: "/tmp/xianyu-recovery-test" });
+  assert.equal(result.ok, true);
+  assert.equal(result.step, "relaunched-to-safe-main");
+  assert.equal(result.safeStateVerified, true);
+  assert.equal(result.savedDraft, false);
+  assert.equal(taps.length, 0);
+});

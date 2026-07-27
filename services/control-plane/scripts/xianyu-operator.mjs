@@ -1336,6 +1336,36 @@ export async function inspectRecoveryPage(op, { evidenceDir = EVIDENCE_DIR_DEFAU
   };
 }
 
+// restore() 兜底：精细退出失败或闲鱼根本不在前台时，startIdlefish 强制回闲鱼主页
+// （force-stop 清旧任务栈，弃未存草稿，无发布无保存），再以 isRecoverySafeMain 硬闸校验。
+// 成功返回与 recoverDiscardDryRun 终态同形的 result；失败/异常返回 null——绝不靠盲点坐标继续。
+async function relaunchToSafeMain(op, resolution, { capture, evidenceFiles }) {
+  try {
+    await startIdlefish(op);
+    const page = await snapshot(op, "xianyu-recovery-after-relaunch");
+    await capture("after-relaunch");
+    if (!isRecoverySafeMain({ focus: page.focus, nodes: page.nodes, resolution })) return null;
+    const finalScreenshot = await capture("final");
+    return {
+      ok: true,
+      step: "relaunched-to-safe-main",
+      stoppedBeforePublish: true,
+      savedDraft: false,
+      publishTapped: false,
+      safeStateVerified: true,
+      evidenceRequired: true,
+      evidenceFiles,
+      finalScreenshot,
+      focus: page.focus,
+      resolution,
+      discard: null,
+    };
+  } catch {
+    // relaunch 本身失败（transport/启动失败）→ 返回 null，调用方按原 step fail-closed。
+    return null;
+  }
+}
+
 export async function recoverDiscardDryRun(op, { evidenceDir = EVIDENCE_DIR_DEFAULT } = {}) {
   mkdirSync(evidenceDir, { recursive: true });
   const safeSerial = String(op.serial || "device").replace(/[^A-Za-z0-9_-]/g, "_");
@@ -1364,8 +1394,39 @@ export async function recoverDiscardDryRun(op, { evidenceDir = EVIDENCE_DIR_DEFA
     const resolution = parseDisplayResolution(sizeRaw);
     if (!resolution) return fail("display-size-unavailable");
 
+    // 精细退出任一步骤不可唯一验证时，先试 relaunch 回主页兜底，回不到再按原 step fail-closed。
+    const relaunchOr = async (step, extra = {}) => {
+      const relaunched = await relaunchToSafeMain(op, resolution, { capture, evidenceFiles });
+      return relaunched || fail(step, extra);
+    };
+
     let page = await snapshot(op, "xianyu-recovery-before");
     await capture("before");
+    // 闲鱼不在前台（拨号盘/桌面/其它 app）→ startIdlefish 强制回闲鱼主页再判断。
+    // restore() 本就是动作恢复；force-stop 清旧任务栈弃未存草稿，无发布无保存。
+    if (page.focus?.package !== IDLEFISH_PACKAGE) {
+      await startIdlefish(op);
+      page = await snapshot(op, "xianyu-recovery-after-relaunch");
+      await capture("after-relaunch");
+      if (isRecoverySafeMain({ focus: page.focus, nodes: page.nodes, resolution })) {
+        const finalScreenshot = await capture("final");
+        return {
+          ok: true,
+          step: "relaunched-to-safe-main",
+          stoppedBeforePublish: true,
+          savedDraft: false,
+          publishTapped: false,
+          safeStateVerified: true,
+          evidenceRequired: true,
+          evidenceFiles,
+          finalScreenshot,
+          focus: page.focus,
+          resolution,
+          discard: null,
+        };
+      }
+      // 极少见：startIdlefish 后闲鱼停在子页（非 main-safe）→ 落到下面精细处理。
+    }
     const overlay = await returnFromXianyuChatOverlay(op, page);
     if (!overlay.ok) return fail("chat-overlay-back-unverified");
     if (overlay.handled) {
@@ -1413,14 +1474,14 @@ export async function recoverDiscardDryRun(op, { evidenceDir = EVIDENCE_DIR_DEFA
         transition += 1) {
         if (pageClassification.pageType === "sku-sheet") {
           const close = findSkuRecoveryClose(page.nodes, { focus: page.focus, resolution });
-          if (!close?.bounds) return fail("sku-close-not-uniquely-verified", { pageClassification });
+          if (!close?.bounds) return await relaunchOr("sku-close-not-uniquely-verified", { pageClassification });
           await op.tap(...center(close.bounds));
           await settle(1000);
           page = await snapshot(op, `xianyu-recovery-after-sku-close-${transition}`);
           await capture(`after-sku-close-${transition}`);
         } else {
           const confirmExit = findSkuExitConfirm(page.nodes, { focus: page.focus, resolution });
-          if (!confirmExit?.bounds) return fail("sku-exit-confirm-not-uniquely-verified", { pageClassification });
+          if (!confirmExit?.bounds) return await relaunchOr("sku-exit-confirm-not-uniquely-verified", { pageClassification });
           await op.tap(...center(confirmExit.bounds));
           await settle(1000);
           page = await snapshot(op, `xianyu-recovery-after-sku-exit-confirm-${transition}`);
@@ -1434,7 +1495,7 @@ export async function recoverDiscardDryRun(op, { evidenceDir = EVIDENCE_DIR_DEFA
         });
       }
       if (["sku-sheet", "sku-exit-dialog"].includes(pageClassification.pageType)) {
-        return fail("sku-recovery-transition-limit", { pageClassification });
+        return await relaunchOr("sku-recovery-transition-limit", { pageClassification });
       }
     }
 
@@ -1446,7 +1507,7 @@ export async function recoverDiscardDryRun(op, { evidenceDir = EVIDENCE_DIR_DEFA
       const discardButton = discardCandidates.length === 1
         ? findDiscardWithoutSaving(page.nodes, { resolution })
         : null;
-      if (!discardButton?.bounds) return fail("discard-button-not-uniquely-verified");
+      if (!discardButton?.bounds) return await relaunchOr("discard-button-not-uniquely-verified");
       await op.tap(...center(discardButton.bounds));
       await settle(1000);
       discard = {
@@ -1458,10 +1519,10 @@ export async function recoverDiscardDryRun(op, { evidenceDir = EVIDENCE_DIR_DEFA
     } else if (page.focus.package === IDLEFISH_PACKAGE && isPublishCompose(page.nodes)) {
       discard = await discardDraftDryRun(op);
       if (discard.ok !== true || discard.savedDraft !== false) {
-        return fail("compose-discard-not-verified", { discard });
+        return await relaunchOr("compose-discard-not-verified", { discard });
       }
     } else if (!isRecoverySafeMain({ focus: page.focus, nodes: page.nodes, resolution })) {
-      return fail("unexpected-page-after-sku-close", {
+      return await relaunchOr("unexpected-page-after-sku-close", {
         focus: page.focus,
         pageClassification,
       });
