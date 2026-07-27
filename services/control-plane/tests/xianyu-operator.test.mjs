@@ -20,6 +20,8 @@ import {
   findSkuRecoveryClose,
   findSkuExitConfirm,
   findSkuBatchEditControls,
+  findSkuSelectAll,
+  summarizeSkuSelectAllMiss,
   findAppNumpadDelete,
   findAppNumpadKey,
   freightOptionTarget,
@@ -962,6 +964,36 @@ test("findSkuBatchEditControls prefers rightmost 确定 as keyboard confirm", ()
   assert.ok(controls.stockInput);
   assert.deepEqual(controls.keyboardConfirm.bounds, [884, 2132, 972, 2184]);
   assert.ok(APP_NUMPAD_SETTLE_MS >= 400);
+});
+
+test("findSkuSelectAll requires comma-prefix and trailing 全选 (recipe success label)", () => {
+  const ok = findSkuSelectAll([
+    { label: "全选，按钮 0, 全选", bounds: [40, 400, 200, 460], clickable: true },
+  ]);
+  assert.ok(ok);
+  assert.deepEqual(ok.bounds, [40, 400, 200, 460]);
+  // 裸「全选」或无尾缀：当前正则 miss（03 嫌疑）
+  assert.equal(findSkuSelectAll([{ label: "全选", bounds: [40, 400, 200, 460] }]), null);
+  assert.equal(findSkuSelectAll([{ label: "全选，按钮", bounds: [40, 400, 200, 460] }]), null);
+});
+
+test("summarizeSkuSelectAllMiss surfaces raw 全选 labels and page markers for job result", () => {
+  const diag = summarizeSkuSelectAllMiss([
+    { label: "取消批量设置", bounds: [10, 10, 100, 40], clickable: true },
+    { label: "全选", bounds: [40, 400, 200, 460], clickable: true, className: "android.view.View" },
+    { label: "已选 2", bounds: [220, 400, 360, 460] },
+    { label: "批量设置价格和库存", bounds: [40, 2000, 1000, 2100], clickable: true },
+    { label: "设置宝贝规格", bounds: [1, 1, 2, 2] }, // should not dominate markers if also batch
+  ]);
+  assert.equal(diag.kind, "sku-select-all-missing");
+  assert.deepEqual(diag.labelsWithSelectAll, ["全选"]);
+  assert.equal(diag.selectAllCandidates.length, 1);
+  assert.equal(diag.selectAllCandidates[0].matchesFindSkuSelectAll, false);
+  assert.equal(diag.markers.cancelBatch, true);
+  assert.equal(diag.markers.batchEntry, true);
+  assert.equal(diag.markers.selectedCount, 2);
+  assert.equal(diag.markers.specsPage, true);
+  assert.ok(diag.clickableLabelsSample.includes("全选"));
 });
 
 test("createStepSupervisor retries recover then succeeds", async () => {
