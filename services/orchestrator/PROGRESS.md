@@ -1,6 +1,6 @@
 # xhs-registry 进度
 
-> 最后更新：2026-07-27 14:15 CST（本仓已上 GitHub **private** `gifted-professor/xhs-registry`；快路径 conc4 已推 main。控制面代码仍在 `xhs-device-agent` main@1f7ae22）
+> 最后更新：2026-07-27 15:00 CST（**Explorer Mode v2**：`modes/explorer.md` + `ops/explore-preflight.mjs` + `ops/screenshot-and-analyze.mjs`；dump 优先/vision 限次/外部 timeout。GitHub private xhs-registry；控制面 `xhs-device-agent` main@1f7ae22）
 
 ## 一句话现状（北极星，所有 agent 必读）
 

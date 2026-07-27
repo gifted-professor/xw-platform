@@ -33,11 +33,23 @@
 2. **Windows**（`C:\Users\Public\xhs-routing-v1-1` @ **`main`** + 17920/17930）= 唯一业务执行码与 registry/控制面。
 3. job 对错只看 Windows HEAD / task-launch 全 hash；Mac checkout 脏不代表未部署。
 
+## 工作模式（派工时指定一个）
+
+| 模式 | 何时 | 入口 |
+|------|------|------|
+| **Explorer** | 未知面/探路/写 recipe | **`modes/explorer.md`** → `ops/explore-preflight.mjs` → `ops/screenshot-and-analyze.mjs` |
+| **Runner** | 已知剧本回归 | `ops/conc4-full-dry-run.mjs` 等 |
+| **Fix** | 改代码/部署 | Grok/GLM；正道 devicectl + git main |
+
+自动派 cheap agent 探 App：**只派 Explorer**，把 `modes/explorer.md` 文末派工模板填好即可。
+
 ## 复用流程表（默认油门；手拼仍允许）
 
 | 要做的事 | 默认命令（cwd = 本仓 xhs-registry，除非注明） |
 |----------|-----------------------------------------------|
 | 看 live | `ssh xhs-windows 'curl.exe -s http://127.0.0.1:17930/agent-entry.md'` |
+| **探索开工检查** | `node ops/explore-preflight.mjs --alias 01` |
+| **探索截屏（一步）** | `node ops/screenshot-and-analyze.mjs --alias 01` → `SHOT=…` |
 | **4 机 full_dry_run 并发** | `node ops/conc4-full-dry-run.mjs --actor <you>-conc4` |
 | 同上只预检 | `node ops/conc4-full-dry-run.mjs --actor <you>-conc4 --dry-run` |
 | 隔离后 main-safe 清 | `node ops/recover-main-safe.mjs --job <jobId> --actor <you>` |
