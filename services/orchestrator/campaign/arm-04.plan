@@ -1,0 +1,6 @@
+2 manifest xianyu.observe.image_manifest /Users/a1234/Desktop/Coding/xhs-registry/campaign/fixtures/04-manifest.json 150
+2 image xianyu.publish.image_dry_run /Users/a1234/Desktop/Coding/xhs-registry/campaign/fixtures/04-image.json 300
+2 full xianyu.publish.full_dry_run /Users/a1234/Desktop/Coding/xhs-registry/campaign/fixtures/04-full.json 840
+3 manifest xianyu.observe.image_manifest /Users/a1234/Desktop/Coding/xhs-registry/campaign/fixtures/04-manifest.json 150
+3 image xianyu.publish.image_dry_run /Users/a1234/Desktop/Coding/xhs-registry/campaign/fixtures/04-image.json 300
+3 full xianyu.publish.full_dry_run /Users/a1234/Desktop/Coding/xhs-registry/campaign/fixtures/04-full.json 840

@@ -205,15 +205,24 @@ function rowToKnowledge(r) {
   };
 }
 
-function listKnowledge({ app, category, q, limit } = {}) {
+function listKnowledge({ app, category, q, limit, lifecycle, appliesTo } = {}) {
   const where = [];
   const args = [];
   if (app) { where.push("app=?"); args.push(app); }
   if (category) { where.push("category=?"); args.push(category); }
-  if (q) { where.push("(title LIKE ? OR content LIKE ?)"); args.push(`%${q}%`, `%${q}%`); }
+  if (lifecycle) { where.push("lifecycle=?"); args.push(lifecycle); }
+  if (appliesTo) { where.push("EXISTS (SELECT 1 FROM json_each(applies_to_json) WHERE value=?)"); args.push(appliesTo); }
+  // q 同时搜 id：入口只给最近 N 条，agent 常常已知 id（如 routing-table-v2）却搜不到
+  if (q) { where.push("(id LIKE ? OR title LIKE ? OR content LIKE ?)"); args.push(`%${q}%`, `%${q}%`, `%${q}%`); }
   const lim = limit ? ` LIMIT ${Math.max(1, Math.min(100, Number(limit)))}` : "";
   const sql = `SELECT * FROM knowledge ${where.length ? "WHERE " + where.join(" AND ") : ""} ORDER BY updated_at DESC${lim}`;
   return db.prepare(sql).all(...args).map(rowToKnowledge);
+}
+
+function getKnowledge(id) {
+  const r = db.prepare("SELECT * FROM knowledge WHERE id=?").get(id);
+  if (!r) { const e = new Error(`knowledge not found: ${id}`); e.status = 404; throw e; }
+  return rowToKnowledge(r);
 }
 
 function slugify(title, app) {
@@ -657,6 +666,221 @@ function listDeviceJobStatus(windowPerDevice = DEVICE_JOB_WINDOW) {
     }
     return { ok: true, window: win, perDevice };
   }, { ok: false, error: "control.db 暂不可读", window: win, perDevice: {} });
+}
+
+// ---------- 能力库（P1）----------
+// 控制面 /control/v1/capabilities 不返回 externalEffect/approvalRequired，registry 按控制面
+// policy.mjs 同款规则本地推导，避免 save_draft_dry_run 这类「标 automatic 实则需审批」误导 agent。
+const EXTERNAL_RISK = new Set(["R2", "R3"]);
+const EXTERNAL_IDEMPOTENCY = new Set(["external_effect", "ambiguous_on_timeout"]);
+const LOW_MATURITY = new Set(["E0", "E1"]);
+
+function derivePolicy(capability) {
+  const mode = capability.automationPolicy?.mode ?? null;
+  const canaryOnlyFlag = capability.automationPolicy?.canaryOnly === true;
+  const availability = capability.availability ?? "implemented";
+  const externalEffect = EXTERNAL_RISK.has(capability.risk) || EXTERNAL_IDEMPOTENCY.has(capability.idempotency);
+  const approvalRequired = externalEffect || mode === "approval_required" || availability === "approval_gated";
+  const canaryRequired = LOW_MATURITY.has(capability.maturity) || canaryOnlyFlag || availability === "canary_only";
+  const labOnly = mode === "lab_only";
+  const disabled = mode === "disabled";
+  const available = availability === "implemented";
+  // autonomous = 无需人工审批（审批维度）；但未必能直接 job 自跑——见 runnableAsJob
+  const autonomous = !approvalRequired && !labOnly && !disabled;
+  // runnableAsJob = 可直接 devicectl job submit 自跑（已实现 + 免审批 + 非 lab + 非 disabled + 非 canary-only）
+  const runnableAsJob = available && !approvalRequired && !labOnly && !disabled && !canaryRequired;
+  // runnableAsCanarySession = 需要 canary session 才能跑（低成熟度 / canary_only availability）
+  const runnableAsCanarySession = (available || availability === "canary_only") && !approvalRequired && !labOnly && !disabled && canaryRequired;
+  return {
+    mode,
+    availability,
+    externalEffect,
+    approvalRequired,
+    canaryRequired,
+    labOnly,
+    disabled,
+    autonomous,
+    runnableAsJob,
+    runnableAsCanarySession,
+  };
+}
+
+// 启动/请求期不变量检查：策略字面值与实际推导不一致时亮红灯（控制塔与 API 都显示）
+function capabilityLint(capability, policy) {
+  const warnings = [];
+  if (policy.mode === "automatic" && policy.approvalRequired) {
+    warnings.push(`automationPolicy.mode=automatic 但 idempotency=${capability.idempotency}/risk=${capability.risk} 推导出需人工审批——字面值有误导性`);
+  }
+  if (policy.externalEffect && capability.restoration?.required === false) {
+    warnings.push("有外部效应且不要求 restoration——副作用不会被自动回收");
+  }
+  if (policy.canaryRequired && policy.mode === "automatic") {
+    warnings.push(`maturity=${capability.maturity} 需 canary session，automatic 模式下 job 直提会被拒`);
+  }
+  if (policy.autonomous && !policy.runnableAsJob) {
+    warnings.push(`autonomous=true 但 availability=${policy.availability} 实际不可直接 job 自跑——task-packet 不会生成 job 骨架`);
+  }
+  return warnings;
+}
+
+function summarizeCapability(capability, routingByCapability) {
+  const policy = derivePolicy(capability);
+  return {
+    id: capability.id,
+    appId: capability.appId ?? null,
+    risk: capability.risk ?? null,
+    maturity: capability.maturity ?? null,
+    idempotency: capability.idempotency ?? null,
+    timeoutMs: capability.timeoutMs ?? null,
+    resources: capability.resources ?? [],
+    restorationRequired: capability.restoration?.required ?? null,
+    verificationMode: capability.verification?.mode ?? null,
+    policy,
+    lint: capabilityLint(capability, policy),
+    eligibleAliases: routingByCapability.get(capability.id) ?? [],
+  };
+}
+
+function routingMatrix() {
+  return queryControlDb((cdb) => {
+    const rows = cdb.prepare("SELECT alias, routing_json FROM devices WHERE alias IS NOT NULL ORDER BY alias").all();
+    const byAlias = {};
+    const byCapability = new Map();
+    for (const r of rows) {
+      let routing = {};
+      try { routing = JSON.parse(r.routing_json || "{}"); } catch { /* keep {} */ }
+      const ids = Array.isArray(routing.capabilityIds) ? routing.capabilityIds : [];
+      byAlias[r.alias] = { enabled: routing.enabled !== false, tags: routing.tags ?? [], capabilityIds: ids };
+      // 只有 routing.enabled !== false 的设备才计入 byCapability——placement 明确拒绝 disabled profile，
+      // 把它标 eligible 会误导 agent 提交后被控制面拒。
+      if (routing.enabled !== false) {
+        for (const id of ids) {
+          if (!byCapability.has(id)) byCapability.set(id, []);
+          byCapability.get(id).push(r.alias);
+        }
+      }
+    }
+    return { ok: true, byAlias, byCapability };
+  }, { ok: false, error: "control.db 暂不可读", byAlias: {}, byCapability: new Map() });
+}
+
+async function buildCapabilityCatalog() {
+  const matrix = routingMatrix();
+  let capabilities = [];
+  let error = null;
+  try {
+    const data = await fetchJson(`${CONTROL}/control/v1/capabilities`);
+    capabilities = Array.isArray(data?.capabilities) ? data.capabilities : [];
+  } catch (e) {
+    error = String(e.message || e);
+  }
+  const items = capabilities.map((c) => summarizeCapability(c, matrix.byCapability)).sort((a, b) => a.id.localeCompare(b.id));
+  return {
+    ok: !error,
+    error,
+    generatedAt: new Date().toISOString(),
+    count: items.length,
+    routingSourceOk: matrix.ok,
+    capabilities: items,
+    routingByAlias: matrix.byAlias,
+    lintWarnings: items.flatMap((item) => item.lint.map((w) => ({ capabilityId: item.id, warning: w }))),
+  };
+}
+
+// ---------- 任务包（P1，只推荐不代提交）----------
+const TASK_KEYWORDS = [
+  { match: /闲鱼|xianyu|上架|发布商品|草稿/i, appId: "xianyu" },
+  { match: /小红书|xhs|评论|笔记/i, appId: "xhs" },
+  { match: /微信|wechat|客服|会话/i, appId: "wechat" },
+  { match: /设备|device|网关|小薇|xiaowei/i, appId: "xiaowei" },
+];
+const INTENT_KEYWORDS = [
+  { match: /只读|观察|快照|observe|snapshot|巡检/i, prefer: /observe/ },
+  { match: /图片|image|相册/i, prefer: /image/ },
+  { match: /输入|文案|描述|text/i, prefer: /input/ },
+  { match: /全链|完整|full|标准链|发布|发商品|上架|不保存|no.?save/i, prefer: /full_dry_run$/ },
+  { match: /打开|进入|open/i, prefer: /open/ },
+  { match: /草稿|保存草稿|save.?draft/i, prefer: /save_draft/ },
+];
+
+function buildTaskPacket(taskText, catalog, entry) {
+  const text = String(taskText || "");
+  const app = TASK_KEYWORDS.find((k) => k.match.test(text))?.appId ?? null;
+  const intent = INTENT_KEYWORDS.filter((k) => k.match.test(text)).map((k) => k.prefer);
+  const pool = catalog.capabilities.filter((c) => (app ? c.appId === app : true));
+  const readyAliases = new Set(entry.devices.filter((d) => d.state.ready).map((d) => d.alias));
+  // 只推荐被路由到至少一台设备的能力（无路由=placement 会拒，推荐了也跑不了）。
+  // 无意图匹配时不按基础分瞎猜——返回空推荐 + 提示，避免误导（如把 open_dry_run 排在 save_draft 前）。
+  const routed = pool.filter((c) => c.eligibleAliases.length);
+  let recommendations = [];
+  if (intent.length) {
+    const scored = routed.map((c) => {
+      let score = 0;
+      for (const rx of intent) if (rx.test(c.id)) score += 3;
+      if (c.policy.runnableAsJob) score += 2;       // 可直接 job 自跑优先
+      if (c.risk === "R0") score += 1;
+      return { c, score };
+    }).sort((a, b) => b.score - a.score || a.c.id.localeCompare(b.c.id));
+    recommendations = scored.slice(0, 3).map(({ c, score }) => {
+      const eligible = c.eligibleAliases.map((alias) => ({
+        alias,
+        routed: true,
+        ready: readyAliases.has(alias),
+        reason: readyAliases.has(alias) ? "ready" : "not ready（离线/隔离/占用/有未解决失败，见 devices[].state）",
+      }));
+      const why = [
+        app ? `App 匹配 ${app}` : "未指定 App",
+        c.policy.runnableAsJob ? "可直接 job 自跑（已实现+免审批+非 canary）" : c.policy.runnableAsCanarySession ? "需 canary session（低成熟度/canary_only）" : c.policy.approvalRequired ? "需人工审批（human token）" : `availability=${c.policy.availability}，暂不可跑`,
+        `路由允许：${c.eligibleAliases.join("/")}`,
+      ];
+      // 只对 runnableAsJob 生成 job submit 骨架；canary session 给 canary 提示；其余不给骨架（避免误导提交后被拒）
+      let submitSkeleton = null;
+      let submitNote = null;
+      if (c.policy.runnableAsJob) {
+        submitSkeleton = `node control-plane/devicectl.mjs --ssh xhs-windows job submit --actor <actor> --capability ${c.id} --device <deviceId 见 /api/devices> --idempotency-key <唯一键> --params '<json>'`;
+      } else if (c.policy.runnableAsCanarySession) {
+        submitNote = "需先建立 canary session 再提交（见控制面 canary 文档），不可直接 job submit";
+      } else {
+        submitNote = `不可直接提交：${c.policy.approvalRequired ? "需人工审批" : c.policy.labOnly ? "lab_only" : c.policy.disabled ? "disabled" : `availability=${c.policy.availability}`}`;
+      }
+      return {
+        capabilityId: c.id,
+        score,
+        why,
+        policy: c.policy,
+        lint: c.lint,
+        timeoutMs: c.timeoutMs,
+        restorationRequired: c.restorationRequired,
+        eligibleDevices: eligible,
+        submitSkeleton,
+        submitNote,
+      };
+    });
+  }
+  const noIntentNote = intent.length ? null : "未匹配到明确意图关键词（observe/image/input/full/open/save_draft 等），请细化任务描述；不按基础分瞎猜推荐。";
+  const knowledge = listKnowledge({ app: app || undefined, limit: 8 }).map((item) => ({
+    id: item.id, title: item.title, category: item.category, lifecycle: item.lifecycle, verifyMode: item.verifyMode,
+  }));
+  return {
+    ok: true,
+    task: text,
+    inferredApp: app,
+    recommendations,
+    acceptance: [
+      "job 终态 succeeded 且 result.verification.ok !== false",
+      "restoration.required 的能力还需 result.restoration.ok !== false",
+      "收尾 leases=[]、pending=[]、本机 quarantined=false",
+    ],
+    stopConditions: [
+      "waiting_approval 出现在标称免审批能力上 → 停，系统异常",
+      "recovery_required → 设备已隔离，只允许 main-safe 零动作恢复，其余保持隔离报告",
+      "验证码/风控/登录墙/未知页面 → 立即停",
+    ],
+    knowledge,
+    protocol: ENTRY_PROTOCOL,
+    noIntentNote,
+    note: "本接口只推荐与解释，不代提交任何 job。",
+  };
 }
 
 async function proxyApprovalDecision(jobId, decision, actor, reason) {
@@ -1104,7 +1328,65 @@ const server = http.createServer(async (req, res) => {
       return sendText(res, 200, body, "text/html; charset=utf-8", { "cache-control": "no-store" });
     }
     if (req.method === "GET" && url.pathname === "/api/health") {
-      return sendJson(res, 200, { ok: true, port: PORT, identities: listIdentities().length, lastIdentitySync: metaGet("last_identity_sync") });
+      // 浅健康保持向后兼容（监控脚本在用）；?deep=1 给分层视图
+      if (url.searchParams.get("deep") !== "1") {
+        return sendJson(res, 200, { ok: true, port: PORT, identities: listIdentities().length, lastIdentitySync: metaGet("last_identity_sync") });
+      }
+      const entry = await buildAgentEntry();
+      const degraded = [];
+      if (!entry.sources.controlPlane.reachable) degraded.push("控制面不可达：设备/lease 视图为空，禁止据此判断设备空闲");
+      if (!entry.sources.controlDb.reachable) degraded.push("control.db 不可读：job 状态/审批列表降级");
+      if (entry.sources.identityCache.stale) degraded.push(`身份缓存过期（${entry.sources.identityCache.ageSeconds}s > ${entry.sources.identityCache.staleAfterSeconds}s）：飞书同步可能已停`);
+      const fleetReady = entry.devices.filter((d) => d.state.ready === true);
+      const catalog = await buildCapabilityCatalog();
+      if (!catalog.ok) degraded.push(`能力清单不可读：${catalog.error}`);
+      if (catalog.lintWarnings.length) degraded.push(`能力策略不变量告警 ${catalog.lintWarnings.length} 条（见 /api/capabilities）`);
+      return sendJson(res, 200, {
+        ok: true,
+        liveness: { ok: true, port: PORT, uptimeSeconds: Math.round(process.uptime()) },
+        readiness: {
+          ok: entry.sources.controlPlane.reachable && entry.sources.controlDb.reachable && !entry.sources.identityCache.stale,
+          controlPlane: entry.sources.controlPlane, controlDb: entry.sources.controlDb, identityCache: entry.sources.identityCache,
+        },
+        fleet: {
+          ok: fleetReady.length > 0,
+          readyCount: fleetReady.length, totalCount: entry.devices.length,
+          ready: fleetReady.map((d) => d.alias),
+          notReady: entry.devices.filter((d) => d.state.ready !== true).map((d) => ({
+            alias: d.alias,
+            reason: d.state.online === false ? "offline" : d.state.quarantined ? "quarantined"
+              : d.state.leaseFree === false ? "leased" : d.state.hasUnresolvedFailure ? "unresolved-failure" : "unknown",
+          })),
+        },
+        approvals: { ok: entry.approvals.sourceOk, pendingCount: entry.approvals.pendingCount, humanTokenEnforced: !LEGACY_AUTH },
+        capabilities: { ok: catalog.ok, count: catalog.count, autonomousCount: catalog.capabilities.filter((c) => c.policy.autonomous).length, lintWarnings: catalog.lintWarnings },
+        degraded,
+      });
+    }
+    if (req.method === "GET" && url.pathname === "/api/capabilities") {
+      const catalog = await buildCapabilityCatalog();
+      const app = url.searchParams.get("app");
+      const autonomousOnly = url.searchParams.get("autonomous") === "1";
+      const alias = url.searchParams.get("alias");
+      let items = catalog.capabilities;
+      if (app) items = items.filter((c) => c.appId === app);
+      if (autonomousOnly) items = items.filter((c) => c.policy.autonomous);
+      if (alias) items = items.filter((c) => c.eligibleAliases.includes(alias));
+      return sendJson(res, 200, { ...catalog, count: items.length, capabilities: items }, { "cache-control": "no-store" });
+    }
+    const capMatch = url.pathname.match(/^\/api\/capabilities\/([^/]+)$/);
+    if (req.method === "GET" && capMatch) {
+      const catalog = await buildCapabilityCatalog();
+      const wanted = decodeURIComponent(capMatch[1]);
+      const found = catalog.capabilities.find((c) => c.id === wanted);
+      if (!found) return sendJson(res, 404, { ok: false, error: `capability not found: ${wanted}` });
+      return sendJson(res, 200, { ok: true, capability: found, routingByAlias: catalog.routingByAlias });
+    }
+    if (req.method === "GET" && url.pathname === "/api/task-packet") {
+      const task = url.searchParams.get("task") || "";
+      if (!task) return sendJson(res, 400, { ok: false, error: "task query parameter is required, e.g. /api/task-packet?task=闲鱼三机no-save验证" });
+      const [catalog, entry] = await Promise.all([buildCapabilityCatalog(), buildAgentEntry()]);
+      return sendJson(res, 200, buildTaskPacket(task, catalog, entry), { "cache-control": "no-store" });
     }
     if (req.method === "GET" && url.pathname === "/watchdog") {
       const wdDir = path.join(__dirname, "watchdog");
@@ -1144,16 +1426,16 @@ ${reports.length > 1 ? '<h2 style="font-size:14px;margin-top:16px">历史报告<
       return sendJson(res, 200, { ok: true, count: body.identities.length, syncedAt: metaGet("last_identity_sync") });
     }
     if (req.method === "GET" && url.pathname === "/api/knowledge") {
-      return sendJson(res, 200, {
-        ok: true,
-        count: undefined,
-        knowledge: listKnowledge({
-          app: url.searchParams.get("app") || undefined,
-          category: url.searchParams.get("category") || undefined,
-          q: url.searchParams.get("q") || undefined,
-          limit: url.searchParams.get("limit") || undefined,
-        }),
+      const items = listKnowledge({
+        app: url.searchParams.get("app") || undefined,
+        category: url.searchParams.get("category") || undefined,
+        lifecycle: url.searchParams.get("lifecycle") || undefined,
+        appliesTo: url.searchParams.get("appliesTo") || undefined,
+        q: url.searchParams.get("q") || undefined,
+        limit: url.searchParams.get("limit") || undefined,
       });
+      const total = db.prepare("SELECT COUNT(*) AS c FROM knowledge").get().c;
+      return sendJson(res, 200, { ok: true, count: items.length, total, knowledge: items });
     }
     if (req.method === "POST" && url.pathname === "/api/knowledge") {
       const body = await readBody(req);
@@ -1171,6 +1453,9 @@ ${reports.length > 1 ? '<h2 style="font-size:14px;margin-top:16px">历史报告<
       return sendJson(res, 200, { ok: true, knowledge: flagEngineer(decodeURIComponent(km[1]), body.needs !== false) });
     }
     km = url.pathname.match(/^\/api\/knowledge\/([^/]+)$/);
+    if (req.method === "GET" && km) {
+      return sendJson(res, 200, { ok: true, knowledge: getKnowledge(decodeURIComponent(km[1])) });
+    }
     if (req.method === "PATCH" && km) {
       const rawId = decodeURIComponent(km[1]);
       const body = await readBody(req);

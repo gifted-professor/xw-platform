@@ -48,7 +48,7 @@ function createRegistryDb(dbPath) {
 function createControlDb(dbPath) {
   const db = new DatabaseSync(dbPath);
   db.exec(`
-    CREATE TABLE devices (device_id TEXT PRIMARY KEY, alias TEXT);
+    CREATE TABLE devices (device_id TEXT PRIMARY KEY, alias TEXT, routing_json TEXT);
     CREATE TABLE jobs (
       job_id TEXT PRIMARY KEY, run_id TEXT, actor_id TEXT, device_id TEXT, capability_id TEXT,
       capability_json TEXT, params_json TEXT, status TEXT, error_code TEXT,
@@ -58,8 +58,13 @@ function createControlDb(dbPath) {
       approval_id TEXT PRIMARY KEY, job_id TEXT, decision TEXT, actor_id TEXT, reason TEXT, created_at INTEGER
     );
   `);
-  db.prepare("INSERT INTO devices VALUES (?,?)").run("dev-01", "01");
-  db.prepare("INSERT INTO devices VALUES (?,?)").run("dev-03", "03");
+  db.prepare("INSERT INTO devices VALUES (?,?,?)").run("dev-01", "01",
+    JSON.stringify({ enabled: true, tags: ["slot:01"], capabilityIds: ["xianyu.publish.open_dry_run", "xianyu.publish.save_draft_dry_run"] }));
+  db.prepare("INSERT INTO devices VALUES (?,?,?)").run("dev-03", "03",
+    JSON.stringify({ enabled: true, tags: ["slot:03"], capabilityIds: ["xianyu.publish.open_dry_run"] }));
+  // dev-02：routing.enabled=false——placement 会拒，eligibleAliases 必须不含 02（disabled-routing 反例守卫）
+  db.prepare("INSERT INTO devices VALUES (?,?,?)").run("dev-02", "02",
+    JSON.stringify({ enabled: false, tags: ["slot:02"], capabilityIds: ["xianyu.publish.open_dry_run"] }));
   const insert = db.prepare(`INSERT INTO jobs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`);
   insert.run("job-running", "run-running", "agent-alpha", "dev-01", "xianyu.publish.open_dry_run",
     JSON.stringify({ id: "xianyu.publish.open_dry_run", appId: "xianyu", risk: "R0" }), "{}", "running", null,
@@ -90,6 +95,18 @@ function createControlServer() {
     if (req.method === "GET" && req.url === "/control/v1/devices") return json(res, 200, { devices: [
       { deviceId: "dev-01", alias: "01", online: true, quarantined: false },
       { deviceId: "dev-03", alias: "03", online: true, quarantined: true, quarantineReason: "ADAPTER_FAILED" },
+    ] });
+    if (req.method === "GET" && req.url === "/control/v1/capabilities") return json(res, 200, { capabilities: [
+      { id: "xianyu.publish.open_dry_run", appId: "xianyu", risk: "R1", maturity: "E2", idempotency: "replay_safe",
+        timeoutMs: 60000, resources: ["device"], restoration: { required: true }, verification: { mode: "state" },
+        automationPolicy: { mode: "automatic" } },
+      // 字面 automatic 但外部效应 → 必须被推导成 approvalRequired 并触发 lint
+      { id: "xianyu.publish.save_draft_dry_run", appId: "xianyu", risk: "R1", maturity: "E2", idempotency: "external_effect",
+        timeoutMs: 90000, resources: ["device"], restoration: { required: false }, verification: { mode: "state" },
+        automationPolicy: { mode: "automatic" } },
+      { id: "xhs.comment.send", appId: "xhs", risk: "R2", maturity: "E2", idempotency: "ambiguous_on_timeout",
+        timeoutMs: 90000, resources: ["device"], restoration: { required: true }, verification: { mode: "state" },
+        automationPolicy: { mode: "approval_required" } },
     ] });
     if (req.method === "GET" && req.url === "/control/v1/leases") return json(res, 200, { leases: [
       { deviceId: "dev-01", holderId: "agent-alpha", kind: "job", expiresAt: new Date(now + 60000).toISOString() },
@@ -346,6 +363,116 @@ test("agent entry degrades without returning 500 when control plane is unreachab
     await stopRegistry(degraded.child);
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("capability catalog derives approval policy, lints misleading modes, and maps device routing", async () => {
+  const headers = { "x-registry-token": TOKEN };
+  const catalog = await (await fetch(`${registry.base}/api/capabilities`, { headers })).json();
+  assert.equal(catalog.ok, true);
+  assert.equal(catalog.count, 3);
+  const open = catalog.capabilities.find((c) => c.id === "xianyu.publish.open_dry_run");
+  const saveDraft = catalog.capabilities.find((c) => c.id === "xianyu.publish.save_draft_dry_run");
+  const send = catalog.capabilities.find((c) => c.id === "xhs.comment.send");
+  // R1 + replay_safe + automatic → agent 可自跑
+  assert.equal(open.policy.autonomous, true);
+  assert.equal(open.policy.approvalRequired, false);
+  assert.deepEqual(open.eligibleAliases, ["01", "03"]);
+  // 字面 automatic 但 external_effect → 推导为需审批，且必须 lint 出来
+  assert.equal(saveDraft.policy.approvalRequired, true);
+  assert.equal(saveDraft.policy.autonomous, false);
+  assert.ok(saveDraft.lint.some((w) => /误导性/.test(w)));
+  assert.ok(saveDraft.lint.some((w) => /副作用不会被自动回收/.test(w)));
+  assert.deepEqual(saveDraft.eligibleAliases, ["01"]);
+  // R2 → 外部效应 + 需审批
+  assert.equal(send.policy.externalEffect, true);
+  assert.equal(send.policy.approvalRequired, true);
+  assert.ok(catalog.lintWarnings.length >= 1);
+  // runnableAsJob：已实现+免审批+非 canary 才能给 job 骨架；save_draft/send 不可直接 job 自跑
+  assert.equal(open.policy.runnableAsJob, true);
+  assert.equal(saveDraft.policy.runnableAsJob, false);
+  assert.equal(send.policy.runnableAsJob, false);
+  assert.equal(open.policy.availability, "implemented");
+
+  const autonomousOnly = await (await fetch(`${registry.base}/api/capabilities?autonomous=1`, { headers })).json();
+  assert.deepEqual(autonomousOnly.capabilities.map((c) => c.id), ["xianyu.publish.open_dry_run"]);
+  const byAlias = await (await fetch(`${registry.base}/api/capabilities?alias=03`, { headers })).json();
+  assert.deepEqual(byAlias.capabilities.map((c) => c.id), ["xianyu.publish.open_dry_run"]);
+  const single = await fetch(`${registry.base}/api/capabilities/xhs.comment.send`, { headers });
+  assert.equal(single.status, 200);
+  assert.equal((await single.json()).capability.risk, "R2");
+  assert.equal((await fetch(`${registry.base}/api/capabilities/nope.nope`, { headers })).status, 404);
+});
+
+test("task packet recommends autonomous capabilities with eligible devices and never submits", async () => {
+  const headers = { "x-registry-token": TOKEN };
+  assert.equal((await fetch(`${registry.base}/api/task-packet`, { headers })).status, 400);
+  const packet = await (await fetch(`${registry.base}/api/task-packet?task=${encodeURIComponent("闲鱼打开页面 dry-run 验证")}`, { headers })).json();
+  assert.equal(packet.inferredApp, "xianyu");
+  assert.equal(packet.recommendations[0].capabilityId, "xianyu.publish.open_dry_run");
+  assert.equal(packet.recommendations[0].policy.autonomous, true);
+  const dev01 = packet.recommendations[0].eligibleDevices.find((d) => d.alias === "01");
+  assert.equal(dev01.routed, true);
+  assert.equal(dev01.ready, false); // 01 有活跃 lease，不 ready
+  assert.match(packet.recommendations[0].submitSkeleton, /--ssh xhs-windows job submit/);
+  assert.ok(packet.acceptance.length >= 2 && packet.stopConditions.length >= 2);
+  assert.equal(packet.note.includes("不代提交"), true);
+  // save_draft 任务：草稿意图匹配 save_draft_dry_run，但它 approvalRequired → 不可直接 job，给 submitNote 不给骨架
+  const draftPacket = await (await fetch(`${registry.base}/api/task-packet?task=${encodeURIComponent("闲鱼保存草稿")}`, { headers })).json();
+  const draftRec = draftPacket.recommendations.find((r) => r.capabilityId === "xianyu.publish.save_draft_dry_run");
+  assert.ok(draftRec, "save_draft 应出现在推荐里（路由到 01）");
+  assert.equal(draftRec.submitSkeleton, null);
+  assert.ok(draftRec.submitNote && /需人工审批/.test(draftRec.submitNote));
+  // 无意图匹配不瞎猜：只给 app 不给意图 → 空推荐 + noIntentNote
+  const vague = await (await fetch(`${registry.base}/api/task-packet?task=${encodeURIComponent("闲鱼")}`, { headers })).json();
+  assert.equal(vague.inferredApp, "xianyu");
+  assert.deepEqual(vague.recommendations, []);
+  assert.ok(vague.noIntentNote && /未匹配到明确意图/.test(vague.noIntentNote));
+});
+
+test("layered health reports readiness, fleet and capability lint; shallow health stays compatible", async () => {
+  const headers = { "x-registry-token": TOKEN };
+  const shallow = await (await fetch(`${registry.base}/api/health`, { headers })).json();
+  assert.equal(shallow.ok, true);
+  assert.equal(typeof shallow.identities, "number");
+  const deep = await (await fetch(`${registry.base}/api/health?deep=1`, { headers })).json();
+  assert.equal(deep.liveness.ok, true);
+  assert.equal(deep.readiness.controlPlane.reachable, true);
+  assert.equal(deep.fleet.totalCount, 2);
+  assert.deepEqual(deep.fleet.notReady.find((d) => d.alias === "03").reason, "quarantined");
+  assert.equal(deep.approvals.humanTokenEnforced, true);
+  assert.equal(deep.capabilities.count, 3);
+  assert.equal(deep.capabilities.autonomousCount, 1);
+  assert.ok(deep.degraded.some((d) => /能力策略不变量告警/.test(d)));
+});
+
+test("knowledge supports single fetch, lifecycle/appliesTo filters, id search and honest counts", async () => {
+  const headers = { "x-registry-token": TOKEN, "content-type": "application/json" };
+  // 自给自足：不依赖前序测试是否改过存量条目的 lifecycle
+  await fetch(`${registry.base}/api/knowledge`, {
+    method: "POST", headers,
+    body: JSON.stringify({ id: "p1-filter-blocker", title: "查询用卡点", content: "c", lifecycle: "active_blocker", appliesTo: ["registry.mjs"] }),
+  });
+  const one = await fetch(`${registry.base}/api/knowledge/p1-filter-blocker`, { headers });
+  assert.equal(one.status, 200);
+  assert.equal((await one.json()).knowledge.lifecycle, "active_blocker");
+  assert.equal((await fetch(`${registry.base}/api/knowledge/does-not-exist`, { headers })).status, 404);
+  const list = await (await fetch(`${registry.base}/api/knowledge`, { headers })).json();
+  assert.equal(typeof list.count, "number");
+  assert.equal(list.count, list.knowledge.length);
+  assert.equal(typeof list.total, "number");
+  const blockers = await (await fetch(`${registry.base}/api/knowledge?lifecycle=active_blocker`, { headers })).json();
+  assert.equal(blockers.knowledge.every((k) => k.lifecycle === "active_blocker"), true);
+  assert.equal(blockers.knowledge.some((k) => k.id === "p1-filter-blocker"), true);
+  // q 现在也搜 id：agent 常常已知 id 却搜不到内容
+  const byId = await (await fetch(`${registry.base}/api/knowledge?q=p1-filter-blocker`, { headers })).json();
+  assert.equal(byId.knowledge.length, 1);
+  const byApplies = await (await fetch(`${registry.base}/api/knowledge?appliesTo=registry.mjs`, { headers })).json();
+  assert.equal(byApplies.knowledge.some((k) => k.id === "p1-filter-blocker"), true);
+  // json_each 精确匹配：通配符 %/_ 不再当 LIKE 元字符，前缀也不再误匹配
+  const wildcard = await (await fetch(`${registry.base}/api/knowledge?appliesTo=%`, { headers })).json();
+  assert.equal(wildcard.knowledge.length, 0);
+  const prefix = await (await fetch(`${registry.base}/api/knowledge?appliesTo=registry`, { headers })).json();
+  assert.equal(prefix.knowledge.length, 0);
 });
 
 test("api approvals require human token, derive actor from credential, and leave audit trail", async () => {

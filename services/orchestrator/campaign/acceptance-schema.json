@@ -5,12 +5,13 @@
   "properties": {
     "verdict": { "type": "string", "enum": ["pass", "fail"] },
     "perDevice": {
-      "type": "object",
-      "additionalProperties": {
+      "type": "array",
+      "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["consecutiveGreenRounds", "claimsMatchControlDb", "notes"],
+        "required": ["alias", "consecutiveGreenRounds", "claimsMatchControlDb", "notes"],
         "properties": {
+          "alias": { "type": "string" },
           "consecutiveGreenRounds": { "type": "integer" },
           "claimsMatchControlDb": { "type": "boolean" },
           "notes": { "type": "string" }

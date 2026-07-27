@@ -9,6 +9,9 @@ registry.db-shm
 runtime/
 node_modules/
 
+# campaign 运行态（step.sh/arm-driver.sh/fixtures/ARM-PROTOCOL 是源，logs 与 done/abort 标记是运行产物）
+campaign/logs/
+
 # watchdog 运行态（脚本与模板保留，state 与报告是运行产物）
 watchdog/state.json
 watchdog/reports/

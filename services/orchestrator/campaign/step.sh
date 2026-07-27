@@ -43,7 +43,7 @@ while :; do
     failed|ambiguous|cancelled)
       printf '%s\n' "$ST"; log "RED $JOB status=$STATUS"; exit 2 ;;
     recovery_required)
-      printf '%s\n' "$ST"; log "RECOVERY_REQUIRED $JOB（设备已隔离）"; exit 3 ;;
+      printf '%s\n' "$ST"; log "RECOVERY_REQUIRED ${JOB} (设备已隔离)"; exit 3 ;;
     waiting_approval)
       printf '%s\n' "$ST"; log "waiting_approval（不应出现于免审批能力）"; exit 4 ;;
     "")

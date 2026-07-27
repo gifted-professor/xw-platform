@@ -1,6 +1,6 @@
 # xhs-registry 进度
 
-> 最后更新：2026-07-27（P0 安全闸与入口语义修正落地：agent-entry v2、token 拆分、审批审计、installer AtStartup、watchdog 冷却修复、本目录 git 化；01/02/04 单次全绿；当前 active blocker 仍为 03 物理断连）
+> 最后更新：2026-07-27（无人化批次：三机 3 连轮 campaign 02/04 达成、01 fail-closed 隔离；registry P1（capabilities/task-packet）部署并 Codex review 修 4 bug；Hermes 常驻 cron ×3 上线；当前 active blocker 仍为 03 物理断连 + 01 因微信前台隔离待恢复）
 
 ## 一句话现状（北极星，所有 agent 必读）
 
@@ -32,6 +32,21 @@
 - **测试**：13/13（node --test，新增 per-device 语义、TTL stale、human/agent/loopback 权限矩阵、LEGACY 回归、审计断言）。
 - **部署实证（2026-07-27 00:08 CST 完成切换）**：Windows registry.mjs SHA256 `780054dc65bc1d8aeb2b2198a1839f408373b262d57e367ceab350861ca1836a`（旧版备份 `backups\registry.mjs.pre-p0-20260727`）。legacy soak 通过后以 `-HumanToken` 原子重装任务：State Running、`StopOnIdleEnd=false`、**BootTrigger 已注册**（此前任务无任何触发器）。验收矩阵全过：loopback/agent token POST approve=**403**、human token 无 confirm=**400**、human token+confirm 穿透控制面（fake-job 404 如实代理）且 `approval_audit` 落行（actor=human:console 凭证推导）、`?token=<human>`=**303**、agent token 读=200、loopback 知识库读=200、sync-feishu lastIdentitySync 切换后继续推进。生产 v2 实测：01/02/04 `ready=true`/`unresolvedFailure=none`（旧失败不再误导），03 `ready=false`/`unresolved=ADAPTER_FAILED`/隔离如实。human token 在 Windows 任务参数里（`schtasks /query /tn XhsDeviceRegistry /v` 可查回）。坑：`schtasks /end` 杀不掉旧 node（22144 曾继续占 17930 服务 v1），需 netstat 定位 PID 后定点 taskkill；ssh 进 Windows 默认 PowerShell，curl JSON body 要 scp 临时文件。**未做真实重启 soak**（会打断控制面/网关/手机 serve，留待下次维护窗口顺带验证 BootTrigger 实效）。
 - **知识库留痕**：`registry-token-split-migration-20260727`（recipe，verifyMode=replay，含迁移顺序与两个坑）。
+
+### 无人化真机稳定性 campaign + registry P1 + Hermes 常驻（2026-07-27）
+
+> 批准的 4-phase 计划（campaign 规模=每台 3 连轮 + 三机并发 1 轮；恢复权限=main-safe 零动作自动恢复、其余 fail-closed 停臂；分工=Claude 战役 / Hermes 常驻 / Codex 验收）。执行过程零人工，人只做开工前颗粒度对齐 + R2/R3 审批 + 03 物理重插。
+
+- **Phase A — 三机 3 连轮 campaign（本仓库 `campaign/`，净新建）**：
+  - 原语 `campaign/step.sh`（submit→15s poll→终态，退出码 0/2/3/4/5/6）+ 主会话后台驱动 `campaign/arm-driver.sh`（三臂真并行，控制面按 deviceId 键控泵，跨设备并发）。fixture 参数固定（`campaign/fixtures/<alias>-<step>.json`），每步换幂等键重放。链：01=open→input→image→full、02=open→input→full、04=manifest→image→full。能力全免审批（R0/R1 非外部效应）。
+  - **结果（2026-07-27 09:19 CST 截止）**：**02、04 各 3 连轮 COMPLETE（green_steps=6）**；01 r1+r2 全绿 + r3 open 绿后 r3 input 触发 `recovery_required`（设备前台 package=com.tencent.mm 微信，非闲鱼 → 非 main-safe）→ fail-closed 保持隔离、臂终止。leases 全释放（activeLeases=0），02/04 干净，01/03 隔离。
+  - **证据 job id**：02 末轮 full `job_15d3b4df-9aac-48ca-9376-a696a6cd9178`；04 末轮 full `job_e020cfd0-f28b-4e22-af54-5093bd101bd9`；01 r1 full `job_5569fd47-a787-40c6-a018-027574d32700`、r2 full `job_8cadb94a-cb3f-402b-829b-110527c8193b`、r3 open `job_5318a8bd-49d7-4902-8a19-925406822872`、r3 input(recovery) `job_3d62c4bc-d9b6-42cb-b7d5-2bf028824fc7`。日志 `campaign/logs/arm-{01,02,04}.log`。
+  - **验收**：Codex `--output-schema campaign/acceptance-schema.json` 独立 ssh 只读复核 control.db job 终态 + registry streak（执行者不自评，Codex 结论为准）。campaign 目标原文=3 台各 3 连轮，实际 2/3 达成 + 1 fail-closed 隔离，verdict 由 Codex 据 schema 判定。
+  - **踩坑（已写知识库）**：① `step.sh` line 46 `$JOB（`全角括号 + `set -u` + 非 UTF-8 locale → 误判 unbound 变量 exit 1，掩盖 recovery_required exit 3（01 r3 input 实际 recovery_required 被记成 rc=1）；修法=ASCII 括号 + `${JOB}`。② recover-inspect-record 的 analysis 要求 `xhs.visual-elements.v1` 按截图 SHA 审计的视觉元素分析，不接受简化 classification JSON——视觉 sidecar 不可用时无法完成恢复分析 → fail-closed 保持隔离（正确）。
+- **Phase B — registry P1（`/api/capabilities`+`/api/task-packet`+知识库过滤，已部署）**：Codex 无头 diff review 后修 4 处真实 bug（registry.mjs 部署 SHA `aa9924a`）：① `derivePolicy` 新增 `availability`/`runnableAsJob`/`runnableAsCanarySession`——autonomous（免审批）≠ 可直接 job 自跑；wechat.* `availability=dependency_pending_wechat_operator` 标 autonomous=true 但 runnableAsJob=false，task-packet 不再给它生成 job submit 骨架。② `routingMatrix` 只在 `routing.enabled!==false` 时把 alias 计入 byCapability（否则 eligibleAliases 误导 agent 提交后被拒）。③ `listKnowledge` appliesTo 过滤改 `json_each` 精确元素匹配，不再 LIKE '%x%'（`?appliesTo=%` 不再返回全部）。④ task-packet 意图词补 save_draft/草稿 + 发布/发商品；无意图匹配返回空推荐 + noIntentNote。17 集成测试全过（含 disabled-routing/appliesTo 通配符/no-intent/save_draft 无骨架反例）。**Codex #1 高危项（LEGACY_AUTH 可 approve）= 文档化迁移兼容契约，prod 带 --human-token 不激活，未改——记 backlog 待人定**。
+- **Phase C — Hermes 常驻 cron ×3（已注册验证）**：`xhs-pnp-sentry`（每 15min，03 PnP present 翻转通知+写知识库）、`xhs-fleet-health`（每 30min，17930/17920 探活+sync-feishu 日志尾异常才发声）、`xhs-l1-patrol`（每 2h，对 ready 设备提交 `xianyu.observe.snapshot` R0 只读巡探，空闲才跑，全绿静默）。脚本落 `~/.hermes/scripts/`，源在 `ops/`。**watchdog launchd 迁移暂缓**（TCC 拦 launchd 跑 ~/Desktop 脚本 + 与运行中终端循环 watchdog 双发风险，留待迁出 Desktop 后做）。
+- **Phase D — 03 恢复管线**：PnP 哨兵已挂（present 翻转即触发）；恢复管线脚本待建，03 仍物理未连接。
+- **知识库留痕（4 条，已导入 Windows）**：`campaign-3round-stability-recipe-20260727`（recipe/replay）、`step-sh-fullwidth-paren-set-u-bug-20260727`（pitfall/resolved）、`recovery-visual-elements-sha-contract-20260727`（pitfall/active_blocker/needsEngineer）、`registry-p1-runnableAsJob-routing-appliesTo-fix-20260727`（recipe/replay）。
 
 ### 闲鱼标准草稿链路（2026-07-26）
 
