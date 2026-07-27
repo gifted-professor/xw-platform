@@ -1,6 +1,6 @@
 # xhs-registry 进度
 
-> 最后更新：2026-07-27 ~17:05 CST（selectAllMiss 诊断上 main@14ca698 已部署；03 单机 full_dry_run 绿 job_41b713ba；手推路径已停）
+> 最后更新：2026-07-27 ~18:00 CST（`input-text --no-refocus` 修多行光标跳位；selectAllMiss@14ca698；4/4 并发曾绿）
 
 ## 一句话现状（北极星，所有 agent 必读）
 

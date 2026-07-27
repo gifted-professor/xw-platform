@@ -33,11 +33,14 @@ node ops/focus.mjs --alias 01                    # FOCUS=pkg/activity
 node ops/tap.mjs --alias 01 --x 540 --y 1200     # TAP=ok
 # 中文输入：效卫 XwIME（禁止 adb input text / clipboard 当主路径）
 node ops/input-text.mjs --alias 01 --text "蓝色" --x 540 --y 1200 --enter
+# 多行描述：首行 refocus；后续 --no-refocus 保光标（每行再点会跳位/乱序）
+node ops/input-text.mjs --alias 01 --text "行1" --x 540 --y 870 --enter --keep-ime
+node ops/input-text.mjs --alias 01 --text "行2" --enter --keep-ime --no-refocus
 node ops/launch-app.mjs --alias 01 --package com.taobao.idlefish
 ```
 
 > 以上是 **Explorer lab 通道**（22222）。生产业务仍用 job/session；探索可用，不用于 R2 外发。  
-> **Flutter（闲鱼）**：`input-text` 必须带字段中心 `--x --y` 做 IME 切换后 refocus；SKU 规格值加 `--enter`。
+> **Flutter（闲鱼）**：首进字段带 `--x --y` refocus；**多行连续**后续用 `--no-refocus`（+ 建议 `--keep-ime`）；SKU 规格值加 `--enter`。见 `pitfall-input-text-multiline-refocus-20260727`。
 
 ---
 
