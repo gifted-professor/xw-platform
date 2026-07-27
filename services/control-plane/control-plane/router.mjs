@@ -59,11 +59,37 @@ export class ControlRouter {
     if (method === "GET" && path === "/control/v1/devices") {
       return { status: 200, body: { devices: this.state.listDevices() } };
     }
+    if (method === "GET" && path === "/control/v1/nodes") {
+      return { status: 200, body: { nodes: this.control.listNodes() } };
+    }
     if (method === "GET" && path === "/control/v1/capabilities") {
       return { status: 200, body: { capabilities: this.capabilities.listPublic() } };
     }
     if (method === "GET" && path === "/control/v1/leases") {
       return { status: 200, body: { leases: this.state.listLeases() } };
+    }
+
+    if (method === "POST" && path === "/control/v1/leases/authorize") {
+      const input = requireBody(body);
+      const lease = this.state.authorizeLease({
+        leaseId: input.leaseId,
+        token: tokenOf(input, headers),
+        deviceId: input.deviceId,
+        runtimeId: input.runtimeId,
+      });
+      return {
+        status: 200,
+        body: {
+          ok: true,
+          authorized: true,
+          lease: {
+            leaseId: lease.leaseId,
+            deviceId: lease.deviceId,
+            kind: lease.kind,
+            expiresAt: lease.expiresAt,
+          },
+        },
+      };
     }
 
     let match = path.match(/^\/control\/v1\/jobs\/([^/]+)$/);
@@ -91,6 +117,9 @@ export class ControlRouter {
       const created = this.control.submitJob(requireBody(body));
       return { status: 202, body: { ...created, job: publicJob(created.job) } };
     }
+    if (method === "POST" && path === "/control/v1/routes/plan") {
+      return { status: 200, body: { route: this.control.planRoute(requireBody(body)) } };
+    }
     if (method === "POST" && path === "/control/v1/legacy-events") {
       const input = requireBody(body);
       const eventId = this.state.appendEvent({
@@ -107,6 +136,50 @@ export class ControlRouter {
     match = path.match(/^\/control\/v1\/jobs\/([^/]+)\/cancel$/);
     if (method === "POST" && match) {
       return { status: 200, body: { job: publicJob(this.control.cancelJob(decodeURIComponent(match[1]))) } };
+    }
+    match = path.match(/^\/control\/v1\/jobs\/([^/]+)\/recover$/);
+    if (method === "POST" && match) {
+      const input = requireBody(body);
+      return {
+        status: 200,
+        body: {
+          recovery: await this.control.recoverJob({
+            jobId: decodeURIComponent(match[1]),
+            actorId: input.actorId,
+            idempotencyKey: input.idempotencyKey,
+          }),
+        },
+      };
+    }
+    match = path.match(/^\/control\/v1\/jobs\/([^/]+)\/recover\/inspect$/);
+    if (method === "POST" && match) {
+      const input = requireBody(body);
+      return {
+        status: 200,
+        body: {
+          inspection: await this.control.inspectRecovery({
+            jobId: decodeURIComponent(match[1]),
+            actorId: input.actorId,
+            idempotencyKey: input.idempotencyKey,
+          }),
+        },
+      };
+    }
+    match = path.match(/^\/control\/v1\/jobs\/([^/]+)\/recover\/inspect\/([^/]+)\/analysis$/);
+    if (method === "POST" && match) {
+      const input = requireBody(body);
+      return {
+        status: 200,
+        body: {
+          analysis: await this.control.recordRecoveryInspectionAnalysis({
+            jobId: decodeURIComponent(match[1]),
+            inspectionId: decodeURIComponent(match[2]),
+            actorId: input.actorId,
+            idempotencyKey: input.idempotencyKey,
+            analysis: input.analysis,
+          }),
+        },
+      };
     }
 
     if (method === "POST" && path === "/control/v1/sessions") {

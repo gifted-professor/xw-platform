@@ -4,6 +4,11 @@ import { dirname } from "node:path";
 
 import { canonicalJson, fingerprint, newId, sha256 } from "./canonical.mjs";
 import { ControlPlaneError } from "./errors.mjs";
+import {
+  normalizePlacementRequest,
+  normalizeRoutingProfile,
+  selectPlacement,
+} from "./placement.mjs";
 
 const ACTIVE_JOB_STATES = new Set(["running", "verifying", "restoring"]);
 const TERMINAL_JOB_STATES = new Set(["succeeded", "failed", "ambiguous", "recovery_required", "cancelled"]);
@@ -38,7 +43,19 @@ function publicDevice(row, includeRuntime = false) {
     ...(includeRuntime ? {
       runtimeId: row.runtime_id,
       metadata: parseJson(row.metadata_json, {}),
+      routingProfile: normalizeRoutingProfile(parseJson(row.routing_json, {})),
     } : {}),
+  };
+}
+
+function publicNode(row) {
+  if (!row) return null;
+  return {
+    nodeId: row.node_id,
+    status: row.status,
+    authority: Boolean(row.authority),
+    dispatchMode: row.dispatch_mode,
+    lastSeenAt: iso(row.last_seen_at),
   };
 }
 
@@ -63,6 +80,8 @@ function publicJob(row) {
     errorCode: row.error_code,
     result: parseJson(row.result_json),
     capability: parseJson(row.capability_json),
+    placementRequest: parseJson(row.placement_request_json, {}),
+    routeDecision: parseJson(row.placement_decision_json),
   };
 }
 
@@ -108,6 +127,14 @@ export class StateStore {
 
   #migrate() {
     this.db.exec(`
+      CREATE TABLE IF NOT EXISTS nodes (
+        node_id TEXT PRIMARY KEY,
+        status TEXT NOT NULL,
+        authority INTEGER NOT NULL DEFAULT 0,
+        dispatch_mode TEXT NOT NULL DEFAULT 'local',
+        metadata_json TEXT NOT NULL DEFAULT '{}',
+        last_seen_at INTEGER NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS devices (
         device_id TEXT PRIMARY KEY,
         alias TEXT NOT NULL,
@@ -115,6 +142,7 @@ export class StateStore {
         node_id TEXT NOT NULL,
         runtime_id TEXT,
         metadata_json TEXT NOT NULL DEFAULT '{}',
+        routing_json TEXT NOT NULL DEFAULT '{"enabled":false,"tags":[],"capabilityIds":[]}',
         online INTEGER NOT NULL DEFAULT 1,
         quarantined INTEGER NOT NULL DEFAULT 0,
         quarantine_reason TEXT,
@@ -150,7 +178,9 @@ export class StateStore {
         started_at INTEGER,
         finished_at INTEGER,
         error_code TEXT,
-        result_json TEXT
+        result_json TEXT,
+        placement_request_json TEXT NOT NULL DEFAULT '{}',
+        placement_decision_json TEXT
       );
       CREATE INDEX IF NOT EXISTS jobs_device_queue_idx ON jobs(device_id, status, created_at);
       CREATE TABLE IF NOT EXISTS leases (
@@ -171,6 +201,8 @@ export class StateStore {
         device_id TEXT NOT NULL REFERENCES devices(device_id),
         token_hash TEXT NOT NULL,
         canary INTEGER NOT NULL,
+        scope_capability_id TEXT,
+        placement_decision_json TEXT,
         created_at INTEGER NOT NULL,
         expires_at INTEGER NOT NULL
       );
@@ -201,8 +233,24 @@ export class StateStore {
         bytes INTEGER NOT NULL,
         created_at INTEGER NOT NULL
       );
-      PRAGMA user_version = 1;
     `);
+    this.#ensureColumn(
+      "devices",
+      "routing_json",
+      `TEXT NOT NULL DEFAULT '{"enabled":false,"tags":[],"capabilityIds":[]}'`,
+    );
+    this.#ensureColumn("jobs", "placement_request_json", "TEXT NOT NULL DEFAULT '{}'");
+    this.#ensureColumn("jobs", "placement_decision_json", "TEXT");
+    this.#ensureColumn("sessions", "scope_capability_id", "TEXT");
+    this.#ensureColumn("sessions", "placement_decision_json", "TEXT");
+    this.db.exec("PRAGMA user_version = 2;");
+  }
+
+  #ensureColumn(table, column, definition) {
+    const columns = this.db.prepare(`PRAGMA table_info(${table})`).all();
+    if (!columns.some((item) => item.name === column)) {
+      this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    }
   }
 
   transaction(callback) {
@@ -253,6 +301,61 @@ export class StateStore {
     return interrupted.map((row) => row.job_id);
   }
 
+  upsertNode({
+    nodeId,
+    status = "online",
+    authority = false,
+    dispatchMode = "local",
+    metadata = {},
+  }) {
+    if (typeof nodeId !== "string" || nodeId.trim() === "") throw new TypeError("nodeId is required");
+    if (!["online", "offline"].includes(status)) throw new TypeError("node status must be online or offline");
+    if (!["local", "remote"].includes(dispatchMode)) throw new TypeError("dispatchMode must be local or remote");
+    const now = this.now();
+    this.db.prepare(`
+      INSERT INTO nodes (node_id, status, authority, dispatch_mode, metadata_json, last_seen_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(node_id) DO UPDATE SET
+        status=excluded.status,
+        authority=excluded.authority,
+        dispatch_mode=excluded.dispatch_mode,
+        metadata_json=excluded.metadata_json,
+        last_seen_at=excluded.last_seen_at
+    `).run(nodeId.trim(), status, authority ? 1 : 0, dispatchMode, canonicalJson(metadata), now);
+    return this.getNode(nodeId.trim());
+  }
+
+  getNode(nodeId) {
+    return publicNode(this.db.prepare("SELECT * FROM nodes WHERE node_id=?").get(nodeId));
+  }
+
+  listNodes() {
+    this.cleanupExpiredLeases();
+    return this.db.prepare("SELECT * FROM nodes ORDER BY node_id").all().map((row) => {
+      const counts = this.db.prepare(`
+        SELECT
+          COUNT(*) AS device_count,
+          SUM(
+            CASE WHEN online=1 AND quarantined=0
+              AND json_extract(routing_json, '$.enabled')=1
+            THEN 1 ELSE 0 END
+          ) AS ready_count
+        FROM devices WHERE node_id=?
+      `).get(row.node_id);
+      const leases = this.db.prepare(`
+        SELECT COUNT(*) AS active_count
+        FROM leases l JOIN devices d ON d.device_id=l.device_id
+        WHERE d.node_id=? AND l.expires_at>?
+      `).get(row.node_id, this.now());
+      return {
+        ...publicNode(row),
+        devices: Number(counts.device_count || 0),
+        readyDevices: Number(counts.ready_count || 0),
+        activeDeviceLeases: Number(leases.active_count || 0),
+      };
+    });
+  }
+
   upsertDevice({
     deviceId,
     alias,
@@ -260,6 +363,7 @@ export class StateStore {
     nodeId,
     runtimeId = null,
     metadata = {},
+    routingProfile = {},
     online = true,
   }) {
     if (!alias || !physicalLabel || !nodeId) throw new TypeError("alias, physicalLabel, and nodeId are required");
@@ -271,19 +375,31 @@ export class StateStore {
     }
     const id = existing?.device_id || deviceId || newId("dev");
     const now = this.now();
+    const normalizedRouting = normalizeRoutingProfile(routingProfile);
     this.db.prepare(`
       INSERT INTO devices (
-        device_id, alias, physical_label, node_id, runtime_id, metadata_json, online, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        device_id, alias, physical_label, node_id, runtime_id, metadata_json, routing_json, online, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(device_id) DO UPDATE SET
         alias=excluded.alias,
         physical_label=excluded.physical_label,
         node_id=excluded.node_id,
         runtime_id=COALESCE(excluded.runtime_id, devices.runtime_id),
         metadata_json=excluded.metadata_json,
+        routing_json=excluded.routing_json,
         online=excluded.online,
         updated_at=excluded.updated_at
-    `).run(id, alias, physicalLabel, nodeId, runtimeId, canonicalJson(metadata), online ? 1 : 0, now);
+    `).run(
+      id,
+      alias,
+      physicalLabel,
+      nodeId,
+      runtimeId,
+      canonicalJson(metadata),
+      canonicalJson(normalizedRouting),
+      online ? 1 : 0,
+      now,
+    );
     return this.getDevice(id, { includeRuntime: true });
   }
 
@@ -322,6 +438,29 @@ export class StateStore {
     ).run(this.now(), deviceId);
   }
 
+  completeDeviceRecovery({ deviceId, jobId, runId, payload }) {
+    return this.transaction(() => {
+      const device = this.requireDevice(deviceId, { requireReady: false });
+      if (!device.quarantined) {
+        throw new ControlPlaneError("DEVICE_NOT_QUARANTINED", `${device.alias} is not quarantined`, {
+          status: 409,
+        });
+      }
+      const now = this.now();
+      this.db.prepare(
+        "UPDATE devices SET quarantined=0, quarantine_reason=NULL, updated_at=? WHERE device_id=?",
+      ).run(now, deviceId);
+      const eventId = this.#insertEvent({
+        jobId,
+        runId,
+        type: "job.recovery.succeeded",
+        payload,
+        createdAt: now,
+      });
+      return { eventId, device: this.getDevice(deviceId) };
+    });
+  }
+
   syncCapabilities(registry) {
     const now = this.now();
     this.transaction(() => {
@@ -358,10 +497,92 @@ export class StateStore {
     return row ? { ...parseJson(row.manifest_json), enabled: Boolean(row.enabled) } : null;
   }
 
+  #placementCandidates() {
+    const now = this.now();
+    return this.db.prepare(`
+      SELECT d.*,
+        EXISTS(
+          SELECT 1 FROM leases l
+          WHERE l.device_id=d.device_id AND l.expires_at>?
+        ) AS active_lease,
+        (
+          SELECT COUNT(*) FROM jobs j
+          WHERE j.device_id=d.device_id AND j.status='queued'
+        ) AS pending_jobs,
+        (
+          SELECT COUNT(*) FROM jobs j
+          WHERE j.device_id=d.device_id AND j.status='waiting_approval'
+        ) AS waiting_approval
+      FROM devices d
+    `).all(now).map((row) => {
+      const device = publicDevice(row, true);
+      const pendingJobs = Number(row.pending_jobs || 0);
+      const waitingApproval = Number(row.waiting_approval || 0);
+      const activeLease = Boolean(row.active_lease);
+      return {
+        ...device,
+        activeLease,
+        pendingJobs,
+        waitingApproval,
+        effectiveLoad: (activeLease ? 1 : 0) + pendingJobs + waitingApproval,
+      };
+    });
+  }
+
+  #selectPlacementDecision({
+    authorityNodeId,
+    capability,
+    placementRequest,
+    invocation,
+    canary,
+    advisory,
+  }) {
+    const requestedNodeId = placementRequest.placement.nodeId || authorityNodeId;
+    const node = this.getNode(requestedNodeId);
+    if (!node || node.status !== "online" || node.dispatchMode !== "local" || requestedNodeId !== authorityNodeId) {
+      throw new ControlPlaneError(
+        "NODE_UNAVAILABLE",
+        `node ${requestedNodeId} is unavailable for local dispatch`,
+        { status: 409, details: { nodeId: requestedNodeId } },
+      );
+    }
+    return selectPlacement({
+      authorityNodeId,
+      capability,
+      placementRequest,
+      candidates: this.#placementCandidates(),
+      invocation,
+      canary,
+      advisory,
+      now: this.now(),
+    });
+  }
+
+  planPlacement({
+    authorityNodeId,
+    capability,
+    deviceId = null,
+    placement = {},
+    invocation = "job",
+    canary = false,
+  }) {
+    const placementRequest = normalizePlacementRequest({ deviceId, placement });
+    return this.#selectPlacementDecision({
+      authorityNodeId,
+      capability,
+      placementRequest,
+      invocation,
+      canary,
+      advisory: true,
+    });
+  }
+
   createJob({
     idempotencyKey,
     actorId,
-    deviceId,
+    authorityNodeId,
+    deviceId = null,
+    placement = {},
     capability,
     params = {},
     canary = false,
@@ -376,35 +597,55 @@ export class StateStore {
     if (typeof actorId !== "string" || actorId.trim() === "") {
       throw new ControlPlaneError("ACTOR_REQUIRED", "actorId is required");
     }
-    this.requireDevice(deviceId);
-    const requestFingerprint = fingerprint({ deviceId, capabilityId: capability.id, params, canary, sessionId });
-    const prior = this.db.prepare("SELECT * FROM jobs WHERE idempotency_key=?").get(idempotencyKey);
-    if (prior) {
-      if (prior.request_fingerprint !== requestFingerprint) {
-        throw new ControlPlaneError("IDEMPOTENCY_CONFLICT", "idempotency key was used for a different request", {
-          status: 409,
-          details: { jobId: prior.job_id },
-        });
-      }
-      return { job: publicJob(prior), reused: true };
-    }
+    const placementRequest = normalizePlacementRequest({ deviceId, placement });
+    const requestFingerprint = fingerprint({
+      actorId,
+      placementRequest,
+      capabilityId: capability.id,
+      params,
+      canary,
+      sessionId,
+    });
+    const legacyFingerprint = placementRequest.mode === "pinned"
+      ? fingerprint({ deviceId: placementRequest.deviceId, capabilityId: capability.id, params, canary, sessionId })
+      : null;
     const now = this.now();
     const jobId = newId("job");
     const runId = newId("run");
-    this.transaction(() => {
+    const result = this.transaction(() => {
+      const prior = this.db.prepare("SELECT * FROM jobs WHERE idempotency_key=?").get(idempotencyKey);
+      if (prior) {
+        if (prior.actor_id !== actorId
+          || (prior.request_fingerprint !== requestFingerprint && prior.request_fingerprint !== legacyFingerprint)) {
+          throw new ControlPlaneError("IDEMPOTENCY_CONFLICT", "idempotency key was used for a different request", {
+            status: 409,
+            details: { jobId: prior.job_id },
+          });
+        }
+        return { reused: true, jobId: prior.job_id };
+      }
+      const routeDecision = this.#selectPlacementDecision({
+        authorityNodeId,
+        capability,
+        placementRequest,
+        invocation: sessionId ? "session_action" : "job",
+        canary,
+        advisory: false,
+      });
       this.db.prepare(`
         INSERT INTO jobs (
           job_id, run_id, idempotency_key, request_fingerprint, actor_id, device_id,
           capability_id, capability_json, params_json, canary, session_id, status,
-          approval_required, external_effect, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          approval_required, external_effect, created_at, updated_at,
+          placement_request_json, placement_decision_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         jobId,
         runId,
         idempotencyKey,
         requestFingerprint,
         actorId,
-        deviceId,
+        routeDecision.selectedDeviceId,
         capability.id,
         canonicalJson(capability),
         canonicalJson(params),
@@ -415,16 +656,32 @@ export class StateStore {
         externalEffect ? 1 : 0,
         now,
         now,
+        canonicalJson(placementRequest),
+        canonicalJson(routeDecision),
       );
       this.#insertEvent({
         jobId,
         runId,
-        type: `job.${status}`,
-        payload: { actorId, deviceId, capabilityId: capability.id, approvalRequired, canary },
+        type: "route.assigned",
+        payload: routeDecision,
         createdAt: now,
       });
+      this.#insertEvent({
+        jobId,
+        runId,
+        type: `job.${status}`,
+        payload: {
+          actorId,
+          deviceId: routeDecision.selectedDeviceId,
+          capabilityId: capability.id,
+          approvalRequired,
+          canary,
+        },
+        createdAt: now,
+      });
+      return { reused: false, jobId };
     });
-    return { job: this.getJob(jobId), reused: false };
+    return { job: this.getJob(result.jobId), reused: result.reused };
   }
 
   getJob(jobId) {
@@ -562,8 +819,28 @@ export class StateStore {
     return expired.length;
   }
 
-  acquireLease({ deviceId, kind, holderId, jobId = null, ttlMs = 60000 }) {
-    this.requireDevice(deviceId);
+  acquireLease({
+    deviceId,
+    kind,
+    holderId,
+    jobId = null,
+    ttlMs = 60000,
+    allowQuarantined = false,
+  }) {
+    const device = this.requireDevice(deviceId, { requireReady: !allowQuarantined });
+    if (allowQuarantined) {
+      if (kind !== "recovery") {
+        throw new ControlPlaneError("RECOVERY_LEASE_REQUIRED", "only recovery leases may access quarantine", {
+          status: 403,
+        });
+      }
+      if (!device.online) {
+        throw new ControlPlaneError("DEVICE_OFFLINE", `${device.alias} is offline`, { status: 409 });
+      }
+      if (!device.quarantined) {
+        throw new ControlPlaneError("DEVICE_NOT_QUARANTINED", `${device.alias} is not quarantined`, { status: 409 });
+      }
+    }
     this.cleanupExpiredLeases();
     const token = newId("lease_token");
     const tokenHash = sha256(token);
@@ -623,6 +900,37 @@ export class StateStore {
     return publicLease(row);
   }
 
+  authorizeLease({ leaseId, token, deviceId, runtimeId }) {
+    const lease = this.validateLease(leaseId, token);
+    if (typeof deviceId !== "string" || deviceId.trim() === "") {
+      throw new ControlPlaneError("LEASE_DEVICE_REQUIRED", "deviceId is required for operator authorization");
+    }
+    if (lease.deviceId !== deviceId) {
+      throw new ControlPlaneError("LEASE_DEVICE_MISMATCH", "lease does not own the requested device", {
+        status: 409,
+        details: { leaseDeviceId: lease.deviceId, requestedDeviceId: deviceId },
+      });
+    }
+    const device = this.requireDevice(deviceId, {
+      includeRuntime: true,
+      requireReady: lease.kind !== "recovery",
+    });
+    if (lease.kind === "recovery") {
+      if (!device.online) {
+        throw new ControlPlaneError("DEVICE_OFFLINE", `${device.alias} is offline`, { status: 409 });
+      }
+      if (!device.quarantined) {
+        throw new ControlPlaneError("DEVICE_NOT_QUARANTINED", `${device.alias} is not quarantined`, { status: 409 });
+      }
+    }
+    if (typeof runtimeId !== "string" || runtimeId === "" || device.runtimeId !== runtimeId) {
+      throw new ControlPlaneError("LEASE_RUNTIME_MISMATCH", "lease is not valid for the requested runtime", {
+        status: 409,
+      });
+    }
+    return lease;
+  }
+
   heartbeatLease(leaseId, token, ttlMs = 60000) {
     this.validateLease(leaseId, token);
     const now = this.now();
@@ -635,41 +943,111 @@ export class StateStore {
     this.db.prepare("DELETE FROM leases WHERE lease_id=?").run(leaseId);
   }
 
-  createSession({ actorId, deviceId, canary = false, ttlMs = 60000 }) {
+  createSession({
+    actorId,
+    authorityNodeId,
+    deviceId = null,
+    placement = {},
+    capability = null,
+    canary = false,
+    ttlMs = 60000,
+  }) {
+    if (typeof actorId !== "string" || actorId.trim() === "") {
+      throw new ControlPlaneError("ACTOR_REQUIRED", "actorId is required");
+    }
+    if (!capability && !deviceId) {
+      throw new ControlPlaneError(
+        "PLACEMENT_CONFLICT",
+        "automatic sessions require capabilityId",
+        { status: 409 },
+      );
+    }
+    const placementRequest = normalizePlacementRequest({ deviceId, placement });
     const sessionId = newId("session");
-    const lease = this.acquireLease({
-      deviceId,
-      kind: "interactive",
-      holderId: actorId,
-      ttlMs,
-    });
+    const leaseId = newId("lease");
+    const token = newId("lease_token");
     const now = this.now();
-    try {
+    this.cleanupExpiredLeases();
+    const result = this.transaction(() => {
+      let routeDecision;
+      if (capability) {
+        routeDecision = this.#selectPlacementDecision({
+          authorityNodeId,
+          capability,
+          placementRequest,
+          invocation: "session",
+          canary,
+          advisory: false,
+        });
+      } else {
+        const device = this.requireDevice(placementRequest.deviceId);
+        const busy = this.db.prepare(
+          "SELECT 1 FROM leases WHERE device_id=? AND expires_at>?",
+        ).get(device.deviceId, now);
+        if (busy) {
+          throw new ControlPlaneError("DEVICE_BUSY", "device already has an active lease", { status: 423 });
+        }
+        routeDecision = {
+          mode: "pinned",
+          decision: "dispatchable",
+          selectedNodeId: device.nodeId,
+          selectedDeviceId: device.deviceId,
+          selectedDevice: {
+            deviceId: device.deviceId,
+            alias: device.alias,
+            physicalLabel: device.physicalLabel,
+            nodeId: device.nodeId,
+          },
+          queueDepth: 0,
+          waitingApproval: 0,
+          activeLease: false,
+          requiredResources: ["device"],
+          selector: {},
+          assignedAt: iso(now),
+          advisory: false,
+        };
+      }
       this.db.prepare(`
-        INSERT INTO sessions (
-          session_id, lease_id, actor_id, device_id, token_hash, canary, created_at, expires_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO leases (
+          lease_id, device_id, kind, holder_id, job_id, token_hash, created_at, heartbeat_at, expires_at
+        ) VALUES (?, ?, 'interactive', ?, NULL, ?, ?, ?, ?)
       `).run(
-        sessionId,
-        lease.leaseId,
+        leaseId,
+        routeDecision.selectedDeviceId,
         actorId,
-        deviceId,
-        sha256(lease.token),
-        canary ? 1 : 0,
+        sha256(token),
+        now,
         now,
         now + ttlMs,
       );
-    } catch (error) {
-      this.releaseLease(lease.leaseId, lease.token);
-      throw error;
-    }
+      this.db.prepare(`
+        INSERT INTO sessions (
+          session_id, lease_id, actor_id, device_id, token_hash, canary,
+          scope_capability_id, placement_decision_json, created_at, expires_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        sessionId,
+        leaseId,
+        actorId,
+        routeDecision.selectedDeviceId,
+        sha256(token),
+        canary ? 1 : 0,
+        capability?.id || null,
+        canonicalJson(routeDecision),
+        now,
+        now + ttlMs,
+      );
+      return routeDecision;
+    });
     return {
       sessionId,
-      leaseId: lease.leaseId,
-      token: lease.token,
+      leaseId,
+      token,
       actorId,
-      deviceId,
+      deviceId: result.selectedDeviceId,
       canary,
+      scopeCapabilityId: capability?.id || null,
+      routeDecision: result,
       expiresAt: iso(now + ttlMs),
     };
   }
@@ -688,6 +1066,8 @@ export class StateStore {
       actorId: row.actor_id,
       deviceId: row.device_id,
       canary: Boolean(row.canary),
+      scopeCapabilityId: row.scope_capability_id,
+      routeDecision: parseJson(row.placement_decision_json),
       expiresAt: iso(row.expires_at),
     };
   }

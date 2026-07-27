@@ -7,6 +7,7 @@ import { createXhsAdapter } from "../apps/xhs/adapter.mjs";
 import { createXianyuAdapter } from "../apps/xianyu/adapter.mjs";
 import { createXiaoweiAdapter } from "../apps/xiaowei/adapter.mjs";
 import { CapabilityRegistry } from "../control-plane/lib/capability-registry.mjs";
+import { evaluateCapabilityPolicy } from "../control-plane/lib/policy.mjs";
 
 const registry = CapabilityRegistry.load(fileURLToPath(new URL("../apps", import.meta.url)));
 const privateDevice = {
@@ -16,12 +17,18 @@ const privateDevice = {
   runtimeId: "private-runtime-id",
   metadata: { xhsServePort: 17895, adbPath: "adb.exe" },
 };
+const leaseAuthorization = {
+  leaseId: "lease-test",
+  token: "lease-token-secret",
+  deviceId: privateDevice.deviceId,
+  controlUrl: "http://127.0.0.1:17920",
+};
 
 test("XHS adapter uses a per-device loopback serve and fail-closed verifier", async () => {
   const calls = [];
   const adapter = createXhsAdapter({
     fetchImpl: async (url, options) => {
-      calls.push({ url, body: JSON.parse(options.body) });
+      calls.push({ url, body: JSON.parse(options.body), headers: options.headers });
       return new Response(JSON.stringify({
         ok: true,
         result: { cards: [] },
@@ -30,10 +37,13 @@ test("XHS adapter uses a per-device loopback serve and fail-closed verifier", as
     },
   });
   const capability = registry.require("xhs.observe.feed");
-  const execution = await adapter.execute({ capability, device: privateDevice, params: {} });
+  const execution = await adapter.execute({ capability, device: privateDevice, params: {}, leaseAuthorization });
   assert.equal(new URL(calls[0].url).hostname, "127.0.0.1");
   assert.equal(new URL(calls[0].url).port, "17895");
   assert.equal(calls[0].body.action, "feedCards");
+  assert.equal(calls[0].headers["x-control-lease-id"], leaseAuthorization.leaseId);
+  assert.equal(calls[0].headers["x-control-token"], leaseAuthorization.token);
+  assert.equal(calls[0].headers["x-control-device-id"], leaseAuthorization.deviceId);
   assert.deepEqual(await adapter.verify({ capability, execution }), { ok: true, mode: "state" });
 
   const send = registry.require("xhs.comment.send");
@@ -43,20 +53,104 @@ test("XHS adapter uses a per-device loopback serve and fail-closed verifier", as
   }), { ok: false, ambiguous: true, mode: "custom" });
 });
 
+test("XHS adapter surfaces inner serve rejection instead of masking it as verification failure", async () => {
+  const adapter = createXhsAdapter({
+    fetchImpl: async () => new Response(JSON.stringify({
+      ok: true,
+      result: { ok: false, step: "notOnNote", activity: "IndexActivityV2", log: [["focus", {}]] },
+      metrics: {},
+    }), { status: 200, headers: { "content-type": "application/json" } }),
+  });
+  const send = registry.require("xhs.comment.send");
+  await assert.rejects(
+    adapter.execute({ capability: send, device: privateDevice, params: { text: "probe" }, leaseAuthorization }),
+    (error) => {
+      assert.equal(error.code, "ADAPTER_ACTION_REJECTED");
+      assert.equal(error.details.step, "notOnNote");
+      return true;
+    },
+  );
+});
+
 test("Xianyu adapter preserves stop-before-publish and discard verification", async () => {
   const calls = [];
   const fakeOperator = fileURLToPath(new URL("../package.json", import.meta.url));
   const adapter = createXianyuAdapter({
     operatorPath: fakeOperator,
-    run: async (_command, args) => {
-      calls.push(args);
-      if (args.includes("discard-dry-run")) return { ok: true, savedDraft: false };
+    run: async (_command, args, options) => {
+      calls.push({ args, options });
+      if (args.includes("inspect-recovery")) {
+        return {
+          ok: true,
+          step: "recovery-inspected",
+          stoppedBeforeAction: true,
+          screenshot: { path: "C:\\evidence\\inspect.png", bytes: 1000, sha256: "a".repeat(64) },
+          observation: { pageClassification: { pageType: "unknown", confidence: 0 } },
+        };
+      }
+      if (args.includes("recover-discard-dry-run")) {
+        return {
+          ok: true,
+          step: "sku-sheet-discarded-to-safe-main",
+          stoppedBeforePublish: true,
+          savedDraft: false,
+          safeStateVerified: true,
+          evidenceFiles: [{
+            path: "C:\\evidence\\recovered.png",
+            kind: "screenshot",
+            label: "xianyu-recovery-final",
+          }],
+        };
+      }
+      if (args.includes("discard-dry-run")) return { ok: false, step: "not-on-publish-compose", savedDraft: false };
       if (args.includes("input-dry-run")) {
         return {
           ok: true,
           stoppedBeforePublish: true,
-          audit: { imeRestored: true, textVerified: true, clearedVerified: true },
+          audit: {
+            inputAccepted: true,
+            textVerified: true,
+            clearedVerified: true,
+            imeRestored: false,
+            imeKeptOnXw: true,
+          },
         };
+      }
+      if (args.includes("verify-image-manifest")) {
+        return {
+          ok: true,
+          step: "image-manifest-verified",
+          stoppedBeforeAction: true,
+          manifest: {
+            verified: true,
+            entries: [{
+              phonePath: "/sdcard/Pictures/XianyuStaging/a.png",
+              expectedSha256: "a".repeat(64),
+              actualSha256: "a".repeat(64),
+              verified: true,
+            }],
+          },
+        };
+      }
+      if (args.includes("image-dry-run")) {
+        return {
+          ok: true,
+          stoppedBeforePublish: true,
+          step: "images-uploaded",
+          upload: { ok: true, step: "images-uploaded", picked: 2, imgCount: 2 },
+        };
+      }
+      if (args.includes("--save-draft")) {
+        return {
+          ok: true,
+          stoppedBeforePublish: true,
+          savedDraft: true,
+          publishTapped: false,
+          steps: { saveDraft: { ok: true } },
+        };
+      }
+      if (args.includes("publish-dry-run")) {
+        return { ok: true, stoppedBeforePublish: true, savedDraft: false, steps: {} };
       }
       return { ok: true };
     },
@@ -66,10 +160,135 @@ test("Xianyu adapter preserves stop-before-publish and discard verification", as
     capability,
     device: privateDevice,
     params: { text: "probe" },
+    leaseAuthorization,
   });
   assert.equal((await adapter.verify({ capability, execution })).ok, true);
-  assert.equal((await adapter.restore({ capability, device: privateDevice })).ok, true);
-  assert.equal(calls.some((args) => args.includes("discard-dry-run")), true);
+  const restoration = await adapter.restore({ capability, device: privateDevice, leaseAuthorization });
+  assert.equal(restoration.ok, false);
+  assert.equal(restoration.step, "not-on-publish-compose");
+  assert.equal(calls.some(({ args }) => args.includes("discard-dry-run")), true);
+
+  const recovery = await adapter.restore({
+    capability,
+    device: privateDevice,
+    evidenceDirectory: "C:\\evidence",
+    leaseAuthorization,
+    recoveryAttempt: true,
+  });
+  assert.equal(recovery.ok, true);
+  assert.equal(recovery.safeStateVerified, true);
+  assert.equal(recovery.evidenceRequired, true);
+  assert.equal(recovery.visualConfirmationRequired, true);
+  assert.equal(recovery.zeroActionVerified, false);
+  assert.equal(recovery.evidenceFiles[0].label, "xianyu-recovery-final");
+  assert.equal(calls.at(-1).args.includes("recover-discard-dry-run"), true);
+  assert.equal(calls.at(-1).args.includes("--evidence-dir"), true);
+
+  const inspection = await adapter.inspectRecovery({
+    capability,
+    device: privateDevice,
+    evidenceDirectory: "C:\\evidence",
+    leaseAuthorization,
+  });
+  assert.equal(inspection.ok, true);
+  assert.equal(inspection.stoppedBeforeAction, true);
+  assert.equal(inspection.evidenceFiles[0].path, "C:\\evidence\\inspect.png");
+  assert.equal(calls.at(-1).args.includes("inspect-recovery"), true);
+  assert.equal(calls.at(-1).args.includes("--evidence-dir"), true);
+
+  const imageManifestCap = registry.require("xianyu.observe.image_manifest");
+  const imageManifestParams = {
+    images: [{ phonePath: "/sdcard/Pictures/XianyuStaging/a.png", sha256: "a".repeat(64) }],
+  };
+  const imageManifestExec = await adapter.execute({
+    capability: imageManifestCap,
+    device: privateDevice,
+    params: imageManifestParams,
+    leaseAuthorization,
+  });
+  assert.equal((await adapter.verify({ capability: imageManifestCap, execution: imageManifestExec })).ok, true);
+  assert.equal((await adapter.verify({
+    capability: imageManifestCap,
+    execution: {
+      output: {
+        ok: true,
+        stoppedBeforeAction: true,
+        manifest: { verified: true, entries: [] },
+      },
+    },
+  })).ok, false);
+  assert.equal((await adapter.verify({
+    capability: imageManifestCap,
+    execution: {
+      output: {
+        ok: true,
+        stoppedBeforeAction: true,
+        manifest: { verified: true, entries: [{ verified: false }] },
+      },
+    },
+  })).ok, false);
+  assert.equal(calls.at(-1).args.includes("verify-image-manifest"), true);
+  assert.equal(calls.at(-1).args.includes("--images"), true);
+  assert.deepEqual(evaluateCapabilityPolicy(imageManifestCap), {
+    approvalRequired: false,
+    externalEffect: false,
+  });
+  assert.throws(
+    () => registry.validateParams(imageManifestCap.id, {
+      images: [{ phonePath: "/sdcard/Pictures/a.png", sha256: "short" }],
+    }),
+    { code: "PARAMS_SCHEMA_INVALID" },
+  );
+
+  const imageCap = registry.require("xianyu.publish.image_dry_run");
+  const imageExec = await adapter.execute({
+    capability: imageCap,
+    device: privateDevice,
+    params: {
+      images: [{ phonePath: "/sdcard/Pictures/XianyuStaging/a.png", sha256: "a".repeat(64) }],
+      imageAlbum: "XianyuStaging",
+    },
+    leaseAuthorization,
+  });
+  assert.equal((await adapter.verify({ capability: imageCap, execution: imageExec })).ok, true);
+  assert.equal(calls.some(({ args }) => args.includes("image-dry-run")), true);
+
+  const fullCap = registry.require("xianyu.publish.full_dry_run");
+  assert.throws(
+    () => registry.validateParams(fullCap.id, { saveDraft: true }),
+    { code: "PARAMS_SCHEMA_INVALID" },
+  );
+  const fullExec = await adapter.execute({
+    capability: fullCap,
+    device: privateDevice,
+    params: { saveDraft: false },
+    leaseAuthorization,
+  });
+  assert.equal((await adapter.verify({ capability: fullCap, execution: fullExec })).ok, true);
+  assert.equal(calls.at(-1).args.includes("--save-draft"), false);
+
+  const fullDraftCap = registry.require("xianyu.publish.full_draft_dry_run");
+  assert.deepEqual(evaluateCapabilityPolicy(fullDraftCap), {
+    approvalRequired: true,
+    externalEffect: true,
+  });
+  const draftExec = await adapter.execute({
+    capability: fullDraftCap,
+    device: privateDevice,
+    params: {},
+    leaseAuthorization,
+  });
+  assert.equal(calls.at(-1).args.includes("--save-draft"), true);
+  assert.equal((await adapter.verify({ capability: fullDraftCap, execution: draftExec })).ok, true);
+  assert.deepEqual(
+    await adapter.restore({ capability: fullDraftCap, device: privateDevice, execution: draftExec, leaseAuthorization }),
+    { ok: true, skipped: "already-saved-draft" },
+  );
+
+  for (const call of calls) {
+    assert.equal(call.options.env.XHS_OPERATOR_LEASE_TOKEN, leaseAuthorization.token);
+    assert.doesNotMatch(JSON.stringify(call.args), /lease-token-secret/);
+  }
 });
 
 test("WeChat adapter requires title match and baseline restoration", async () => {

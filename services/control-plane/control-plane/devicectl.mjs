@@ -3,6 +3,9 @@ import { pathToFileURL } from "node:url";
 
 import { ControlPlaneError, errorBody } from "./lib/errors.mjs";
 
+export const DEFAULT_REMOTE_REPO = "C:\\Users\\Public\\xhs-routing-v1-1";
+const FORWARDED_ARGV_FLAG = "--forwarded-argv-base64";
+
 function option(argv, name, fallback = undefined) {
   const index = argv.indexOf(name);
   return index >= 0 ? argv[index + 1] : fallback;
@@ -10,6 +13,14 @@ function option(argv, name, fallback = undefined) {
 
 function flag(argv, name) {
   return argv.includes(name);
+}
+
+function options(argv, name) {
+  const result = [];
+  for (let index = 0; index < argv.length; index += 1) {
+    if (argv[index] === name && argv[index + 1] !== undefined) result.push(argv[index + 1]);
+  }
+  return result;
 }
 
 function requireOption(argv, name) {
@@ -26,6 +37,20 @@ function parseJsonOption(argv, name, fallback = {}) {
   } catch {
     throw new ControlPlaneError("CLI_JSON_INVALID", `${name} must be valid JSON`);
   }
+}
+
+function placementOptions(argv) {
+  const placement = {};
+  const nodeId = option(argv, "--node");
+  const physicalLabel = option(argv, "--physical-label");
+  const requiredTags = options(argv, "--require-tag");
+  if (nodeId !== undefined) placement.nodeId = nodeId;
+  if (physicalLabel !== undefined) placement.physicalLabel = physicalLabel;
+  if (requiredTags.length > 0) placement.requiredTags = requiredTags;
+  return {
+    ...(option(argv, "--device") !== undefined ? { deviceId: option(argv, "--device") } : {}),
+    ...(Object.keys(placement).length > 0 ? { placement } : {}),
+  };
 }
 
 async function requestJson(baseUrl, method, path, body) {
@@ -45,24 +70,39 @@ async function requestJson(baseUrl, method, path, body) {
   return result;
 }
 
-function remotePowerShell(repo, encodedArgs, expectedHost) {
+export function encodeForwardedArgv(argv) {
+  if (!Array.isArray(argv) || argv.some((value) => typeof value !== "string")) {
+    throw new ControlPlaneError("CLI_FORWARDED_ARGS_INVALID", "forwarded arguments must be strings");
+  }
+  return Buffer.from(JSON.stringify(argv), "utf8").toString("base64");
+}
+
+export function decodeForwardedArgv(encoded) {
+  try {
+    const decoded = JSON.parse(Buffer.from(String(encoded || ""), "base64").toString("utf8"));
+    if (!Array.isArray(decoded) || decoded.some((value) => typeof value !== "string")) throw new Error("not string[]");
+    return decoded;
+  } catch {
+    throw new ControlPlaneError("CLI_FORWARDED_ARGS_INVALID", "forwarded arguments are invalid");
+  }
+}
+
+export function remotePowerShell(repo, encodedArgs, expectedHost) {
   const quote = (value) => String(value).replace(/'/g, "''");
   return [
     `$actualHost=[System.Net.Dns]::GetHostName()`,
     `if ($actualHost -ine '${quote(expectedHost)}') { throw "authority host mismatch: $actualHost" }`,
     `$repo='${quote(repo)}'`,
     `Set-Location -LiteralPath $repo`,
-    `$json=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encodedArgs}'))`,
-    `$forward=@(ConvertFrom-Json $json)`,
-    `& node 'control-plane\\devicectl.mjs' '--local' @forward`,
+    `& node 'control-plane\\devicectl.mjs' '--local' '${FORWARDED_ARGV_FLAG}' '${quote(encodedArgs)}'`,
     `exit $LASTEXITCODE`,
   ].join("; ");
 }
 
 function runRemote(argv, alias) {
-  const repo = process.env.DEVICECTL_REMOTE_REPO || "C:\\Users\\windows 10\\Desktop\\coding\\control_Test\\xhs-device-agent";
+  const repo = process.env.DEVICECTL_REMOTE_REPO || DEFAULT_REMOTE_REPO;
   const expectedHost = process.env.CONTROL_PLANE_EXPECTED_HOST || "DESKTOP-3I1EVHE";
-  const encodedArgs = Buffer.from(JSON.stringify(argv), "utf8").toString("base64");
+  const encodedArgs = encodeForwardedArgv(argv);
   return new Promise((resolve, reject) => {
     const child = spawn("ssh", [
       alias,
@@ -81,11 +121,15 @@ function runRemote(argv, alias) {
 function help() {
   return `devicectl [--ssh xhs-windows] <command>
 
-  health | devices | capabilities | leases
-  job submit --actor ID --device ID --capability ID --idempotency-key KEY [--params JSON]
+  health | nodes | devices | capabilities | leases
+  route plan --actor ID --capability ID [--device ID | --node ID --physical-label LABEL --require-tag TAG]
+  job submit --actor ID --capability ID --idempotency-key KEY [--device ID | placement selectors] [--params JSON]
   job status|watch|cancel --job ID
+  job recover --job ID --actor ID --idempotency-key KEY
+  job recover-inspect --job ID --actor ID --idempotency-key KEY
+  job recover-inspect-record --job ID --inspection ID --actor ID --idempotency-key KEY --analysis JSON
   approval approve|deny --job ID --actor ID [--reason TEXT]
-  session acquire --actor ID --device ID [--canary]
+  session acquire --actor ID [--device ID | --capability ID with placement selectors] [--canary]
   session heartbeat|release --session ID --token TOKEN
   session action --session ID --token TOKEN --capability ID --idempotency-key KEY [--params JSON]
   lab action --session ID --token TOKEN --action NAME --idempotency-key KEY [--data JSON]
@@ -93,6 +137,13 @@ function help() {
 }
 
 export async function main(argv = process.argv.slice(2)) {
+  const forwardedArgv = option(argv, FORWARDED_ARGV_FLAG);
+  if (forwardedArgv !== undefined) {
+    if (!flag(argv, "--local")) {
+      throw new ControlPlaneError("CLI_FORWARDED_ARGS_INVALID", `${FORWARDED_ARGV_FLAG} is remote-internal only`);
+    }
+    argv = ["--local", ...decodeForwardedArgv(forwardedArgv)];
+  }
   const sshAlias = option(argv, "--ssh");
   if (sshAlias && !flag(argv, "--local")) {
     const forwarded = argv.filter((value, index) => value !== "--ssh" && argv[index - 1] !== "--ssh");
@@ -108,21 +159,62 @@ export async function main(argv = process.argv.slice(2)) {
     return;
   }
   let result;
-  if (["health", "devices", "capabilities", "leases"].includes(group)) {
+  if (["health", "nodes", "devices", "capabilities", "leases"].includes(group)) {
     result = await requestJson(baseUrl, "GET", `/control/v1/${group}`);
+  } else if (group === "route" && action === "plan") {
+    result = await requestJson(baseUrl, "POST", "/control/v1/routes/plan", {
+      actorId: requireOption(argv, "--actor"),
+      capabilityId: requireOption(argv, "--capability"),
+      params: parseJsonOption(argv, "--params", {}),
+      canary: flag(argv, "--canary"),
+      ...placementOptions(argv),
+    });
   } else if (group === "job" && action === "submit") {
     result = await requestJson(baseUrl, "POST", "/control/v1/jobs", {
       actorId: requireOption(argv, "--actor"),
-      deviceId: requireOption(argv, "--device"),
       capabilityId: requireOption(argv, "--capability"),
       idempotencyKey: requireOption(argv, "--idempotency-key"),
       params: parseJsonOption(argv, "--params", {}),
       canary: flag(argv, "--canary"),
+      ...placementOptions(argv),
     });
   } else if (group === "job" && action === "status") {
     result = await requestJson(baseUrl, "GET", `/control/v1/jobs/${encodeURIComponent(requireOption(argv, "--job"))}`);
   } else if (group === "job" && action === "cancel") {
     result = await requestJson(baseUrl, "POST", `/control/v1/jobs/${encodeURIComponent(requireOption(argv, "--job"))}/cancel`, {});
+  } else if (group === "job" && action === "recover") {
+    result = await requestJson(
+      baseUrl,
+      "POST",
+      `/control/v1/jobs/${encodeURIComponent(requireOption(argv, "--job"))}/recover`,
+      {
+        actorId: requireOption(argv, "--actor"),
+        idempotencyKey: requireOption(argv, "--idempotency-key"),
+      },
+    );
+  } else if (group === "job" && action === "recover-inspect") {
+    result = await requestJson(
+      baseUrl,
+      "POST",
+      `/control/v1/jobs/${encodeURIComponent(requireOption(argv, "--job"))}/recover/inspect`,
+      {
+        actorId: requireOption(argv, "--actor"),
+        idempotencyKey: requireOption(argv, "--idempotency-key"),
+      },
+    );
+  } else if (group === "job" && action === "recover-inspect-record") {
+    const jobId = requireOption(argv, "--job");
+    const inspectionId = requireOption(argv, "--inspection");
+    result = await requestJson(
+      baseUrl,
+      "POST",
+      `/control/v1/jobs/${encodeURIComponent(jobId)}/recover/inspect/${encodeURIComponent(inspectionId)}/analysis`,
+      {
+        actorId: requireOption(argv, "--actor"),
+        idempotencyKey: requireOption(argv, "--idempotency-key"),
+        analysis: parseJsonOption(argv, "--analysis", null),
+      },
+    );
   } else if (group === "job" && action === "watch") {
     const jobId = requireOption(argv, "--job");
     while (true) {
@@ -139,8 +231,9 @@ export async function main(argv = process.argv.slice(2)) {
   } else if (group === "session" && action === "acquire") {
     result = await requestJson(baseUrl, "POST", "/control/v1/sessions", {
       actorId: requireOption(argv, "--actor"),
-      deviceId: requireOption(argv, "--device"),
+      ...(option(argv, "--capability") !== undefined ? { capabilityId: option(argv, "--capability") } : {}),
       canary: flag(argv, "--canary"),
+      ...placementOptions(argv),
     });
   } else if (group === "session" && ["heartbeat", "release"].includes(action)) {
     const sessionId = requireOption(argv, "--session");

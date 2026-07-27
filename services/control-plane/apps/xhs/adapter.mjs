@@ -9,18 +9,47 @@ function endpoint(device) {
   return `http://127.0.0.1:${port}/`;
 }
 
+function leaseHeaders(leaseAuthorization) {
+  if (!leaseAuthorization?.leaseId || !leaseAuthorization?.token || !leaseAuthorization?.deviceId) {
+    throw new ControlPlaneError("LEASE_CONTEXT_REQUIRED", "XHS adapter requires an active control-plane lease", {
+      status: 500,
+    });
+  }
+  return {
+    "x-control-lease-id": leaseAuthorization.leaseId,
+    "x-control-token": leaseAuthorization.token,
+    "x-control-device-id": leaseAuthorization.deviceId,
+  };
+}
+
 export function createXhsAdapter({ fetchImpl = globalThis.fetch } = {}) {
   return {
     id: "xhs",
-    async execute({ capability, device, params }) {
+    async execute({ capability, device, params, leaseAuthorization }) {
       const response = await postJson(
         endpoint(device),
         { action: capability.implementation.action, ...params },
-        { timeoutMs: capability.timeoutMs, fetchImpl },
+        { timeoutMs: capability.timeoutMs, fetchImpl, headers: leaseHeaders(leaseAuthorization) },
       );
+      const result = response.result;
+      // serve 外层恒为 HTTP 200 ok:true，内层 result.ok===false 才是动作被拒绝
+      // （notOnNote / editorLostAfterInput / commentBox / countUnavailable 等守卫，
+      //  全部发生在点发送之前，未发出、非 ambiguous）。不透传会被误判成 VERIFICATION_FAILED。
+      if (result && typeof result === "object" && result.ok === false) {
+        const error = new ControlPlaneError("ADAPTER_ACTION_REJECTED", `xhs action rejected: ${result.step || "unknown"}`, {
+          status: 502,
+          details: {
+            step: result.step ?? null,
+            activity: result.activity ?? result.focus ?? null,
+            log: Array.isArray(result.log) ? result.log.slice(-8) : undefined,
+          },
+        });
+        error.notSent = true; // 守卫都在点发送之前触发，确定未发出，不应标 ambiguous
+        throw error;
+      }
       return {
         vendorCode: 200,
-        output: response.result,
+        output: result,
         metrics: response.metrics,
       };
     },
@@ -46,15 +75,18 @@ export function createXhsAdapter({ fetchImpl = globalThis.fetch } = {}) {
       }
       return { ok: false, ambiguous: true, mode: "custom" };
     },
-    async restore({ capability, device }) {
+    async restore({ capability, device, leaseAuthorization }) {
       if (!capability.restoration.required) return { ok: true };
+      const headers = leaseHeaders(leaseAuthorization);
       const restoreIme = await postJson(endpoint(device), { action: "restoreIme" }, {
         timeoutMs: 30000,
         fetchImpl,
+        headers,
       });
       const home = await postJson(endpoint(device), { action: "backToFeed", maxBack: 5 }, {
         timeoutMs: 30000,
         fetchImpl,
+        headers,
       });
       return { ok: restoreIme.ok !== false && home.ok !== false };
     },

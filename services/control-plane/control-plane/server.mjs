@@ -78,8 +78,8 @@ export async function main(argv = process.argv.slice(2)) {
   }
   const actualHost = assertAuthorityHost();
   assertPinnedNodeVersion();
-  const runtime = createControlPlaneRuntime();
   const nodeId = process.env.CONTROL_PLANE_NODE_ID || "DESKTOP-3I1EVHE";
+  const runtime = createControlPlaneRuntime({ nodeId });
   const router = new ControlRouter({ ...runtime, nodeId });
   const server = createControlServer({ router });
   runtime.control.start();

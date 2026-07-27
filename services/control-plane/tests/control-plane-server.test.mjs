@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -45,6 +45,7 @@ test("HTTP API is loopback-oriented, emits no CORS header, and redacts runtime I
     physicalLabel: "rack-01",
     nodeId: "DESKTOP-3I1EVHE",
     runtimeId: "never-expose",
+    routingProfile: { enabled: true, capabilityIds: ["test.observe"] },
   });
   const evidence = new EvidenceStore({
     runsRoot: join(root, "runs"),
@@ -79,6 +80,82 @@ test("HTTP API is loopback-oriented, emits no CORS header, and redacts runtime I
     assert.equal(body.devices[0].deviceId, device.deviceId);
     assert.doesNotMatch(JSON.stringify(body), /never-expose|runtimeId/);
 
+    const nodesResponse = await fetch(`http://127.0.0.1:${port}/control/v1/nodes`);
+    assert.equal(nodesResponse.status, 200);
+    const nodes = await nodesResponse.json();
+    assert.equal(nodes.nodes[0].nodeId, "DESKTOP-3I1EVHE");
+    assert.equal(nodes.nodes[0].readyDevices, 1);
+    assert.doesNotMatch(JSON.stringify(nodes), /never-expose|runtimeId|routingProfile/);
+
+    const operatorLease = state.acquireLease({
+      deviceId: device.deviceId,
+      kind: "job",
+      holderId: "job:operator-auth-test",
+      jobId: "job:operator-auth-test",
+    });
+    const authorizeResponse = await fetch(`http://127.0.0.1:${port}/control/v1/leases/authorize`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-control-token": operatorLease.token,
+      },
+      body: JSON.stringify({
+        leaseId: operatorLease.leaseId,
+        deviceId: device.deviceId,
+        runtimeId: "never-expose",
+      }),
+    });
+    assert.equal(authorizeResponse.status, 200);
+    const authorizeBody = await authorizeResponse.json();
+    assert.equal(authorizeBody.authorized, true);
+    assert.doesNotMatch(JSON.stringify(authorizeBody), /never-expose|runtimeId|lease_token/);
+
+    const wrongRuntimeResponse = await fetch(`http://127.0.0.1:${port}/control/v1/leases/authorize`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-control-token": operatorLease.token,
+      },
+      body: JSON.stringify({
+        leaseId: operatorLease.leaseId,
+        deviceId: device.deviceId,
+        runtimeId: "wrong-runtime",
+      }),
+    });
+    assert.equal(wrongRuntimeResponse.status, 409);
+    assert.equal((await wrongRuntimeResponse.json()).error.code, "LEASE_RUNTIME_MISMATCH");
+    state.releaseLease(operatorLease.leaseId, operatorLease.token);
+
+    const beforeJobs = state.db.prepare("SELECT COUNT(*) AS count FROM jobs").get().count;
+    const planResponse = await fetch(`http://127.0.0.1:${port}/control/v1/routes/plan`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        actorId: "agent-a",
+        capabilityId: "test.observe",
+      }),
+    });
+    assert.equal(planResponse.status, 200);
+    const plan = await planResponse.json();
+    assert.equal(plan.route.decision, "dispatchable");
+    assert.equal(plan.route.selectedDeviceId, device.deviceId);
+    assert.equal(state.db.prepare("SELECT COUNT(*) AS count FROM jobs").get().count, beforeJobs);
+
+    const submitResponse = await fetch(`http://127.0.0.1:${port}/control/v1/jobs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        actorId: "agent-a",
+        capabilityId: "test.observe",
+        idempotencyKey: "api-auto-route",
+      }),
+    });
+    assert.equal(submitResponse.status, 202);
+    const submitted = await submitResponse.json();
+    assert.equal(submitted.job.routeDecision.selectedDeviceId, device.deviceId);
+    assert.match(submitted.storage.manifestPath, /manifest\.json$/);
+    assert.doesNotMatch(JSON.stringify(submitted), /never-expose|runtimeId|routingProfile/);
+
     const invalid = await fetch(`http://127.0.0.1:${port}/control/v1/jobs`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -103,4 +180,122 @@ test("production startup pins the verified Windows Node version", () => {
     expected: "24.11.1",
     actual: "24.12.0",
   }), { code: "NODE_VERSION_MISMATCH" });
+});
+
+test("production launch assets keep retired legacy UI routes enforced", () => {
+  const worker = readFileSync(fileURLToPath(new URL("../scripts/control-plane-worker.ps1", import.meta.url)), "utf8");
+  const envExample = readFileSync(fileURLToPath(new URL("../.env.example", import.meta.url)), "utf8");
+  assert.match(worker, /CONTROL_PLANE_LEGACY_MODE\s*=\s*"enforce"/);
+  assert.doesNotMatch(worker, /CONTROL_PLANE_LEGACY_MODE\s*=\s*"audit"/);
+  assert.match(envExample, /^CONTROL_PLANE_LEGACY_MODE=enforce$/m);
+});
+
+test("router exposes job recovery without returning credentials", async () => {
+  const calls = [];
+  const router = new ControlRouter({
+    control: {
+      async recoverJob(input) {
+        calls.push(input);
+        return {
+          ok: true,
+          reused: false,
+          jobId: input.jobId,
+          runId: "run_public",
+          deviceId: "dev_public",
+          quarantineCleared: true,
+        };
+      },
+    },
+    state: {},
+    capabilities: {},
+    evidence: {},
+  });
+  const result = await router.handle({
+    method: "POST",
+    path: "/control/v1/jobs/job_recovery/recover",
+    body: { actorId: "agent-a", idempotencyKey: "recover-1" },
+  });
+  assert.equal(result.status, 200);
+  assert.deepEqual(calls, [{
+    jobId: "job_recovery",
+    actorId: "agent-a",
+    idempotencyKey: "recover-1",
+  }]);
+  assert.equal(result.body.recovery.quarantineCleared, true);
+  assert.doesNotMatch(JSON.stringify(result.body), /token|runtime/i);
+});
+
+test("router exposes read-only recovery inspection without returning credentials", async () => {
+  const calls = [];
+  const router = new ControlRouter({
+    control: {
+      async inspectRecovery(input) {
+        calls.push(input);
+        return {
+          ok: true,
+          reused: false,
+          jobId: input.jobId,
+          runId: "run_public",
+          deviceId: "dev_public",
+          stoppedBeforeAction: true,
+          quarantineCleared: false,
+          screenshot: { kind: "screenshot", sha256: "a".repeat(64), bytes: 1234 },
+        };
+      },
+    },
+    state: {},
+    capabilities: {},
+    evidence: {},
+  });
+  const result = await router.handle({
+    method: "POST",
+    path: "/control/v1/jobs/job_recovery/recover/inspect",
+    body: { actorId: "agent-a", idempotencyKey: "inspect-1" },
+  });
+  assert.equal(result.status, 200);
+  assert.deepEqual(calls, [{
+    jobId: "job_recovery",
+    actorId: "agent-a",
+    idempotencyKey: "inspect-1",
+  }]);
+  assert.equal(result.body.inspection.quarantineCleared, false);
+  assert.doesNotMatch(JSON.stringify(result.body), /token|runtime/i);
+});
+
+test("router records hash-bound visual analysis without changing recovery state", async () => {
+  const calls = [];
+  const router = new ControlRouter({
+    control: {
+      async recordRecoveryInspectionAnalysis(input) {
+        calls.push(input);
+        return {
+          ok: true,
+          inspectionId: input.inspectionId,
+          quarantineCleared: false,
+          pageClassification: { pageType: "unknown", safeStateVerified: false },
+        };
+      },
+    },
+    state: {},
+    capabilities: {},
+    evidence: {},
+  });
+  const result = await router.handle({
+    method: "POST",
+    path: "/control/v1/jobs/job_recovery/recover/inspect/inspection_1/analysis",
+    body: {
+      actorId: "agent-a",
+      idempotencyKey: "analysis-1",
+      analysis: { schemaVersion: "xhs.visual-elements.v1" },
+    },
+  });
+  assert.equal(result.status, 200);
+  assert.deepEqual(calls, [{
+    jobId: "job_recovery",
+    inspectionId: "inspection_1",
+    actorId: "agent-a",
+    idempotencyKey: "analysis-1",
+    analysis: { schemaVersion: "xhs.visual-elements.v1" },
+  }]);
+  assert.equal(result.body.analysis.quarantineCleared, false);
 });

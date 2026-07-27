@@ -29,6 +29,23 @@ function readToken(path) {
   }
 }
 
+export function inspectTransportLock({
+  path = DEFAULT_LOCK_PATH,
+  staleMs = 180000,
+  now = Date.now(),
+} = {}) {
+  try {
+    const ageMs = Math.max(0, now - statSync(path).mtimeMs);
+    return {
+      status: ageMs > staleMs ? "stale" : "busy",
+      ageMs,
+    };
+  } catch (error) {
+    if (error?.code === "ENOENT") return { status: "free", ageMs: null };
+    return { status: "unknown", ageMs: null };
+  }
+}
+
 export async function acquireTransportLock({
   path = DEFAULT_LOCK_PATH,
   timeoutMs = 45000,

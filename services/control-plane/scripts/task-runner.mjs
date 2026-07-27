@@ -19,6 +19,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { join, dirname, basename, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { FastOperator, Pacer, applyCommentFlags } from "./fast-operator.mjs";
+import { requireRecordedLabBypass } from "../control-plane/lib/operator-access.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -393,6 +394,7 @@ async function main() {
     console.error("usage: task-runner.mjs --adb <path> --serial <serial> --task <file.json> [--loops N] [--comment-cap N] [--dry-run] [--autonomous] [--fast] [--log-dir <dir>] [--on-error skip|abort]");
     process.exit(2);
   }
+  requireRecordedLabBypass("task-runner");
   const task = loadTask(resolve(taskPath));
   const loopsOverride = arg("--loops", null);
   const loops = Number(loopsOverride ?? task.loops);

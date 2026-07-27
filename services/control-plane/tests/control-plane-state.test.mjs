@@ -42,11 +42,13 @@ function setup(path) {
   const state = new StateStore({ dbPath: path });
   const registry = new CapabilityRegistry([capability()]);
   state.syncCapabilities(registry);
+  state.upsertNode({ nodeId: "DESKTOP-3I1EVHE", authority: true });
   const device = state.upsertDevice({
     alias: "01",
     physicalLabel: "rack-01",
     nodeId: "DESKTOP-3I1EVHE",
     runtimeId: "private-runtime-id",
+    routingProfile: { enabled: true, tags: ["slot:01"], capabilityIds: ["test.observe"] },
   });
   return { state, device, registry };
 }
@@ -61,6 +63,7 @@ test("idempotency is durable and public device records redact runtime IDs", () =
     const input = {
       idempotencyKey: "same",
       actorId: "agent-a",
+      authorityNodeId: "DESKTOP-3I1EVHE",
       deviceId: device.deviceId,
       capability: registry.require("test.observe"),
       params: {},
@@ -102,6 +105,42 @@ test("exclusive leases reject a second actor and validate tokens", () => {
   }
 });
 
+test("operator authorization binds a lease to both public device and private runtime", () => {
+  const root = tempRoot();
+  const { state, device } = setup(join(root, "control.db"));
+  try {
+    const lease = state.acquireLease({
+      deviceId: device.deviceId,
+      kind: "job",
+      holderId: "job:test",
+      jobId: "job:test",
+    });
+    const authorized = state.authorizeLease({
+      leaseId: lease.leaseId,
+      token: lease.token,
+      deviceId: device.deviceId,
+      runtimeId: "private-runtime-id",
+    });
+    assert.equal(authorized.deviceId, device.deviceId);
+    assert.equal(Object.hasOwn(authorized, "token"), false);
+    assert.throws(() => state.authorizeLease({
+      leaseId: lease.leaseId,
+      token: lease.token,
+      deviceId: device.deviceId,
+      runtimeId: "other-runtime",
+    }), { code: "LEASE_RUNTIME_MISMATCH", status: 409 });
+    assert.throws(() => state.authorizeLease({
+      leaseId: lease.leaseId,
+      token: "wrong-token",
+      deviceId: device.deviceId,
+      runtimeId: "private-runtime-id",
+    }), { code: "LEASE_TOKEN_INVALID", status: 403 });
+  } finally {
+    state.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("restart marks in-flight work recovery_required and quarantines its device", () => {
   const root = tempRoot();
   const path = join(root, "control.db");
@@ -112,6 +151,7 @@ test("restart marks in-flight work recovery_required and quarantines its device"
     const created = state.createJob({
       idempotencyKey: "restart",
       actorId: "agent-a",
+      authorityNodeId: "DESKTOP-3I1EVHE",
       deviceId: fixture.device.deviceId,
       capability: fixture.registry.require("test.observe"),
       params: {},

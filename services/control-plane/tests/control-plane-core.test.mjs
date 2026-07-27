@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { CapabilityRegistry } from "../control-plane/lib/capability-registry.mjs";
 import { AdapterRegistry, ControlPlane } from "../control-plane/lib/control-plane.mjs";
 import { EvidenceStore } from "../control-plane/lib/evidence-store.mjs";
+import { ControlPlaneError } from "../control-plane/lib/errors.mjs";
 import { StateStore } from "../control-plane/lib/state-store.mjs";
 
 const tempBase = fileURLToPath(new URL("../control-plane/runtime", import.meta.url));
@@ -58,11 +59,13 @@ function fixture({ capabilities, adapter }) {
   const root = mkdtempSync(join(tempBase, "core-test-"));
   const state = new StateStore({ dbPath: join(root, "control.db") });
   const registry = new CapabilityRegistry(capabilities);
+  const capabilityIds = capabilities.map((capability) => capability.id);
   const devices = ["01", "02"].map((alias) => state.upsertDevice({
     alias,
     physicalLabel: `rack-${alias}`,
     nodeId: "DESKTOP-3I1EVHE",
     runtimeId: `private-${alias}`,
+    routingProfile: { enabled: true, tags: [`slot:${alias}`], capabilityIds },
   }));
   const evidence = new EvidenceStore({
     runsRoot: join(root, "runs"),
@@ -94,6 +97,51 @@ function fixture({ capabilities, adapter }) {
     },
   };
 }
+
+test("job result keeps bounded diagnostics and drops unrelated adapter output", async () => {
+  const diagnostic = {
+    publishCompose: true,
+    mediaCount: 0,
+    expectedCount: 2,
+    hasAddMore: false,
+    topMedia: {
+      nodeCount: 1,
+      nodes: [{ labelKind: "empty", classKind: "view", bounds: [10, 20, 30, 40], clickable: false }],
+    },
+  };
+  const adapter = {
+    id: "test",
+    async execute() {
+      return {
+        vendorCode: 0,
+        output: {
+          ok: false,
+          step: "images-unverified",
+          diagnostic,
+          privateRawLabel: "must-not-persist",
+        },
+      };
+    },
+    async verify() { return { ok: false, mode: "state" }; },
+    async restore() { return { ok: true }; },
+  };
+  const f = fixture({ capabilities: [manifest("test.diagnostic")], adapter });
+  try {
+    const submitted = f.control.submitJob({
+      idempotencyKey: "bounded-diagnostic",
+      actorId: "agent-a",
+      deviceId: f.devices[0].deviceId,
+      capabilityId: "test.diagnostic",
+      params: {},
+    }).job;
+    const terminal = await f.control.waitForJob(submitted.jobId);
+    assert.equal(terminal.status, "failed");
+    assert.deepEqual(terminal.result.output.diagnostic, diagnostic);
+    assert.equal(Object.hasOwn(terminal.result.output, "privateRawLabel"), false);
+  } finally {
+    await f.close();
+  }
+});
 
 test("different devices run concurrently while one device remains FIFO", async () => {
   const gates = [];
@@ -151,6 +199,48 @@ test("different devices run concurrently while one device remains FIFO", async (
     assert.equal((await f.control.waitForJob(secondSameDevice.jobId)).status, "succeeded");
   } finally {
     gates.forEach((gate) => gate.resolve());
+    await f.close();
+  }
+});
+
+test("adapter execution receives a device-bound lease credential without persisting the token", async () => {
+  const seen = [];
+  let f;
+  const adapter = {
+    id: "test",
+    async execute({ device, leaseAuthorization }) {
+      const authorized = f.state.authorizeLease({
+        leaseId: leaseAuthorization.leaseId,
+        token: leaseAuthorization.token,
+        deviceId: leaseAuthorization.deviceId,
+        runtimeId: device.runtimeId,
+      });
+      seen.push({ device, leaseAuthorization, authorized });
+      return { vendorCode: 0, output: { ok: true } };
+    },
+    async verify() { return { ok: true, mode: "state" }; },
+    async restore() { return { ok: true }; },
+  };
+  f = fixture({ capabilities: [manifest("test.lease-context")], adapter });
+  try {
+    const submitted = f.control.submitJob({
+      idempotencyKey: "lease-context",
+      actorId: "agent-a",
+      deviceId: f.devices[0].deviceId,
+      capabilityId: "test.lease-context",
+      params: {},
+    }).job;
+    const finished = await f.control.waitForJob(submitted.jobId);
+    assert.equal(finished.status, "succeeded");
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].leaseAuthorization.deviceId, f.devices[0].deviceId);
+    assert.equal(seen[0].authorized.deviceId, f.devices[0].deviceId);
+    assert.doesNotMatch(JSON.stringify(finished), new RegExp(seen[0].leaseAuthorization.token));
+    assert.doesNotMatch(
+      JSON.stringify(f.evidence.getManifest(submitted.runId)),
+      new RegExp(seen[0].leaseAuthorization.token),
+    );
+  } finally {
     await f.close();
   }
 });
@@ -257,6 +347,474 @@ test("restoration failure quarantines the device", async () => {
   }
 });
 
+test("audited recovery lease restores a quarantined device exactly once", async () => {
+  let restoreCalls = 0;
+  let recoveryAuthorization = null;
+  let recoveryAttempt = null;
+  let f;
+  const adapter = {
+    id: "test",
+    async execute() { return { vendorCode: 0 }; },
+    async verify() { return { ok: true, mode: "state" }; },
+    async restore({ device, leaseAuthorization, recoveryAttempt: attempted }) {
+      restoreCalls += 1;
+      if (restoreCalls === 1) return { ok: false };
+      recoveryAttempt = attempted;
+      recoveryAuthorization = f.state.authorizeLease({
+        leaseId: leaseAuthorization.leaseId,
+        token: leaseAuthorization.token,
+        deviceId: leaseAuthorization.deviceId,
+        runtimeId: device.runtimeId,
+      });
+      return { ok: true };
+    },
+  };
+  f = fixture({
+    capabilities: [manifest("test.restore", {
+      restoration: { required: true, description: "must restore" },
+    })],
+    adapter,
+  });
+  try {
+    const job = f.control.submitJob({
+      idempotencyKey: "restore-then-recover",
+      actorId: "agent-a",
+      deviceId: f.devices[0].deviceId,
+      capabilityId: "test.restore",
+      params: {},
+    }).job;
+    assert.equal((await f.control.waitForJob(job.jobId)).status, "recovery_required");
+    assert.equal(f.state.getDevice(job.deviceId).quarantined, true);
+    assert.throws(() => f.state.acquireLease({
+      deviceId: job.deviceId,
+      kind: "job",
+      holderId: "job:must-stay-blocked",
+      jobId: job.jobId,
+    }), { code: "DEVICE_QUARANTINED" });
+
+    const recovered = await f.control.recoverJob({
+      jobId: job.jobId,
+      actorId: "recovery-agent",
+      idempotencyKey: "recover-once",
+    });
+    assert.equal(recovered.ok, true);
+    assert.equal(recovered.reused, false);
+    assert.equal(recovered.quarantineCleared, true);
+    assert.equal(recoveryAuthorization.kind, "recovery");
+    assert.equal(recoveryAttempt, true);
+    assert.equal(f.state.getDevice(job.deviceId).quarantined, false);
+    assert.equal(f.state.listLeases().length, 0);
+    assert.deepEqual(
+      f.state.listJobEvents(job.jobId).filter((event) => event.type.startsWith("job.recovery.")).map((event) => event.type),
+      ["job.recovery.started", "job.recovery.succeeded"],
+    );
+
+    const replay = await f.control.recoverJob({
+      jobId: job.jobId,
+      actorId: "recovery-agent",
+      idempotencyKey: "recover-once",
+    });
+    assert.equal(replay.ok, true);
+    assert.equal(replay.reused, true);
+    assert.equal(restoreCalls, 2);
+  } finally {
+    await f.close();
+  }
+});
+
+test("failed audited recovery keeps the device quarantined", async () => {
+  let restoreCalls = 0;
+  const adapter = {
+    id: "test",
+    async execute() { return { vendorCode: 0 }; },
+    async verify() { return { ok: true, mode: "state" }; },
+    async restore() {
+      restoreCalls += 1;
+      return { ok: false };
+    },
+  };
+  const f = fixture({
+    capabilities: [manifest("test.restore", {
+      restoration: { required: true, description: "must restore" },
+    })],
+    adapter,
+  });
+  try {
+    const job = f.control.submitJob({
+      idempotencyKey: "restore-stays-failed",
+      actorId: "agent-a",
+      deviceId: f.devices[0].deviceId,
+      capabilityId: "test.restore",
+      params: {},
+    }).job;
+    assert.equal((await f.control.waitForJob(job.jobId)).status, "recovery_required");
+    await assert.rejects(
+      f.control.recoverJob({
+        jobId: job.jobId,
+        actorId: "recovery-agent",
+        idempotencyKey: "recover-fails",
+      }),
+      { code: "RECOVERY_FAILED" },
+    );
+    assert.equal(restoreCalls, 2);
+    assert.equal(f.state.getDevice(job.deviceId).quarantined, true);
+    assert.equal(f.state.listLeases().length, 0);
+    assert.equal(
+      f.state.listJobEvents(job.jobId).some((event) => event.type === "job.recovery.failed"),
+      true,
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("audited recovery cannot clear quarantine when required screenshot evidence is missing", async () => {
+  let restoreCalls = 0;
+  const adapter = {
+    id: "test",
+    async execute() { return { vendorCode: 0 }; },
+    async verify() { return { ok: true, mode: "state" }; },
+    async restore() {
+      restoreCalls += 1;
+      if (restoreCalls === 1) return { ok: false };
+      return { ok: true, safeStateVerified: true, evidenceRequired: true, evidenceFiles: [] };
+    },
+  };
+  const f = fixture({
+    capabilities: [manifest("test.restore", {
+      restoration: { required: true, description: "must restore" },
+    })],
+    adapter,
+  });
+  try {
+    const job = f.control.submitJob({
+      idempotencyKey: "restore-evidence-required",
+      actorId: "agent-a",
+      deviceId: f.devices[0].deviceId,
+      capabilityId: "test.restore",
+      params: {},
+    }).job;
+    assert.equal((await f.control.waitForJob(job.jobId)).status, "recovery_required");
+    await assert.rejects(
+      f.control.recoverJob({
+        jobId: job.jobId,
+        actorId: "recovery-agent",
+        idempotencyKey: "recover-without-evidence",
+      }),
+      (error) => error.code === "RECOVERY_FAILED"
+        && error.details?.causeCode === "RECOVERY_SCREENSHOT_MISSING",
+    );
+    assert.equal(f.state.getDevice(job.deviceId).quarantined, true);
+    assert.equal(f.state.listLeases().length, 0);
+  } finally {
+    await f.close();
+  }
+});
+
+test("visual-gated recovery requires a fresh safe analysis and a zero-action verification", async () => {
+  let restoreCalls = 0;
+  const adapter = {
+    id: "test",
+    async execute() { return { vendorCode: 0 }; },
+    async verify() { return { ok: true, mode: "state" }; },
+    async restore() {
+      restoreCalls += 1;
+      if (restoreCalls === 1) return { ok: false };
+      return {
+        ok: true,
+        safeStateVerified: true,
+        visualConfirmationRequired: true,
+        zeroActionVerified: true,
+      };
+    },
+  };
+  const f = fixture({
+    capabilities: [manifest("test.restore", {
+      restoration: { required: true, description: "must restore" },
+    })],
+    adapter,
+  });
+  try {
+    const job = f.control.submitJob({
+      idempotencyKey: "restore-visual-gate",
+      actorId: "agent-a",
+      deviceId: f.devices[0].deviceId,
+      capabilityId: "test.restore",
+      params: {},
+    }).job;
+    assert.equal((await f.control.waitForJob(job.jobId)).status, "recovery_required");
+    f.state.appendEvent({
+      jobId: job.jobId,
+      runId: job.runId,
+      type: "job.recovery.analysis.recorded",
+      payload: {
+        analysisResult: {
+          inspectionId: "inspection-test",
+          imageSha256: "d".repeat(64),
+          pageClassification: { pageType: "main-safe", safeStateVerified: true, confidence: 0.98 },
+          analysisEvidence: { evidenceId: "evidence-test" },
+        },
+      },
+    });
+    const recovered = await f.control.recoverJob({
+      jobId: job.jobId,
+      actorId: "recovery-agent",
+      idempotencyKey: "recover-with-visual-gate",
+    });
+    assert.equal(recovered.ok, true);
+    assert.equal(recovered.restoration.visualConfirmation.inspectionId, "inspection-test");
+    assert.equal(recovered.restoration.visualConfirmation.confidence, 0.98);
+    assert.equal(f.state.getDevice(job.deviceId).quarantined, false);
+  } finally {
+    await f.close();
+  }
+});
+
+test("visual-gated recovery keeps quarantine when no safe analysis exists", async () => {
+  let restoreCalls = 0;
+  const adapter = {
+    id: "test",
+    async execute() { return { vendorCode: 0 }; },
+    async verify() { return { ok: true, mode: "state" }; },
+    async restore() {
+      restoreCalls += 1;
+      if (restoreCalls === 1) return { ok: false };
+      return {
+        ok: true,
+        safeStateVerified: true,
+        visualConfirmationRequired: true,
+        zeroActionVerified: true,
+      };
+    },
+  };
+  const f = fixture({
+    capabilities: [manifest("test.restore", {
+      restoration: { required: true, description: "must restore" },
+    })],
+    adapter,
+  });
+  try {
+    const job = f.control.submitJob({
+      idempotencyKey: "restore-visual-gate-missing",
+      actorId: "agent-a",
+      deviceId: f.devices[0].deviceId,
+      capabilityId: "test.restore",
+      params: {},
+    }).job;
+    assert.equal((await f.control.waitForJob(job.jobId)).status, "recovery_required");
+    await assert.rejects(
+      f.control.recoverJob({
+        jobId: job.jobId,
+        actorId: "recovery-agent",
+        idempotencyKey: "recover-without-visual-gate",
+      }),
+      (error) => error.code === "RECOVERY_FAILED"
+        && error.details?.causeCode === "RECOVERY_VISUAL_CONFIRMATION_REQUIRED",
+    );
+    assert.equal(f.state.getDevice(job.deviceId).quarantined, true);
+    assert.equal(f.state.listLeases().length, 0);
+  } finally {
+    await f.close();
+  }
+});
+
+test("audited recovery inspection attaches a screenshot and never clears quarantine", async () => {
+  let inspectionCalls = 0;
+  const adapter = {
+    id: "test",
+    async execute() { return { vendorCode: 0 }; },
+    async verify() { return { ok: true, mode: "state" }; },
+    async restore() { return { ok: false, step: "not-on-safe-page" }; },
+    async inspectRecovery({ evidenceDirectory, leaseAuthorization }) {
+      inspectionCalls += 1;
+      const screenshot = join(evidenceDirectory, "inspect.png");
+      writeFileSync(screenshot, Buffer.from("fake-png-evidence"));
+      return {
+        ok: true,
+        step: "recovery-inspected",
+        stoppedBeforeAction: true,
+        leaseKindObserved: leaseAuthorization ? "recovery" : null,
+        observation: {
+          focus: {
+            package: "com.taobao.idlefish",
+            activity: "com.taobao.idlefish.maincontainer.activity.MainActivity",
+          },
+          pageClassification: {
+            schemaVersion: 1,
+            pageType: "unknown",
+            confidence: 0,
+            safeStateVerified: false,
+            reasons: ["visual analysis pending"],
+          },
+        },
+        evidenceFiles: [{ path: screenshot, kind: "screenshot", label: "recovery-inspect" }],
+      };
+    },
+  };
+  const f = fixture({
+    capabilities: [manifest("test.restore", {
+      restoration: { required: true, description: "must restore" },
+    })],
+    adapter,
+  });
+  try {
+    const job = f.control.submitJob({
+      idempotencyKey: "inspect-after-failure",
+      actorId: "agent-a",
+      deviceId: f.devices[0].deviceId,
+      capabilityId: "test.restore",
+      params: {},
+    }).job;
+    assert.equal((await f.control.waitForJob(job.jobId)).status, "recovery_required");
+
+    const inspection = await f.control.inspectRecovery({
+      jobId: job.jobId,
+      actorId: "inspection-agent",
+      idempotencyKey: "inspect-once",
+    });
+    assert.equal(inspection.ok, true);
+    assert.equal(inspection.reused, false);
+    assert.equal(inspection.stoppedBeforeAction, true);
+    assert.equal(inspection.quarantineCleared, false);
+    assert.equal(inspection.screenshot.kind, "screenshot");
+    assert.match(inspection.screenshot.sha256, /^[a-f0-9]{64}$/);
+    assert.equal(inspection.pageClassification.pageType, "unknown");
+    assert.equal(f.state.getDevice(job.deviceId).quarantined, true);
+    assert.equal(f.state.listLeases().length, 0);
+    assert.deepEqual(
+      f.state.listJobEvents(job.jobId)
+        .filter((event) => event.type.startsWith("job.recovery.inspect."))
+        .map((event) => event.type),
+      ["job.recovery.inspect.started", "job.recovery.inspect.succeeded"],
+    );
+    assert.equal(f.state.listEvidence(job.runId).some((item) => item.kind === "screenshot"), true);
+    assert.equal(f.state.listEvidence(job.runId).some((item) => item.kind === "recovery_inspection"), true);
+
+    const replay = await f.control.inspectRecovery({
+      jobId: job.jobId,
+      actorId: "inspection-agent",
+      idempotencyKey: "inspect-once",
+    });
+    assert.equal(replay.reused, true);
+    assert.equal(inspectionCalls, 1);
+
+    await assert.rejects(f.control.recordRecoveryInspectionAnalysis({
+      jobId: job.jobId,
+      inspectionId: inspection.inspectionId,
+      actorId: "inspection-agent",
+      idempotencyKey: "analysis-wrong-hash",
+      analysis: {
+        schemaVersion: "xhs.visual-elements.v1",
+        image: { sha256: "b".repeat(64), resolution: [1080, 2400] },
+        analyzer: { name: "visual-grounding-poc", version: "test", timings: { hotPathMs: 1200 } },
+        elements: [],
+      },
+    }), { code: "RECOVERY_ANALYSIS_REJECTED" });
+
+    const analysis = await f.control.recordRecoveryInspectionAnalysis({
+      jobId: job.jobId,
+      inspectionId: inspection.inspectionId,
+      actorId: "inspection-agent",
+      idempotencyKey: "analysis-once",
+      analysis: {
+        schemaVersion: "xhs.visual-elements.v1",
+        image: { sha256: inspection.screenshot.sha256, resolution: [1080, 2400] },
+        analyzer: { name: "visual-grounding-poc", version: "test", timings: { hotPathMs: 1200 } },
+        elements: [
+          { id: "home", label: "闲鱼", bounds: [0, 2140, 220, 2320], conf: 0.99, source: "ocr" },
+          { id: "messages", label: "消息", bounds: [610, 2140, 800, 2320], conf: 0.99, source: "ocr" },
+          { id: "mine", label: "我的", bounds: [850, 2140, 1070, 2320], conf: 0.99, source: "ocr" },
+        ],
+      },
+    });
+    assert.equal(analysis.pageClassification.pageType, "main-safe");
+    assert.equal(analysis.pageClassification.safeStateVerified, true);
+    assert.equal(analysis.quarantineCleared, false);
+    assert.equal(f.state.getDevice(job.deviceId).quarantined, true);
+    assert.equal(f.state.listEvidence(job.runId).some((item) => item.kind === "recovery_analysis"), true);
+
+    const replayedAnalysis = await f.control.recordRecoveryInspectionAnalysis({
+      jobId: job.jobId,
+      inspectionId: inspection.inspectionId,
+      actorId: "inspection-agent",
+      idempotencyKey: " analysis-once ",
+      analysis: {
+        schemaVersion: "xhs.visual-elements.v1",
+        image: { sha256: inspection.screenshot.sha256, resolution: [1080, 2400] },
+        analyzer: { name: "visual-grounding-poc", version: "test", timings: { hotPathMs: 1200 } },
+        elements: [
+          { id: "home", label: "闲鱼", bounds: [0, 2140, 220, 2320], conf: 0.99, source: "ocr" },
+          { id: "messages", label: "消息", bounds: [610, 2140, 800, 2320], conf: 0.99, source: "ocr" },
+          { id: "mine", label: "我的", bounds: [850, 2140, 1070, 2320], conf: 0.99, source: "ocr" },
+        ],
+      },
+    });
+    assert.equal(replayedAnalysis.reused, true);
+    await assert.rejects(f.control.recordRecoveryInspectionAnalysis({
+      jobId: job.jobId,
+      inspectionId: inspection.inspectionId,
+      actorId: "inspection-agent",
+      idempotencyKey: "analysis-once",
+      analysis: {},
+    }), { code: "IDEMPOTENCY_KEY_CONFLICT" });
+  } finally {
+    await f.close();
+  }
+});
+
+test("failed recovery inspection releases its lease and preserves quarantine", async () => {
+  const adapter = {
+    id: "test",
+    async execute() { return { vendorCode: 0 }; },
+    async verify() { return { ok: true, mode: "state" }; },
+    async restore() { return { ok: false }; },
+    async inspectRecovery() {
+      throw new ControlPlaneError("ADAPTER_FAILED", "adapter process failed", {
+        details: {
+          adapterCode: "GATEWAY_DEVICE_PROBE_FAILED",
+          privateMessage: "must not escape",
+        },
+      });
+    },
+  };
+  const f = fixture({
+    capabilities: [manifest("test.restore", {
+      restoration: { required: true, description: "must restore" },
+    })],
+    adapter,
+  });
+  try {
+    const job = f.control.submitJob({
+      idempotencyKey: "inspect-failure",
+      actorId: "agent-a",
+      deviceId: f.devices[0].deviceId,
+      capabilityId: "test.restore",
+      params: {},
+    }).job;
+    assert.equal((await f.control.waitForJob(job.jobId)).status, "recovery_required");
+    await assert.rejects(f.control.inspectRecovery({
+      jobId: job.jobId,
+      actorId: "inspection-agent",
+      idempotencyKey: "inspect-fails",
+    }), (error) => error.code === "RECOVERY_INSPECTION_FAILED"
+      && error.details?.adapterCode === "GATEWAY_DEVICE_PROBE_FAILED"
+      && !JSON.stringify(error.details).includes("must not escape"));
+    await assert.rejects(f.control.inspectRecovery({
+      jobId: job.jobId,
+      actorId: "inspection-agent",
+      idempotencyKey: " inspect-fails ",
+    }), { code: "RECOVERY_INSPECTION_PREVIOUSLY_FAILED" });
+    assert.equal(f.state.getDevice(job.deviceId).quarantined, true);
+    assert.equal(f.state.listLeases().length, 0);
+    const failedEvent = f.state.listJobEvents(job.jobId)
+      .find((event) => event.type === "job.recovery.inspect.failed");
+    assert.equal(failedEvent.payload.adapterCode, "GATEWAY_DEVICE_PROBE_FAILED");
+    assert.equal(JSON.stringify(failedEvent.payload).includes("must not escape"), false);
+  } finally {
+    await f.close();
+  }
+});
+
 test("E1 lab actions require an exclusive canary session and valid token", async () => {
   let executions = 0;
   const adapter = {
@@ -268,6 +826,7 @@ test("E1 lab actions require an exclusive canary session and valid token", async
   const lab = manifest("test.lab", {
     maturity: "E1",
     automationPolicy: { mode: "lab_only", canaryOnly: true },
+    availability: "canary_only",
   });
   const f = fixture({ capabilities: [lab], adapter });
   try {
@@ -297,8 +856,199 @@ test("E1 lab actions require an exclusive canary session and valid token", async
       params: {},
     });
     assert.equal(job.status, "succeeded");
+    assert.equal(job.routeDecision.decision, "dispatchable");
+    assert.equal(job.routeDecision.activeLease, true);
+    assert.equal(job.routeDecision.reusesSessionLease, true);
+    assert.equal(job.deviceId, session.deviceId);
+    assert.equal(executions, 1);
+    const replay = await f.control.executeSessionAction(session.sessionId, session.token, {
+      idempotencyKey: "lab-action",
+      capabilityId: lab.id,
+      params: {},
+    });
+    assert.equal(replay.jobId, job.jobId);
     assert.equal(executions, 1);
     assert.equal(f.control.releaseSession(session.sessionId, session.token).released, true);
+    const nonCanarySession = f.control.createSession({
+      actorId: "agent-b",
+      deviceId: f.devices[1].deviceId,
+    });
+    await assert.rejects(
+      f.control.executeSessionAction(nonCanarySession.sessionId, nonCanarySession.token, {
+        idempotencyKey: "lab-without-canary",
+        capabilityId: lab.id,
+        params: {},
+      }),
+      { code: "CANARY_SESSION_REQUIRED", status: 403 },
+    );
+    assert.equal(f.control.releaseSession(nonCanarySession.sessionId, nonCanarySession.token).released, true);
+  } finally {
+    await f.close();
+  }
+});
+
+test("session actions are serialized per device and an active action blocks release", async () => {
+  const gate = deferred();
+  let executions = 0;
+  const adapter = {
+    id: "test",
+    async execute() {
+      executions += 1;
+      await gate.promise;
+      return { vendorCode: 0 };
+    },
+    async verify() { return { ok: true, mode: "state" }; },
+    async restore() { return { ok: true }; },
+  };
+  const lab = manifest("test.lab", {
+    maturity: "E1",
+    automationPolicy: { mode: "lab_only", canaryOnly: true },
+    availability: "canary_only",
+  });
+  const f = fixture({ capabilities: [lab], adapter });
+  let session;
+  try {
+    session = f.control.createSession({
+      actorId: "agent-a",
+      deviceId: f.devices[0].deviceId,
+      canary: true,
+    });
+    const running = f.control.executeSessionAction(session.sessionId, session.token, {
+      idempotencyKey: "lab-running",
+      capabilityId: lab.id,
+      params: {},
+    });
+    await until(() => executions === 1);
+    assert.equal(f.control.activeJobs.has(session.deviceId), true);
+    await assert.rejects(
+      f.control.executeSessionAction(session.sessionId, session.token, {
+        idempotencyKey: "lab-overlap",
+        capabilityId: lab.id,
+        params: {},
+      }),
+      { code: "DEVICE_BUSY", status: 423 },
+    );
+    assert.throws(
+      () => f.control.releaseSession(session.sessionId, session.token),
+      { code: "SESSION_ACTION_RUNNING", status: 423 },
+    );
+    gate.resolve();
+    assert.equal((await running).status, "succeeded");
+    assert.equal(f.control.activeJobs.has(session.deviceId), false);
+    assert.equal(f.control.releaseSession(session.sessionId, session.token).released, true);
+    session = null;
+  } finally {
+    gate.resolve();
+    if (session) {
+      try { f.control.releaseSession(session.sessionId, session.token); } catch {}
+    }
+    await f.close();
+  }
+});
+
+test("pump skips quarantined devices and keeps the job queued", async () => {
+  let executions = 0;
+  const adapter = {
+    id: "test",
+    async execute() { executions += 1; return { vendorCode: 0 }; },
+    async verify() { return { ok: true, mode: "state" }; },
+    async restore() { return { ok: true }; },
+  };
+  const capability = manifest("test.observe");
+  const f = fixture({ capabilities: [capability], adapter });
+  try {
+    await f.control.stop();
+    const cap = f.registry.require(capability.id);
+
+    const blocked = f.state.createJob({
+      idempotencyKey: "quarantined-queued",
+      actorId: "agent-a",
+      authorityNodeId: "DESKTOP-3I1EVHE",
+      deviceId: f.devices[0].deviceId,
+      capability: cap,
+      params: {},
+    });
+    f.evidence.initializeRun({ job: blocked.job, device: f.devices[0] });
+    f.state.quarantineDevice(f.devices[0].deviceId, "TEST_QUARANTINE");
+
+    const healthy = f.state.createJob({
+      idempotencyKey: "healthy-queued",
+      actorId: "agent-b",
+      authorityNodeId: "DESKTOP-3I1EVHE",
+      deviceId: f.devices[1].deviceId,
+      capability: cap,
+      params: {},
+    });
+    f.evidence.initializeRun({ job: healthy.job, device: f.devices[1] });
+
+    await assert.doesNotReject(() => f.control.pump());
+    assert.equal(f.state.requireJob(blocked.job.jobId).status, "queued");
+    await until(() => f.state.requireJob(healthy.job.jobId).status === "succeeded");
+    assert.equal(executions, 1);
+
+    f.state.clearDeviceQuarantine(f.devices[0].deviceId);
+    await assert.doesNotReject(() => f.control.pump());
+    await until(() => f.state.requireJob(blocked.job.jobId).status === "succeeded");
+    assert.equal(executions, 2);
+  } finally {
+    await f.close();
+  }
+});
+
+test("pump skips offline devices and start does not crash on residual queued jobs", async () => {
+  let executions = 0;
+  const adapter = {
+    id: "test",
+    async execute() { executions += 1; return { vendorCode: 0 }; },
+    async verify() { return { ok: true, mode: "state" }; },
+    async restore() { return { ok: true }; },
+  };
+  const capability = manifest("test.observe");
+  const f = fixture({ capabilities: [capability], adapter });
+  try {
+    await f.control.stop();
+    const cap = f.registry.require(capability.id);
+
+    const offlineJob = f.state.createJob({
+      idempotencyKey: "offline-queued",
+      actorId: "agent-a",
+      authorityNodeId: "DESKTOP-3I1EVHE",
+      deviceId: f.devices[0].deviceId,
+      capability: cap,
+      params: {},
+    });
+    f.evidence.initializeRun({ job: offlineJob.job, device: f.devices[0] });
+
+    const device = f.state.getDevice(f.devices[0].deviceId, { includeRuntime: true });
+    f.state.upsertDevice({
+      deviceId: device.deviceId,
+      alias: device.alias,
+      physicalLabel: device.physicalLabel,
+      nodeId: device.nodeId,
+      runtimeId: device.runtimeId,
+      metadata: device.metadata,
+      routingProfile: device.routingProfile,
+      online: false,
+    });
+
+    // Simulates control-plane restart with leftover queued work for an offline device.
+    f.control.start();
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    assert.equal(f.state.requireJob(offlineJob.job.jobId).status, "queued");
+    assert.equal(executions, 0);
+
+    f.state.upsertDevice({
+      deviceId: device.deviceId,
+      alias: device.alias,
+      physicalLabel: device.physicalLabel,
+      nodeId: device.nodeId,
+      runtimeId: device.runtimeId,
+      metadata: device.metadata,
+      routingProfile: device.routingProfile,
+      online: true,
+    });
+    await until(() => f.state.requireJob(offlineJob.job.jobId).status === "succeeded");
+    assert.equal(executions, 1);
   } finally {
     await f.close();
   }

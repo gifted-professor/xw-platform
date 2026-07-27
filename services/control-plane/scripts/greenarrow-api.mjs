@@ -1,3 +1,5 @@
+import { requireRecordedLabBypass } from "../control-plane/lib/operator-access.mjs";
+
 const WS_URL = "ws://127.0.0.1:22222/";
 const DEFAULT_DEVICE = "";
 
@@ -33,8 +35,17 @@ function request(action, devices, data) {
   return body;
 }
 
+function requirePackageName(value, command) {
+  const packageName = String(value || "").trim();
+  if (!/^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)+$/.test(packageName)) {
+    throw new Error(`用法：${command} <包名>（例如 com.taobao.idlefish）`);
+  }
+  return packageName;
+}
+
 async function main() {
   const [command = "help", ...args] = process.argv.slice(2);
+  if (command !== "help") requireRecordedLabBypass("greenarrow-api");
   const device = process.env.LVJIAN_DEVICE || DEFAULT_DEVICE;
   if (!device && !["help", "list"].includes(command)) {
     throw new Error("请先设置环境变量 LVJIAN_DEVICE");
@@ -56,6 +67,18 @@ async function main() {
 
     case "start-xhs":
       result = await send(request("startApk", device, { apk: "com.xingin.xhs" }));
+      break;
+
+    case "start-apk":
+      result = await send(request("startApk", device, { apk: requirePackageName(args[0], command) }));
+      break;
+
+    case "stop-apk":
+      result = await send(request("stopApk", device, { apk: requirePackageName(args[0], command) }));
+      break;
+
+    case "apk-list":
+      result = await send(request("apkList", device));
       break;
 
     case "tap-xhs": {
@@ -97,6 +120,9 @@ node 绿箭API控制器.mjs list
 node 绿箭API控制器.mjs home
 node 绿箭API控制器.mjs back
 node 绿箭API控制器.mjs start-xhs
+node 绿箭API控制器.mjs start-apk <包名>
+node 绿箭API控制器.mjs stop-apk <包名>
+node 绿箭API控制器.mjs apk-list
 node 绿箭API控制器.mjs tap-xhs
 node 绿箭API控制器.mjs tap <x百分比> <y百分比>
 node 绿箭API控制器.mjs swipe-up
