@@ -10,4 +10,8 @@ data/*
 *.log
 .idea/
 .vscode/
-
+control-plane/runtime/
+config/control-plane.devices.json
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal

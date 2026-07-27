@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "capabilities": [
+    {
+      "schemaVersion": 1,
+      "id": "xiaowei.device.list",
+      "appId": "xiaowei",
+      "packageName": null,
+      "versionRange": "observed:9.10.113",
+      "maturity": "E3",
+      "risk": "R0",
+      "resources": ["device", "transport:xiaowei:22222"],
+      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+      "outputSchema": { "type": "object" },
+      "preconditions": ["xiaowei.exe is in the interactive Windows session"],
+      "verification": { "mode": "state", "description": "vendor success and device array" },
+      "restoration": { "required": false, "description": "read-only" },
+      "timeoutMs": 8000,
+      "idempotency": "read_only",
+      "automationPolicy": { "mode": "automatic" },
+      "implementation": { "adapter": "xiaowei", "action": "list" },
+      "evidence": ["origin/feat/xiaowei-full-device-api"],
+      "availability": "implemented"
+    },
+    {
+      "schemaVersion": 1,
+      "id": "xiaowei.lab.raw",
+      "appId": "xiaowei",
+      "packageName": null,
+      "versionRange": "observed:9.10.113",
+      "maturity": "E1",
+      "risk": "R1",
+      "resources": ["device", "transport:xiaowei:22222"],
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": { "type": "string", "enum": ["list", "Screen", "imeList"] },
+          "data": { "type": "object" }
+        },
+        "required": ["action"],
+        "additionalProperties": false
+      },
+      "outputSchema": { "type": "object" },
+      "preconditions": ["exclusive canary session", "allowlisted action"],
+      "verification": { "mode": "custom", "description": "vendor success plus action-specific observation" },
+      "restoration": { "required": false, "description": "lab caller must choose only a bounded reversible action" },
+      "timeoutMs": 30000,
+      "idempotency": "replay_safe",
+      "automationPolicy": { "mode": "lab_only", "canaryOnly": true },
+      "implementation": { "adapter": "xiaowei", "action": "raw" },
+      "evidence": ["origin/feat/xiaowei-full-device-api"],
+      "availability": "canary_only"
+    }
+  ]
+}

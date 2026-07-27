@@ -5,10 +5,14 @@
   "description": "ADB-first multi-device inventory with optional cloud vision and Feishu Base sync",
   "type": "module",
   "scripts": {
-    "check": "node --check scripts/cloud-vision.mjs && node --check scripts/greenarrow-api.mjs"
+    "check": "node scripts/check-js.mjs && node scripts/secret-scan.mjs",
+    "control-plane": "node control-plane/server.mjs serve",
+    "devicectl": "node control-plane/devicectl.mjs",
+    "evidence:index": "node control-plane/index-legacy-evidence.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "test:control": "node --test tests/control-plane-*.test.mjs tests/capability-registry.test.mjs"
   },
   "engines": {
-    "node": ">=18"
+    "node": "24.11.1"
   }
 }
-

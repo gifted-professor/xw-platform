@@ -8,7 +8,7 @@
 
 - Windows 10/11、PowerShell 5.1+
 - Android Platform Tools，或效卫软件内置的 `adb.exe`
-- Node.js 18+（仅云端视觉和可选本地 API 控制器需要）
+- Node.js 18+（基础采集）；多 Agent 控制面固定使用 Node.js 24.11.1
 - 可选：`lark-cli`，用于同步飞书多维表格
 - 可选：[效卫安卓投屏官方下载页面](https://www.xiaowei.xin/android)；软件本体不包含在本仓库
 - [效卫帮助中心](https://www.xiaowei.xin/help/71)
@@ -67,8 +67,25 @@ hermes -z "按照 skills/xhs-device-operator/SKILL.md 运行一次安全设备�
 - `skills/xhs-device-operator/SKILL.md`：Hermes/Codex 执行规则
 - `docs/ARCHITECTURE.md`：系统结构和页面状态机
 - `docs/SAFETY.md`：数据与操作边界
+- `docs/control-plane.md`：多 Agent、多手机控制面部署与使用
+
+## 多 Agent 控制面
+
+控制面在 Windows 本机 `127.0.0.1:17920` 提供统一任务、租约、审批和证据接口。不同手机可以并发，同一手机严格 FIFO；远端 Agent 通过 SSH 运行 `devicectl`，不直接访问端口。
+
+```powershell
+Copy-Item config/control-plane.devices.example.json config/control-plane.devices.json
+node control-plane/server.mjs serve
+```
+
+Mac 侧：
+
+```bash
+node control-plane/devicectl.mjs --ssh xhs-windows health
+```
+
+完整配置、审批和迁移规则见 `docs/control-plane.md`。
 
 ## 隐私
 
 仓库不应包含 API Key、OAuth Token、设备截图、UI XML、真实 ADB 序列号、账号清单或飞书记录。提交前运行 `git status` 并检查暂存内容。
-

@@ -1,0 +1,126 @@
+import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+
+import { ControlPlaneError } from "./errors.mjs";
+
+export function requireFile(path, capabilityId) {
+  if (!existsSync(path)) {
+    throw new ControlPlaneError(
+      "ADAPTER_DEPENDENCY_MISSING",
+      `${capabilityId} depends on an implementation that is not merged`,
+      { status: 503, details: { dependency: path.split(/[\\/]/).pop() } },
+    );
+  }
+}
+
+export function runJsonCommand(command, args, {
+  cwd,
+  timeoutMs,
+  env = process.env,
+  maxOutputBytes = 4 * 1024 * 1024,
+} = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd,
+      env,
+      shell: false,
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = Buffer.alloc(0);
+    let stderr = Buffer.alloc(0);
+    let settled = false;
+    let killedForSize = false;
+    const append = (current, chunk) => {
+      const next = Buffer.concat([current, chunk]);
+      if (next.length > maxOutputBytes) {
+        killedForSize = true;
+        child.kill();
+      }
+      return next.subarray(0, maxOutputBytes);
+    };
+    child.stdout.on("data", (chunk) => { stdout = append(stdout, chunk); });
+    child.stderr.on("data", (chunk) => { stderr = append(stderr, chunk); });
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      child.kill();
+      const error = new ControlPlaneError("ADAPTER_TIMEOUT", `adapter timed out after ${timeoutMs}ms`, {
+        status: 504,
+      });
+      error.sent = true;
+      reject(error);
+    }, timeoutMs);
+    timer.unref?.();
+    child.once("error", (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(new ControlPlaneError("ADAPTER_START_FAILED", "unable to start adapter process", {
+        status: 503,
+        cause: error,
+      }));
+    });
+    child.once("exit", (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (killedForSize) {
+        reject(new ControlPlaneError("ADAPTER_OUTPUT_TOO_LARGE", "adapter output exceeded the limit", { status: 502 }));
+        return;
+      }
+      const output = stdout.toString("utf8").trim();
+      if (code !== 0) {
+        reject(new ControlPlaneError("ADAPTER_FAILED", "adapter process failed", {
+          status: 502,
+          details: { exitCode: code, stderrPresent: stderr.length > 0 },
+        }));
+        return;
+      }
+      try {
+        resolve(output ? JSON.parse(output) : {});
+      } catch (error) {
+        reject(new ControlPlaneError("ADAPTER_INVALID_JSON", "adapter returned invalid JSON", {
+          status: 502,
+          cause: error,
+        }));
+      }
+    });
+  });
+}
+
+export async function postJson(url, body, { timeoutMs = 30000, fetchImpl = globalThis.fetch } = {}) {
+  let response;
+  try {
+    response = await fetchImpl(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (error) {
+    const wrapped = new ControlPlaneError("ADAPTER_HTTP_UNAVAILABLE", "loopback adapter is unavailable", {
+      status: 503,
+      details: { endpoint: new URL(url).origin },
+      cause: error,
+    });
+    if (error?.name === "TimeoutError") wrapped.sent = true;
+    throw wrapped;
+  }
+  let result;
+  try {
+    result = await response.json();
+  } catch (error) {
+    throw new ControlPlaneError("ADAPTER_INVALID_JSON", "loopback adapter returned invalid JSON", {
+      status: 502,
+      cause: error,
+    });
+  }
+  if (!response.ok || result?.ok === false) {
+    throw new ControlPlaneError("ADAPTER_REJECTED", "loopback adapter rejected the action", {
+      status: 502,
+      details: { httpStatus: response.status },
+    });
+  }
+  return result;
+}

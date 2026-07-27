@@ -16,9 +16,10 @@
 import http from "node:http";
 import { spawn, spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
-import { readdirSync, existsSync } from "node:fs";
+import { readdirSync, existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, extname } from "node:path";
+import { guardLegacyUiRoute } from "../control-plane/lib/legacy-guard.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SCRIPTS = __dirname; // dashboard.mjs 放 scripts/
@@ -28,11 +29,10 @@ const STATIC_DIR = join(SCRIPTS, "dashboard");
 const LOGS_DIR = join(SCRIPTS, "logs");
 
 // 同 4 个 serve 的硬编码路径
-const ADB = "C:\\PROGRA~2\\xiaowei_android\\tools\\adb.exe";
-const NODE = "D:\\Program Files\\Node\\node.exe";
-const LLM_ENDPOINT = "http://100.84.194.46:8317/v1/chat/completions";
-const LLM_KEY = "cliproxy-codexapp";
-const LLM_MODEL = "grok-4.20-0309-non-reasoning";
+const ADB = process.env.ADB_PATH || "C:\\PROGRA~2\\xiaowei_android\\tools\\adb.exe";
+const NODE = process.env.NODE_PATH || process.execPath;
+const LLM_ENDPOINT = process.env.XHS_LLM_ENDPOINT || null;
+const LLM_MODEL = process.env.XHS_LLM_MODEL || "grok-4.20-0309-non-reasoning";
 
 // 安全上限:dashboard 计时 SIGINT 是主停法,这只是 SIGINT 失效时的兜底,正常远不会触达。
 const LOOPS_SAFETY = 100000;
@@ -40,12 +40,19 @@ const KILL_GRACE_MS = 30000; // SIGINT 后 30s 仍不退则 SIGKILL 兜底
 
 const PORT = Number(process.env.DASH_PORT || 17900);
 
-const DEVICES = [
-  { serial: "REPLACE_SERIAL_01", port: 17895 },
-  { serial: "REPLACE_SERIAL_03", port: 17896 },
-  { serial: "REPLACE_SERIAL_02", port: 17897 },
-  { serial: "REPLACE_SERIAL_04", port: 17898 },
-];
+function loadDashboardDevices() {
+  const path = process.env.CONTROL_PLANE_DEVICES_FILE || join(__dirname, "..", "config", "control-plane.devices.json");
+  try {
+    const config = JSON.parse(readFileSync(path, "utf8"));
+    return config.devices
+      .filter((device) => device.runtimeId && Number.isInteger(Number(device.metadata?.xhsServePort)))
+      .map((device) => ({ serial: device.runtimeId, port: Number(device.metadata.xhsServePort) }));
+  } catch {
+    return [];
+  }
+}
+
+const DEVICES = loadDashboardDevices();
 
 // serial -> 运行态记录
 const running = new Map();
@@ -411,8 +418,9 @@ function runItem(serial, rec, idx) {
     "--task", join(TASKS_DIR, item.task + ".json"),
     "--loops", String(LOOPS_SAFETY),
     "--comment-cap", String(item.cap),
-    "--llm-endpoint", LLM_ENDPOINT, "--llm-key", LLM_KEY, "--llm-model", LLM_MODEL,
   ];
+  if (LLM_ENDPOINT) args.push("--llm-endpoint", LLM_ENDPOINT);
+  if (LLM_MODEL) args.push("--llm-model", LLM_MODEL);
   const child = spawn(NODE, args, { stdio: ["ignore", "pipe", "pipe"] });
   rec.child = child;
   rec.itemStartedAt = Date.now();
@@ -569,7 +577,10 @@ async function readBody(req) {
 }
 
 function send(res, code, obj, type = "application/json") {
-  res.writeHead(code, { "Content-Type": type + "; charset=utf-8", "Access-Control-Allow-Origin": "*" });
+  const headers = { "Content-Type": type + "; charset=utf-8" };
+  const allowedOrigin = process.env.DASHBOARD_ALLOW_CORS_ORIGIN;
+  if (allowedOrigin && allowedOrigin !== "*") headers["Access-Control-Allow-Origin"] = allowedOrigin;
+  res.writeHead(code, headers);
   if (Buffer.isBuffer(obj)) return res.end(obj);
   res.end(typeof obj === "string" ? obj : JSON.stringify(obj));
 }
@@ -593,6 +604,16 @@ const server = http.createServer(async (req, res) => {
   }
   if (req.method === "POST" && path === "/home") {
     const b = await readBody(req);
+    try {
+      await guardLegacyUiRoute({
+        source: "dashboard",
+        action: "home",
+        actorPresent: Boolean(b.id),
+        logger: (event) => aLog("legacy", JSON.stringify(event)),
+      });
+    } catch (error) {
+      return send(res, error.status || 423, { ok: false, error: error.code || error.message });
+    }
     touchAgent(b.id);
     const d = DEVICES.find((x) => x.serial === b.serial);
     if (!d) return send(res, 400, { error: "bad serial" });
@@ -600,6 +621,16 @@ const server = http.createServer(async (req, res) => {
   }
   if (req.method === "POST" && path === "/task") {
     const b = await readBody(req);
+    try {
+      await guardLegacyUiRoute({
+        source: "dashboard",
+        action: `task.${b.action || "unknown"}`,
+        actorPresent: Boolean(b.id),
+        logger: (event) => aLog("legacy", JSON.stringify(event)),
+      });
+    } catch (error) {
+      return send(res, error.status || 423, { ok: false, error: error.code || error.message });
+    }
     touchAgent(b.id);
     const d = DEVICES.find((x) => x.serial === b.serial);
     if (!d) return send(res, 400, { error: "bad serial" });
@@ -669,6 +700,16 @@ const server = http.createServer(async (req, res) => {
   }
   if (req.method === "POST" && path === "/primitive") {
     const b = await readBody(req);
+    try {
+      await guardLegacyUiRoute({
+        source: "dashboard",
+        action: `primitive.${b.action || "unknown"}`,
+        actorPresent: Boolean(b.id),
+        logger: (event) => aLog("legacy", JSON.stringify(event)),
+      });
+    } catch (error) {
+      return send(res, error.status || 423, { ok: false, error: error.code || error.message });
+    }
     touchAgent(b.id);
     const d = DEVICES.find((x) => x.serial === b.serial);
     if (!d) return send(res, 400, { error: "bad serial" });
@@ -682,7 +723,8 @@ const server = http.createServer(async (req, res) => {
   send(res, 404, { error: "not found", path });
 });
 
-server.listen(PORT, "0.0.0.0", () => log("dashboard serving on 0.0.0.0:" + PORT));
+const DASHBOARD_HOST = process.env.DASHBOARD_HOST || "127.0.0.1";
+server.listen(PORT, DASHBOARD_HOST, () => log(`dashboard serving on ${DASHBOARD_HOST}:${PORT}`));
 
 // dashboard 退出时强杀所有运行中的任务子进程,避免手机上无人值守继续跑
 function cleanup() {

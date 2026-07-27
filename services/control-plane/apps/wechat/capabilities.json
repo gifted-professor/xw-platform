@@ -1,0 +1,77 @@
+{
+  "schemaVersion": 1,
+  "capabilities": [
+    {
+      "schemaVersion": 1,
+      "id": "wechat.observe.main",
+      "appId": "wechat",
+      "packageName": "com.tencent.mm",
+      "versionRange": "observed:8.0.64",
+      "maturity": "E2",
+      "risk": "R0",
+      "resources": ["device", "transport:xiaowei:22222"],
+      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+      "outputSchema": { "type": "object" },
+      "preconditions": ["local OCR and wechat-operator implementation are present"],
+      "verification": { "mode": "hash", "description": "LauncherUI, page markers, and fresh screenshot hash agree" },
+      "restoration": { "required": true, "description": "return to the WeChat main page" },
+      "timeoutMs": 90000,
+      "idempotency": "read_only",
+      "automationPolicy": { "mode": "automatic" },
+      "implementation": { "adapter": "wechat", "action": "inspect" },
+      "evidence": ["PR #13"],
+      "availability": "dependency_pending_wechat_operator"
+    },
+    {
+      "schemaVersion": 1,
+      "id": "wechat.observe.probe",
+      "appId": "wechat",
+      "packageName": "com.tencent.mm",
+      "versionRange": "observed:8.0.64",
+      "maturity": "E2",
+      "risk": "R0",
+      "resources": ["device", "transport:xiaowei:22222"],
+      "inputSchema": {
+        "type": "object",
+        "properties": { "label": { "type": "string", "minLength": 1, "maxLength": 40 } },
+        "additionalProperties": false
+      },
+      "outputSchema": { "type": "object" },
+      "preconditions": ["local OCR and wechat-operator implementation are present"],
+      "verification": { "mode": "hash", "description": "fresh focus, OCR screen ID, and screenshot hash are returned" },
+      "restoration": { "required": false, "description": "probe does not navigate" },
+      "timeoutMs": 60000,
+      "idempotency": "read_only",
+      "automationPolicy": { "mode": "automatic" },
+      "implementation": { "adapter": "wechat", "action": "probe" },
+      "evidence": ["PR #13"],
+      "availability": "dependency_pending_wechat_operator"
+    },
+    {
+      "schemaVersion": 1,
+      "id": "wechat.navigate.conversation",
+      "appId": "wechat",
+      "packageName": "com.tencent.mm",
+      "versionRange": "observed:8.0.64",
+      "maturity": "E2",
+      "risk": "R1",
+      "resources": ["device", "transport:xiaowei:22222"],
+      "inputSchema": {
+        "type": "object",
+        "properties": { "title": { "type": "string", "minLength": 1, "maxLength": 80 } },
+        "required": ["title"],
+        "additionalProperties": false
+      },
+      "outputSchema": { "type": "object" },
+      "preconditions": ["unique OCR contact match", "local OCR and wechat-operator are present"],
+      "verification": { "mode": "custom", "description": "ChattingUI title matches and main-page baseline is restored" },
+      "restoration": { "required": true, "description": "return to main page and compare baseline" },
+      "timeoutMs": 120000,
+      "idempotency": "replay_safe",
+      "automationPolicy": { "mode": "automatic" },
+      "implementation": { "adapter": "wechat", "action": "open" },
+      "evidence": ["PR #13"],
+      "availability": "dependency_pending_wechat_operator"
+    }
+  ]
+}

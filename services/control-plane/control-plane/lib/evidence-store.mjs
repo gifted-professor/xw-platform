@@ -1,0 +1,185 @@
+import {
+  appendFileSync,
+  createReadStream,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  statfsSync,
+  writeFileSync,
+} from "node:fs";
+import { createHash } from "node:crypto";
+import { basename, dirname, join, resolve } from "node:path";
+
+import { canonicalJson } from "./canonical.mjs";
+import { ControlPlaneError } from "./errors.mjs";
+
+const SENSITIVE_KEYS = /(?:serial|runtime.?id|token|secret|password|authorization|cookie|api.?key)/i;
+
+export function redactRuntimeData(value) {
+  if (Array.isArray(value)) return value.map(redactRuntimeData);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([key]) => !SENSITIVE_KEYS.test(key))
+        .map(([key, child]) => [key, redactRuntimeData(child)]),
+    );
+  }
+  return value;
+}
+
+function atomicWriteJson(path, value) {
+  mkdirSync(dirname(path), { recursive: true });
+  const temporary = `${path}.${process.pid}.tmp`;
+  writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+  renameSync(temporary, path);
+}
+
+async function fileHash(path) {
+  const hash = createHash("sha256");
+  for await (const chunk of createReadStream(path)) hash.update(chunk);
+  return hash.digest("hex");
+}
+
+export class EvidenceStore {
+  constructor({
+    runsRoot,
+    state,
+    minFreeBytes = 128 * 1024 * 1024,
+    minExternalEffectFreeBytes = 1024 * 1024 * 1024,
+  }) {
+    this.runsRoot = resolve(runsRoot);
+    this.state = state;
+    this.minFreeBytes = minFreeBytes;
+    this.minExternalEffectFreeBytes = minExternalEffectFreeBytes;
+    mkdirSync(this.runsRoot, { recursive: true });
+  }
+
+  freeBytes() {
+    const info = statfsSync(this.runsRoot);
+    return Number(info.bavail) * Number(info.bsize);
+  }
+
+  assertCapacity({ externalEffect = false } = {}) {
+    const freeBytes = this.freeBytes();
+    const required = externalEffect ? this.minExternalEffectFreeBytes : this.minFreeBytes;
+    if (freeBytes < required) {
+      throw new ControlPlaneError("EVIDENCE_DISK_LOW", "not enough free space for a new run", {
+        status: 507,
+        details: { freeBytes, requiredBytes: required, externalEffect },
+      });
+    }
+    return freeBytes;
+  }
+
+  runDirectory(runId) {
+    return join(this.runsRoot, runId);
+  }
+
+  getManifest(runId) {
+    const path = join(this.runDirectory(runId), "manifest.json");
+    if (!existsSync(path)) {
+      throw new ControlPlaneError("RUN_NOT_FOUND", `unknown run ${runId}`, { status: 404 });
+    }
+    return JSON.parse(readFileSync(path, "utf8"));
+  }
+
+  initializeRun({ job, device, gitCommit = process.env.CONTROL_PLANE_GIT_COMMIT || "unknown" }) {
+    this.assertCapacity({ externalEffect: job.externalEffect });
+    const directory = this.runDirectory(job.runId);
+    mkdirSync(join(directory, "evidence"), { recursive: true });
+    const manifest = {
+      schemaVersion: 1,
+      runId: job.runId,
+      jobId: job.jobId,
+      actorId: job.actorId,
+      nodeId: device.nodeId,
+      deviceId: device.deviceId,
+      deviceAlias: device.alias,
+      capabilityId: job.capabilityId,
+      capabilityMaturity: job.capability.maturity,
+      capabilityRisk: job.capability.risk,
+      gitCommit,
+      createdAt: job.createdAt,
+      evidence: [],
+    };
+    atomicWriteJson(join(directory, "manifest.json"), redactRuntimeData(manifest));
+    this.appendEvent(job.runId, {
+      type: "run.initialized",
+      jobId: job.jobId,
+      deviceId: device.deviceId,
+      capabilityId: job.capabilityId,
+      createdAt: new Date().toISOString(),
+    });
+    return { directory, manifest };
+  }
+
+  appendEvent(runId, event) {
+    const directory = this.runDirectory(runId);
+    mkdirSync(directory, { recursive: true });
+    appendFileSync(
+      join(directory, "events.jsonl"),
+      `${canonicalJson(redactRuntimeData(event))}\n`,
+      { mode: 0o600 },
+    );
+  }
+
+  async attachFile({ job, sourcePath, kind, label }) {
+    if (!existsSync(sourcePath)) {
+      throw new ControlPlaneError("EVIDENCE_FILE_MISSING", "adapter evidence file is missing", {
+        status: 500,
+        details: { kind, label },
+      });
+    }
+    const stats = statSync(sourcePath);
+    if (!stats.isFile() || stats.size === 0) {
+      throw new ControlPlaneError("EVIDENCE_FILE_INVALID", "adapter evidence file is empty or not a file", {
+        status: 500,
+        details: { kind, label },
+      });
+    }
+    const hash = await fileHash(sourcePath);
+    const safeLabel = String(label || basename(sourcePath)).replace(/[^A-Za-z0-9._-]+/g, "_");
+    const relativePath = join("evidence", `${safeLabel}-${hash.slice(0, 12)}${basename(sourcePath).includes(".") ? `.${basename(sourcePath).split(".").pop()}` : ""}`);
+    const targetPath = join(this.runDirectory(job.runId), relativePath);
+    writeFileSync(targetPath, readFileSync(sourcePath), { mode: 0o600 });
+    const record = this.state.recordEvidence({
+      jobId: job.jobId,
+      runId: job.runId,
+      kind,
+      path: relativePath,
+      sha256: hash,
+      bytes: stats.size,
+    });
+    this.#refreshManifest(job.runId);
+    return record;
+  }
+
+  writeJson({ job, kind, label, value }) {
+    const safeLabel = String(label).replace(/[^A-Za-z0-9._-]+/g, "_");
+    const sanitized = redactRuntimeData(value);
+    const content = `${canonicalJson(sanitized)}\n`;
+    const hash = createHash("sha256").update(content).digest("hex");
+    const relativePath = join("evidence", `${safeLabel}-${hash.slice(0, 12)}.json`);
+    const targetPath = join(this.runDirectory(job.runId), relativePath);
+    writeFileSync(targetPath, content, { mode: 0o600 });
+    const record = this.state.recordEvidence({
+      jobId: job.jobId,
+      runId: job.runId,
+      kind,
+      path: relativePath,
+      sha256: hash,
+      bytes: Buffer.byteLength(content),
+    });
+    this.#refreshManifest(job.runId);
+    return record;
+  }
+
+  #refreshManifest(runId) {
+    const path = join(this.runDirectory(runId), "manifest.json");
+    const manifest = JSON.parse(readFileSync(path, "utf8"));
+    manifest.evidence = this.state.listEvidence(runId);
+    atomicWriteJson(path, manifest);
+  }
+}

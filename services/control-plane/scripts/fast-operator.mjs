@@ -21,28 +21,14 @@
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
-import { writeFileSync, unlinkSync, statSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { acquireTransportLock } from "../control-plane/lib/xiaowei-transport.mjs";
 
 // 跨进程文件锁串行化小薇 WS 访问：xiaowei 单实例 WS accept 串行，多设备并发建连会持续 connection failed
 // （非瞬时，retry 无效）。4 个 task-runner 进程抢同一 lock 文件，O_EXCL 互斥，每次只 1 路连 22222。
-// 陈旧检测：持锁进程崩溃残留 lock，30s 后强删（xiaoweiInvoke 最坏 3×12s<36s，留余量）。
-const XW_LOCK = join(tmpdir(), "xw-ws-22222.lock");
 async function withXwLock(fn) {
-  for (let attempt = 0; ; attempt += 1) {
-    try { writeFileSync(XW_LOCK, String(process.pid), { flag: "wx" }); break; }
-    catch (e) {
-      if (e.code === "EEXIST") {
-        try { const st = statSync(XW_LOCK); if (Date.now() - st.mtimeMs > 30000) { try { unlinkSync(XW_LOCK); } catch {} } } catch {}
-        await new Promise((r) => setTimeout(r, 50 + (attempt % 8) * 30));
-        continue;
-      }
-      throw e;
-    }
-  }
+  const release = await acquireTransportLock();
   try { return await fn(); }
-  finally { try { unlinkSync(XW_LOCK); } catch {} }
+  finally { release(); }
 }
 
 // ---------- uiautomator XML 解析（自包含，不依赖原文件） ----------
@@ -1375,9 +1361,9 @@ function applyCommentFlags(opP) {
   return opP.then((op) => {
     op.xwWs = arg("--xw-ws", "ws://127.0.0.1:22222/");
     op.xwBridgeIme = arg("--xw-bridge-ime", "com.android.xwkeyboard/.XwIME");
-    op.llmEndpoint = arg("--llm-endpoint", null);
-    op.llmKey = arg("--llm-key", null);
-    op.llmModel = arg("--llm-model", "grok-4.20-0309-non-reasoning"); // CPA 非 reasoning 快档(0.9s/0 reasoning)；gpt-4o-mini 在 CPA 不存在
+    op.llmEndpoint = arg("--llm-endpoint", process.env.XHS_LLM_ENDPOINT || null);
+    op.llmKey = process.env.XHS_LLM_KEY || null;
+    op.llmModel = arg("--llm-model", process.env.XHS_LLM_MODEL || "grok-4.20-0309-non-reasoning"); // CPA 非 reasoning 快档(0.9s/0 reasoning)；gpt-4o-mini 在 CPA 不存在
     // Slice 2 优化 flags（默认关，保持原拟人/strict 校验行为）
     op.imeSticky = process.argv.includes("--ime-sticky");
     op.verifyMode = arg("--verify", "strict"); // none|light|strict
