@@ -1,6 +1,6 @@
 # xhs-registry 进度
 
-> 最后更新：2026-07-27 11:00 CST（03 物理重插 + isRecoverySafeMain bare「消息」fix 部署→03 恢复清隔离；4 机并发 full_dry_run 轮 3/4 绿 01/02/04 succeeded、03 fail-closed 卡 service-compose restoration；Codex 独立验收 verdict=fail 如实。当前 active blocker：03 service-compose restoration 间隙 + 03 重新隔离卡 compose 页）
+> 最后更新：2026-07-27 12:30 CST（discard-dry-run relaunch 修通 03 service-compose restoration → 4 机并发 full_dry_run **4/4 全绿**；fleet ready 4/4。当前 active blocker：无硬隔离；compose 精细 a11y 退出仍可选优化 backlog）
 
 ## 一句话现状（北极星，所有 agent 必读）
 
@@ -49,8 +49,18 @@
   - **03 物理重插 + 恢复（2026-07-27 10:25 CST）**：用户现场重插 03 → PnP 哨兵报 present → 用户手动把 03 停在闲鱼主页。`job recover` 首次 RESTORATION_FAILED，根因 `scripts/xianyu-operator.mjs` isRecoverySafeMain line 1337 `/^消息[,，]/` 只认逗号后缀，而 03 a11y 把「消息」tab 暴露成裸 `消息`（无 `消息，未选中状态` 描述节点）→ false-negative（「卖闲置」同函数用 `(?:$|[,，])` 接受裸标签，内部不一致）。修法 commit `14a5f0d`：对齐成 `/^消息(?:$|[,，])/`，49 测试全过含 03 fixture 回归。**部署坑**：task-launch.json gitCommit 必须填**完整 40 字符 hash**（短 7 字符触发 `Repository commit mismatch` 闸门→控制面 exit 1），改全 hash 后重启 `XhsDeviceControlPlaneV1`，17920 LISTEN/health 200。03 recover→`step=already-safe-main` `quarantineCleared=true`。**再坑**：recovery 清隔离但原 job 是 terminal `recovery_required` 不翻 status，registry `state.ready` 还要求一个成功 job 刷新 lastSuccess（registry.mjs:663 `unresolvedFailure=lastFailure 且比 lastSuccess 新`）——给 01/03 各跑一个 R0 `xianyu.observe.snapshot` succeeded 后 4/4 全 ready。
   - **4 机并发 full_dry_run 轮（2026-07-27 02:34 CST）**：4 台同刻各提交 `xianyu.publish.full_dry_run`（eligibleAliases=01/02/03/04，R1 免审批，fixture 全 skipUpload/skipCategory/skipAddress=true saveDraft=false，不需图片）。4 job startedAt 均 02:34:18 真并行，共享 `transport:xiaowei:22222` 锁无死锁无互相干扰。**结果：01/02/04 succeeded（restoration/verification true），03 recovery_required/RESTORATION_FAILED**——03 dry-run 本身 output.ok=true/verification.ok=true（未存草稿未发布），但 restoration 从 service-category compose 页退回 main 失败（03 闲鱼落到服务类目 compose，findDiscardWithoutSaving/compose-exit 不认其 a11y 出口）→ 03 重新隔离、卡 compose 页。job id：01=`job_b696b401`、02=`job_e6aad8ee`、03=`job_c47d9413`、04=`job_cea82378`。**并发机制结论：4 路真并行 + 22222 锁串行化网关请求无死锁，机制成立；03 失败是 03 专属 compose-exit restoration 间隙与并发无关。**
   - **Codex 独立验收 verdict=fail（如实）**：blocker=03 非 succeeded（4/4 硬门槛失败）+ fleet not clean（03 quarantined）；major=沙箱 SSH 不可达→四台 claimsMatchControlDb=false（=未比对非不一致）+ 无法独立确认时间窗/22222 锁/实际参数；minor=本地 fixture saveDraft=false 但静态不能替代 control.db 实证。用户决定接受 3/4 作为并发机制验证结果，03 compose-exit 间隙记 backlog。
-  - **03 现状**：quarantined=true reason=RESTORATION_FAILED，卡在 service-compose 页（agent 不能对隔离设备点按退出，需人手退回闲鱼主页才能 recover）；compose-exit 修复待做（扩 operator findDiscardWithoutSaving 覆盖 service-category compose a11y）。
-- **知识库留痕（7 条，已导入 Windows）**：`campaign-3round-stability-recipe-20260727`（recipe/replay）、`step-sh-fullwidth-paren-set-u-bug-20260727`（pitfall/resolved）、`recovery-visual-elements-sha-contract-20260727`（pitfall/active_blocker/needsEngineer）、`registry-p1-runnableAsJob-routing-appliesTo-fix-20260727`（recipe/replay）、`recovery-isrecoverysafemain-bare-message-tab-20260727`（pitfall/resolved）、`xianyu-03-service-compose-restoration-gap-20260727`（pitfall/active_blocker/needsEngineer）、`xianyu-4machine-concurrency-recipe-20260727`（recipe/replay）。
+  - **03 现状（已清隔离且并发 restoration 过关，2026-07-27 12:30 CST）**：`quarantined=false`、`state.ready=true`；4 机并发 full_dry_run 中 03 与 01/02/04 同为 succeeded。
+  - **03 零点击自主恢复闭环（2026-07-27，继承 Claude 会话 9e0dc5b6 → Grok 收尾）**：
+    1. **代码**：GPFS `47c329d` — `recoverDiscardDryRun` relaunch；`6f9221c` — recovery.failed 透出 adapterCode/stderr；**`953d187` — `discardDraftDryRun`（job 末 restoration 真路径）relaunch 兜底**。
+    2. **部署**：Windows `xhs-routing-v1-1` pull 对齐 + `task-launch.json` **完整 40 字符** gitCommit + 重启 `XhsDeviceControlPlaneV1`。
+    3. **attempt1**：对 `job_c47d9413` `job recover` → relaunch dialer→MainActivity（零点击）→ 预期 `RECOVERY_VISUAL_CONFIRMATION_REQUIRED`。
+    4. **attempt2**：`ops/recover-main-safe.mjs` → main-safe 0.98 → `already-safe-main` / `quarantineCleared=true`。
+    5. **ready 刷新**：R0 snapshot `job_b8043847` succeeded。
+    6. **交接**：`~/handoffs/HANDOFF-from-9e0dc5b6-xhs-registry.md`。
+  - **job 末 discard-dry-run relaunch（关键修复，`953d187`）**：此前 03 并发失败是 **in-job restoration 走 `discard-dry-run`**（不是 recover 路径），service-compose 上 close/不保存 a11y 认不出 → RESTORATION_FAILED。现精细路径失败则 `startIdlefish` 回 main（弃未存草稿）。单测 54/54。
+  - **4 机并发 full_dry_run 复跑 4/4 全绿（2026-07-27 12:16–12:28 CST）**：actor `grok-conc4`，startedAt 均 ~04:16:50 真并行。job：01=`job_b26617e9`、02=`job_25c9678d`、03=`job_7e9955cf`、04=`job_a0ead64d`；全 `succeeded` 且 `output.ok`/`restoration.ok`/`verification.ok`。终态 fleet **4 ready / 0 lease**。02 因 5×2 SKU 略长（~11.5min）。上轮 3/4 的 03 间隙已实证关闭。
+  - **仍可选 backlog**：service-compose **精细** a11y 点选退出（relaunch 兜底已够并发验收；精细路径可降 force-stop 频率）。
+- **知识库留痕**：原条目 + `recovery-zero-tap-relaunch-two-step-20260727`、`recovery-relaunch-gate-visual-confirmation-20260727`、`recovery-discard-dry-run-relaunch-fallback-20260727`、`xianyu-4machine-concurrency-4of4-20260727`、`ops-recover-main-safe-one-shot-20260727`。
 
 ### 闲鱼标准草稿链路（2026-07-26）
 
