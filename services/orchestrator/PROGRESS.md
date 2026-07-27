@@ -63,6 +63,20 @@
   - **仍可选 backlog**：service-compose **精细** a11y 点选退出（relaunch 兜底已够并发验收；精细路径可降 force-stop 频率）。
 - **知识库留痕**：原条目 + `recovery-zero-tap-relaunch-two-step-20260727`、`recovery-relaunch-gate-visual-confirmation-20260727`、`recovery-discard-dry-run-relaunch-fallback-20260727`、`xianyu-4machine-concurrency-4of4-20260727`、`ops-recover-main-safe-one-shot-20260727`。
 
+### 飞书商品表 → 闲鱼发布 dry-run 编排（2026-07-28）
+
+- **新增 `ops/feishu-to-xianyu.mjs`**（Mac 编排，零新依赖）：飞书商品目录表 `REPLACE_FEISHU_PRODUCT_TABLE_ID`（app `PYtZbqy…`，**与设备身份表同 app 不同 table**）按 SKU+`READY_TO_PUBLISH` 取一条 → 提取 商品简称/售价/颜色/尺码/闲鱼文案内容/Yupoo原图 → `lark-cli base +record-download-attachment` 下图 → `windows_bridge.py phone-push --media-scan` 推到 01/02/04 的 `XianyuFull<parseInt(alias)>` 相册 → 组装一个 `xianyu.publish.full_dry_run` fixture（含 `images`+`imageAlbum`+`maxImages`，**不设 skipUpload**，`calibrated.image=true`）→ 预检 fleet → 并发 submit+poll（镜像 `conc4-full-dry-run.mjs`）。
+- **飞书字段映射（record-list 行序，非 field-list 序）**：SKU=36、商品简称=28、售价=26、颜色=22、尺码=2、闲鱼文案内容=27、商品包状态=11、**Yupoo原图=13**（attachment cell = `[{file_token,name,size}]`）。前缀从 `闲鱼文案内容` 首行派生：奥莱折扣→`【奥莱折扣】`、撤店清仓→`【撤店清仓】`、出全新→`出全新 `、其他→`出闲置 `；body=去首行后剩余行。fixture 写 `descriptionPrefix`/`productTitle`/`descriptionBody` 三字段。
+- **坑①**：`lark-cli --output` **必须相对当前目录**（绝对路径报 `unsafe output path`）→ cwd=下载目录、`--output` 用裸文件名。
+- **坑②**：同 SKU 有空壳重复行（无 Yupoo图）→ 优先取有 Yupoo原图 的那条；多条都有图才算真冲突 fail-closed。
+- **dry-run 实证（2026-07-28）**：`--sku DX1488-100 --aliases 01,02,04 --dry-run` 全链路绿——3 张图下载 sha 算出、phone-push 三台 sha 校验全 ✓、3 份 fixture 字段全、预检跑过（01/02/04 当前 `ready=false` 为 fleet 现状非脚本 bug，dry-run 仅告警）。`npm test` 17/17、`conc4 --dry-run` 回归不变。
+- **Repo B 已完成并部署（2026-07-28）**：GPFS `xianyu-operator.mjs` 加 `resolveDescriptionLines(plan)` + `fillDescriptionMultiLine`（首行 refocus+inputText+KEYCODE_ENTER，后续 no-refocus+inputText+ENTER，末行不 ENTER，关「完成」+ `descriptionContains` 逐行回读校验 + 整段重输兜底；单行退回老 `fillTextField`），描述步 dispatch。**PR #17 合 main `62918db`**。部署方式已核实：Windows `C:\Users\Public\xhs-routing-v1-1` git pull main + 改 `C:\Users\Public\xhs-agent-control\task-launch.json` 的 `gitCommit`（完整 40 字符，短 hash 会触发 "Repository commit mismatch" 退 1）+ `schtasks /end|/run XhsDeviceControlPlaneV1` + `/control/v1/health` 200。
+- **坑③ adapter 白名单（PR #18 `c2a44c3`）**：`apps/xianyu/adapter.mjs` `commandArgs` 逐 flag 转发，只认 `--description` 单串，**不认 `descriptionPrefix`/`productTitle`/`descriptionBody`/`descriptionLines`** → 飞书 fixture 用三字段时被丢、`resolveDescriptionLines` 返 null、描述步被整个跳过。PR #17 部署后 3 台 job 仍 failed 才发现。修：adapter 加四 flag 转发 + `planFromArgv` 读这四 flag。**已合 main 并部署 Windows**。
+- **多行描述已实证（2026-07-28，核心目标达成）**：Windows `XHS_ALLOW_BYPASS=1 XHS_BYPASS_REASON=…` 直跑 `node scripts/xianyu-operator.mjs --serial REPLACE_SERIAL_01 --transport gateway publish-dry-run --plan <fixture> --calibrated all --skip-category --skip-address`，stdout 全 summary 的 supervisor 事件：`description phase=ok attempt=1 step=desc-filled ok=true`（`verified=true`，4 行【奥莱折扣】JORDAN…/尺码 S-XXL/部分断码/主页实拍 逐行回读全中）。**注意**：control plane `result_json` 只存 `output.{ok,step}`，把 `summary.steps`（含 selectAllMiss 诊断）整段丢 → 看步骤级结果必须靠 `XHS_ALLOW_BYPASS=1` 直跑抓 stdout（gateway 平时强制 `CONTROL_LEASE_REQUIRED`，bypass 是受审计 lab 通道）。
+- **坑④ SKU 卡死（未解，遗留待别人接手）**：DX1488-100（5 尺码）full_dry_run 三台 + 01 直跑（含/不含单色两版）一律 `sku:sku-select-all-missing` → VERIFICATION_FAILED。诊断 `selectAllMiss.markers.specsPage=true / batchEntry=false` → operator 停在 SKU「规格定义页」没进「批量设置价格和库存」页，`findSkuSelectAll` 找不到「全选」。去掉单色维度**同样卡** → 与颜色维度数无关，是 `fillSkuSpecs`（`:~3170`）规格页→批量页导航/等待问题。详见知识库 `pitfall-xianyu-sku-select-all-missing-20260728`。
+- **assembleFixture 单色规则（2026-07-28，已改未提交）**：单色不当 SKU 维度 → `colorArr.length>1` 才带 `颜色`，单色只留 `尺码`（用户定）。注：此规则未解 SKU 卡死。
+- **设备 01 现场提醒**：bypass 直跑无控制面 lease → 无自动 restore，01 末态停在 `com.taobao.idlefish` FlutterBoost（非 home、非 compose）；下次控制面 job 的 `open` 步 force-stop+relaunch 会自重置，或手动 discard。
+
 ### 闲鱼标准草稿链路（2026-07-26）
 
 - **形态**：按 App 固定剧本（非 LLM 临场点）；闲鱼在 `apps/xianyu` + `scripts/xianyu-operator.mjs`

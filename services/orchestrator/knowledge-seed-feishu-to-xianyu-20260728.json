@@ -1,0 +1,64 @@
+[
+  {
+    "id": "recipe-feishu-product-to-xianyu-fixture-20260728",
+    "app": "xianyu",
+    "category": "recipe",
+    "title": "飞书商品目录表 → 闲鱼 full_dry_run fixture 提取配方",
+    "content": "飞书商品目录多维表 REPLACE_FEISHU_PRODUCT_TABLE_ID（app REDACTED_FEISHU_BASE_TOKEN，与设备身份表同 app 不同 table）按 SKU+商品包状态=READY_TO_PUBLISH 取一条，组装 xianyu.publish.full_dry_run fixture。字段按 record-list 的 fields 数组位置解析（注意：record-list 行序 ≠ base +field-list 序——后者按 UI 顺序排，Yupoo原图 在 field-list 是 36、在 record-list 行序是 13）。映射（record-list 行序）：SKU=36、商品简称=28→productTitle、售价=26→price+skuPrice、颜色=22→skuSpecs.颜色（单值包数组）、尺码=2→skuSpecs.尺码（按 - 拆）、闲鱼文案内容=27→descriptionPrefix+descriptionBody、商品包状态=11（过滤）、Yupoo原图=13（attachment cell=[{file_token,name,size}]）。前缀从闲鱼文案内容首行派生：奥莱折扣→【奥莱折扣】、撤店清仓→【撤店清仓】、出全新→出全新 、其他→出闲置 ；body=去首行后剩余行。fixture 不设 skipUpload、calibrated.image=true，images 用 phone-push 后的本地 sha256。同 SKU 有空壳重复行（无图）时优先取有 Yupoo图 的那条，多条都有图才 fail-closed。下载用 lark-cli base +record-download-attachment（见配套 pitfall）。编排脚本 ops/feishu-to-xianyu.mjs 镜像 conc4-full-dry-run.mjs（预检/submit/poll）+ sync-feishu.mjs（lark-cli 读取）。【skuSpecs 单色规则 2026-07-28】单色不当 SKU 维度：assembleFixture 仅 colorArr.length>1 才带 颜色，单色只留 尺码。注意：去掉单色未解决 SKU 卡死（见 pitfill-sku-select-all-missing），SKU 卡死是 operator fillSkuSpecs 导航问题，与本规则无关。",
+    "appliesTo": ["xianyu.publish.full_dry_run", "ops/feishu-to-xianyu.mjs", "飞书多维表"],
+    "steps": [
+      "lark-cli base +record-list --base-token … --table-id REPLACE_FEISHU_PRODUCT_TABLE_ID --limit 200 --format json --as user",
+      "按 fields 数组 indexOf(显示名) 建位置索引；断言 Yupoo原图 index===13",
+      "过滤 SKU 精确匹配 + 商品包状态=READY_TO_PUBLISH；多条时优先 Yupoo原图 非空的",
+      "lark-cli base +record-download-attachment（cwd=下载目录，--output 用裸文件名）逐张下 Yupoo原图 file_token，算 sha256",
+      "windows_bridge.py phone-push <local> <alias> /sdcard/Pictures/XianyuFull<parseInt(alias)>/<name> --media-scan --overwrite-phone",
+      "组装 fixture（descriptionPrefix/productTitle/descriptionBody + images[{phonePath,sha256}] + imageAlbum + maxImages + 不设 skipUpload + calibrated.image=true）",
+      "预检 agent-entry（ready/leaseFree/online），devicectl --ssh xhs-windows job submit + poll"
+    ],
+    "verifyMode": "dry-run：飞书提取字段全 + 3-5 图下载 sha 算出 + phone-push 三台 sha 校验绿 + fixture JSON 字段全 + 预检通过；实跑需 Repo B 多行 fill 落地后验描述框逐行无乱序",
+    "verifiedBy": []
+  },
+  {
+    "id": "pitfall-lark-cli-output-relative-path-20260728",
+    "app": "xianyu",
+    "category": "pitfall",
+    "title": "lark-cli base +record-download-attachment --output 必须相对当前目录",
+    "content": "lark-cli（@larksuite/cli 1.0.69）下载多维表附件时，--output 传绝对路径会报 validation/invalid_argument：\"unsafe output path: --output must be a relative path within the current directory\"。绕法：把 execFileSync 的 cwd 设成目标下载目录，--output 只传裸文件名（如 01.png）；下载多张时逐张单 --file-token + 单文件 --output（单 --file-token 才允许 --output 为文件路径，多张须 --output 为目录且相对）。同理 lark-cli 其它落盘命令大概率同限。",
+    "appliesTo": ["ops/feishu-to-xianyu.mjs", "飞书多维表附件下载", "lark-cli"],
+    "verifyMode": "replay：DX1488-100 三张 Yupoo原图 下载到 tmp-imgs/DX1488-100/ 成功 + sha 算出",
+    "verifiedBy": []
+  },
+  {
+    "id": "pitfall-xianyu-multiline-description-not-supported-20260728",
+    "app": "xianyu",
+    "category": "pitfall",
+    "title": "闲鱼多行描述：逐行 no-refocus 配方已移植进 operator 并实证 desc-filled",
+    "content": "GPFS scripts/xianyu-operator.mjs 的 normalizeXwInputText（:866）写前把 \\n/\\r 压成空格，fillTextField 一次性写整段、无逐行 Enter → 多行被压成单行。【配方】首行 refocus+inputText+KEYCODE_ENTER(66)，中间行 no-refocus+inputText+ENTER（保光标，对应 d3cb5ec），末行 no-refocus 不 ENTER，全程 deferRestore/keepIme。【已移植 2026-07-28】operator 新增 resolveDescriptionLines(plan)（descriptionLines 优先 → 否则 descriptionPrefix+productTitle+descriptionBody 组装 → 否则 description 含 \\n 拆行 → 否则 null 走老单行）+ fillDescriptionMultiLine（单行退回 fillTextField；多行逐行 inputTextViaXiaowei + shellExec keyevent 66，末行不 ENTER，关「完成」，descriptionContains 逐行回读校验，refocus 间歇失效整段重输兜底）。【坑① adapter 白名单】apps/xianyu/adapter.mjs commandArgs 逐 flag 转发，只认 --description 单串，不认三字段 → 飞书 fixture 用三字段时被丢、resolveDescriptionLines 返 null、描述步被整个跳过。修：adapter 加 --description-prefix/--product-title/--description-body/--description-lines，operator planFromArgv 读这四 flag。【实证 2026-07-28】Windows 上 XHS_ALLOW_BYPASS=1 直跑 operator publish-dry-run --plan（DX1488-100，4 行【奥莱折扣】JORDAN…/尺码 S-XXL/部分断码/主页实拍）：supervisor 事件 description phase=ok attempt=1 step=desc-filled ok=true（verified=true，逐行回读全中）。PR #17（operator）+#18（adapter）已合 main c2a44c3 并部署 Windows（gitCommit 同步、控制面重启 health 200）。【遗留】同次直跑 sku 步 sku-select-all-missing（见下条 SKU 坑），与多行描述无关。",
+    "appliesTo": ["xianyu.publish.full_dry_run", "scripts/xianyu-operator.mjs", "apps/xianyu/adapter.mjs", "ops/feishu-to-xianyu.mjs", "闲鱼描述框"],
+    "steps": [
+      "operator 新增 resolveDescriptionLines + fillDescriptionMultiLine（PR #17），描述步 dispatch：wantMultiDesc 用多行，否则老 fillTextField",
+      "adapter commandArgs 转发 --description-prefix/--product-title/--description-body/--description-lines，operator planFromArgv 读这四 flag（PR #18）——否则三字段被白名单丢",
+      "首行：op.tap(描述框中心)+settle → inputTextViaXiaowei(line0,{clearFirst:true,deferRestore:true,refocus:tap}) → shellExec('input keyevent 66')",
+      "中间行：inputTextViaXiaowei(line,{clearFirst:false,deferRestore:true})（不 refocus）→ shellExec('input keyevent 66')",
+      "末行：inputTextViaXiaowei(last,{clearFirst:false,deferRestore:true})（不 refocus、不 ENTER）→ 关「完成」+ audit.restore() + descriptionContains 逐行回读校验"
+    ],
+    "verifyMode": "operator 直跑（XHS_ALLOW_BYPASS=1 bypass）publish-dry-run --plan：description step=desc-filled ok=true（verified，4 行逐行回读全中）。adapter 修复前的控制面 3 台 job 描述步被跳过（字段未抵达）→ 修复后直跑实证通过",
+    "verifiedBy": ["ops/input-text.mjs 2026-07-28 4 行实证", "operator 直跑 2026-07-28 desc-filled ok=true verified"]
+  },
+  {
+    "id": "pitfall-xianyu-sku-select-all-missing-20260728",
+    "app": "xianyu",
+    "category": "pitfall",
+    "title": "闲鱼 full_dry_run 卡 sku-select-all-missing：operator 停在规格页未进批量价/库存页",
+    "content": "DX1488-100（5 尺码 S-XXL）full_dry_run 三台（01/02/04）+ 01 直跑（含/不含单色两种 fixture）一律卡 sku 步 step=sku-select-all-missing，VERIFICATION_FAILED。诊断（run_8d301b69 / direct3.log 全 summary）：selectAllMiss.markers.specsPage=true、batchEntry=false、cancelBatch=false、nextOrPriceStock=true → operator 还在 SKU「规格定义页」（选颜色/尺码维度那页），没点到「下一步/价格库存」进「批量设置价格和库存」页，故 findSkuSelectAll 找不到「全选」labelsWithSelectAll=[]。almostRelatedLabels=['颜色\\n选择推荐的\\n颜色','展开全部按钮, 展开全部']。去掉单色维度（只留尺码）同样卡死 → 与颜色维度数无关，是 fillSkuSpecs（scripts/xianyu-operator.mjs :~3170）从规格页跳批量页的导航/等待逻辑问题。坑中坑：control plane result_json 只存 output.{ok,step}，把 operator summary.steps（含 selectAllMiss 诊断）整段丢了 → 必须靠 XHS_ALLOW_BYPASS=1 直跑 operator 抓 stdout 全 summary 才能看诊断。多行描述（Repo B）已在此卡点之前 desc-filled ok=true 验证通过，与此坑无关。",
+    "appliesTo": ["xianyu.publish.full_dry_run", "scripts/xianyu-operator.mjs", "fillSkuSpecs", "ops/feishu-to-xianyu.mjs"],
+    "steps": [
+      "复现：node ops/feishu-to-xianyu.mjs --sku DX1488-100 --aliases 01,02,04 --actor hermes-f2x → 三台 failed sku-select-all-missing",
+      "或直跑抓诊断：Windows 上 XHS_ALLOW_BYPASS=1 XHS_BYPASS_REASON=... node scripts/xianyu-operator.mjs --serial REPLACE_SERIAL_01 --transport gateway publish-dry-run --plan <fixture.json> --calibrated all --skip-category --skip-address，stdout 全 summary 的 steps.sku.selectAllMiss",
+      "看 selectAllMiss.markers：specsPage=true / batchEntry=false → 停在规格页，未进批量页",
+      "修 fillSkuSpecs（:~3170）：点「下一步/价格库存」后等待「批量设置价格和库存」/「取消批量设置」出现再 findSkuSelectAll；现疑似点完没等到批量页就 dump 找全选"
+    ],
+    "verifyMode": "修复后三台 full_dry_run sku 步过 + 全流程 succeeded + restoration/verification 未 false（待修）",
+    "verifiedBy": []
+  }
+]

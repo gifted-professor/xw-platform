@@ -9,6 +9,9 @@ registry.db-shm
 runtime/
 node_modules/
 
+# feishu-to-xianyu 下载的 Yupoo 原图运行态
+tmp-imgs/
+
 # campaign 运行态（step.sh/arm-driver.sh/fixtures/ARM-PROTOCOL 是源，logs 与 done/abort 标记是运行产物）
 campaign/logs/
 
