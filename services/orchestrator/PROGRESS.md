@@ -1,6 +1,6 @@
 # xhs-registry 进度
 
-> 最后更新：2026-07-27 13:30 CST（**方案 A 真源收口**：PR #14+#15 已并入 GitHub `main`；生产代码真源 = `main` @ `1f7ae22`。此前 4 机并发 4/4 全绿。当前 active blocker：无硬隔离）
+> 最后更新：2026-07-27 13:40 CST（方案 A main 真源已收口；过时 knowledge active_blocker 三条已 resolved；Agents.md 补默认链路+跨机并发。agent-entry active blockers=none；4 ready）
 
 ## 一句话现状（北极星，所有 agent 必读）
 
