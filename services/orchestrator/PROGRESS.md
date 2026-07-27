@@ -1,6 +1,6 @@
 # xhs-registry 进度
 
-> 最后更新：2026-07-27 14:00 CST（**快路径**：`ops/conc4-full-dry-run.mjs` 四机并发一键入口；AGENTS 复用流程表+双路径契约。不增硬闸。agent-entry blockers=none；main@1f7ae22）
+> 最后更新：2026-07-27 14:15 CST（本仓已上 GitHub **private** `gifted-professor/xhs-registry`；快路径 conc4 已推 main。控制面代码仍在 `xhs-device-agent` main@1f7ae22）
 
 ## 一句话现状（北极星，所有 agent 必读）
 
