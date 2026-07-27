@@ -2434,6 +2434,102 @@ async function fillTextField(op, field, text, { evidenceDir, label = "field", cl
   };
 }
 
+// 多行描述组装：
+//   descriptionLines（数组）优先 → 直接用；
+//   否则 descriptionPrefix + productTitle + descriptionBody → [prefix+productTitle, ...body 行]；
+//   否则 description 含换行 → 拆行；
+//   否则 null（走老单行 fillTextField）。
+export function resolveDescriptionLines(plan) {
+  if (Array.isArray(plan.descriptionLines) && plan.descriptionLines.length) {
+    const ls = plan.descriptionLines.map((s) => String(s ?? "").trim()).filter(Boolean);
+    return ls.length ? ls : null;
+  }
+  if (plan.descriptionPrefix != null && plan.productTitle != null) {
+    const head = String(plan.descriptionPrefix || "") + String(plan.productTitle || "");
+    const body = String(plan.descriptionBody || "").replace(/\r\n/g, "\n").split("\n").map((s) => s.trim()).filter(Boolean);
+    const ls = [head, ...body].filter((s) => s.length);
+    return ls.length ? ls : null;
+  }
+  if (typeof plan.description === "string" && /[\r\n]/.test(plan.description)) {
+    const ls = plan.description.replace(/\r\n/g, "\n").split("\n").map((s) => s.trim()).filter(Boolean);
+    return ls.length ? ls : null;
+  }
+  return null;
+}
+
+// 闲鱼描述框多行输入（2026-07-28 实证 via ops/input-text.mjs：4 行顺序正确）。
+// 效卫 XwIME 对换行敏感——normalizeXwInputText 把 \n 压成空格，故须逐行 inputText + KEYCODE_ENTER(66)。
+// 首行切 IME 后须 refocus（FlutterBoost）；后续行不 refocus（保光标，对应 d3cb5ec --no-refocus）；末行不 ENTER。
+// 单行时退回 fillTextField（保持老路径）。
+async function fillDescriptionMultiLine(op, field, lines, { evidenceDir, label = "desc", clearFirst = true } = {}) {
+  if (!field?.bounds) return { ok: false, step: `${label}-field-missing` };
+  const norm = lines.map((s) => String(s ?? "").trim()).filter(Boolean);
+  if (norm.length === 0) return { ok: false, step: `${label}-empty-text` };
+  if (norm.length === 1) return fillTextField(op, field, norm[0], { evidenceDir, label, clearFirst });
+  const safeSerial = String(op.serial).replace(/[^A-Za-z0-9_-]/g, "_");
+  const warnings = [];
+  const [x, y] = center(field.bounds);
+  const tapX = Math.min(field.bounds[2] - 40, x), tapY = Math.min(field.bounds[3] - 40, y + 20);
+  const refocus = async () => { await op.tap(tapX, tapY); };
+  const enter = async () => { await op.shellExec("input keyevent 66", 8000).catch(() => null); await settle(500); };
+
+  // 逐行输入：i=0 带 refocus + clearFirst；后续行 no-refocus + clearFirst:false；末行不 ENTER
+  const inputAll = async (firstClear) => {
+    let audit = null;
+    for (let i = 0; i < norm.length; i += 1) {
+      const opts = { clearFirst: i === 0 ? firstClear : false, deferRestore: true };
+      if (i === 0) opts.refocus = refocus;
+      audit = await op.inputTextViaXiaowei(norm[i], opts);
+      await settle(500);
+      if (i < norm.length - 1) await enter();
+    }
+    return audit;
+  };
+
+  await refocus();
+  await settle(700);
+  const baseline = await captureEvidenceSoft(op, `${evidenceDir}\\xianyu-${label}-baseline-${safeSerial}.png`, warnings, `${label}-baseline`);
+  let audit = null;
+  let verified = false;
+  try {
+    audit = await inputAll(clearFirst);
+  } catch (e) {
+    if (typeof audit?.restore === "function") await audit.restore().catch(() => null);
+    return { ok: false, step: `${label}-input-failed`, error: e.message, evidence: { baseline }, warnings };
+  }
+  await settle(600);
+  const entered = await captureEvidenceSoft(op, `${evidenceDir}\\xianyu-${label}-entered-${safeSerial}.png`, warnings, `${label}-entered`);
+  if (typeof audit?.restore === "function") await audit.restore().catch(() => null);
+  let after = await snapshot(op, `xianyu-${label}-after`);
+  verified = norm.every((line) => after.nodes.some((node) => descriptionContains(node, line)));
+  if (!verified) {
+    // refocus 间歇失效兜底：整段清空重输一次（同 fillTextField 二次重输哲学）
+    await refocus();
+    await settle(700);
+    try {
+      audit = await inputAll(true);
+      await settle(600);
+      if (typeof audit?.restore === "function") await audit.restore().catch(() => null);
+      const after2 = await snapshot(op, `xianyu-${label}-after2`);
+      verified = norm.every((line) => after2.nodes.some((node) => descriptionContains(node, line)));
+    } catch { /* 保持 unverified */ }
+    if (typeof audit?.restore === "function") await audit.restore().catch(() => null);
+  }
+  // 关闭编辑器（点「完成」）——分类推荐区/后续行在编辑态关闭后才渲染
+  const editorSnap = await snapshot(op, `xianyu-${label}-editor`);
+  const doneBtn = editorSnap.nodes.find((n) => /^完成$/.test(String(n.label || "")));
+  if (doneBtn?.bounds) { await op.tap(...center(doneBtn.bounds)); await settle(900); }
+  return {
+    ok: verified,
+    step: verified ? `${label}-filled` : `${label}-unverified`,
+    verified,
+    audit: audit?.audit || audit,
+    evidence: { baseline, entered },
+    warnings: warnings.length ? warnings : undefined,
+    lines: norm.length,
+  };
+}
+
 // 价格字段填入：价格是纯数字（ASCII），用 `input text` 直输即可，无需 IME 桥。
 // 仍做回读校验（页面出现该数字串）。
 async function fillPriceField(op, field, price, { evidenceDir } = {}) {
@@ -3796,8 +3892,10 @@ export async function publishDryRun(op, plan, {
     }, { maxAttempts: 2, recover: recoverCompose }));
   }
 
-  // 3. 描述（证据截图 fail-soft 已在 fillTextField）
-  if (plan.description) {
+  // 3. 描述（证据截图 fail-soft 已在 fillTextField / fillDescriptionMultiLine）
+  const descLines = resolveDescriptionLines(plan);
+  const wantMultiDesc = descLines && descLines.length > 1;
+  if (wantMultiDesc || plan.description) {
     record("description", await sup.run("description", async () => {
       await recoverCompose();
       let fresh = await snapshot(op, "xianyu-desc-field");
@@ -3808,6 +3906,7 @@ export async function publishDryRun(op, plan, {
         fresh = await snapshot(op, "xianyu-desc-field-sc");
         field = findDescriptionField(fresh.nodes);
       }
+      if (wantMultiDesc) return fillDescriptionMultiLine(op, field, descLines, { evidenceDir, label: "desc", clearFirst: true });
       return fillTextField(op, field, plan.description, { evidenceDir, label: "desc", clearFirst: true });
     }, {
       maxAttempts: 2,
