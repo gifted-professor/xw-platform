@@ -1,6 +1,6 @@
 # xhs-registry 进度
 
-> 最后更新：2026-07-27 15:20 CST（Explorer **交互油门**：`ops/tap|dump-ui|focus|launch-app.mjs` + `_win-xiaowei` 走 22222；不绑 17910。GitHub xhs-registry；控制面 main@1f7ae22）
+> 最后更新：2026-07-27 ~17:05 CST（selectAllMiss 诊断上 main@14ca698 已部署；03 单机 full_dry_run 绿 job_41b713ba；手推路径已停）
 
 ## 一句话现状（北极星，所有 agent 必读）
 
@@ -146,6 +146,10 @@
 
 ## 已知问题（下次可修）
 
+0. **2026-07-27 Hermes 踩坑（WP0 已留痕，详情知识库）**：
+   - **VLM 绝对像素不可用**：mimo vision Y 系统偏低，XHS 底栏实测 **ΔY=−1330px**（`pitfall-vision-vlm-y-bias-20260727`）；契约已改 `modes/explorer.md`。自主控制应走 dump/区域/VGP，不接 VLM 裸坐标 tap。
+   - **03 `sku:sku-select-all-missing`**：全选在价库批量页。WP1-A′ 手推诚实失败（`pitfall-wp1a-03-sku-hand-nav-blocked-20260727`）。**已部署**失败侧 `selectAllMiss`（PR #16 → main **`14ca698`**，recipe `recipe-sku-select-all-miss-diag-20260727`）：miss 时 job result 带 labels 原文。实证：03 recover 后单机 full_dry_run **`job_41b713ba` succeeded**（本轮未 miss，当前正则可用）；再 miss 时读 `output.selectAllMiss` 再改正则。Explorer：`ops/input-text.mjs` 保留。
+   - 其它已 resolved 指针：`pitfall-explorer-bg-poll-quoting-20260727`、`pitfall-explorer-session-no-heartbeat-20260727`、`note-17910-optional-for-explorer-ops-20260727`。
 1. ~~registry 会在控制面重启时崩溃退出~~ 已修复（2026-07-24 20:10，registry.mjs 701 行版）：control.db 查询全部走 queryControlDb（出错关句柄、30s 后重试，不再永久降级）；EADDRINUSE 进程内重试（防止任务重启撞端口耗尽重启次数）；进程级 uncaughtException/unhandledRejection 兜底。已通过验收：重演控制面重启，registry 存活且审批/聚合接口正常。Windows 旧版备份 registry.mjs.bak-phase3
 2. **计划任务 idle 杀手（2026-07-26 再次回归并修复）**：`XhsDeviceRegistry` live task 再次出现 `StopOnIdleEnd=true`，导致 17930 被终止；根因是 `install-registry-task.ps1` 未固化该设置。现已在源脚本加入 `-DontStopOnIdleEnd`，live task 改为 false 并恢复 17930；原任务 XML 备份为 `C:\Users\Public\xhs-registry\XhsDeviceRegistry.before-idle-fix-20260726.xml`。以后重装任务后必须回验此字段。fast-operator serve 是 WMI 拉的不受影响。
 3. ~~serve 响应包装掩盖执行细节~~ 已修复（2026-07-24，commit `3537505` + 部署流程文档 `824b1fd`）：xhs adapter 透传内层 `ok:false` 为 `ADAPTER_ACTION_REJECTED`（带 step/activity/log，`notSent` 不误标 ambiguous）；`resultSummary` 增加 output/error 字段；测试 33/33。**部署已走标准流程：GPFS commit → push origin → Windows pull（分支 agent/placement-entry-v1-1-20260724，两端一致）**，详见仓库 AGENTS.md「部署流程」节

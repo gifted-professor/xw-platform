@@ -11,10 +11,10 @@
 
 ```bash
 node ops/explore-preflight.mjs --alias 01
-# 若依赖 17910 设备面：再加 --require-17910
+# 仅当仍依赖旧 17910 设备 API 时：再加 --require-17910（默认不需要）
 ```
 
-脚本检查：17930/17920 health → agent-entry ready/lease → control devices online → 探测 17910。
+脚本检查：17930/17920 health → agent-entry ready/lease → control devices online；**17910 为可选探测**（`ops/dump-ui|tap|focus|launch-app|screenshot` 走小薇 **22222**，不绑 17910）。见知识库 `note-17910-optional-for-explorer-ops-20260727`。
 
 也可手查：
 
@@ -24,17 +24,20 @@ ssh xhs-windows 'curl.exe -s http://127.0.0.1:17920/control/v1/health'
 ssh xhs-windows 'curl.exe -s http://127.0.0.1:17930/agent-entry.md'
 ```
 
-截屏 / dump / tap / 开 App（**禁止**手搓临时脚本；**不依赖 17910**，走小薇 22222）：
+截屏 / dump / tap / 输入 / 开 App（**禁止**手搓临时脚本；**不依赖 17910**，走小薇 22222）：
 
 ```bash
 node ops/screenshot-and-analyze.mjs --alias 01   # SHOT=/path.png
 node ops/dump-ui.mjs --alias 01                  # DUMP=/path.xml
 node ops/focus.mjs --alias 01                    # FOCUS=pkg/activity
 node ops/tap.mjs --alias 01 --x 540 --y 1200     # TAP=ok
+# 中文输入：效卫 XwIME（禁止 adb input text / clipboard 当主路径）
+node ops/input-text.mjs --alias 01 --text "蓝色" --x 540 --y 1200 --enter
 node ops/launch-app.mjs --alias 01 --package com.taobao.idlefish
 ```
 
-> 以上是 **Explorer lab 通道**（22222）。生产业务仍用 job/session；探索可用，不用于 R2 外发。
+> 以上是 **Explorer lab 通道**（22222）。生产业务仍用 job/session；探索可用，不用于 R2 外发。  
+> **Flutter（闲鱼）**：`input-text` 必须带字段中心 `--x --y` 做 IME 切换后 refocus；SKU 规格值加 `--enter`。
 
 ---
 
@@ -46,7 +49,8 @@ node ops/launch-app.mjs --alias 01 --package com.taobao.idlefish
 | 写 control.db、调用 approve/deny | 红线 |
 | R2/R3 **执行**外发（评论/发布/私信…） | 只允许 submit 挂起等人 |
 | 逐步 scp 临时脚本当默认手法 | 用 `screenshot-and-analyze.mjs` |
-| 有 dump/语义仍 vision 死磕；同目标 vision **>2 次** | 坐标易偏、费时 |
+| 有 dump/语义仍 vision 死磕；同目标 vision **>2 次** | VLM 像素 Y 可偏 **−1330px**（见下）；费时 |
+| 交互式 session 长时间不 heartbeat | lease 可能被回收；≤20s 心跳或改用 job |
 | 遇验证码/风控/登录墙继续点 | 立即停 + knowledge |
 | 一次会话多个主 flow | 失焦；一轮一个 scope |
 | 编造验证结果 | `verifyMode=human` 时标待人 |
@@ -58,8 +62,9 @@ node ops/launch-app.mjs --alias 01 --package com.taobao.idlefish
 - 读 agent-entry / knowledge / capabilities  
 - 写 knowledge（recipe / pitfall / unknown）  
 - R0/R1 job（observe、`*_dry_run` 等 automatic）  
-- Explorer ops：preflight / screenshot / **dump-ui / tap / focus / launch-app**（lab 22222）  
-- session canary（若 capability 要求且 lease 可见）  
+- Explorer ops：preflight / screenshot / **dump-ui / tap / input-text / focus / launch-app**（lab **22222**，不绑 17910）  
+- session canary（若 capability 要求且 lease 可见）；**长 session 每 ≤20s heartbeat**，否则优先 job 模式  
+
 
 ---
 
@@ -70,7 +75,7 @@ node ops/launch-app.mjs --alias 01 --package com.taobao.idlefish
 | live 状态 | `GET …:17930/api/agent-entry` |
 | 能力目录 | `GET …:17930/api/capabilities` 或控制面 |
 | 生产碰机 | `devicectl job/session` 正道 |
-| 探索交互 | `ops/tap\|dump-ui\|focus\|launch-app\|screenshot-and-analyze.mjs`（**22222**，不绑 17910） |
+| 探索交互 | `ops/tap\|input-text\|dump-ui\|focus\|launch-app\|screenshot-and-analyze.mjs`（**22222**，不绑 17910） |
 | 观测 capability | `xhs.observe.*` / `xianyu.observe.snapshot` / `wechat.observe.*` |
 | 已知剧本回归 | **Runner**：`ops/conc4-full-dry-run.mjs` |
 
@@ -103,7 +108,7 @@ vision 同一目标 2 次失败：
   → 不默认换机（除非 allow_switch_device: true）
 ```
 
-**已知**：部分视觉模型 Y 坐标系统性偏移（可偏 100–500px）；有 bounds 时禁止用 vision。
+**已知（Hermes 2026-07-27 实机 01）**：VLM（如 mimo-v2.5）对**绝对像素** Y 系统性偏低——XHS 底栏 dump Y=2279 vs vision Y=949 → **ΔY=−1330px**（ratioY≈0.416）；微购约 −160~−179px。X 偏差较小。**不是**单纯截图缩放，换模型也难当主眼；有 bounds 时**禁止**用 vision 像素。知识库：`pitfall-vision-vlm-y-bias-20260727`。优先 dump/语义；dump 空时 vision 限次且宜出区域描述而非裸坐标。
 
 ---
 
@@ -168,10 +173,11 @@ Explorer 产出 recipe 默认 **`verifyMode=human`**，content 可带 `[explorer
 步骤:
   1) timeout 1200 node ops/explore-preflight.mjs --alias 01
   2) 需要截屏: node ops/screenshot-and-analyze.mjs --alias 01
-  3) 正道 devicectl job only；dump-first；vision≤2/目标
-  4) 结束 POST knowledge（成功 A/B/C 或 aborted）
+  3) 正道 devicectl job only；dump-first；vision≤2/目标（Y 可偏 −1330px，有 bounds 禁 vision）
+  4) 若用 session：每 ≤20s heartbeat；否则优先 job
+  5) 结束 POST knowledge（成功 A/B/C 或 aborted）
 
-禁止: 旁路碰机、approve、R2 执行、逐步 scp、vision 死磕。
+禁止: 旁路碰机、approve、R2 执行、逐步 scp、vision 死磕、无 heartbeat 长 session。
 ```
 
 ### 模式对照

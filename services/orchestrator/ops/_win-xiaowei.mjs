@@ -1,5 +1,6 @@
 // Windows helper: Xiaowei ws://127.0.0.1:22222 原子动作
-// node _win-xiaowei.mjs --serial <id> --action tap|shell|dump|focus|start [--x --y --cmd --out --package --activity --force-stop]
+// node _win-xiaowei.mjs --serial <id> --action tap|shell|dump|focus|start|inputText
+//   [--x --y --cmd --out --package --activity --force-stop --text-b64 --text --refocus-x --refocus-y --clear-first --enter --defer-restore]
 import { writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 
@@ -9,6 +10,8 @@ const opt = (n, fb = null) => {
   return i >= 0 ? argv[i + 1] : fb;
 };
 const flag = (n) => argv.includes(n);
+
+const BRIDGE_IME = "com.android.xwkeyboard/.XwIME";
 
 const serial = opt("--serial");
 const action = opt("--action");
@@ -147,6 +150,119 @@ try {
     ).catch(() => "");
     result.stdout = String(stdout).slice(0, 2000);
     result.focus = parseFocus(raw);
+  } else if (action === "inputText") {
+    // 效卫 XwIME：selectIme → (refocus) → inputText → optional ENTER → restore IME
+    // Flutter：切 IME 后必须 refocus，否则 inputAccepted 但字不进字段。
+    const textB64 = opt("--text-b64");
+    const textRaw = textB64
+      ? Buffer.from(String(textB64), "base64").toString("utf8")
+      : (opt("--text") || "");
+    const text = String(textRaw ?? "")
+      .replace(/\r\n/g, "\n")
+      .replace(/[\r\n]+/g, " ")
+      .replace(/[ \t\u00a0]+/g, " ")
+      .trim();
+    if (!text) throw new Error("inputText needs --text-b64 or --text");
+
+    const refocusX = opt("--refocus-x");
+    const refocusY = opt("--refocus-y");
+    const hasRefocus = refocusX != null && refocusY != null
+      && Number.isFinite(Number(refocusX)) && Number.isFinite(Number(refocusY));
+    const clearFirst = flag("--clear-first");
+    const doEnter = flag("--enter");
+    const deferRestore = flag("--defer-restore");
+
+    const priorImeRaw = await adbShell("settings get secure default_input_method", 8000).catch(() => "");
+    const priorIme = String(priorImeRaw || "").trim();
+    const audit = {
+      priorIme,
+      bridgeIme: BRIDGE_IME,
+      selected: false,
+      refocused: false,
+      cleared: false,
+      inputAccepted: false,
+      enter: false,
+      restored: false,
+    };
+
+    const restoreIme = async () => {
+      if (!priorIme || priorIme === BRIDGE_IME || priorIme === "null") {
+        audit.restored = true;
+        return;
+      }
+      try {
+        const cur = String(await adbShell("settings get secure default_input_method", 8000)).trim();
+        if (cur !== priorIme) {
+          const r = await xwInvoke({ action: "selectIme", devices: serial, data: { ime: priorIme } }, 12000);
+          if (r.code !== 10000) throw new Error(`restore selectIme code=${r.code}`);
+        }
+        audit.restored = true;
+      } catch (e) {
+        audit.restoreError = String(e.message || e).slice(0, 200);
+      }
+    };
+
+    try {
+      let cur = String(await adbShell("settings get secure default_input_method", 8000)).trim();
+      if (cur !== BRIDGE_IME) {
+        const r = await xwInvoke({ action: "selectIme", devices: serial, data: { ime: BRIDGE_IME } }, 12000);
+        if (r.code !== 10000) {
+          throw new Error(`selectIme XwIME failed code=${r.code} ${r.message || ""}`.slice(0, 200));
+        }
+        for (let i = 0; i < 8; i += 1) {
+          await sleep(200);
+          cur = String(await adbShell("settings get secure default_input_method", 8000)).trim();
+          if (cur === BRIDGE_IME) break;
+        }
+        if (cur !== BRIDGE_IME) throw new Error(`bridge IME not active after selectIme (cur=${cur})`);
+      }
+      audit.selected = true;
+      await sleep(400);
+
+      if (hasRefocus) {
+        const rx = Math.round(Number(refocusX));
+        const ry = Math.round(Number(refocusY));
+        await adbShell(`input tap ${rx} ${ry}`, 10000);
+        await sleep(600);
+        audit.refocused = true;
+        audit.refocusX = rx;
+        audit.refocusY = ry;
+      }
+
+      if (clearFirst) {
+        await adbShell(
+          "input keyevent KEYCODE_MOVE_END " + Array(48).fill("KEYCODE_DEL").join(" "),
+          8000,
+        );
+        await sleep(150);
+        audit.cleared = true;
+      }
+
+      const ir = await xwInvoke(
+        { action: "inputText", devices: serial, data: { content: text } },
+        15000,
+      );
+      if (ir.code !== 10000) {
+        throw new Error(`inputText failed code=${ir.code} ${ir.message || ""}`.slice(0, 200));
+      }
+      audit.inputAccepted = true;
+
+      if (doEnter) {
+        await sleep(200);
+        await adbShell("input keyevent KEYCODE_ENTER", 8000);
+        audit.enter = true;
+      }
+    } catch (e) {
+      await restoreIme();
+      throw e;
+    }
+
+    if (!deferRestore) await restoreIme();
+    else audit.restored = false;
+
+    result.audit = audit;
+    result.textLen = text.length;
+    result.textPreview = text.slice(0, 40);
   } else {
     throw new Error(`unknown action ${action}`);
   }

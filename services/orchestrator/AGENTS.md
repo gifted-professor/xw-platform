@@ -50,7 +50,7 @@
 | 看 live | `ssh xhs-windows 'curl.exe -s http://127.0.0.1:17930/agent-entry.md'` |
 | **探索开工检查** | `node ops/explore-preflight.mjs --alias 01` |
 | **探索截屏（一步）** | `node ops/screenshot-and-analyze.mjs --alias 01` → `SHOT=…` |
-| **探索 dump/点/焦点/开 App** | `ops/dump-ui.mjs` / `tap.mjs` / `focus.mjs` / `launch-app.mjs`（lab 22222，见 `modes/explorer.md`） |
+| **探索 dump/点/输入/焦点/开 App** | `ops/dump-ui.mjs` / `tap.mjs` / `input-text.mjs` / `focus.mjs` / `launch-app.mjs`（lab 22222，见 `modes/explorer.md`） |
 | **4 机 full_dry_run 并发** | `node ops/conc4-full-dry-run.mjs --actor <you>-conc4` |
 | 同上只预检 | `node ops/conc4-full-dry-run.mjs --actor <you>-conc4 --dry-run` |
 | 隔离后 main-safe 清 | `node ops/recover-main-safe.mjs --job <jobId> --actor <you>` |
