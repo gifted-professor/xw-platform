@@ -1242,6 +1242,35 @@ export function firstFailedPublishStep(steps = {}) {
 
 export function firstFailedPublishDiagnostic(steps = {}) {
   const sku = steps?.sku;
+  if (sku?.selectAllMiss?.kind === "sku-select-all-missing") {
+    const source = sku.selectAllMiss;
+    const safeLabels = (values, allow) => (Array.isArray(values) ? values : [])
+      .map((value) => String(value || "").trim())
+      .filter((value) => value && allow.test(value))
+      .slice(0, 12)
+      .map((value) => value.slice(0, 120));
+    return {
+      kind: "sku-select-all-missing",
+      expectedRows: Math.max(0, Number(sku.expectedRows || 0)),
+      dimensions: (Array.isArray(sku.dimResults) ? sku.dimResults : [])
+        .map((result) => String(result?.dim || "").trim())
+        .filter(Boolean)
+        .slice(0, 4)
+        .map((value) => value.slice(0, 24)),
+      nodeCount: Math.max(0, Number(source.nodeCount || 0)),
+      labelsWithSelectAll: safeLabels(source.labelsWithSelectAll, /全选/),
+      almostRelatedLabels: safeLabels(
+        source.almostRelatedLabels,
+        /全选|批量|规格|价格|库存|下一步|颜色|尺码|展开全部/,
+      ),
+      markers: {
+        specsPage: source.markers?.specsPage === true,
+        batchEntry: source.markers?.batchEntry === true,
+        cancelBatch: source.markers?.cancelBatch === true,
+        nextOrPriceStock: source.markers?.nextOrPriceStock === true,
+      },
+    };
+  }
   for (const [field, key] of [["price", "priceTyped"], ["stock", "stockTyped"]]) {
     const source = sku?.[key]?.typed?.diagnostic;
     if (source?.kind !== "app-numpad-key-missing") continue;
@@ -1744,16 +1773,21 @@ export function findSkuRow(snapshot) {
 }
 
 // SKU sheet 删除入口（1号机 2026-07-23 实证 label 形态）：
-//   值级（值行右侧垃圾桶）：ImageView label='删除，按钮'        ← skuReplace 只删这层
-//   维级（维度标题行右侧）：View     label='删除，按钮, 删除'   ← 不碰！维度可能是我们要填的
-// 精确匹配值级；普通规格值文本('S, S')与维级删除均不匹配。
+//   值级（值行右侧垃圾桶）：ImageView label='删除，按钮'
+//   维级（维度标题行右侧）：View     label='删除，按钮, 删除'
+// replaceExisting 要先清空整张规格表，再按 fixture 重建。否则单色商品虽只传尺码，
+// 仍会遗留空的「颜色」维度，导致「下一步」不进价库页。
 export function findSpecDeleteEntry(snapshot) {
   return snapshot.find((node) => !!node?.bounds && String(node?.label || "").trim() === "删除，按钮") || null;
 }
 
-// 维度级删除入口（'删除，按钮, 删除'）：存在说明有维度区；空维度无值可删，属正常状态。
+export function findSpecDimensionDeleteEntry(snapshot) {
+  return snapshot.find((node) => !!node?.bounds
+    && String(node?.label || "").trim() === "删除，按钮, 删除") || null;
+}
+
 function hasDimLevelDelete(snapshot) {
-  return snapshot.some((node) => String(node?.label || "").trim() === "删除，按钮, 删除");
+  return !!findSpecDimensionDeleteEntry(snapshot);
 }
 
 // 未删净证据：仍存在值级删除入口（有值才有值级垃圾桶）。维级删除不算残留。
@@ -1777,32 +1811,51 @@ function skuDebugDump(tag, nodes) {
   } catch { /* 调试落盘失败不影响主流程 */ }
 }
 
-async function deleteExistingSpecValues(op) {
+export async function deleteExistingSpecValues(op, {
+  snapshotFn = snapshot,
+  settleFn = settle,
+} = {}) {
   let deleted = 0;
-  let snap = await snapshot(op, "xianyu-sku-replace-check");
+  let dimensionsDeleted = 0;
+  let snap = await snapshotFn(op, "xianyu-sku-replace-check");
   skuDebugDump("replace-check", snap.nodes);
   let entry = findSpecDeleteEntry(snap.nodes);
-  if (!entry) {
-    // 状态A chips 页 或 空维度区（有维级删除但无值）→ 无值可删，正常继续
-    if (isSpecTypeChipPage(snap.nodes) || hasDimLevelDelete(snap.nodes)) {
-      return { ok: true, step: "sku-replace-empty", deleted };
-    }
-    return { ok: false, step: "sku-replace-unverified", deleted };
+  if (!entry && !isSpecTypeChipPage(snap.nodes) && !hasDimLevelDelete(snap.nodes)) {
+    return { ok: false, step: "sku-replace-unverified", deleted, dimensionsDeleted };
   }
 
   const maxDeletes = Math.max(1, snap.nodes.length);
   while (entry && deleted < maxDeletes) {
     await op.tap(...center(entry.bounds));
     deleted += 1;
-    await settle(800);
-    snap = await snapshot(op, `xianyu-sku-replace-after-${deleted}`);
+    await settleFn(800);
+    snap = await snapshotFn(op, `xianyu-sku-replace-after-${deleted}`);
     entry = findSpecDeleteEntry(snap.nodes);
   }
 
   if (entry || hasSpecValueEvidence(snap.nodes)) {
-    return { ok: false, step: "sku-replace-unverified", deleted };
+    return { ok: false, step: "sku-replace-unverified", deleted, dimensionsDeleted };
   }
-  return { ok: true, step: "sku-replaced", deleted };
+
+  // 值删完后再删维度：replaceExisting 的语义是全量重建，不保留空的旧颜色/尺码区。
+  let dimensionEntry = findSpecDimensionDeleteEntry(snap.nodes);
+  const maxDimensionDeletes = 4;
+  while (dimensionEntry && dimensionsDeleted < maxDimensionDeletes) {
+    await op.tap(...center(dimensionEntry.bounds));
+    dimensionsDeleted += 1;
+    await settleFn(800);
+    snap = await snapshotFn(op, `xianyu-sku-replace-dimension-after-${dimensionsDeleted}`);
+    dimensionEntry = findSpecDimensionDeleteEntry(snap.nodes);
+  }
+  if (dimensionEntry || hasSpecValueEvidence(snap.nodes) || hasDimLevelDelete(snap.nodes)) {
+    return { ok: false, step: "sku-replace-unverified", deleted, dimensionsDeleted };
+  }
+  return {
+    ok: true,
+    step: deleted || dimensionsDeleted ? "sku-replaced" : "sku-replace-empty",
+    deleted,
+    dimensionsDeleted,
+  };
 }
 
 // 图片上传入口：发布页左上媒体按钮区，label 含「图片」「照片」「相机」或 + 占位。

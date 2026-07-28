@@ -20,6 +20,7 @@ import {
   findSkuRecoveryClose,
   findSkuExitConfirm,
   findSkuBatchEditControls,
+  findSpecDimensionDeleteEntry,
   findSkuSelectAll,
   summarizeSkuSelectAllMiss,
   findAppNumpadDelete,
@@ -49,6 +50,7 @@ import {
   summarizeAppNumpadCandidates,
   verifyImageManifestDryRun,
   replaceSkuBatchAppNumpadValue,
+  deleteExistingSpecValues,
   skuBatchInputValue,
   shouldScrollAfterSkuValue,
 } from "../scripts/xianyu-operator.mjs";
@@ -93,6 +95,39 @@ test("publish failure diagnostic bubbles only the bounded numpad object", () => 
   assert.equal(diagnostic.field, "price");
   assert.equal(diagnostic.candidates[0].withinKeyboardGeometry, false);
   assert.doesNotMatch(JSON.stringify(diagnostic), /secret|rawLabel/);
+});
+
+test("publish failure diagnostic keeps bounded SKU page markers without unrelated labels", () => {
+  const diagnostic = firstFailedPublishDiagnostic({
+    sku: {
+      ok: false,
+      step: "sku-select-all-missing",
+      expectedRows: 5,
+      dimResults: [{ dim: "尺码" }],
+      selectAllMiss: {
+        kind: "sku-select-all-missing",
+        nodeCount: 35,
+        labelsWithSelectAll: ["全选"],
+        almostRelatedLabels: ["颜色\n选择推荐的\n颜色", "用户商品私密文本"],
+        markers: {
+          specsPage: true,
+          batchEntry: false,
+          cancelBatch: false,
+          nextOrPriceStock: true,
+        },
+      },
+    },
+  });
+  assert.deepEqual(diagnostic.dimensions, ["尺码"]);
+  assert.deepEqual(diagnostic.labelsWithSelectAll, ["全选"]);
+  assert.deepEqual(diagnostic.almostRelatedLabels, ["颜色\n选择推荐的\n颜色"]);
+  assert.deepEqual(diagnostic.markers, {
+    specsPage: true,
+    batchEntry: false,
+    cancelBatch: false,
+    nextOrPriceStock: true,
+  });
+  assert.doesNotMatch(JSON.stringify(diagnostic), /用户商品私密文本/);
 });
 
 test("image upload state counts 04 button tiles only when anchored by the add tile", () => {
@@ -221,6 +256,32 @@ test("SKU values scroll exactly after each completed pair, never after the final
     [1, 2].filter((count) => shouldScrollAfterSkuValue(count, 2)),
     [],
   );
+});
+
+test("replaceExisting clears old values and dimensions before rebuilding requested specs", async () => {
+  const valueDelete = { label: "删除，按钮", bounds: [900, 500, 1000, 600] };
+  const dimensionDelete = { label: "删除，按钮, 删除", bounds: [900, 300, 1000, 400] };
+  assert.equal(findSpecDimensionDeleteEntry([valueDelete, dimensionDelete]), dimensionDelete);
+
+  const snapshots = [
+    { nodes: [valueDelete, dimensionDelete] },
+    { nodes: [dimensionDelete] },
+    { nodes: [{ label: "推荐常用的规格类型", bounds: [20, 200, 1000, 300] }] },
+  ];
+  const taps = [];
+  const result = await deleteExistingSpecValues({
+    async tap(x, y) { taps.push([x, y]); },
+  }, {
+    snapshotFn: async () => snapshots.shift(),
+    settleFn: async () => {},
+  });
+  assert.deepEqual(taps, [[950, 550], [950, 350]]);
+  assert.deepEqual(result, {
+    ok: true,
+    step: "sku-replaced",
+    deleted: 1,
+    dimensionsDeleted: 1,
+  });
 });
 
 test("publish dry-run surfaces the first failed step without full operator output", () => {
