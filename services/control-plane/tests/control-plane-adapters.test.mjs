@@ -140,6 +140,21 @@ test("Xianyu adapter preserves stop-before-publish and discard verification", as
           upload: { ok: true, step: "images-uploaded", picked: 2, imgCount: 2 },
         };
       }
+      if (args.includes("--http-api-strict")) {
+        return {
+          ok: true,
+          stoppedBeforePublish: true,
+          savedDraft: false,
+          steps: { sku: { ok: true } },
+          transportEvidence: {
+            mode: "typed-http",
+            httpReady: true,
+            httpTapAttempts: 6,
+            httpTapSucceeded: 6,
+            gatewayTapFallbacks: 0,
+          },
+        };
+      }
       if (args.includes("--save-draft")) {
         return {
           ok: true,
@@ -266,6 +281,41 @@ test("Xianyu adapter preserves stop-before-publish and discard verification", as
   });
   assert.equal((await adapter.verify({ capability: fullCap, execution: fullExec })).ok, true);
   assert.equal(calls.at(-1).args.includes("--save-draft"), false);
+
+  const flutterTapProbe = registry.require("xianyu.probe.flutter_pointer_tap");
+  const flutterTapExec = await adapter.execute({
+    capability: flutterTapProbe,
+    device: privateDevice,
+    params: {
+      skuPrice: 12.34,
+      skuStock: "2",
+      skuSpecs: { "颜色": ["白色"] },
+      saveDraft: false,
+    },
+    leaseAuthorization,
+  });
+  const flutterArgs = calls.at(-1).args;
+  assert.equal(flutterArgs.includes("--http-api-strict"), true);
+  assert.deepEqual(flutterArgs.slice(flutterArgs.indexOf("--device-alias"), flutterArgs.indexOf("--device-alias") + 2), [
+    "--device-alias", "01",
+  ]);
+  assert.equal(flutterArgs.includes("--skip-upload"), true);
+  assert.equal(flutterArgs.includes("--skip-category"), true);
+  assert.equal(flutterArgs.includes("--skip-freight"), true);
+  assert.equal(flutterArgs.includes("--skip-address"), true);
+  assert.equal((await adapter.verify({ capability: flutterTapProbe, execution: flutterTapExec })).ok, true);
+  assert.equal((await adapter.verify({
+    capability: flutterTapProbe,
+    execution: {
+      output: {
+        ...flutterTapExec.output,
+        transportEvidence: {
+          ...flutterTapExec.output.transportEvidence,
+          gatewayTapFallbacks: 1,
+        },
+      },
+    },
+  })).ok, false);
 
   const fullDraftCap = registry.require("xianyu.publish.full_draft_dry_run");
   assert.deepEqual(evaluateCapabilityPolicy(fullDraftCap), {

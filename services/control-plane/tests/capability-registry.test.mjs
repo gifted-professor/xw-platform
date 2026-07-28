@@ -3,14 +3,58 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { CapabilityRegistry, validateAgainstSchema } from "../control-plane/lib/capability-registry.mjs";
+import { evaluateCapabilityPolicy } from "../control-plane/lib/policy.mjs";
 
 test("repository capabilities use the unified E0-E4 manifest", () => {
   const registry = CapabilityRegistry.load(fileURLToPath(new URL("../apps", import.meta.url)));
-  assert.equal(registry.capabilities.length, 18);
-  assert.equal(new Set(registry.capabilities.map((item) => item.id)).size, 18);
+  assert.equal(registry.capabilities.length, 19);
+  assert.equal(new Set(registry.capabilities.map((item) => item.id)).size, 19);
   assert.equal(registry.capabilities.some((item) => /^D/.test(item.maturity)), false);
   assert.equal(registry.capabilities.every((item) => /^E[0-4]$/.test(item.maturity)), true);
   assert.equal(registry.listPublic().some((item) => Object.hasOwn(item, "implementation")), false);
+});
+
+test("Flutter pointer tap probe is bounded, no-save, and restoration-required", () => {
+  const registry = CapabilityRegistry.load(fileURLToPath(new URL("../apps", import.meta.url)));
+  const probe = registry.require("xianyu.probe.flutter_pointer_tap");
+
+  assert.equal(probe.automationPolicy.mode, "automatic");
+  assert.equal(probe.risk, "R1");
+  assert.equal(probe.restoration.required, true);
+  assert.throws(() => evaluateCapabilityPolicy(probe), { code: "CANARY_SESSION_REQUIRED" });
+  assert.deepEqual(evaluateCapabilityPolicy(probe, { canary: true, invocation: "session" }), {
+    approvalRequired: false,
+    externalEffect: false,
+  });
+  assert.throws(
+    () => registry.validateParams(probe.id, {
+      skuPrice: 12.34,
+      skuStock: "2",
+      skuSpecs: { "颜色": ["白色"] },
+      saveDraft: true,
+    }),
+    { code: "PARAMS_SCHEMA_INVALID" },
+  );
+  assert.doesNotThrow(() => registry.validateParams(probe.id, {
+    skuPrice: 12.34,
+    skuStock: "2",
+    skuSpecs: { "颜色": ["白色"] },
+    saveDraft: false,
+  }));
+  for (const skuSpecs of [
+    {},
+    { "颜色": "白色" },
+    { "颜色": [] },
+    { "颜色": [""] },
+    { "颜色": ["白色"], "尺码": ["M"], "材质": ["棉"] },
+  ]) {
+    assert.throws(() => registry.validateParams(probe.id, {
+      skuPrice: 12.34,
+      skuStock: "2",
+      skuSpecs,
+      saveDraft: false,
+    }), { code: "PARAMS_SCHEMA_INVALID" });
+  }
 });
 
 test("pure and draft-producing Xianyu full dry-runs have separate contracts", () => {
@@ -60,4 +104,16 @@ test("small schema validator supports arrays and bounds", () => {
     type: "array",
     items: { type: "integer", minimum: 1 },
   }), { code: "PARAMS_SCHEMA_INVALID" });
+  assert.doesNotThrow(() => validateAgainstSchema({ color: ["white"] }, {
+    type: "object",
+    minProperties: 1,
+    maxProperties: 1,
+    propertyNames: { type: "string", maxLength: 10 },
+    additionalProperties: {
+      type: "array",
+      minItems: 1,
+      maxItems: 2,
+      items: { type: "string", minLength: 1, maxLength: 10 },
+    },
+  }));
 });

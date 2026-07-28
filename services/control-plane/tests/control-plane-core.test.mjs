@@ -118,6 +118,14 @@ test("job result keeps bounded diagnostics and drops unrelated adapter output", 
           ok: false,
           step: "images-unverified",
           diagnostic,
+          transportEvidence: {
+            mode: "typed-http",
+            httpReady: true,
+            httpTapAttempts: 4,
+            httpTapSucceeded: 4,
+            gatewayTapFallbacks: 0,
+            privateRawLabel: "must-not-persist",
+          },
           privateRawLabel: "must-not-persist",
         },
       };
@@ -138,6 +146,13 @@ test("job result keeps bounded diagnostics and drops unrelated adapter output", 
     assert.equal(terminal.status, "failed");
     assert.deepEqual(terminal.result.output.diagnostic, diagnostic);
     assert.equal(Object.hasOwn(terminal.result.output, "privateRawLabel"), false);
+    assert.deepEqual(terminal.result.transportEvidence, {
+      mode: "typed-http",
+      httpReady: true,
+      httpTapAttempts: 4,
+      httpTapSucceeded: 4,
+      gatewayTapFallbacks: 0,
+    });
   } finally {
     await f.close();
   }

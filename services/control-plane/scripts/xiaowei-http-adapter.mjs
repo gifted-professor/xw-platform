@@ -20,8 +20,30 @@ import { GatewayOperator } from "./gateway-operator.mjs";
 
 const DEFAULT_HTTP = "http://127.0.0.1:17910";
 
+export function parseEffectiveDisplaySize(output) {
+  const text = String(output || "");
+  const override = text.match(/Override size:\s*(\d+)x(\d+)/i);
+  const physical = text.match(/Physical size:\s*(\d+)x(\d+)/i);
+  const match = override || physical;
+  if (!match) return null;
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  return Number.isInteger(width) && width > 0 && Number.isInteger(height) && height > 0
+    ? { width, height }
+    : null;
+}
+
 export class XiaoweiHttpAdapter {
-  constructor({ serial, xwWs, xwHttp = DEFAULT_HTTP, deviceAlias = "01", fallbackOnError = true } = {}) {
+  constructor({
+    serial,
+    xwWs,
+    xwHttp = DEFAULT_HTTP,
+    deviceAlias = "01",
+    fallbackOnError = true,
+    innerOperator = null,
+    fetchImpl = globalThis.fetch,
+    healthCheckImpl = null,
+  } = {}) {
     if (!serial) throw new Error("XiaoweiHttpAdapter 缺 serial");
     this.serial = serial;
     this._deviceAlias = deviceAlias;
@@ -29,9 +51,19 @@ export class XiaoweiHttpAdapter {
     this._httpReady = false;
     this._xwHttp = xwHttp;
     this._chain = Promise.resolve();
+    this._fetch = fetchImpl;
+    this._healthCheckImpl = healthCheckImpl;
+    this._sourceFrame = null;
+    this._transportEvidence = {
+      mode: "typed-http",
+      httpReady: false,
+      httpTapAttempts: 0,
+      httpTapSucceeded: 0,
+      gatewayTapFallbacks: 0,
+    };
 
     // 内部 GatewayOperator 负责所有非迁移操作
-    this._inner = new GatewayOperator({ serial, xwWs });
+    this._inner = innerOperator || new GatewayOperator({ serial, xwWs });
 
     // 暴露与 GatewayOperator 兼容的接口字段
     this.transport = "gateway";
@@ -47,8 +79,16 @@ export class XiaoweiHttpAdapter {
     await this._inner.start();
     // 再探测 HTTP API 是否在监听
     this._httpReady = await this._healthCheck();
+    this._transportEvidence.httpReady = this._httpReady;
     if (!this._httpReady && !this._fallbackOnError) {
       throw new Error("Xiaowei HTTP API not reachable at " + this._xwHttp);
+    }
+    if (this._httpReady) {
+      const wmSize = await this._inner.shellExec("wm size", 8000).catch(() => "");
+      this._sourceFrame = parseEffectiveDisplaySize(wmSize);
+      if (!this._sourceFrame && !this._fallbackOnError) {
+        throw new Error("Xiaowei HTTP tap source frame could not be verified");
+      }
     }
     return this;
   }
@@ -57,7 +97,11 @@ export class XiaoweiHttpAdapter {
 
   async tap(x, y) {
     this.metrics.taps += 1;
-    if (!this._httpReady) return this._inner.tap(x, y);
+    if (!this._httpReady) {
+      this._transportEvidence.gatewayTapFallbacks += 1;
+      return this._inner.tap(x, y);
+    }
+    this._transportEvidence.httpTapAttempts += 1;
     const body = {
       capability: "input.pointer.tap",
       deviceAlias: this._deviceAlias,
@@ -66,12 +110,18 @@ export class XiaoweiHttpAdapter {
           space: "sourcePixels",
           x: Math.round(x),
           y: Math.round(y),
-          width: 1080,
-          height: 2400,
+          width: this._sourceFrame?.width || 1080,
+          height: this._sourceFrame?.height || 2400,
         },
       },
     };
-    await this._httpInvoke("input.pointer.tap", body, 15000);
+    // pointer tap is non-idempotent. A lost response is ambiguous, so never retry it.
+    await this._httpInvoke("input.pointer.tap", body, 15000, { maxAttempts: 1 });
+    this._transportEvidence.httpTapSucceeded += 1;
+  }
+
+  transportEvidence() {
+    return { ...this._transportEvidence };
   }
 
   // ─── D3: screen.capture ─────────────────────────────────
@@ -160,6 +210,7 @@ export class XiaoweiHttpAdapter {
 
   // TCP connect 探活 HTTP API（不做实际 API 调用，避免副作用）
   async _healthCheck() {
+    if (this._healthCheckImpl) return Boolean(await this._healthCheckImpl(this._xwHttp));
     try {
       const url = new URL(this._xwHttp);
       return new Promise((resolve) => {
@@ -175,8 +226,8 @@ export class XiaoweiHttpAdapter {
     }
   }
 
-  // HTTP POST /device/v1/invoke，串行化 + 重试
-  async _httpInvoke(capability, body, timeoutMs = 15000) {
+  // HTTP POST /device/v1/invoke，串行化；只对明确允许的幂等调用重试。
+  async _httpInvoke(capability, body, timeoutMs = 15000, { maxAttempts = 3 } = {}) {
     const run = () => this._chain.then(async () => {
       await new Promise((r) => setTimeout(r, 200)); // 200ms 起搏
 
@@ -184,7 +235,7 @@ export class XiaoweiHttpAdapter {
       const t = setTimeout(() => controller.abort(), timeoutMs);
 
       try {
-        const res = await fetch(`${this._xwHttp}/device/v1/invoke`, {
+        const res = await this._fetch(`${this._xwHttp}/device/v1/invoke`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
@@ -193,13 +244,19 @@ export class XiaoweiHttpAdapter {
         clearTimeout(t);
 
         const data = await res.json();
+        if (!res.ok) {
+          const err = new Error(`typed API ${capability} HTTP ${res.status}`);
+          err.code = data?.error?.code || `HTTP_${res.status}`;
+          throw err;
+        }
         if (!data.ok && data.ok !== undefined) {
           const err = new Error(`typed API ${capability} failed: ${data.error?.message || JSON.stringify(data.error)}`);
           err.code = data.error?.code;
           throw err;
         }
-        // typed API 响应没有 ok 字段（直接返回 {status, vendorResponse, ...}）
-        // 有 status 字段就表示成功
+        if (data?.ok !== true && typeof data?.status !== "string") {
+          throw new Error(`typed API ${capability} returned an unrecognized response`);
+        }
         return data;
       } catch (e) {
         clearTimeout(t);
@@ -208,9 +265,9 @@ export class XiaoweiHttpAdapter {
       }
     });
 
-    // 最多 3 次重试（连接失败/超时），typed API 错误不重试
+    // 幂等调用默认最多 3 次重试（连接失败/超时），typed API 错误不重试。
     let lastErr;
-    for (let attempt = 0; attempt < 3; attempt += 1) {
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       try {
         const p = run();
         this._chain = p.catch(() => {});
@@ -218,7 +275,7 @@ export class XiaoweiHttpAdapter {
       } catch (e) {
         lastErr = e;
         if (e.code) throw e; // typed API 业务错误不重试
-        if (attempt < 2) await new Promise((r) => setTimeout(r, 400));
+        if (attempt < maxAttempts - 1) await new Promise((r) => setTimeout(r, 400));
       }
     }
     throw lastErr;

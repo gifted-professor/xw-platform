@@ -13,8 +13,24 @@ function boundedAdapterCode(error) {
   return typeof value === "string" && /^[A-Z0-9_]{1,96}$/.test(value) ? value : null;
 }
 
+function boundedTransportEvidence(value) {
+  if (!value || typeof value !== "object") return undefined;
+  const counters = ["httpTapAttempts", "httpTapSucceeded", "gatewayTapFallbacks"];
+  if (value.mode !== "typed-http"
+    || value.httpReady !== true
+    || counters.some((key) => !Number.isSafeInteger(value[key]) || value[key] < 0)) return undefined;
+  return {
+    mode: "typed-http",
+    httpReady: true,
+    httpTapAttempts: value.httpTapAttempts,
+    httpTapSucceeded: value.httpTapSucceeded,
+    gatewayTapFallbacks: value.gatewayTapFallbacks,
+  };
+}
+
 function resultSummary(execution, verification, restoration, error = null) {
   const out = execution?.output;
+  const transportEvidence = boundedTransportEvidence(out?.transportEvidence);
   return {
     vendorCode: execution?.vendorCode ?? null,
     // 执行细节摘要（ok/step/verified/counts/text），便于 VERIFICATION_FAILED 时回溯，不落完整 dump
@@ -25,6 +41,7 @@ function resultSummary(execution, verification, restoration, error = null) {
           .map((k) => [k, out[k]]),
       )
       : null,
+    ...(transportEvidence ? { transportEvidence } : {}),
     error: error
       ? { code: error.code || null, message: String(error.message || error), details: error.details ?? null }
       : null,
@@ -422,12 +439,10 @@ export class ControlPlane {
         idempotencyKey,
         deviceId: job.deviceId,
         causeCode: cause.code,
-        // 诊断：把 operator 的 errorCode + stdout/stderr 片段落进 control.db 事件，
-        // 否则 03 这类 recover 崩溃只剩 causeCode=ADAPTER_FAILED，远端无从知道 operator 真实报错。
+        // 只落结构化诊断。原始 stdout/stderr 可能含 private runtime 或设备内容，禁止持久化。
         adapterCode: cause.details?.adapterCode ?? null,
         adapterExitCode: cause.details?.exitCode ?? null,
-        adapterStdout: cause.details?.stdoutSnippet ?? null,
-        adapterStderr: cause.details?.stderrSnippet ?? null,
+        adapterStderrPresent: cause.details?.stderrPresent === true,
       });
       throw new ControlPlaneError("RECOVERY_FAILED", "device recovery did not verify a safe state", {
         status: 409,
