@@ -33,6 +33,8 @@ import {
   classifyTarget,
   deviceFromEntry,
   planPhoneImages,
+  redactSensitiveArgValues,
+  summarizeJob,
 } from "./feishu-to-xianyu-lib.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -178,7 +180,7 @@ function runNode(args) {
       stdio: ["ignore", "pipe", "pipe"],
     });
   } catch (e) {
-    const out = `${e.stdout || ""}${e.stderr || ""}${e.message || ""}`;
+    const out = redactSensitiveArgValues(`${e.stdout || ""}${e.stderr || ""}${e.message || ""}`, args);
     const err = new Error(out.slice(0, 800));
     err.cause = e;
     throw err;
@@ -347,33 +349,74 @@ function downloadYupooImages(product) {
   return downloaded;
 }
 
-// ---------- 3. phone-push 到每台 ----------
-function phonePushAll(images, aliases) {
+// ---------- 3. session lease 内 phone-push 到每台 ----------
+function acquirePushSession(row) {
+  const raw = runNode([
+    DEVICTL, "--ssh", SSH, "session", "acquire",
+    "--actor", ACTOR,
+    "--device", row.deviceId,
+  ]);
+  const parsed = parseJsonBlob(raw);
+  const session = parsed.session || parsed;
+  if (!session.sessionId || !session.token || !session.leaseId) {
+    throw new Error(`${row.alias}: session acquire 缺字段`);
+  }
+  return session;
+}
+
+function pushSessionCommand(action, session) {
+  const raw = runNode([
+    DEVICTL, "--ssh", SSH, "session", action,
+    "--session", session.sessionId,
+    "--token", session.token,
+  ]);
+  return parseJsonBlob(raw);
+}
+
+function phonePushAll(images, rows) {
   const perAlias = {}; // alias -> [{phonePath, sha256}]
-  for (const alias of aliases) {
+  for (const row of rows) {
+    const { alias } = row;
     const n = Number(alias);
     const album = `XianyuFull${n}`;
     const imgs = [];
-    for (const img of images) {
-      const phonePath = `/sdcard/Pictures/${album}/${img.name}`;
-      const args = [
-        BRIDGE, "phone-push",
-        img.localPath,
-        alias,
-        phonePath,
-        "--media-scan",
-        "--overwrite-phone",
-      ];
-      let out;
-      try {
-        out = sh("python3", args, { timeout: 120000 });
-      } catch (e) {
-        throw new Error(`phone-push ${alias} ${img.name} 失败: ${(e.stdout || e.stderr || e.message || "").toString().slice(0, 400)}`);
+    const session = acquirePushSession(row);
+    log(`  ${alias} session=${session.sessionId} lease=${session.leaseId}（可见 lease）`);
+    let failure = null;
+    try {
+      for (const img of images) {
+        pushSessionCommand("heartbeat", session);
+        const phonePath = `/sdcard/Pictures/${album}/${img.name}`;
+        const args = [
+          BRIDGE, "phone-push",
+          img.localPath,
+          alias,
+          phonePath,
+          "--media-scan",
+          "--overwrite-phone",
+        ];
+        let out;
+        try {
+          // session TTL 为 60s；单次同步 push 必须在下一次 heartbeat 前有界结束。
+          out = sh("python3", args, { timeout: 45000 });
+        } catch (e) {
+          throw new Error(`phone-push ${alias} ${img.name} 失败: ${(e.stdout || e.stderr || e.message || "").toString().slice(0, 400)}`);
+        }
+        pushSessionCommand("heartbeat", session);
+        log(`  ✓ ${alias} ← ${img.name} → ${phonePath}${/sha|ok|pushed/i.test(out) ? " ✓" : ""}`);
+        imgs.push({ phonePath, sha256: img.sha256 });
       }
-      // bridge 成功输出含 OK / pushed / sha 校验；失败会非零退出（已被 catch）
-      log(`  ✓ ${alias} ← ${img.name} → ${phonePath}${/sha|ok|pushed/i.test(out) ? " ✓" : ""}`);
-      imgs.push({ phonePath, sha256: img.sha256 });
+    } catch (e) {
+      failure = e;
     }
+    try {
+      pushSessionCommand("release", session);
+      log(`  ✓ ${alias} session released`);
+    } catch (e) {
+      if (!failure) failure = new Error(`${alias}: session release 失败: ${e.message}`);
+      else log(`  ⚠️  ${alias} 原失败后 session release 也失败: ${e.message}`);
+    }
+    if (failure) throw failure;
     perAlias[alias] = { album, images: imgs };
   }
   return perAlias;
@@ -433,22 +476,6 @@ function statusOne(jobId) {
   const out = runNode([DEVICTL, "--ssh", SSH, "job", "status", "--job", jobId]);
   const j = parseJsonBlob(out);
   return j.job || j;
-}
-
-function summarizeJob(job) {
-  const result = job.result || {};
-  const verification = result.verification || job.verification || {};
-  const restoration = result.restoration || job.restoration || {};
-  const output = result.output || job.output || {};
-  return {
-    status: job.status || "?",
-    errorCode: job.errorCode || null,
-    outputOk: output.ok === true || result?.output?.ok === true,
-    verificationOk: verification.ok !== false && (verification.ok === true || verification.ok == null),
-    restorationOk: restoration.ok !== false && (restoration.ok === true || restoration.ok == null),
-    restorationFailed: restoration.ok === false,
-    verificationFailed: verification.ok === false,
-  };
 }
 
 function isTerminal(status) {
@@ -528,7 +555,7 @@ if (DRY) {
 } else {
   try {
     log(`[f2x] phone-push 到 ${ALIASES.join(", ")}`);
-    pushed = phonePushAll(images, ALIASES);
+    pushed = phonePushAll(images, pre.rows);
   } catch (e) {
     console.log(`✗ phone-push 失败: ${e.message}`);
     process.exit(4);
@@ -620,12 +647,12 @@ for (const alias of ALIASES) {
   const rest = f.restorationFailed ? "fail" : f.restorationOk ? "ok" : "?";
   const ver = f.verificationFailed ? "fail" : f.verificationOk ? "ok" : "?";
   const out = f.outputOk ? "ok" : "?";
-  if (f.status !== "succeeded" || f.restorationFailed || f.verificationFailed) anyBad = true;
+  if (f.status !== "succeeded" || !f.outputOk || !f.restorationOk || !f.verificationOk) anyBad = true;
   log(`${alias.padEnd(12)} ${f.jobId.padEnd(40)} ${String(f.status).padEnd(12)} ${out.padEnd(12)} ${rest.padEnd(12)} ${ver.padEnd(12)} ${f.errorCode || ""}`);
 }
 log(`\nlogDir=${logDir}`);
 
 if (anyNonTerminal) { console.log("✗ 超时：仍有 job 非终态"); process.exit(3); }
 if (anyBad) { console.log("✗ 未全绿"); process.exit(1); }
-console.log(`✓ ${ALIASES.length} 台 succeeded + restoration/verification 未失败`);
+console.log(`✓ ${ALIASES.length} 台 succeeded + output/restoration/verification 明确为 true`);
 process.exit(0);

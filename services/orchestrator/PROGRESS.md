@@ -65,7 +65,7 @@
 
 ### 飞书商品表 → 闲鱼发布 dry-run 编排（2026-07-28）
 
-- **`ops/feishu-to-xianyu.mjs` 丝滑化（2026-07-28）**：submit 前只读一次 live，默认从 01–04 动态选择可跑目标；目标 lease/offline/quarantine 永远硬拦，unresolvedFailure 要先恢复，`--force` 收窄为 `FORCE=ready-only`。飞书商品目录表 `REPLACE_FEISHU_PRODUCT_TABLE_ID` 按 SKU+`READY_TO_PUBLISH` 取一条 → 本地下图 → 组装 `xianyu.publish.full_dry_run` fixture → submit+poll。`--dry-run` 现在只规划 phonePath，**零手机写入**；真要只推图用显式 `--prep/--push-only` 后退出。推图仍是编排层已知 gap，生产验收继续只认 devicectl job/session + 可见 lease。
+- **`ops/feishu-to-xianyu.mjs` 丝滑化（2026-07-28）**：submit 前只读一次 live，默认从 01–04 动态选择可跑目标；目标 lease/offline/quarantine **以及未知状态**永远 fail-closed，unresolvedFailure 要先恢复，`--force` 收窄为 `FORCE=ready-only`。飞书商品目录表 `REPLACE_FEISHU_PRODUCT_TABLE_ID` 按 SKU+`READY_TO_PUBLISH` 取一条 → 本地下图 → 组装 `xianyu.publish.full_dry_run` fixture → submit+poll。`--dry-run` 只规划 phonePath，**零手机写入**；真要推图用显式 `--prep/--push-only`，每台先通过 devicectl acquire 可见 session lease，推图间 heartbeat，finally release 后退出。终态汇总要求 output/restoration/verification 三者明确为 true，缺字段不再假绿。
 - **飞书字段映射（record-list 行序，非 field-list 序）**：SKU=36、商品简称=28、售价=26、颜色=22、尺码=2、闲鱼文案内容=27、商品包状态=11、**Yupoo原图=13**（attachment cell = `[{file_token,name,size}]`）。前缀从 `闲鱼文案内容` 首行派生：奥莱折扣→`【奥莱折扣】`、撤店清仓→`【撤店清仓】`、出全新→`出全新 `、其他→`出闲置 `；body=去首行后剩余行。fixture 写 `descriptionPrefix`/`productTitle`/`descriptionBody` 三字段。
 - **坑①**：`lark-cli --output` **必须相对当前目录**（绝对路径报 `unsafe output path`）→ cwd=下载目录、`--output` 用裸文件名。
 - **坑②**：同 SKU 有空壳重复行（无 Yupoo图）→ 优先取有 Yupoo原图 的那条；多条都有图才算真冲突 fail-closed。

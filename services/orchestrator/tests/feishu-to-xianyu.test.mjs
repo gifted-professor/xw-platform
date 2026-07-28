@@ -5,8 +5,11 @@ import test from "node:test";
 import {
   assembleFixture,
   classifyTarget,
+  deviceFromEntry,
   isValidVerifyMode,
   planPhoneImages,
+  redactSensitiveArgValues,
+  summarizeJob,
 } from "../ops/feishu-to-xianyu-lib.mjs";
 
 const product = {
@@ -48,6 +51,30 @@ test("ready tiering never lets force skip a target lease", () => {
   assert.match(gate.warnings.join(" "), /FORCE=ready-only/);
 });
 
+test("unknown online, quarantine, and lease states fail closed", () => {
+  const gate = classifyTarget({
+    deviceId: "dev-unknown",
+    online: null,
+    quarantined: null,
+    leaseFree: null,
+    ready: true,
+    unresolvedFailure: null,
+  }, { force: true });
+  assert.match(gate.hardProblems.join(" "), /online 状态未知/);
+  assert.match(gate.hardProblems.join(" "), /quarantine 状态未知/);
+  assert.match(gate.hardProblems.join(" "), /lease 状态未知/);
+});
+
+test("missing control lease field stays unknown instead of becoming lease-free", () => {
+  const row = deviceFromEntry({ devices: [{
+    alias: "02",
+    control: { deviceId: "dev-02", online: true, quarantined: false },
+    state: { online: true, quarantined: false, ready: true },
+  }] }, "02");
+  assert.equal(row.leaseFree, null);
+  assert.match(classifyTarget(row).hardProblems.join(" "), /lease 状态未知/);
+});
+
 test("unresolved failure requests recovery while clean ready=false remains warning-only", () => {
   const dirty = classifyTarget({
     deviceId: "dev-04", online: true, quarantined: false, leaseFree: true, ready: false,
@@ -67,4 +94,31 @@ test("knowledge verifyMode accepts only registry enum values", () => {
   assert.equal(isValidVerifyMode("dry-run: custom prose"), false);
   const seed = JSON.parse(readFileSync(new URL("../knowledge-seed-feishu-to-xianyu-20260728.json", import.meta.url), "utf8"));
   for (const item of seed) assert.equal(isValidVerifyMode(item.verifyMode), true, item.id);
+});
+
+test("job summary requires explicit output, restoration, and verification success", () => {
+  assert.deepEqual(summarizeJob({ status: "succeeded", result: { output: { ok: true } } }), {
+    status: "succeeded",
+    errorCode: null,
+    outputOk: true,
+    verificationOk: false,
+    restorationOk: false,
+    restorationFailed: false,
+    verificationFailed: false,
+  });
+  const complete = summarizeJob({
+    status: "succeeded",
+    result: { output: { ok: true }, restoration: { ok: true }, verification: { ok: true } },
+  });
+  assert.equal(complete.outputOk, true);
+  assert.equal(complete.restorationOk, true);
+  assert.equal(complete.verificationOk, true);
+});
+
+test("command errors redact session tokens from argv echoes", () => {
+  const token = "SAMPLE_SECRET_DO_NOT_LOG";
+  const message = `Command failed: node devicectl session heartbeat --session s1 --token ${token}`;
+  const redacted = redactSensitiveArgValues(message, ["session", "heartbeat", "--session", "s1", "--token", token]);
+  assert.equal(redacted.includes(token), false);
+  assert.match(redacted, /--token \[REDACTED\]/);
 });

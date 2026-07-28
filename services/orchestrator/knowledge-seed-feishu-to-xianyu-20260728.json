@@ -73,8 +73,9 @@
       "读一次 agent-entry 并按目标 alias 分类；全局 activeLeases 仅提示",
       "飞书按 SKU+READY_TO_PUBLISH 取有 Yupoo 原图记录并只下载到 Mac",
       "dry-run 用 planPhoneImages 生成预计路径；不调用 phonePushAll",
+      "非 dry-run 推图逐台先 devicectl session acquire，输出可见 leaseId，推图间 heartbeat，finally release",
       "单色 fixture 只生成 尺码；saveDraft 必须 false",
-      "实跑只经 devicectl job submit/status，确认 lease 可见、verification/restoration true、终态释放"
+      "实跑只经 devicectl job submit/status，确认 lease 可见、output/verification/restoration 明确 true、终态释放"
     ],
     "verifyMode": "replay",
     "verifiedBy": ["job_5f770de4-b4ab-427f-8aa9-0424cc45bf2e", "/tmp/f2x-phase5-dryrun/fixture-02-full.json"]
