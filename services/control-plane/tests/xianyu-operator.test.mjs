@@ -53,6 +53,7 @@ import {
   deleteExistingSpecValues,
   skuBatchInputValue,
   shouldScrollAfterSkuValue,
+  waitForSkuPricePage,
 } from "../scripts/xianyu-operator.mjs";
 
 test("numpad failure diagnostics retain only matching key geometry and bounded enums", () => {
@@ -1036,6 +1037,25 @@ test("findSkuSelectAll requires comma-prefix and trailing 全选 (recipe success
   // 裸「全选」或无尾缀：当前正则 miss（03 嫌疑）
   assert.equal(findSkuSelectAll([{ label: "全选", bounds: [40, 400, 200, 460] }]), null);
   assert.equal(findSkuSelectAll([{ label: "全选，按钮", bounds: [40, 400, 200, 460] }]), null);
+});
+
+test("waitForSkuPricePage skips transient sparse snapshots and stops on a business marker", async () => {
+  const snapshots = [
+    { nodes: [{ label: "加载中" }] },
+    { nodes: [] },
+    { nodes: [{ label: "批量设置价格和库存", bounds: [40, 1800, 1000, 1900] }] },
+  ];
+  const delays = [];
+  const result = await waitForSkuPricePage({}, {
+    attempts: 6,
+    delayMs: 1,
+    snapshotFn: async () => snapshots.shift(),
+    settleFn: async (ms) => { delays.push(ms); },
+  });
+  assert.equal(result.navigationWait.ready, true);
+  assert.equal(result.navigationWait.attempts, 3);
+  assert.deepEqual(delays, [1, 1, 1]);
+  assert.equal(result.nodes[0].label, "批量设置价格和库存");
 });
 
 test("summarizeSkuSelectAllMiss surfaces raw 全选 labels and page markers for job result", () => {
