@@ -42,6 +42,15 @@ function arg(name, fallback = null) {
   return i >= 0 ? process.argv[i + 1] : fallback;
 }
 
+const OPERATOR_COMMANDS = new Set([
+  "start", "snapshot", "verify-image-manifest", "open-publish", "input-dry-run", "image-dry-run", "discard-dry-run",
+  "save-draft-dry-run", "publish-dry-run", "flutter-pointer-tap-probe", "inspect-recovery", "recover-discard-dry-run", "probe",
+]);
+
+export function resolveOperatorCommand(argv = process.argv) {
+  return argv.find((value) => OPERATOR_COMMANDS.has(value)) || "help";
+}
+
 export function semanticLabel(node) {
   return [node?.text, node?.contentDesc]
     .map((value) => String(value || "").trim())
@@ -1770,6 +1779,58 @@ export function findReturnAddressRow(snapshot) {
 // 规格/SKU 行：label 含「规格」「颜色/尺码」「SKU」。点开进入规格编辑二级页。
 export function findSkuRow(snapshot) {
   return findRowByLabel(snapshot, /规格|颜色.*尺码|SKU/);
+}
+
+export function summarizeFlutterSkuTapTransition(beforeNodes, afterNodes) {
+  const skuPage = (nodes) => {
+    const labels = (nodes || []).map((node) => String(node?.label || ""));
+    return labels.some((label) => /设置宝贝规格|推荐常用的规格类型|选择[^\n]*规格类型/.test(label))
+      || (labels.some((label) => /添加规格类型/.test(label))
+        && labels.some((label) => /^下一步(?:[,，\s]|$)/.test(label)));
+  };
+  const fromCompose = isPublishCompose(beforeNodes || []);
+  const beforeSkuPage = skuPage(beforeNodes);
+  const afterSkuPage = skuPage(afterNodes);
+  return {
+    verified: fromCompose && !beforeSkuPage && afterSkuPage,
+    from: fromCompose ? "publish-compose" : "unknown",
+    to: afterSkuPage ? "sku-specs" : "unknown",
+    beforeSkuPage,
+    afterSkuPage,
+  };
+}
+
+export async function flutterPointerTapProbe(op) {
+  const opened = await openPublishDryRun(op);
+  if (!opened.ok) {
+    return {
+      ok: false,
+      step: `open:${opened.step || "failed"}`,
+      stoppedBeforePublish: true,
+      savedDraft: false,
+    };
+  }
+  const { row, snap: before } = await locateRowWithScroll(op, findSkuRow, "flutter-tap-probe");
+  if (!row?.bounds || !isPublishCompose(before.nodes)) {
+    return {
+      ok: false,
+      step: "sku-row-missing",
+      stoppedBeforePublish: true,
+      savedDraft: false,
+    };
+  }
+  await op.tap(...center(row.bounds));
+  await settle(1500);
+  const after = await snapshot(op, "xianyu-flutter-tap-probe-after");
+  const transition = summarizeFlutterSkuTapTransition(before.nodes, after.nodes);
+  return {
+    ok: transition.verified,
+    step: transition.verified ? "flutter-tap-transition-verified" : "flutter-tap-transition-unverified",
+    stoppedBeforePublish: true,
+    savedDraft: false,
+    steps: { flutterTap: { ok: transition.verified } },
+    transition,
+  };
 }
 
 // SKU sheet 删除入口（1号机 2026-07-23 实证 label 形态）：
@@ -4258,10 +4319,7 @@ export async function probePage(op, { label = "probe" } = {}) {
 }
 
 async function main() {
-  const command = process.argv.find((value) => [
-    "start", "snapshot", "verify-image-manifest", "open-publish", "input-dry-run", "image-dry-run", "discard-dry-run",
-    "save-draft-dry-run", "publish-dry-run", "inspect-recovery", "recover-discard-dry-run", "probe",
-  ].includes(value)) || "help";
+  const command = resolveOperatorCommand();
   const serial = arg("--serial");
   const adbPath = arg("--adb", process.env.ADB_PATH || DEFAULT_ADB);
   if (!serial && command !== "help") throw new Error("缺少 --serial <设备序列号>");
@@ -4280,6 +4338,7 @@ node scripts/xianyu-operator.mjs --serial <serial> inspect-recovery --evidence-d
 node scripts/xianyu-operator.mjs --serial <serial> recover-discard-dry-run --evidence-dir <dir>
 node scripts/xianyu-operator.mjs --serial <serial> save-draft-dry-run
 node scripts/xianyu-operator.mjs --serial <serial> publish-dry-run --plan <plan.json>
+node scripts/xianyu-operator.mjs --serial <serial> --transport gateway flutter-pointer-tap-probe --http-api-strict --device-alias <01-04>
 node scripts/xianyu-operator.mjs --serial <serial> publish-dry-run \\
     --title "..." --description "..." --price 119.00 --condition 全新 \\
     --sku-specs '{"颜色":["白色","黑色"],"尺码":["M","L"]}' --sku-stock 10 --sku-price 12.34 \\
@@ -4410,6 +4469,13 @@ recover-discard-dry-run 仅在严格识别 SKU 规格页后关闭并不保存，
         publish: process.argv.includes("--publish"),
         saveDraft: process.argv.includes("--save-draft") || plan.saveDraft === true,
       });
+      if (typeof op.transportEvidence === "function") {
+        result.transportEvidence = op.transportEvidence();
+      }
+      console.log(JSON.stringify(result, null, 2));
+    }
+    if (command === "flutter-pointer-tap-probe") {
+      const result = await flutterPointerTapProbe(op);
       if (typeof op.transportEvidence === "function") {
         result.transportEvidence = op.transportEvidence();
       }
