@@ -102,6 +102,16 @@ export function validateAgainstSchema(value, schema, path = "params") {
   const type = schema.type;
   if (type === "object") {
     if (!isObject(value)) throw new ControlPlaneError("PARAMS_SCHEMA_INVALID", `${path} must be an object`);
+    const entries = Object.entries(value);
+    if (schema.minProperties !== undefined && entries.length < schema.minProperties) {
+      throw new ControlPlaneError("PARAMS_SCHEMA_INVALID", `${path} has fewer than ${schema.minProperties} properties`);
+    }
+    if (schema.maxProperties !== undefined && entries.length > schema.maxProperties) {
+      throw new ControlPlaneError("PARAMS_SCHEMA_INVALID", `${path} has more than ${schema.maxProperties} properties`);
+    }
+    if (schema.propertyNames) {
+      for (const [key] of entries) validateAgainstSchema(key, schema.propertyNames, `${path} property name`);
+    }
     for (const required of schema.required || []) {
       if (!Object.hasOwn(value, required)) throw new ControlPlaneError("PARAMS_SCHEMA_INVALID", `${path}.${required} is required`);
     }
@@ -111,6 +121,13 @@ export function validateAgainstSchema(value, schema, path = "params") {
         if (!Object.hasOwn(properties, key)) throw new ControlPlaneError("PARAMS_SCHEMA_INVALID", `${path}.${key} is not allowed`);
       }
     }
+    if (isObject(schema.additionalProperties)) {
+      for (const [key, childValue] of entries) {
+        if (!Object.hasOwn(properties, key)) {
+          validateAgainstSchema(childValue, schema.additionalProperties, `${path}.${key}`);
+        }
+      }
+    }
     for (const [key, child] of Object.entries(properties)) {
       if (Object.hasOwn(value, key)) validateAgainstSchema(value[key], child, `${path}.${key}`);
     }
@@ -118,6 +135,12 @@ export function validateAgainstSchema(value, schema, path = "params") {
   }
   if (type === "array") {
     if (!Array.isArray(value)) throw new ControlPlaneError("PARAMS_SCHEMA_INVALID", `${path} must be an array`);
+    if (schema.minItems !== undefined && value.length < schema.minItems) {
+      throw new ControlPlaneError("PARAMS_SCHEMA_INVALID", `${path} has fewer than ${schema.minItems} items`);
+    }
+    if (schema.maxItems !== undefined && value.length > schema.maxItems) {
+      throw new ControlPlaneError("PARAMS_SCHEMA_INVALID", `${path} has more than ${schema.maxItems} items`);
+    }
     value.forEach((item, index) => validateAgainstSchema(item, schema.items || {}, `${path}[${index}]`));
     return value;
   }

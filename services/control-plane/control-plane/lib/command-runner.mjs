@@ -115,10 +115,6 @@ export function runJsonCommand(command, args, {
             exitCode: code,
             stderrPresent: stderr.length > 0,
             adapterCode,
-            // 诊断：保留有界 stdout（operator 把 {ok:false,errorCode} 写 stdout）+ stderr 片段，
-            // 让 recoverJob 的 recovery.failed 事件能落到 control.db 供远端诊断 03 这类卡死。
-            stdoutSnippet: output.slice(0, 600),
-            stderrSnippet: stderr.toString("utf8").slice(0, 600),
           },
         }));
         return;

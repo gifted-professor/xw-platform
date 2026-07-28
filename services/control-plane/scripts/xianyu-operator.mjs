@@ -4324,11 +4324,16 @@ recover-discard-dry-run 仅在严格识别 SKU 规格页后关闭并不保存，
       at: new Date().toISOString(),
     }));
   }
-  const useHttpApi = process.argv.includes("--http-api");
+  const strictHttpApi = process.argv.includes("--http-api-strict");
+  const useHttpApi = strictHttpApi || process.argv.includes("--http-api");
   const deviceAlias = arg("--device-alias", "04");
   const op = transport === "gateway"
     ? (useHttpApi
-        ? await new XiaoweiHttpAdapter({ serial, deviceAlias }).start()
+        ? await new XiaoweiHttpAdapter({
+            serial,
+            deviceAlias,
+            fallbackOnError: !strictHttpApi,
+          }).start()
         : await new GatewayOperator({ serial }).start())
     : await new FastOperator({ adbPath, serial }).start();
   try {
@@ -4405,6 +4410,9 @@ recover-discard-dry-run 仅在严格识别 SKU 规格页后关闭并不保存，
         publish: process.argv.includes("--publish"),
         saveDraft: process.argv.includes("--save-draft") || plan.saveDraft === true,
       });
+      if (typeof op.transportEvidence === "function") {
+        result.transportEvidence = op.transportEvidence();
+      }
       console.log(JSON.stringify(result, null, 2));
     }
     if (command === "probe") console.log(JSON.stringify(await probePage(op, { label: arg("--label", "probe") }), null, 2));

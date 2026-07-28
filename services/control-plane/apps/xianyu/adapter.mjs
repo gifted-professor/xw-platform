@@ -47,11 +47,26 @@ function commandArgs({ script, action, device, params, evidenceDirectory = null 
     throw new ControlPlaneError("DEVICE_RUNTIME_ID_MISSING", "Xianyu adapter needs a private runtime ID", { status: 503 });
   }
   // Map capability action name to operator CLI command.
-  const command = ["full-dry-run", "full-draft-dry-run"].includes(action) ? "publish-dry-run"
+  const flutterTapProbe = action === "flutter-pointer-tap-probe";
+  const command = ["full-dry-run", "full-draft-dry-run"].includes(action) || flutterTapProbe ? "publish-dry-run"
     : action === "image-dry-run" ? "image-dry-run"
       : action === "save-draft-dry-run" ? "save-draft-dry-run"
         : action;
   const args = [script, "--serial", device.runtimeId, "--transport", "gateway", command];
+  if (flutterTapProbe) {
+    if (!device.alias) {
+      throw new ControlPlaneError("DEVICE_ALIAS_MISSING", "Flutter pointer tap probe needs a public device alias", { status: 503 });
+    }
+    args.push(
+      "--http-api-strict",
+      "--device-alias", String(device.alias),
+      "--calibrated", "sku",
+      "--skip-upload",
+      "--skip-category",
+      "--skip-freight",
+      "--skip-address",
+    );
+  }
   if (params.text !== undefined) args.push("--text", String(params.text));
   // publish-dry-run / image-dry-run params
   if (params.description !== undefined) args.push("--description", String(params.description));
@@ -165,6 +180,22 @@ export function createXianyuAdapter({ run = runJsonCommand, operatorPath = defau
             && output?.stoppedBeforePublish === true
             && output?.savedDraft !== true
             && !output?.steps?.saveDraft,
+          mode: "state",
+        };
+      }
+      if (capability.implementation.action === "flutter-pointer-tap-probe") {
+        const transport = output?.transportEvidence;
+        return {
+          ok: output?.ok === true
+            && output?.stoppedBeforePublish === true
+            && output?.savedDraft !== true
+            && output?.steps?.sku?.ok === true
+            && transport?.mode === "typed-http"
+            && transport?.httpReady === true
+            && Number.isInteger(transport?.httpTapAttempts)
+            && transport.httpTapAttempts > 0
+            && transport.httpTapSucceeded === transport.httpTapAttempts
+            && transport.gatewayTapFallbacks === 0,
           mode: "state",
         };
       }
