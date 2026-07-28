@@ -21,10 +21,10 @@
    `node control-plane/devicectl.mjs --ssh xhs-windows job submit --capability <id> --actor <actor> --idempotency-key <key> [--device <devId>] --params '<json>'`  
    状态：`job status --job <id>`；路由预览：`route plan ...`。
 3. **只对 `ready=yes` 且 `lease=free` 的设备提交**；非 ready 先恢复（`job recover` / `ops/recover-main-safe.mjs`），禁止旁路清隔离。
-4. **跨机并发（允许且已 4/4 实证）**：**默认** `node ops/conc4-full-dry-run.mjs --actor <you>-conc4`（内置 live 预检 + 四路 submit + poll）。  
-   - fixture：`campaign/fixtures/{01,02,03,04}-full.json`；证据知识库 `xianyu-4machine-concurrency-4of4-20260727`  
-   - **禁止**同机并行两个重业务 job；**禁止**无 lease 四机干跑。手拼 devicectl 仅调试用。  
-   - fixture 分层是刻意的：02 为 5×2 尺码×颜色，01/03/04 多为单维颜色。
+4. **跨机并发（机制已 4/4 实证；2026-07-28 起临时只走 01/02）**：**默认** `node ops/conc2-full-dry-run.mjs --actor <you>-conc2`（内置 live 预检 + 两路 submit + poll，脚本拒绝扩大 aliases）。
+   - 效卫 22222 当前仍是**单实例/单连接共享传输**；控制面允许 01/02 job 重叠，但网关请求由全局锁串行化，不宣称多实例。
+   - fixture：`campaign/fixtures/{01,02}-full.json`；历史 4/4 证据知识库 `xianyu-4machine-concurrency-4of4-20260727`。
+   - **禁止**同机并行两个重业务 job；**禁止**无 lease 干跑；03/04 暂不进入默认并发。手拼 devicectl 仅调试用。
 5. **恢复**：job 末 restoration 已有 discard-dry-run relaunch 兜底（main 含 `953d187`）；quarantine 清隔离仍走 recover + 视觉 main-safe 硬闸（见 `ops/recover-main-safe.mjs`）。
 
 ## 环境双路径（三行契约）
@@ -38,7 +38,7 @@
 | 模式 | 何时 | 入口 |
 |------|------|------|
 | **Explorer** | 未知面/探路/写 recipe | **`modes/explorer.md`** → `ops/explore-preflight.mjs` → `ops/screenshot-and-analyze.mjs` |
-| **Runner** | 已知剧本回归 | `ops/conc4-full-dry-run.mjs` 等 |
+| **Runner** | 已知剧本回归 | `ops/conc2-full-dry-run.mjs` 等 |
 | **Fix** | 改代码/部署 | Grok/GLM；正道 devicectl + git main |
 
 自动派 cheap agent 探 App：**只派 Explorer**，把 `modes/explorer.md` 文末派工模板填好即可。
@@ -51,10 +51,10 @@
 | **探索开工检查** | `node ops/explore-preflight.mjs --alias 01` |
 | **探索截屏（一步）** | `node ops/screenshot-and-analyze.mjs --alias 01` → `SHOT=…` |
 | **探索 dump/点/输入/焦点/开 App** | `ops/dump-ui.mjs` / `tap.mjs` / `input-text.mjs` / `focus.mjs` / `launch-app.mjs`（lab 22222，见 `modes/explorer.md`） |
-| **4 机 full_dry_run 并发** | `node ops/conc4-full-dry-run.mjs --actor <you>-conc4` |
-| 同上只预检 | `node ops/conc4-full-dry-run.mjs --actor <you>-conc4 --dry-run` |
+| **01/02 full_dry_run 并发（临时默认）** | `node ops/conc2-full-dry-run.mjs --actor <you>-conc2` |
+| 同上只预检 | `node ops/conc2-full-dry-run.mjs --actor <you>-conc2 --dry-run` |
 | 隔离后 main-safe 清 | `node ops/recover-main-safe.mjs --job <jobId> --actor <you>` |
-| 单机 campaign 步 | `campaign/step.sh`（单机）；四机并发**优先** conc4 脚本 |
+| 单机 campaign 步 | `campaign/step.sh`（单机）；并发**优先** conc2 脚本（固定 01/02） |
 | 手拼调试 | `node <gpfs>/control-plane/devicectl.mjs --ssh xhs-windows job submit …` |
 
 同一流程成功 ≥2 次 → 应收成 `ops/` 脚本；之后默认跑脚本，不靠拼 5 份文档。
