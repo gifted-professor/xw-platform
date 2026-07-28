@@ -15,7 +15,7 @@
       "组装 fixture（descriptionPrefix/productTitle/descriptionBody + images[{phonePath,sha256}] + imageAlbum + maxImages + 不设 skipUpload + calibrated.image=true）",
       "预检 agent-entry（ready/leaseFree/online），devicectl --ssh xhs-windows job submit + poll"
     ],
-    "verifyMode": "dry-run：飞书提取字段全 + 3-5 图下载 sha 算出 + phone-push 三台 sha 校验绿 + fixture JSON 字段全 + 预检通过；实跑需 Repo B 多行 fill 落地后验描述框逐行无乱序",
+    "verifyMode": "replay",
     "verifiedBy": []
   },
   {
@@ -25,7 +25,7 @@
     "title": "lark-cli base +record-download-attachment --output 必须相对当前目录",
     "content": "lark-cli（@larksuite/cli 1.0.69）下载多维表附件时，--output 传绝对路径会报 validation/invalid_argument：\"unsafe output path: --output must be a relative path within the current directory\"。绕法：把 execFileSync 的 cwd 设成目标下载目录，--output 只传裸文件名（如 01.png）；下载多张时逐张单 --file-token + 单文件 --output（单 --file-token 才允许 --output 为文件路径，多张须 --output 为目录且相对）。同理 lark-cli 其它落盘命令大概率同限。",
     "appliesTo": ["ops/feishu-to-xianyu.mjs", "飞书多维表附件下载", "lark-cli"],
-    "verifyMode": "replay：DX1488-100 三张 Yupoo原图 下载到 tmp-imgs/DX1488-100/ 成功 + sha 算出",
+    "verifyMode": "replay",
     "verifiedBy": []
   },
   {
@@ -42,23 +42,41 @@
       "中间行：inputTextViaXiaowei(line,{clearFirst:false,deferRestore:true})（不 refocus）→ shellExec('input keyevent 66')",
       "末行：inputTextViaXiaowei(last,{clearFirst:false,deferRestore:true})（不 refocus、不 ENTER）→ 关「完成」+ audit.restore() + descriptionContains 逐行回读校验"
     ],
-    "verifyMode": "operator 直跑（XHS_ALLOW_BYPASS=1 bypass）publish-dry-run --plan：description step=desc-filled ok=true（verified，4 行逐行回读全中）。adapter 修复前的控制面 3 台 job 描述步被跳过（字段未抵达）→ 修复后直跑实证通过",
+    "verifyMode": "replay",
     "verifiedBy": ["ops/input-text.mjs 2026-07-28 4 行实证", "operator 直跑 2026-07-28 desc-filled ok=true verified"]
   },
   {
     "id": "pitfall-xianyu-sku-select-all-missing-20260728",
     "app": "xianyu",
     "category": "pitfall",
-    "title": "闲鱼 full_dry_run 卡 sku-select-all-missing：operator 停在规格页未进批量价/库存页",
+    "title": "闲鱼 full_dry_run 的 SKU 维度清理与价库页过渡快照",
     "content": "DX1488-100（5 尺码 S-XXL）full_dry_run 三台（01/02/04）+ 01 直跑（含/不含单色两种 fixture）一律卡 sku 步 step=sku-select-all-missing，VERIFICATION_FAILED。诊断（run_8d301b69 / direct3.log 全 summary）：selectAllMiss.markers.specsPage=true、batchEntry=false、cancelBatch=false、nextOrPriceStock=true → operator 还在 SKU「规格定义页」（选颜色/尺码维度那页），没点到「下一步/价格库存」进「批量设置价格和库存」页，故 findSkuSelectAll 找不到「全选」labelsWithSelectAll=[]。almostRelatedLabels=['颜色\\n选择推荐的\\n颜色','展开全部按钮, 展开全部']。去掉单色维度（只留尺码）同样卡死 → 与颜色维度数无关，是 fillSkuSpecs（scripts/xianyu-operator.mjs :~3170）从规格页跳批量页的导航/等待逻辑问题。坑中坑：control plane result_json 只存 output.{ok,step}，把 operator summary.steps（含 selectAllMiss 诊断）整段丢了 → 必须靠 XHS_ALLOW_BYPASS=1 直跑 operator 抓 stdout 全 summary 才能看诊断。多行描述（Repo B）已在此卡点之前 desc-filled ok=true 验证通过，与此坑无关。",
+    "resolution": "PR #19 清理旧维度；PR #20 有界等待价库页业务 marker。02 job_5f770de4-b4ab-427f-8aa9-0424cc45bf2e succeeded，verification/restoration true，未 bypass、未存草稿、未发布。",
     "appliesTo": ["xianyu.publish.full_dry_run", "scripts/xianyu-operator.mjs", "fillSkuSpecs", "ops/feishu-to-xianyu.mjs"],
     "steps": [
-      "复现：node ops/feishu-to-xianyu.mjs --sku DX1488-100 --aliases 01,02,04 --actor hermes-f2x → 三台 failed sku-select-all-missing",
-      "或直跑抓诊断：Windows 上 XHS_ALLOW_BYPASS=1 XHS_BYPASS_REASON=... node scripts/xianyu-operator.mjs --serial REPLACE_SERIAL_01 --transport gateway publish-dry-run --plan <fixture.json> --calibrated all --skip-category --skip-address，stdout 全 summary 的 steps.sku.selectAllMiss",
-      "看 selectAllMiss.markers：specsPage=true / batchEntry=false → 停在规格页，未进批量页",
-      "修 fillSkuSpecs（:~3170）：点「下一步/价格库存」后等待「批量设置价格和库存」/「取消批量设置」出现再 findSkuSelectAll；现疑似点完没等到批量页就 dump 找全选"
+      "单色 fixture 不带颜色；skuReplaceExisting 先有界删除旧值和旧维度，再只重建尺码",
+      "点下一步后有界等待价库页业务 marker，不能用固定 sleep 后单次 snapshot 判失败",
+      "失败只读 job status 的 output.diagnostic：dimensions、nodeCount、markers、labelsWithSelectAll；禁止扩大原始 stdout/stderr",
+      "回归：devicectl 正道提交 xianyu.publish.full_dry_run，要求 succeeded + verification/restoration true + lease 释放"
     ],
-    "verifyMode": "修复后三台 full_dry_run sku 步过 + 全流程 succeeded + restoration/verification 未 false（待修）",
-    "verifiedBy": []
+    "verifyMode": "replay",
+    "verifiedBy": ["job_5f770de4-b4ab-427f-8aa9-0424cc45bf2e"]
+  },
+  {
+    "id": "recipe-feishu-xianyu-silk-safe-20260728",
+    "app": "xianyu",
+    "category": "recipe",
+    "title": "飞书到闲鱼丝滑编排：一次预检、单色尺码、dry-run 零碰机",
+    "content": "2026-07-28 当前配方，优先级高于同日旧 recipe：submit 前只读一次 agent-entry；默认从 01-04 选择 live 可跑集合。目标 alias offline、quarantine、lease 占用永远硬拦，--force 只能标记 ready-only，不能越过硬闸；ready=false 且 unresolvedFailure 存在时先恢复。--dry-run 只读飞书、下载到 Mac、规划 phonePath、组装 fixture，绝不调用 phone-push 或 submit；--prep/--push-only 才显式推图后退出。单色不是规格维度：colorArr.length===1 时 fixture 只含尺码，operator replaceExisting 会先删旧值和旧维度再精确重建。正道验收 job_5f770de4-b4ab-427f-8aa9-0424cc45bf2e 在 02 succeeded，verification/restoration true，lease 释放，未 bypass、未存草稿、未发布。",
+    "appliesTo": ["ops/feishu-to-xianyu.mjs", "xianyu.publish.full_dry_run", "DX1488-100", "fillSkuSpecs"],
+    "steps": [
+      "读一次 agent-entry 并按目标 alias 分类；全局 activeLeases 仅提示",
+      "飞书按 SKU+READY_TO_PUBLISH 取有 Yupoo 原图记录并只下载到 Mac",
+      "dry-run 用 planPhoneImages 生成预计路径；不调用 phonePushAll",
+      "单色 fixture 只生成 尺码；saveDraft 必须 false",
+      "实跑只经 devicectl job submit/status，确认 lease 可见、verification/restoration true、终态释放"
+    ],
+    "verifyMode": "replay",
+    "verifiedBy": ["job_5f770de4-b4ab-427f-8aa9-0424cc45bf2e", "/tmp/f2x-phase5-dryrun/fixture-02-full.json"]
   }
 ]

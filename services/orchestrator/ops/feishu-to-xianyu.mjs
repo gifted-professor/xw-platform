@@ -2,8 +2,8 @@
 // feishu-to-xianyu.mjs — 飞书商品目录表 → 闲鱼并发发布 dry-run 一键编排（跑在 Mac）
 //
 // 链路：lark-cli 读飞书商品表（按 SKU+READY_TO_PUBLISH）→ 提取标题/价格/颜色/尺码/文案
-//      → 下载 Yupoo原图 → phone-push 到 01/02/04 相册 → 组装 full_dry_run fixture
-//      → 预检 fleet → 并发 submit + poll（dry-run 时不 submit）。
+//      → 一次预检 → 下载 Yupoo原图 → 可选 phone-push → 组装 full_dry_run fixture
+//      → 并发 submit + poll（dry-run 时零手机写入且不 submit）。
 //
 // 结构镜像 ops/conc4-full-dry-run.mjs（预检/submit/poll/汇总/退出码）
 //      + sync-feishu.mjs（lark-cli 读取 + 位置字段索引）。零新依赖。
@@ -28,6 +28,12 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, createReadStream } 
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
+import {
+  assembleFixture,
+  classifyTarget,
+  deviceFromEntry,
+  planPhoneImages,
+} from "./feishu-to-xianyu-lib.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..");
@@ -66,6 +72,7 @@ const opt = (n, fb = null) => {
 };
 const flag = (n) => argv.includes(n);
 const FORCE = flag("--force");
+const PREP = flag("--prep") || flag("--push-only");
 
 if (flag("--help") || flag("-h")) {
   console.log(`用法: node ops/feishu-to-xianyu.mjs --sku <SKU> --actor <id> [选项]
@@ -75,7 +82,7 @@ if (flag("--help") || flag("-h")) {
   --actor <id>         例 hermes-f2x / mimo-f2x
 
 选项:
-  --aliases 01,02,04   默认 01,02,04（03 无 ADB，已知限制）
+  --aliases 01,02      默认从 01-04 live 状态选择可跑集合
   --ssh <host>         默认 xhs-windows
   --capability <id>    默认 xianyu.publish.full_dry_run
   --gpfs <path>        默认 GPFS 路由仓（devicectl 所在）
@@ -84,8 +91,9 @@ if (flag("--help") || flag("-h")) {
   --timeout-s <n>      默认 1200
   --poll-s <n>         默认 20
   --img-dir <dir>      默认 <repo>/tmp-imgs（Yupoo 原图本地落盘）
-  --dry-run            只做飞书读取+图片下载+phone-push+组装+预检，不 submit
-  --force              跳过 ready + lease 检查（仅拦 quarantine + offline）；注意 lease 真占时控制面仍会 device_busy
+  --dry-run            飞书读取+本地下载+fixture+预检；零手机写入、不 submit
+  --prep, --push-only  显式 phone-push 后退出，不 submit
+  --force              FORCE=ready-only；不得跳过 lease/offline/quarantine/恢复要求
   --keep-log <dir>     落组装的 fixture + submit/status JSON
 
 退出码: 0 全绿 | 1 部分失败 | 2 预检失败(实跑) | 3 超时 | 4 客户端错误`);
@@ -94,7 +102,8 @@ if (flag("--help") || flag("-h")) {
 
 const SKU_ARG = opt("--sku");
 const ACTOR = opt("--actor");
-const ALIASES = (opt("--aliases", "01,02,04") || "01,02,04")
+const ALIASES_EXPLICIT = opt("--aliases", null);
+let ALIASES = (ALIASES_EXPLICIT || "01,02,03,04")
   .split(",").map((s) => s.trim()).filter(Boolean);
 const CAP = opt("--capability", "xianyu.publish.full_dry_run");
 const FREIGHT = opt("--freight", "包邮");
@@ -104,6 +113,11 @@ const POLL_S = Number(opt("--poll-s", "20")) || 20;
 const IMG_DIR = opt("--img-dir", join(ROOT, "tmp-imgs"));
 const DRY = flag("--dry-run");
 const KEEP_LOG = opt("--keep-log", null);
+
+if (DRY && PREP) {
+  console.log("✗ --dry-run 与 --prep/--push-only 互斥");
+  process.exit(4);
+}
 
 if (!SKU_ARG || !String(SKU_ARG).trim()) {
   console.log("✗ 需要 --sku <SKU>（如 DX1488-100）。见 --help");
@@ -365,54 +379,7 @@ function phonePushAll(images, aliases) {
   return perAlias;
 }
 
-// ---------- 4. 组装 fixture ----------
-function assembleFixture(alias, product, pushed) {
-  const n = Number(alias);
-  const album = `XianyuFull${n}`;
-  const images = pushed[alias].images;
-  return {
-    descriptionPrefix: product.descriptionPrefix,
-    productTitle: product.productTitle,
-    descriptionBody: product.descriptionBody,
-    price: product.price,
-    skuPrice: product.price,
-    skuStock: SKU_STOCK,
-    skuReplaceExisting: true,
-    skuSpecs: {
-      // 单色不当 SKU 维度（单色不构成规格选择，只留尺码；多色才同时带颜色+尺码）
-      ...(product.colorArr.length > 1 ? { 颜色: product.colorArr } : {}),
-      ...(product.sizeArr.length ? { 尺码: product.sizeArr } : {}),
-    },
-    freightTemplate: FREIGHT,
-    imageAlbum: album,
-    images,
-    maxImages: Math.min(Math.max(images.length, 1), 9),
-    saveDraft: false,
-    skipAddress: true,
-    skipCategory: true,
-    calibrated: { freight: true, sku: true, image: true },
-  };
-}
-
 // ---------- 5. 预检（镜像 conc4） ----------
-function deviceFromEntry(entry, alias) {
-  const devices = entry.devices || [];
-  const d = devices.find((x) => x.alias === alias);
-  if (!d) return null;
-  const state = d.state || {};
-  const control = d.control || {};
-  const deviceId = control.deviceId || d.deviceId || null;
-  return {
-    alias,
-    deviceId,
-    ready: state.ready,
-    quarantined: state.quarantined ?? control.quarantined ?? null,
-    leaseFree: state.leaseFree ?? (control.lease == null || control.lease === null),
-    online: state.online ?? control.online,
-    serial: d.serial || control.serial || null,
-  };
-}
-
 function preflight(aliases) {
   if (!existsSync(DEVICTL)) {
     throw Object.assign(new Error(`devicectl 不存在: ${DEVICTL}（GPFS 未挂载？用 --gpfs 覆盖）`), { code: 4 });
@@ -430,24 +397,14 @@ function preflight(aliases) {
   const warnings = [];  // 告警：不拦，控制面仍接受
   for (const alias of aliases) {
     const row = deviceFromEntry(entry, alias);
-    if (!row) { problems.push(`${alias}: 不在 agent-entry.devices`); continue; }
-    if (!row.deviceId) problems.push(`${alias}: 无 deviceId`);
-    // 硬拦：quarantine（设备真坏）+ offline（不可达）
-    if (row.quarantined === true) problems.push(`${alias}: quarantined`);
-    if (row.online === false) problems.push(`${alias}: offline`);
-    // lease 占用（有任务在跑）：默认硬拦，--force 降为告警
-    if (row.leaseFree === false) {
-      if (FORCE) warnings.push(`${alias}: lease 占用中（--force 忽略）`);
-      else problems.push(`${alias}: lease 占用中`);
-    }
-    // ready=false 非阻塞：registry 观测的 ready 含 lease 未刷新/历史 unresolved 等，
-    // 控制面仍接受 job（实证：01/02/04 ready=false 但 full_dry_run 可跑）
-    if (row.ready !== true) warnings.push(`${alias}: ready=${row.ready}（非阻塞）`);
-    rows.push(row);
+    const gate = classifyTarget(row, { force: FORCE });
+    for (const problem of gate.hardProblems) problems.push(`${alias}: ${problem}`);
+    for (const warning of gate.warnings) warnings.push(`${alias}: ${warning}`);
+    rows.push({ ...row, gate });
   }
   // activeLeases 是 fleet 级在跑计数，非本设备门 → 一律告警，per-device leaseFree 才是真门
   if (activeLeases != null && Number(activeLeases) > 0) {
-    warnings.push(`controlPlane.activeLeases=${activeLeases}${FORCE ? "（--force 忽略）" : "（fleet 有在跑，仅告警）"}`);
+    warnings.push(`controlPlane.activeLeases=${activeLeases}（仅提示；只拦目标 alias 的 lease）`);
   }
   return { entry, rows, problems, warnings, activeLeases };
 }
@@ -504,9 +461,44 @@ function sleepSync(seconds) {
 }
 
 // ========== main ==========
+let pre;
+try {
+  log(`[f2x] 一次预检 aliases=${ALIASES.join(",")} FORCE=${FORCE ? "ready-only" : "off"}`);
+  pre = preflight(ALIASES);
+} catch (e) {
+  console.log(`✗ 预检错误: ${e.message}`);
+  process.exit(e.code === 2 ? 2 : 4);
+}
+
+if (!ALIASES_EXPLICIT) {
+  const skipped = pre.rows.filter((row) => row.gate.recoveryRequired || row.gate.hardProblems.length > 0);
+  ALIASES = pre.rows.filter((row) => !row.gate.recoveryRequired && row.gate.hardProblems.length === 0).map((row) => row.alias);
+  for (const row of skipped) pre.warnings.push(`${row.alias}: 默认集合跳过（需恢复或硬闸未过）`);
+  pre.rows = pre.rows.filter((row) => ALIASES.includes(row.alias));
+  pre.problems = [];
+}
+
+for (const row of pre.rows) {
+  if (row.gate.recoveryRequired) pre.problems.push(`${row.alias}: unresolvedFailure 需先 recover；--force 不可跳过`);
+}
+log(`[f2x] target aliases=${ALIASES.join(",") || "none"} activeLeases=${pre.activeLeases}`);
+for (const row of pre.rows) {
+  log(`  ${row.alias} deviceId=${row.deviceId} ready=${row.ready} q=${row.quarantined} leaseFree=${row.leaseFree} online=${row.online}`);
+}
+if (pre.warnings.length) {
+  log("⚠️  预检告警:");
+  for (const warning of pre.warnings) log(`  - ${warning}`);
+}
+if (pre.problems.length || ALIASES.length === 0) {
+  console.log("✗ 预检硬拦（lease/offline/quarantine/无 deviceId/需恢复）:");
+  for (const problem of pre.problems) console.log(`  - ${problem}`);
+  if (ALIASES.length === 0) console.log("  - 默认集合没有可跑设备");
+  process.exit(2);
+}
+
 let product;
 try {
-  log(`[f2x] sku=${SKU_ARG} actor=${ACTOR} aliases=${ALIASES.join(",")} dryRun=${DRY}`);
+  log(`[f2x] sku=${SKU_ARG} actor=${ACTOR} aliases=${ALIASES.join(",")} dryRun=${DRY} prep=${PREP}`);
   log(`[f2x] 飞书表 ${FEISHU_TABLE_ID} · 读取中…`);
   product = readFeishuProduct(SKU_ARG);
 } catch (e) {
@@ -530,17 +522,22 @@ try {
 }
 
 let pushed;
-try {
-  log(`[f2x] phone-push 到 ${ALIASES.join(", ")}`);
-  pushed = phonePushAll(images, ALIASES);
-} catch (e) {
-  console.log(`✗ phone-push 失败: ${e.message}`);
-  process.exit(4);
+if (DRY) {
+  pushed = planPhoneImages(images, ALIASES);
+  log("[f2x] dry-run：仅规划 phonePath，未调用 phone-push（零手机写入）");
+} else {
+  try {
+    log(`[f2x] phone-push 到 ${ALIASES.join(", ")}`);
+    pushed = phonePushAll(images, ALIASES);
+  } catch (e) {
+    console.log(`✗ phone-push 失败: ${e.message}`);
+    process.exit(4);
+  }
 }
 
 // 组装每台 fixture
 const plans = ALIASES.map((alias) => {
-  const params = assembleFixture(alias, product, pushed);
+  const params = assembleFixture(alias, product, pushed, { skuStock: SKU_STOCK, freight: FREIGHT });
   const p = join(logDir, `fixture-${alias}-full.json`);
   writeFileSync(p, JSON.stringify(params, null, 2));
   return { alias, params, fixturePath: p };
@@ -555,35 +552,14 @@ for (const p of plans) {
   log(`    fixture=${p.fixturePath}`);
 }
 
-// 预检
-let pre;
-try {
-  log(`\n[f2x] 预检 fleet…`);
-  pre = preflight(ALIASES);
-} catch (e) {
-  console.log(`✗ 预检错误: ${e.message}`);
-  process.exit(e.code === 2 ? 2 : 4);
-}
-log(`[f2x] activeLeases=${pre.activeLeases}`);
-for (const r of pre.rows) {
-  log(`  ${r.alias} deviceId=${r.deviceId} ready=${r.ready} q=${r.quarantined} leaseFree=${r.leaseFree} online=${r.online}`);
-}
-if (pre.warnings.length) {
-  log("⚠️  预检告警（非阻塞，控制面仍接受）:");
-  for (const w of pre.warnings) log(`  - ${w}`);
-}
-if (pre.problems.length) {
-  console.log("✗ 预检硬拦（quarantine / offline / 无 deviceId / lease 占用）:");
-  for (const p of pre.problems) console.log(`  - ${p}`);
-  if (!DRY) {
-    console.log("  不 submit。先恢复设备/释放 lease；或在确认安全时加 --force 跳过 lease。");
-    process.exit(2);
-  }
-  log("  (dry-run 模式：硬拦项仅报告，不退出)");
+if (DRY) {
+  log(`\n✓ dry-run 完成：一次预检+飞书提取+本地下载+fixture；零手机写入、未 submit`);
+  log(`  fixture 目录=${logDir}`);
+  process.exit(0);
 }
 
-if (DRY) {
-  log(`\n✓ dry-run 完成：飞书提取+图片下载+phone-push+组装+预检均跑过，未 submit`);
+if (PREP) {
+  log(`\n✓ prep 完成：显式 phone-push 已完成，未 submit`);
   log(`  fixture 目录=${logDir}`);
   process.exit(0);
 }
