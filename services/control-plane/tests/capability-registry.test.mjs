@@ -28,33 +28,17 @@ test("Flutter pointer tap probe is bounded, no-save, and restoration-required", 
   });
   assert.throws(
     () => registry.validateParams(probe.id, {
-      skuPrice: 12.34,
-      skuStock: "2",
-      skuSpecs: { "颜色": ["白色"] },
       saveDraft: true,
     }),
     { code: "PARAMS_SCHEMA_INVALID" },
   );
   assert.doesNotThrow(() => registry.validateParams(probe.id, {
-    skuPrice: 12.34,
-    skuStock: "2",
-    skuSpecs: { "颜色": ["白色"] },
     saveDraft: false,
   }));
-  for (const skuSpecs of [
-    {},
-    { "颜色": "白色" },
-    { "颜色": [] },
-    { "颜色": [""] },
-    { "颜色": ["白色"], "尺码": ["M"], "材质": ["棉"] },
-  ]) {
-    assert.throws(() => registry.validateParams(probe.id, {
-      skuPrice: 12.34,
-      skuStock: "2",
-      skuSpecs,
-      saveDraft: false,
-    }), { code: "PARAMS_SCHEMA_INVALID" });
-  }
+  assert.throws(() => registry.validateParams(probe.id, {
+    saveDraft: false,
+    skuSpecs: { "颜色": ["白色"] },
+  }), { code: "PARAMS_SCHEMA_INVALID" });
 });
 
 test("pure and draft-producing Xianyu full dry-runs have separate contracts", () => {

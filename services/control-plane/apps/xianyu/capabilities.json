@@ -241,31 +241,16 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "skuPrice": { "type": "number" },
-          "skuStock": { "type": "string" },
-          "skuSpecs": {
-            "type": "object",
-            "minProperties": 1,
-            "maxProperties": 2,
-            "propertyNames": { "type": "string", "minLength": 1, "maxLength": 20 },
-            "additionalProperties": {
-              "type": "array",
-              "minItems": 1,
-              "maxItems": 10,
-              "items": { "type": "string", "minLength": 1, "maxLength": 20 }
-            }
-          },
-          "skuReplaceExisting": { "type": "boolean" },
           "saveDraft": { "type": "boolean", "enum": [false] }
         },
-        "required": ["skuPrice", "skuStock", "skuSpecs", "saveDraft"],
+        "required": ["saveDraft"],
         "additionalProperties": false
       },
       "outputSchema": { "type": "object" },
       "preconditions": [
         "Xiaowei typed HTTP API is listening on Windows loopback port 17910",
         "probe runs through a visible exclusive control-plane canary session lease",
-        "probe skips upload, category, freight and address; it never saves or publishes"
+        "probe opens the compose page and taps only the SKU row; it never edits, saves or publishes"
       ],
       "verification": {
         "mode": "state",

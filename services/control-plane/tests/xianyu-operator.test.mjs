@@ -44,9 +44,11 @@ import {
   probeBottomTabs,
   recoverDiscardDryRun,
   recoverySemanticHints,
+  resolveOperatorCommand,
   saveLayoutProfile,
   semanticSnapshot,
   summarizeImageMediaNodes,
+  summarizeFlutterSkuTapTransition,
   summarizeAppNumpadCandidates,
   verifyImageManifestDryRun,
   replaceSkuBatchAppNumpadValue,
@@ -55,6 +57,32 @@ import {
   shouldScrollAfterSkuValue,
   waitForSkuPricePage,
 } from "../scripts/xianyu-operator.mjs";
+
+test("operator CLI recognizes the dedicated Flutter tap probe command", () => {
+  assert.equal(resolveOperatorCommand(["node", "script", "flutter-pointer-tap-probe"]), "flutter-pointer-tap-probe");
+  assert.equal(resolveOperatorCommand(["node", "script", "unknown"]), "help");
+});
+
+test("Flutter SKU tap transition requires compose-to-specs state change", () => {
+  const compose = [
+    { label: "宝贝描述", className: "android.view.View", bounds: [10, 300, 900, 500] },
+    { label: "商品规格", className: "android.view.View", bounds: [10, 900, 900, 1050] },
+    { label: "发布", className: "android.widget.Button", bounds: [900, 20, 1070, 150] },
+  ];
+  const specs = [
+    { label: "设置宝贝规格", className: "android.view.View", bounds: [10, 100, 900, 220] },
+    { label: "推荐常用的规格类型", className: "android.view.View", bounds: [10, 300, 900, 420] },
+  ];
+  assert.deepEqual(summarizeFlutterSkuTapTransition(compose, specs), {
+    verified: true,
+    from: "publish-compose",
+    to: "sku-specs",
+    beforeSkuPage: false,
+    afterSkuPage: true,
+  });
+  assert.equal(summarizeFlutterSkuTapTransition(compose, compose).verified, false);
+  assert.equal(summarizeFlutterSkuTapTransition(specs, specs).verified, false);
+});
 
 test("numpad failure diagnostics retain only matching key geometry and bounded enums", () => {
   const diagnostic = summarizeAppNumpadCandidates([

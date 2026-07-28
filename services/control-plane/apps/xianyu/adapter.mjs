@@ -48,7 +48,7 @@ function commandArgs({ script, action, device, params, evidenceDirectory = null 
   }
   // Map capability action name to operator CLI command.
   const flutterTapProbe = action === "flutter-pointer-tap-probe";
-  const command = ["full-dry-run", "full-draft-dry-run"].includes(action) || flutterTapProbe ? "publish-dry-run"
+  const command = ["full-dry-run", "full-draft-dry-run"].includes(action) ? "publish-dry-run"
     : action === "image-dry-run" ? "image-dry-run"
       : action === "save-draft-dry-run" ? "save-draft-dry-run"
         : action;
@@ -60,11 +60,6 @@ function commandArgs({ script, action, device, params, evidenceDirectory = null 
     args.push(
       "--http-api-strict",
       "--device-alias", String(device.alias),
-      "--calibrated", "sku",
-      "--skip-upload",
-      "--skip-category",
-      "--skip-freight",
-      "--skip-address",
     );
   }
   if (params.text !== undefined) args.push("--text", String(params.text));
@@ -189,7 +184,10 @@ export function createXianyuAdapter({ run = runJsonCommand, operatorPath = defau
           ok: output?.ok === true
             && output?.stoppedBeforePublish === true
             && output?.savedDraft !== true
-            && output?.steps?.sku?.ok === true
+            && output?.steps?.flutterTap?.ok === true
+            && output?.transition?.verified === true
+            && output.transition.from === "publish-compose"
+            && output.transition.to === "sku-specs"
             && transport?.mode === "typed-http"
             && transport?.httpReady === true
             && Number.isInteger(transport?.httpTapAttempts)

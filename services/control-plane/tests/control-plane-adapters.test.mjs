@@ -145,7 +145,8 @@ test("Xianyu adapter preserves stop-before-publish and discard verification", as
           ok: true,
           stoppedBeforePublish: true,
           savedDraft: false,
-          steps: { sku: { ok: true } },
+          steps: { flutterTap: { ok: true } },
+          transition: { verified: true, from: "publish-compose", to: "sku-specs" },
           transportEvidence: {
             mode: "typed-http",
             httpReady: true,
@@ -286,12 +287,7 @@ test("Xianyu adapter preserves stop-before-publish and discard verification", as
   const flutterTapExec = await adapter.execute({
     capability: flutterTapProbe,
     device: privateDevice,
-    params: {
-      skuPrice: 12.34,
-      skuStock: "2",
-      skuSpecs: { "颜色": ["白色"] },
-      saveDraft: false,
-    },
+    params: { saveDraft: false },
     leaseAuthorization,
   });
   const flutterArgs = calls.at(-1).args;
@@ -299,10 +295,8 @@ test("Xianyu adapter preserves stop-before-publish and discard verification", as
   assert.deepEqual(flutterArgs.slice(flutterArgs.indexOf("--device-alias"), flutterArgs.indexOf("--device-alias") + 2), [
     "--device-alias", "01",
   ]);
-  assert.equal(flutterArgs.includes("--skip-upload"), true);
-  assert.equal(flutterArgs.includes("--skip-category"), true);
-  assert.equal(flutterArgs.includes("--skip-freight"), true);
-  assert.equal(flutterArgs.includes("--skip-address"), true);
+  assert.equal(flutterArgs.includes("flutter-pointer-tap-probe"), true);
+  assert.equal(flutterArgs.includes("publish-dry-run"), false);
   assert.equal((await adapter.verify({ capability: flutterTapProbe, execution: flutterTapExec })).ok, true);
   assert.equal((await adapter.verify({
     capability: flutterTapProbe,
