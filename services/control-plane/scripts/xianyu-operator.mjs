@@ -2020,6 +2020,25 @@ export function findSkuSelectAll(snapshot) {
     && /全选$/.test(String(node.label || "").trim())) || null;
 }
 
+export async function waitForSkuPricePage(op, {
+  attempts = 6,
+  delayMs = 800,
+  labelPrefix = "xianyu-sku-price-page",
+  snapshotFn = snapshot,
+  settleFn = settle,
+} = {}) {
+  let last = { nodes: [], focus: null };
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    await settleFn(delayMs);
+    last = await snapshotFn(op, `${labelPrefix}-${attempt}`);
+    const labels = (last.nodes || []).map((node) => String(node?.label || "").trim());
+    if (labels.some((label) => /取消批量设置|批量设置价格和库存|全选/.test(label))) {
+      return { ...last, navigationWait: { ready: true, attempts: attempt } };
+    }
+  }
+  return { ...last, navigationWait: { ready: false, attempts } };
+}
+
 /**
  * sku-select-all-missing 失败侧诊断：把价库/批量页上含「全选」的 label 原文与页面指纹
  * 放进 job result，避免手推 Explorer 卡在规格输入页。有界截断，不含用户商品正文。
@@ -3224,11 +3243,15 @@ function isDimTitle(label, dimName) {
       };
     }
     await op.tap(...center(nextBtn.bounds));
-    await settle(1800);
-    let pp = await snapshot(op, "xianyu-sku-price-page");
+    // FlutterBoost 页面切换后 hierarchy 会短暂只剩 0-1 个节点。固定等 1.8s 再抓一次会把
+    // 过渡帧误判成 sku-select-all-missing；有界轮询到价库业务 marker，再进入后续选择逻辑。
+    let pp = await waitForSkuPricePage(op);
     if (!pp.nodes.some((n) => /取消批量设置/.test(String(n.label || "")))) {
       const entry = pp.nodes.find((n) => /批量设置价格和库存/.test(String(n.label || "")));
-      if (entry?.bounds) { await op.tap(...center(entry.bounds)); await settle(1200); pp = await snapshot(op, "xianyu-sku-batch-mode"); }
+      if (entry?.bounds) {
+        await op.tap(...center(entry.bounds));
+        pp = await waitForSkuPricePage(op, { labelPrefix: "xianyu-sku-batch-mode" });
+      }
     }
     // 逐行选中 + 落盘（render-on-scroll/全选机制待实证，先抓现场）
     skuDebugDump("price-page", pp.nodes);
