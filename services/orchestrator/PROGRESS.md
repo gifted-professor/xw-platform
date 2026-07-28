@@ -114,7 +114,7 @@
 - **自动巡航已上线（2026-07-25）**：Windows 计划任务 `XhsScoutScout`，每 45 分钟一轮 P1 constraint 验证（只读 grep，不碰手机/不提交 job），安装脚本 `scripts/install-scout-task.ps1`
 - ~~**当前阻塞**：P1 过滤 bug~~ 已修复（2026-07-25，三连修：b2fba6a P1 选目标 category-agnostic 只认 verifyMode；5339df9 跳过 device/session 目标 + 409 换目标 + generic repo-grep 取证；0f52cb7 noloc pitfall 24h 去重防刷库）。三端一致（origin=Windows=task-launch.json gitCommit 均 0f52cb7），巡航已恢复产出。新形态：6 个 recipe 被标 noloc（evidence 定位不到），待人裁决改 verifyMode=human 或补证据锚点，否则 24h 窗口过后会再刷一轮
 - 委派路由：**routing-table-v2**（知识库，2026-07-25 用户裁决）——验证类→MiMo、修复类（含 scout）→GLM/Grok、设计/验收/运维→Kimi、R2→人；v1 已废止
-- **fallback 链（2026-07-25 定）**：修复类默认 GLM → 失败/超时/验收不过 → Grok → 仍不决 → Kimi → 人；验证类默认 MiMo → 连卡两次 → GLM。触发即升档，不硬磕
+- **fallback 链（2026-07-25 定；2026-07-28 补健康前置）**：进入热路径前先做轻量 availability/quota/已知故障检查；最近一次明确 quota 403、认证失败或连续超时的模型直接标 unavailable 并跳过，不先把任务送进去撞墙。候选池包含 **Claude / Codex / Grok / Kimi**（低成本验证可另用 MiMo/GLM）；按任务类型和当前健康状态选首个可用者，而不是写死单模型。独立验收的首选不可用时切下一只读 reviewer/watchdog，保持“不改文件、不碰设备”边界。失败即升档，不对坏模型重复重试。本次 Kimi 因 billing-cycle quota 403 被摘除，已切 Codex 只读 reviewer，未影响代码或设备。
 - 设备 serve：01→17895 / 02→17897 / 04→17896（serial 见 identities.seed.json）
 - 委派方式：`mimo-ro run --dir <项目> "任务"`（mimo-ro = ~/.mimocode/bin/mimo-ro，key 池轮换包装，池在 ~/.mimocode/key-pool.json 共 12 把，`mimo-ro --check` 体检，失败 key 自动标记 24h）；会话续接 `mimo-ro run -s <id>`。裸 `mimo` 也能用但只有单 key，推荐一律走 mimo-ro
 

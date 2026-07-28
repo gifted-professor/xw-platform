@@ -78,5 +78,21 @@
     ],
     "verifyMode": "replay",
     "verifiedBy": ["job_5f770de4-b4ab-427f-8aa9-0424cc45bf2e", "/tmp/f2x-phase5-dryrun/fixture-02-full.json"]
+  },
+  {
+    "id": "pitfall-reviewer-model-health-fallback-20260728",
+    "app": "xhs",
+    "category": "pitfall",
+    "title": "模型路由先做健康前置，已知额度或认证故障直接走 fallback",
+    "content": "独立验收调用 Kimi 时收到 billing-cycle quota 403；继续重试只会阻塞热路径。默认路由应先检查近期 availability、quota、认证和连续超时状态；明确异常的模型直接跳过，并记录 fallback 原因。当前独立验收 fallback 为只读 reviewer/watchdog，不授权改文件或碰设备。恢复模型只在健康探针重新通过后进入首选链。",
+    "appliesTo": ["routing-table-v2", "watchdog", "independent-review", "model-fallback", "claude", "codex", "grok", "kimi"],
+    "steps": [
+      "派工前读取最近一次模型健康/额度结果；轻量探针可用时先探针",
+      "quota 403、认证失败或连续超时标 unavailable，当前任务直接跳过",
+      "从 Claude/Codex/Grok/Kimi 候选池按任务类型选择下一健康模型，并保持原任务权限边界",
+      "记录选择、失败码与 fallback，不把模型故障误报成业务失败"
+    ],
+    "verifyMode": "constraint",
+    "verifiedBy": ["Kimi 403 access_terminated_error 2026-07-28", "fallback independent reviewer"]
   }
 ]
