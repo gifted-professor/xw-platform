@@ -409,8 +409,8 @@ export function findProfileFollowBtn(xml) {
       /^头像[,，]/.test(String(n.desc || "")),
   );
   if (!av) return null; // 无 tier-1 头像指纹 → 非主页浮层，交给通用 findFollowBtn
-  // 屏宽由最大 R 推导（root bounds），不硬编码坐标
-  const screenW = nodes.reduce((mx, n) => (n.R > mx ? n.R : mx), 0) || 1080;
+  // 屏宽由最大 R 推导（root bounds），不硬编码坐标；av 存在即保证至少一个节点带 bounds
+  const screenW = nodes.reduce((mx, n) => (n.R > mx ? n.R : mx), 0);
   const minCtaW = screenW * 0.3;
   const contains = (a, b) => a.L <= b.L && a.T <= b.T && a.R >= b.R && a.B >= b.B;
   const seen = new Set();
