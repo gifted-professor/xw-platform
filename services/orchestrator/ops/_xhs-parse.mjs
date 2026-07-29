@@ -396,8 +396,8 @@ export function findFollowBtn(xml) {
  *  1) 必须有 tier-1 头像（ImageView clickable cy<600 content-desc ^头像[,，]），否则非浮层 → null；
  *  2) 候选 label（text/desc 精确属于四态）必须在头像下方（cy > 头像 cy）；
  *  3) 解析包含 label 的最小 enabled clickable 容器（几何包含），label 自身坐标不可点；
- *  4) 主 CTA 容器宽 ≥ 屏宽 30%（屏宽由最大 R 推导，不硬编码坐标），过滤窄统计 tab；
- *  5) 唯一可点候选才返回其容器中心；零或多个 → null（fail-closed，绝不猜坐标）。
+ *  4) 主 CTA 容器宽 ≥ 屏宽 30%（屏宽取自 root bounds，非全局 max R；无可用 root → fail-closed），过滤窄统计 tab；
+ *  5) 唯一可点候选才返回其容器中心；零或多个 → null（fail-closed，绝不猜坐标）；同 bounds 容器去重，不同容器即便同中心也算多候选。
  *  返回形状与 findFollowBtn 一致：{x,y,desc,matched,L,T,R,B}，便于调用方在浮层场景直接替换。 */
 export function findProfileFollowBtn(xml) {
   const nodes = allNodes(xml);
@@ -409,8 +409,11 @@ export function findProfileFollowBtn(xml) {
       /^头像[,，]/.test(String(n.desc || "")),
   );
   if (!av) return null; // 无 tier-1 头像指纹 → 非主页浮层，交给通用 findFollowBtn
-  // 屏宽由最大 R 推导（root bounds），不硬编码坐标；av 存在即保证至少一个节点带 bounds
-  const screenW = nodes.reduce((mx, n) => (n.R > mx ? n.R : mx), 0);
+  // 屏宽取自 root（首个解析节点 = UIAutomator dump 的 hierarchy 根，全屏 bounds）；
+  // 不用全局 max R——离屏/无关节点的大 R 会抬高阈值误拒真实 CTA。无可用 root → fail-closed。
+  const root = nodes[0];
+  const screenW = root ? root.R - root.L : 0;
+  if (screenW < 100) return null;
   const minCtaW = screenW * 0.3;
   const contains = (a, b) => a.L <= b.L && a.T <= b.T && a.R >= b.R && a.B >= b.B;
   const seen = new Set();
@@ -427,8 +430,8 @@ export function findProfileFollowBtn(xml) {
     const c = anc[0];
     if (!c) continue; // 无可点容器 → 非可操作
     if (c.R - c.L < minCtaW) continue; // 窄容器 → 统计 tab，拒
-    const key = `${c.cx}_${c.cy}`;
-    if (seen.has(key)) continue; // 同一容器去重
+    const key = `${c.L},${c.T},${c.R},${c.B}`;
+    if (seen.has(key)) continue; // 同 bounds 容器去重；不同容器即便同中心也算多候选
     seen.add(key);
     cands.push({ c, matched: l.text || l.desc });
   }

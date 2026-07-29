@@ -172,3 +172,36 @@ test("findProfileFollowBtn fails closed when the below-avatar label has no click
   ];
   assert.equal(findProfileFollowBtn(xml(nodes)), null);
 });
+
+// P1 回归（Hermes 独立验证）：两个不同 bounds 但同中心的 clickable 容器，旧按 center 去重会并成 1 个候选 → fail-open。
+test("findProfileFollowBtn fails closed on two distinct same-center containers (dedupe by bounds)", () => {
+  // A=[10,900][500,1100] center(255,1000)；B=[50,920][460,1080] center(255,1000)，B 套在 A 内。
+  const A = [10, 900, 500, 1100];
+  const B = [50, 920, 460, 1080];
+  const nodes = [
+    root(),
+    avatar("U", [5, 215, 302, 512]),
+    node({ cls: "FrameLayout", clickable: true, bounds: A }),
+    node({ cls: "FrameLayout", clickable: true, bounds: B }),
+    // label1 套在 B 内（A 也包住）→ 最小容器 B
+    node({ text: "关注", cls: "TextView", clickable: false, bounds: [200, 950, 260, 1010] }),
+    // label2 在 A 内但 B 外（x=470 > B.R=460）→ 最小容器 A
+    node({ text: "关注", cls: "TextView", clickable: false, bounds: [470, 990, 490, 1010] }),
+  ];
+  assert.equal(findProfileFollowBtn(xml(nodes)), null);
+});
+
+// P2 回归（Hermes 独立验证）：离屏/无关节点 R=2000 不应抬高屏宽阈值、误拒真实宽 441 的 CTA。
+test("findProfileFollowBtn derives screen width from root, not global max R (offscreen inflation)", () => {
+  const nodes = [
+    root(), // [0,0][1080,2400] → 屏宽 1080，阈值 324
+    avatar("U", [5, 215, 302, 512]),
+    // 离屏无关节点 R=2000：旧全局 max R 会把阈值抬到 600 → 误拒 441 的 CTA
+    node({ cls: "FrameLayout", clickable: false, bounds: [1900, 0, 2000, 100] }),
+    ...overlayCta("关注"), // 容器宽 441 [33,954][474,1042] → (254,998)
+  ];
+  const hit = findProfileFollowBtn(xml(nodes));
+  assert.equal(hit.matched, "关注");
+  assert.equal(hit.x, 254);
+  assert.equal(hit.y, 998);
+});
