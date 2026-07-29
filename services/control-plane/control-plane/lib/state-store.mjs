@@ -94,6 +94,7 @@ function publicLease(row, token) {
     jobId: row.job_id,
     expiresAt: iso(row.expires_at),
     heartbeatAt: iso(row.heartbeat_at),
+    ...(row.owner_device_run_id ? { ownerDeviceRunId: row.owner_device_run_id } : {}),
     ...(token ? { token } : {}),
   };
 }
@@ -257,6 +258,25 @@ export class StateStore {
         payload_json TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS mission_events_idx ON mission_events(mission_id, event_id);
+      CREATE TABLE IF NOT EXISTS device_runs (
+        device_run_id TEXT PRIMARY KEY,
+        mission_id TEXT NOT NULL REFERENCES missions(mission_id),
+        mission_hash TEXT NOT NULL,
+        mission_version INTEGER NOT NULL,
+        device_id TEXT NOT NULL REFERENCES devices(device_id),
+        session_id TEXT,
+        lease_id TEXT,
+        controller_agent TEXT NOT NULL,
+        controller_epoch INTEGER NOT NULL DEFAULT 1,
+        heartbeat_at INTEGER,
+        phase TEXT NOT NULL,
+        outcome TEXT,
+        readiness_receipt_json TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        finished_at INTEGER
+      );
+      CREATE INDEX IF NOT EXISTS device_runs_mission_idx ON device_runs(mission_id, phase);
     `);
     this.#ensureColumn(
       "devices",
@@ -267,6 +287,7 @@ export class StateStore {
     this.#ensureColumn("jobs", "placement_decision_json", "TEXT");
     this.#ensureColumn("sessions", "scope_capability_id", "TEXT");
     this.#ensureColumn("sessions", "placement_decision_json", "TEXT");
+    this.#ensureColumn("leases", "owner_device_run_id", "TEXT");
     this.db.exec("PRAGMA user_version = 2;");
   }
 
@@ -298,6 +319,8 @@ export class StateStore {
       "SELECT job_id, run_id, device_id, status FROM jobs WHERE status IN ('running','verifying','restoring')",
     ).all();
     if (interrupted.length === 0) {
+      const now = this.now();
+      this.#recoverInterruptedDeviceRuns(now);
       this.db.exec("DELETE FROM sessions; DELETE FROM leases;");
       return [];
     }
@@ -320,9 +343,28 @@ export class StateStore {
           createdAt: now,
         });
       }
+      this.#recoverInterruptedDeviceRuns(now);
       this.db.exec("DELETE FROM sessions; DELETE FROM leases;");
     });
     return interrupted.map((row) => row.job_id);
+  }
+
+  #recoverInterruptedDeviceRuns(now) {
+    const active = this.db.prepare(
+      "SELECT * FROM device_runs WHERE phase IN ('running','waiting_authorization')",
+    ).all();
+    for (const row of active) {
+      this.db.prepare(
+        "UPDATE device_runs SET phase='paused_control_lost', outcome='CONTROL_RESTART', updated_at=?, finished_at=? WHERE device_run_id=?",
+      ).run(now, now, row.device_run_id);
+      this.#insertMissionEvent({
+        missionId: row.mission_id,
+        type: "device_run.paused_control_lost",
+        payload: { deviceRunId: row.device_run_id, reason: "CONTROL_RESTART" },
+        createdAt: now,
+      });
+    }
+    return active.length;
   }
 
   upsertNode({
@@ -1286,5 +1328,245 @@ export class StateStore {
       type: row.type,
       payload: parseJson(row.payload_json, {}),
     }));
+  }
+
+  #publicDeviceRun(row) {
+    if (!row) return null;
+    return {
+      deviceRunId: row.device_run_id,
+      missionId: row.mission_id,
+      missionHash: row.mission_hash,
+      missionVersion: row.mission_version,
+      deviceId: row.device_id,
+      sessionId: row.session_id,
+      leaseId: row.lease_id,
+      controllerAgent: row.controller_agent,
+      controllerEpoch: row.controller_epoch,
+      phase: row.phase,
+      outcome: row.outcome,
+      heartbeatAt: iso(row.heartbeat_at),
+      readinessReceipt: parseJson(row.readiness_receipt_json, null),
+      createdAt: iso(row.created_at),
+      updatedAt: iso(row.updated_at),
+      finishedAt: row.finished_at ? iso(row.finished_at) : null,
+    };
+  }
+
+  // Atomic placement + lease + Session + device_run in one BEGIN IMMEDIATE transaction.
+  // Selects exactly one canonical ready+free device (no capability required, since Explorer
+  // primitives are not typed actions). The lease is owned by the device_run. A registry
+  // mirror may be supplied for a READINESS_SPLIT check; it can only restrict, never permit.
+  openDeviceRunStorage({
+    missionId,
+    missionHash,
+    missionVersion,
+    controllerAgent,
+    authorityNodeId,
+    placement = {},
+    registrySnapshot = null,
+    ttlMs = 60000,
+  }) {
+    const placementRequest = normalizePlacementRequest({ deviceId: null, placement });
+    const now = this.now();
+    this.cleanupExpiredLeases();
+    return this.transaction(() => {
+      const requestedNodeId = placementRequest.placement.nodeId || authorityNodeId;
+      const node = this.getNode(requestedNodeId);
+      if (!node || node.status !== "online" || node.dispatchMode !== "local") {
+        throw new ControlPlaneError("NODE_UNAVAILABLE", `node ${requestedNodeId} is unavailable for local dispatch`, {
+          status: 409, details: { nodeId: requestedNodeId },
+        });
+      }
+      const candidates = this.#placementCandidates();
+      const matching = candidates.filter((candidate) => {
+        if (candidate.nodeId !== requestedNodeId || !candidate.online || candidate.quarantined) return false;
+        if (!candidate.routingProfile.enabled) return false;
+        if (placementRequest.placement.physicalLabel
+          && candidate.physicalLabel !== placementRequest.placement.physicalLabel) return false;
+        const requiredTags = placementRequest.placement.requiredTags || [];
+        if (!requiredTags.every((tag) => candidate.routingProfile.tags.includes(tag))) return false;
+        return true;
+      });
+      const free = matching.filter((candidate) => candidate.effectiveLoad === 0);
+      free.sort((left, right) => (
+        left.physicalLabel.localeCompare(right.physicalLabel)
+        || left.deviceId.localeCompare(right.deviceId)
+      ));
+      const selected = free[0];
+      if (!selected) {
+        const anyReady = matching.length > 0;
+        const code = anyReady ? "DEVICE_BUSY" : "NO_ELIGIBLE_DEVICE";
+        throw new ControlPlaneError(
+          code,
+          code === "DEVICE_BUSY" ? "all eligible devices are busy" : "no device satisfies the placement request",
+          { status: code === "DEVICE_BUSY" ? 423 : 409, details: { missionId, nodeId: requestedNodeId } },
+        );
+      }
+      if (registrySnapshot && typeof registrySnapshot === "object") {
+        const reg = registrySnapshot;
+        if ((typeof reg.deviceId === "string" && reg.deviceId !== selected.deviceId)
+          || (typeof reg.alias === "string" && reg.alias !== selected.alias)
+          || (typeof reg.physicalLabel === "string" && reg.physicalLabel !== selected.physicalLabel)
+          || reg.online === false
+          || reg.quarantined === true) {
+          throw new ControlPlaneError(
+            "READINESS_SPLIT",
+            "registry and control plane readiness disagree",
+            { status: 409, details: { deviceId: selected.deviceId } },
+          );
+        }
+      }
+      const rawDevice = this.db.prepare("SELECT updated_at FROM devices WHERE device_id=?").get(selected.deviceId);
+      const readinessReceipt = {
+        source: "control-plane",
+        deviceId: selected.deviceId,
+        alias: selected.alias,
+        version: rawDevice?.updated_at ?? null,
+        ready: true,
+        checkedAt: iso(now),
+        registryCoherent: registrySnapshot ? true : null,
+      };
+      const routeDecision = {
+        mode: placementRequest.mode,
+        decision: "dispatchable",
+        selectedNodeId: selected.nodeId,
+        selectedDeviceId: selected.deviceId,
+        selectedDevice: {
+          deviceId: selected.deviceId,
+          alias: selected.alias,
+          physicalLabel: selected.physicalLabel,
+          nodeId: selected.nodeId,
+        },
+        queueDepth: selected.pendingJobs,
+        waitingApproval: selected.waitingApproval,
+        activeLease: selected.activeLease,
+        requiredResources: ["device"],
+        selector: placementRequest.placement,
+        assignedAt: iso(now),
+        advisory: false,
+      };
+
+      const deviceRunId = newId("device_run");
+      const leaseId = newId("lease");
+      const sessionId = newId("session");
+      const token = newId("lease_token");
+      const tokenHash = sha256(token);
+      try {
+        this.db.prepare(`
+          INSERT INTO leases (
+            lease_id, device_id, kind, holder_id, job_id, token_hash, created_at, heartbeat_at, expires_at, owner_device_run_id
+          ) VALUES (?, ?, 'mission', ?, NULL, ?, ?, ?, ?, ?)
+        `).run(leaseId, selected.deviceId, controllerAgent, tokenHash, now, now, now + ttlMs, deviceRunId);
+      } catch (error) {
+        if (String(error?.message).includes("UNIQUE constraint failed: leases.device_id")) {
+          throw new ControlPlaneError("DEVICE_BUSY", "device already has an active lease", {
+            status: 423, details: { missionId, deviceId: selected.deviceId },
+          });
+        }
+        throw error;
+      }
+      this.db.prepare(`
+        INSERT INTO sessions (
+          session_id, lease_id, actor_id, device_id, token_hash, canary,
+          scope_capability_id, placement_decision_json, created_at, expires_at
+        ) VALUES (?, ?, ?, ?, ?, 0, NULL, ?, ?, ?)
+      `).run(sessionId, leaseId, controllerAgent, selected.deviceId, tokenHash, canonicalJson(routeDecision), now, now + ttlMs);
+      this.db.prepare(`
+        INSERT INTO device_runs (
+          device_run_id, mission_id, mission_hash, mission_version, device_id, session_id, lease_id,
+          controller_agent, controller_epoch, heartbeat_at, phase, outcome, readiness_receipt_json,
+          created_at, updated_at, finished_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 'running', NULL, ?, ?, ?, NULL)
+      `).run(
+        deviceRunId, missionId, missionHash, missionVersion, selected.deviceId, sessionId, leaseId,
+        controllerAgent, now, canonicalJson(readinessReceipt), now, now,
+      );
+      this.#insertMissionEvent({
+        missionId,
+        type: "device_run.opened",
+        payload: {
+          deviceRunId, deviceId: selected.deviceId, sessionId, leaseId,
+          controllerAgent, controllerEpoch: 1,
+        },
+        createdAt: now,
+      });
+      const leaseRow = this.db.prepare("SELECT * FROM leases WHERE lease_id=?").get(leaseId);
+      return {
+        deviceRunId,
+        missionId,
+        deviceId: selected.deviceId,
+        sessionId,
+        leaseId,
+        token,
+        controllerAgent,
+        controllerEpoch: 1,
+        lease: publicLease(leaseRow, token),
+        routeDecision,
+        readinessReceipt,
+        heartbeatAt: iso(now),
+        tuple: {
+          missionId,
+          deviceRunId,
+          sessionId,
+          controllerAgent,
+          controllerEpoch: 1,
+        },
+      };
+    });
+  }
+
+  getDeviceRun(deviceRunId) {
+    return this.#publicDeviceRun(this.db.prepare("SELECT * FROM device_runs WHERE device_run_id=?").get(deviceRunId));
+  }
+
+  listDeviceRuns({ missionId = null, phase = null } = {}) {
+    let sql = "SELECT * FROM device_runs";
+    const conditions = [];
+    const params = [];
+    if (missionId) { conditions.push("mission_id=?"); params.push(missionId); }
+    if (phase) { conditions.push("phase=?"); params.push(phase); }
+    if (conditions.length) sql += ` WHERE ${conditions.join(" AND ")}`;
+    sql += " ORDER BY created_at";
+    return this.db.prepare(sql).all(...params).map((row) => this.#publicDeviceRun(row));
+  }
+
+  updateDeviceRunPhase(deviceRunId, phase, { outcome = null, controllerEpoch = null } = {}) {
+    const now = this.now();
+    return this.transaction(() => {
+      const row = this.db.prepare("SELECT * FROM device_runs WHERE device_run_id=?").get(deviceRunId);
+      if (!row) throw new ControlPlaneError("DEVICE_RUN_NOT_FOUND", `unknown device run ${deviceRunId}`, { status: 404 });
+      const terminal = ["succeeded", "failed", "ambiguous", "blocked", "cancelled", "paused_control_lost"];
+      this.db.prepare(`
+        UPDATE device_runs SET
+          phase=?,
+          outcome=COALESCE(?, outcome),
+          controller_epoch=COALESCE(?, controller_epoch),
+          heartbeat_at=?,
+          updated_at=?,
+          finished_at=COALESCE(?, finished_at)
+        WHERE device_run_id=?
+      `).run(phase, outcome, controllerEpoch, now, now, terminal.includes(phase) ? now : null, deviceRunId);
+      this.#insertMissionEvent({
+        missionId: row.mission_id,
+        type: `device_run.${phase}`,
+        payload: { deviceRunId, outcome, ...(controllerEpoch !== null ? { controllerEpoch } : {}) },
+        createdAt: now,
+      });
+      return this.#publicDeviceRun(this.db.prepare("SELECT * FROM device_runs WHERE device_run_id=?").get(deviceRunId));
+    });
+  }
+
+  heartbeatDeviceRunStorage(deviceRunId, ttlMs = 60000) {
+    const now = this.now();
+    return this.transaction(() => {
+      const row = this.db.prepare("SELECT * FROM device_runs WHERE device_run_id=?").get(deviceRunId);
+      if (!row) throw new ControlPlaneError("DEVICE_RUN_NOT_FOUND", `unknown device run ${deviceRunId}`, { status: 404 });
+      this.db.prepare("UPDATE leases SET heartbeat_at=?, expires_at=? WHERE lease_id=?")
+        .run(now, now + ttlMs, row.lease_id);
+      this.db.prepare("UPDATE sessions SET expires_at=? WHERE session_id=?").run(now + ttlMs, row.session_id);
+      this.db.prepare("UPDATE device_runs SET heartbeat_at=?, updated_at=? WHERE device_run_id=?")
+        .run(now, now, deviceRunId);
+      return this.#publicDeviceRun(this.db.prepare("SELECT * FROM device_runs WHERE device_run_id=?").get(deviceRunId));
+    });
   }
 }

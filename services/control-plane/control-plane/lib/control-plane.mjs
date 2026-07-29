@@ -3,6 +3,8 @@ import { fingerprint } from "./canonical.mjs";
 import { evaluateCapabilityPolicy } from "./policy.mjs";
 import { inspectTransportLock } from "./xiaowei-transport.mjs";
 import { normalizeRecoveryVisualAnalysis } from "./recovery-inspection.mjs";
+import { MissionRuntime } from "./mission-runtime.mjs";
+import { DeviceRunRuntime } from "./device-run.mjs";
 
 function collectEvidenceFiles(...values) {
   return values.flatMap((value) => Array.isArray(value?.evidenceFiles) ? value.evidenceFiles : []);
@@ -86,6 +88,7 @@ export class ControlPlane {
     schedulerIntervalMs = 100,
     leaseTtlMs = 60000,
     leaseHeartbeatMs = 10000,
+    missions = null,
   }) {
     this.state = state;
     this.capabilities = capabilities;
@@ -104,6 +107,14 @@ export class ControlPlane {
     this.activeJobs = new Map();
     this.started = false;
     this.pumping = false;
+    this.missions = missions instanceof MissionRuntime ? missions : new MissionRuntime({ state });
+    this.deviceRuns = new DeviceRunRuntime({
+      state,
+      missions: this.missions,
+      authorityNodeId,
+      leaseTtlMs,
+      leaseHeartbeatMs,
+    });
     state.upsertNode({
       nodeId: authorityNodeId,
       status: "online",
@@ -126,7 +137,28 @@ export class ControlPlane {
   async stop() {
     this.started = false;
     clearInterval(this.scheduler);
+    for (const deviceRunId of [...this.deviceRuns.heartbeats.keys()]) {
+      this.deviceRuns.stopRunnerHeartbeat(deviceRunId);
+    }
     await Promise.allSettled([...this.activeJobs.values()]);
+  }
+
+  // Mission-bound DeviceRun entry point. The runner auto-heartbeats its lease server-side
+  // once the control loop is started, so normal progress does not depend on a caller.
+  openDeviceRun(input) {
+    const run = this.deviceRuns.openDeviceRun(input);
+    if (this.started) this.deviceRuns.startRunnerHeartbeat(run.deviceRunId, run.token);
+    return run;
+  }
+
+  assertControlTuple(tuple) {
+    return this.deviceRuns.assertControlTuple(tuple);
+  }
+
+  markControlLost(deviceRunId, input) {
+    const run = this.deviceRuns.markControlLost(deviceRunId, input);
+    this.deviceRuns.stopRunnerHeartbeat(deviceRunId);
+    return run;
   }
 
   submitJob({
