@@ -211,6 +211,24 @@ export class ControlRouter {
       };
     }
 
+    if (method === "POST" && path === "/control/v1/missions/primitives") {
+      const input = requireBody(body);
+      const result = await this.control.executeMissionPrimitive(input.tuple, {
+        primitive: input.primitive,
+        envelope: input.envelope,
+      });
+      return { status: 200, body: { ...result } };
+    }
+    match = path.match(/^\/control\/v1\/missions\/([^/]+)\/device-runs$/);
+    if (method === "GET" && match) {
+      return {
+        status: 200,
+        body: {
+          deviceRuns: this.control.deviceRuns.listDeviceRuns({ missionId: decodeURIComponent(match[1]) }),
+        },
+      };
+    }
+
     match = path.match(/^\/control\/v1\/approvals\/([^/]+)$/);
     if (method === "POST" && match) {
       return {

@@ -5,6 +5,8 @@ import { inspectTransportLock } from "./xiaowei-transport.mjs";
 import { normalizeRecoveryVisualAnalysis } from "./recovery-inspection.mjs";
 import { MissionRuntime } from "./mission-runtime.mjs";
 import { DeviceRunRuntime } from "./device-run.mjs";
+import { EffectFirewall } from "./effect-firewall.mjs";
+import { acquireTransportLock as defaultAcquireTransportLock } from "./xiaowei-transport.mjs";
 
 function collectEvidenceFiles(...values) {
   return values.flatMap((value) => Array.isArray(value?.evidenceFiles) ? value.evidenceFiles : []);
@@ -89,6 +91,7 @@ export class ControlPlane {
     leaseTtlMs = 60000,
     leaseHeartbeatMs = 10000,
     missions = null,
+    acquireTransportLock = null,
   }) {
     this.state = state;
     this.capabilities = capabilities;
@@ -115,6 +118,10 @@ export class ControlPlane {
       leaseTtlMs,
       leaseHeartbeatMs,
     });
+    this.firewall = new EffectFirewall();
+    this.acquireTransportLock = typeof acquireTransportLock === "function"
+      ? acquireTransportLock
+      : defaultAcquireTransportLock;
     state.upsertNode({
       nodeId: authorityNodeId,
       status: "online",
@@ -159,6 +166,52 @@ export class ControlPlane {
     const run = this.deviceRuns.markControlLost(deviceRunId, input);
     this.deviceRuns.stopRunnerHeartbeat(deviceRunId);
     return run;
+  }
+
+  // Mission-bound Explorer primitive. Validates the complete control tuple, classifies the
+  // effect-intent envelope against the fresh observed surface, takes the shared transport lock,
+  // records a durable primitive event, and releases the lock. No typed action ID, actionId, or
+  // Workflow DSL is required. The verdict drives the ECP/PHC (Task 4); a blocked verdict is
+  // recorded and returned, never silently dropped or disguised as an approval.
+  async executeMissionPrimitive(tuple, { primitive, envelope }) {
+    if (typeof primitive !== "string" || primitive.trim() === "") {
+      throw new ControlPlaneError("PRIMITIVE_REQUIRED", "primitive is required", { status: 400 });
+    }
+    if (!envelope || typeof envelope !== "object") {
+      throw new ControlPlaneError("ENVELOPE_REQUIRED", "effect-intent envelope is required", { status: 400 });
+    }
+    const run = this.assertControlTuple(tuple);
+    const mission = this.missions.requireActiveMission(tuple.missionId);
+    const verdict = this.firewall.classify(envelope, mission);
+    const release = await this.acquireTransportLock();
+    try {
+      const payload = {
+        deviceRunId: run.deviceRunId,
+        primitive,
+        verdict: {
+          code: verdict.code,
+          decision: verdict.decision,
+          surface: verdict.surface ?? null,
+          reason: verdict.reason,
+          ...(verdict.effectAction ? { effectAction: verdict.effectAction } : {}),
+        },
+      };
+      this.state.appendMissionEvent({ missionId: tuple.missionId, type: "mission.primitive", payload });
+      this.state.appendEvent({ runId: run.deviceRunId, type: "mission.primitive", payload });
+      try {
+        this.evidence.appendEvent(run.deviceRunId, {
+          type: "mission.primitive",
+          primitive,
+          verdict: payload.verdict,
+          createdAt: new Date().toISOString(),
+        });
+      } catch {
+        // SQLite is the durable audit authority; JSONL evidence mirroring is best-effort.
+      }
+      return { deviceRunId: run.deviceRunId, primitive, verdict, recorded: true };
+    } finally {
+      try { release(); } catch {}
+    }
   }
 
   submitJob({

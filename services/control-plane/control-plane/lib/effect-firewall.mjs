@@ -1,0 +1,137 @@
+import { evaluateMissionEffect, targetFingerprint } from "./mission-policy.mjs";
+
+export const SNAPSHOT_MAX_AGE_MS = 5000;
+
+// Observed-surface categories. The classifier must emit at least these. Risk is decided by
+// the observed surface (authoritative, from the fresh snapshot/parser), NOT by the primitive
+// type or the agent-declared intent. declaredIntent is an untrusted hint only.
+const SURFACE_INFO = {
+  navigation: { risk: "R0", kind: "reversible" },
+  observation: { risk: "R0", kind: "reversible" },
+  "social-effect": { risk: "R2", kind: "social" },
+  publish: { risk: "R3", kind: "protected" },
+  delete: { risk: "R3", kind: "protected" },
+  payment: { risk: "R3", kind: "payment" },
+  "risk-control": { risk: "R3", kind: "stop" },
+  login: { risk: "R3", kind: "stop" },
+  captcha: { risk: "R3", kind: "stop" },
+  unknown: { risk: "R3", kind: "unknown" },
+};
+
+const REVERSIBLE_SURFACES = new Set(["navigation", "observation"]);
+const REVERSIBLE_INTENTS = new Set(["screenshot", "dump", "launch", "back", "home", "navigate", "navigation", "observation"]);
+const STOP_SURFACES = new Set(["risk-control", "login", "captcha"]);
+
+const DECLARED_INTENT_RISK = {
+  screenshot: "R0", dump: "R0", launch: "R0", back: "R0", home: "R0",
+  navigate: "R0", navigation: "R0", observation: "R0",
+  follow: "R2", like: "R2", collect: "R2", comment: "R2", dm: "R2",
+  publish: "R3", delete: "R3", payment: "R3",
+};
+
+const RISK_RANK = { R0: 0, R1: 1, R2: 2, R3: 3 };
+
+function maxRisk(a, b) {
+  const ra = RISK_RANK[a] ?? 0;
+  const rb = RISK_RANK[b] ?? 0;
+  for (const [key, rank] of Object.entries(RISK_RANK)) {
+    if (rank === Math.max(ra, rb)) return key;
+  }
+  return a;
+}
+
+function effectActionFor(surface, input) {
+  if (surface === "social-effect") return input.snapshot?.effectAction || input.declaredIntent || null;
+  if (surface === "payment") return "payment";
+  if (surface === "publish") return "publish";
+  if (surface === "delete") return "delete";
+  return null;
+}
+
+// The Effect Firewall resolves an effect-intent envelope against an immutable Mission and a
+// fresh observed surface. It returns { code, decision, surface, reason, risk, effectAction? }.
+// decision ∈ { auto, ecp, phc, blocked }. A raw tap landing on publish/payment is forced through
+// ECP/PHC; raw tap cannot bypass payment or the Protected Human Commit.
+export class EffectFirewall {
+  constructor({ maxAgeMs = SNAPSHOT_MAX_AGE_MS, now = Date.now } = {}) {
+    this.maxAgeMs = maxAgeMs;
+    this.now = now;
+  }
+
+  classify(input, mission, { profile = "production", now = this.now, maxAgeMs = this.maxAgeMs } = {}) {
+    const declaredTarget = input?.declaredTarget ?? null;
+    const observedTarget = input?.observedTargetFingerprint ?? null;
+
+    // 1. Target binding: the parser-observed fingerprint is the bound target. The agent-declared
+    //    target must agree or be absent; it is never trusted as the bound target by itself.
+    if (declaredTarget !== null && observedTarget !== null && declaredTarget !== observedTarget) {
+      return { code: "TARGET_MISMATCH", decision: "blocked", surface: null, reason: "DECLARED_TARGET_NOT_OBSERVED" };
+    }
+
+    const snapshot = input?.snapshot;
+    const surface = snapshot?.surface ?? null;
+
+    // 2. Snapshot freshness: both createdAt and observedAt must be present and within maxAgeMs.
+    if (!snapshot || snapshot.createdAt === undefined || snapshot.observedAt === undefined) {
+      return { code: "SNAPSHOT_STALE", decision: "blocked", surface, reason: "SNAPSHOT_MISSING_TIMESTAMP" };
+    }
+    const createdMs = Date.parse(snapshot.createdAt);
+    const observedMs = Date.parse(snapshot.observedAt);
+    const createdAge = now() - createdMs;
+    const observedAge = now() - observedMs;
+    if (!Number.isFinite(createdMs) || !Number.isFinite(observedMs)
+      || createdAge > maxAgeMs || observedAge > maxAgeMs) {
+      return {
+        code: "SNAPSHOT_STALE",
+        decision: "blocked",
+        surface,
+        reason: (!Number.isFinite(createdMs) || createdAge > maxAgeMs) ? "CREATED_STALE" : "OBSERVED_STALE",
+      };
+    }
+
+    // 3. Surface classification: unknown/unlisted surfaces fail closed in production.
+    const info = SURFACE_INFO[surface];
+    if (!info || surface === "unknown") {
+      return { code: "SURFACE_UNKNOWN", decision: "blocked", surface, reason: "UNCLASSIFIED_SURFACE" };
+    }
+
+    const declaredIntent = input?.declaredIntent ?? null;
+
+    // 4. Intent/surface consistency: a declared reversible intent on a non-reversible surface
+    //    is an intent mismatch (e.g. "navigate" while the surface is publish).
+    if (declaredIntent && REVERSIBLE_INTENTS.has(declaredIntent) && !REVERSIBLE_SURFACES.has(surface)) {
+      return { code: "INTENT_MISMATCH", decision: "blocked", surface, reason: "REVERSIBLE_INTENT_ON_EFFECT_SURFACE" };
+    }
+
+    const boundTarget = observedTarget ?? targetFingerprint(input?.target);
+    const risk = maxRisk(DECLARED_INTENT_RISK[declaredIntent], info.risk);
+
+    // 5. Reversible navigation/observation runs automatically.
+    if (REVERSIBLE_SURFACES.has(surface)) {
+      return { code: "REVERSIBLE_AUTO", decision: "auto", surface, reason: "REVERSIBLE_NAVIGATION", risk };
+    }
+
+    // 6. Stop conditions (risk-control / login / captcha) block, never approve.
+    if (STOP_SURFACES.has(surface)) {
+      return { code: "STOP_CONDITION", decision: "blocked", surface, reason: "STOP_CONDITION", risk };
+    }
+
+    // 7. Effect surfaces (social / publish / delete / payment): the Mission scope + policy
+    //    decide ecp / phc / scope_violation / blocked via the shared evaluator.
+    const action = effectActionFor(surface, input);
+    const effect = evaluateMissionEffect(mission, { action, target: boundTarget }, { now });
+    const code = mapEffectCode(surface, effect.decision);
+    return { code, decision: effect.decision, surface, reason: effect.reason, risk, ...(action ? { effectAction: action } : {}) };
+  }
+}
+
+function mapEffectCode(surface, decision) {
+  if (decision === "ecp") return surface === "payment" ? "PHC_PAYMENT" : "ECP_AUTO";
+  if (decision === "phc") return surface === "payment" ? "PHC_PAYMENT" : "PHC_PROTECTED";
+  if (decision === "scope_violation") return "SCOPE_VIOLATION";
+  return "MISSION_BLOCKED";
+}
+
+export function classifyEffectIntent(input, mission, options) {
+  return new EffectFirewall().classify(input, mission, options);
+}

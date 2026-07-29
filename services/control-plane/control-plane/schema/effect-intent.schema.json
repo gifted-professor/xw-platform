@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://xhs-device-agent.local/schema/effect-intent-v1.json",
+  "title": "Mission Explorer effect-intent envelope",
+  "description": "Every Mission-bound Explorer primitive (including raw tap/swipe/input) carries this envelope. Risk is decided by the observed surface, not by the primitive type or the agent-declared intent.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "primitive", "snapshot"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "primitive": { "enum": ["screenshot", "dump", "launch", "back", "home", "tap", "swipe", "input"] },
+    "declaredIntent": { "type": "string", "minLength": 1 },
+    "declaredTarget": { "type": "string", "minLength": 1 },
+    "observedTargetFingerprint": { "type": "string", "minLength": 1 },
+    "target": {
+      "type": ["string", "object"],
+      "description": "Mission bound target; the observedTargetFingerprint from the fresh snapshot/parser is authoritative."
+    },
+    "snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["surface", "createdAt", "observedAt"],
+      "properties": {
+        "surface": {
+          "enum": ["navigation", "observation", "social-effect", "publish", "delete", "payment", "risk-control", "login", "captcha", "unknown"]
+        },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "observedAt": { "type": "string", "format": "date-time" },
+        "effectAction": { "type": "string", "minLength": 1 },
+        "pageFingerprint": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}
