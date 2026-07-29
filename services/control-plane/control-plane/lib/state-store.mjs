@@ -233,6 +233,30 @@ export class StateStore {
         bytes INTEGER NOT NULL,
         created_at INTEGER NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS missions (
+        mission_id TEXT PRIMARY KEY,
+        idempotency_key TEXT NOT NULL UNIQUE,
+        issuer_actor_id TEXT NOT NULL,
+        version INTEGER NOT NULL DEFAULT 1,
+        mission_hash TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        policy_json TEXT NOT NULL,
+        status TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        revoked_at INTEGER,
+        revoked_reason TEXT
+      );
+      CREATE INDEX IF NOT EXISTS missions_status_idx ON missions(status, expires_at);
+      CREATE TABLE IF NOT EXISTS mission_events (
+        event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        mission_id TEXT NOT NULL REFERENCES missions(mission_id),
+        created_at INTEGER NOT NULL,
+        type TEXT NOT NULL,
+        payload_json TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS mission_events_idx ON mission_events(mission_id, event_id);
     `);
     this.#ensureColumn(
       "devices",
@@ -1135,6 +1159,132 @@ export class StateStore {
       sha256: row.sha256,
       bytes: row.bytes,
       createdAt: iso(row.created_at),
+    }));
+  }
+
+  #publicMission(row) {
+    if (!row) return null;
+    const policy = parseJson(row.policy_json, {});
+    return {
+      missionId: row.mission_id,
+      version: row.version,
+      missionHash: row.mission_hash,
+      contentHash: row.content_hash,
+      status: row.status,
+      createdAt: iso(row.created_at),
+      updatedAt: iso(row.updated_at),
+      expiresAt: iso(row.expires_at),
+      revokedAt: row.revoked_at ? iso(row.revoked_at) : null,
+      revokedReason: row.revoked_reason,
+      ...policy,
+    };
+  }
+
+  // Additive, idempotent Mission insert. The canonical identity is mission_id (derived
+  // from the content hash); idempotency_key is the user-supplied dedup handle. Same key +
+  // same content reuses; same key + different content conflicts; different key + same
+  // content reuses the canonical mission. Never mutates an existing mission's scope.
+  addMission({
+    missionId,
+    idempotencyKey,
+    issuerActorId,
+    version = 1,
+    missionHash,
+    contentHash,
+    policy,
+    expiresAtMs,
+  }) {
+    const now = this.now();
+    return this.transaction(() => {
+      const byKey = this.db.prepare("SELECT * FROM missions WHERE idempotency_key=?").get(idempotencyKey);
+      if (byKey) {
+        if (byKey.mission_id !== missionId) {
+          throw new ControlPlaneError("IDEMPOTENCY_CONFLICT", "idempotency key was used for a different mission", {
+            status: 409,
+            details: { missionId: byKey.mission_id },
+          });
+        }
+        return { mission: this.#publicMission(byKey), reused: true };
+      }
+      const byId = this.db.prepare("SELECT * FROM missions WHERE mission_id=?").get(missionId);
+      if (byId) {
+        return { mission: this.#publicMission(byId), reused: true };
+      }
+      this.db.prepare(`
+        INSERT INTO missions (
+          mission_id, idempotency_key, issuer_actor_id, version, mission_hash, content_hash,
+          policy_json, status, created_at, updated_at, expires_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
+      `).run(
+        missionId,
+        idempotencyKey,
+        issuerActorId,
+        version,
+        missionHash,
+        contentHash,
+        canonicalJson(policy),
+        now,
+        now,
+        expiresAtMs,
+      );
+      this.#insertMissionEvent({
+        missionId,
+        type: "mission.created",
+        payload: { missionHash, contentHash, version },
+        createdAt: now,
+      });
+      return {
+        mission: this.#publicMission(this.db.prepare("SELECT * FROM missions WHERE mission_id=?").get(missionId)),
+        reused: false,
+      };
+    });
+  }
+
+  getMission(missionId) {
+    return this.#publicMission(this.db.prepare("SELECT * FROM missions WHERE mission_id=?").get(missionId));
+  }
+
+  getMissionByIdempotencyKey(idempotencyKey) {
+    return this.#publicMission(this.db.prepare("SELECT * FROM missions WHERE idempotency_key=?").get(idempotencyKey));
+  }
+
+  listMissions() {
+    return this.db.prepare("SELECT * FROM missions ORDER BY created_at").all().map((row) => this.#publicMission(row));
+  }
+
+  setMissionStatus(missionId, status, { reason = null } = {}) {
+    const now = this.now();
+    return this.transaction(() => {
+      const row = this.db.prepare("SELECT * FROM missions WHERE mission_id=?").get(missionId);
+      if (!row) throw new ControlPlaneError("MISSION_NOT_FOUND", `unknown mission ${missionId}`, { status: 404 });
+      if (row.status === status) return this.#publicMission(row);
+      this.db.prepare(
+        "UPDATE missions SET status=?, updated_at=?, revoked_at=COALESCE(?, revoked_at), revoked_reason=COALESCE(?, revoked_reason) WHERE mission_id=?",
+      ).run(status, now, status === "revoked" ? now : null, reason, missionId);
+      return this.#publicMission(this.db.prepare("SELECT * FROM missions WHERE mission_id=?").get(missionId));
+    });
+  }
+
+  #insertMissionEvent({ missionId, type, payload, createdAt }) {
+    const result = this.db.prepare(
+      "INSERT INTO mission_events (mission_id, created_at, type, payload_json) VALUES (?, ?, ?, ?)",
+    ).run(missionId, createdAt, type, canonicalJson(payload));
+    return Number(result.lastInsertRowid);
+  }
+
+  appendMissionEvent({ missionId, type, payload = {} }) {
+    return this.#insertMissionEvent({ missionId, type, payload, createdAt: this.now() });
+  }
+
+  listMissionEvents(missionId, after = 0) {
+    return this.db.prepare(
+      "SELECT * FROM mission_events WHERE mission_id=? AND event_id>? ORDER BY event_id",
+    ).all(missionId, after).map((row) => ({
+      eventId: row.event_id,
+      missionId: row.mission_id,
+      createdAt: iso(row.created_at),
+      type: row.type,
+      payload: parseJson(row.payload_json, {}),
     }));
   }
 }

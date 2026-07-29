@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://xhs-device-agent.local/schema/mission-v1.json",
+  "title": "Immutable Mission policy",
+  "description": "Freedom MVP single-device Mission policy. parallelism is fixed to 1; payment is always confirm.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "issuer", "idempotencyKey", "app", "account", "parallelism", "controllers", "scope", "validity"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "issuer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["actorId"],
+      "properties": { "actorId": { "type": "string", "minLength": 1 } }
+    },
+    "idempotencyKey": { "type": "string", "minLength": 1 },
+    "app": { "type": "string", "minLength": 1 },
+    "account": { "type": "string", "minLength": 1 },
+    "parallelism": { "type": "integer", "const": 1 },
+    "controllers": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["actions", "targets", "totalCount", "perTargetCount", "frequency"],
+      "properties": {
+        "actions": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "targets": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "values"],
+          "properties": {
+            "kind": { "enum": ["fingerprint"] },
+            "values": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 },
+              "minItems": 1,
+              "uniqueItems": true
+            }
+          }
+        },
+        "totalCount": { "type": "integer", "minimum": 1 },
+        "perTargetCount": { "type": "integer", "minimum": 1 },
+        "frequency": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["count", "windowSeconds"],
+          "properties": {
+            "count": { "type": "integer", "minimum": 1 },
+            "windowSeconds": { "type": "integer", "minimum": 1 }
+          }
+        }
+      }
+    },
+    "validity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["expiresAt"],
+      "properties": {
+        "expiresAt": { "type": "string", "format": "date-time" },
+        "notBefore": { "type": "string", "format": "date-time" }
+      }
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "publish": { "enum": ["confirm", "allow_within_scope"] },
+        "delete": { "enum": ["confirm", "allow_within_scope"] },
+        "payment": { "enum": ["confirm"] }
+      }
+    },
+    "redaction": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "publicFields": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}
