@@ -104,6 +104,7 @@
   - **`头像,<name>` content-desc 格式未实证**（Risk #1）：仅来自 fast-operator 注释，无真实 dump fixture。tier-1 miss 即 fail-closed（authorMismatch，不 tap，安全），但 capability 在格式确认前**不能真正成功**。实施第一步=用 Explorer 在 01 抓真实主页浮层 dump 确认格式。
   - **Hermes 10+ 真机回归（req#12）未执行**：独立验收，执行者不自评；需独立 setup 把 01 开到目标用户主页浮层（deep-link `xhs://note/<noteId>` → tap 作者头像），本 capability 按设计不导航，setup 不属 capability 范围。
   - **知识库 recipe `recipe-xhs-follow-ensure-20260729` 待写**（留痕契约）。
+  - **合规 setup 路径缺口**（feat 分支并入）：需补 `xhs.profile.inspect`（R0 只读）+ `xhs.profile.open_dry_run`（R1 可逆导航）两个分层能力做 10+ 回归的 deterministic setup，或人手预置浮层后用正式只读 capability 观察；**禁止 bypass 做 acceptance**。
 
 ### abtop 远程通道：Fleet/Screen/Operator API（2026-07-29）
 
