@@ -13,6 +13,7 @@
 四种 token：`--agent-token`、`--human-token`、`--observer-token`、`--operator-token`。
 
 - **开放调试模式**：当且仅当**四种 token 全部为空**时，registry 进入开放调试模式（所有请求按 `human` 处理）。只要配了任意一个 token，就不再开放调试。安装脚本在四 token 全空且未显式 `-DebugMode` 时**拒绝安装**。
+- **角色 token 不得重复**：鉴权按 human→agent→observer→operator 顺序匹配，任意两个非空角色 token 相同会让低权限凭证被解析成更高权限角色（如 observer==human 时 observer 命中 human）。**服务启动期和安装脚本都拒绝任何重复的非空角色 token**（启动期 `process.exit(1)`，安装期 `throw`）。
 - **observer / operator 只认 header token**：`x-registry-token`，**不接受 URL `?token=`**。human/agent 仍保留 `?token=` 换 session 的既有流程（核心路由不动）。
 - `readOnlyRole()` = observer || operator，作纵深防御。
 
@@ -78,8 +79,9 @@ ok, schemaVersion: "xhs.observer.fleet.v1", generatedAt, degraded, sources, devi
 1. 查 evidence 最新截图行。
 2. `bytes > SCREEN_MAX_BYTES` → `{ oversize:true }` → **413**。
 3. **路径校验防 symlink 逃逸**：对 `RUNS_ROOT` 和目标 `<runsRoot>/<run_id>/<path>` 都做 `realpath`，再做 containment 校验（`targetReal === rootReal || startsWith(rootReal + sep)`），不符 → 丢弃 404。
-4. 异步 `readFile`；读后重算 SHA-256 `safeEqual(row.sha256)`、`buf.length === row.bytes`、魔数判型（PNG `89 50 4E 47` / JPEG `FF D8 FF`），任一不符 → 丢弃 404。
-5. `RUNS_ROOT` 为空 → 404。
+4. 异步 `readFile`；读后重算 SHA-256、`buf.length === row.bytes`、魔数判型（PNG `89 50 4E 47` / JPEG `FF D8 FF`），任一不符 → 丢弃 404。
+5. **SHA 收严**：数据库摘要必须是合法 64 位十六进制 SHA-256，且与重算值严格一致（`safeEqual`）。空值或异常类型**不得**放行——否则绕过完整性校验——一律 404。
+6. `RUNS_ROOT` 为空 → 404。
 
 ### 缓存与 stale 语义（P0-4 拆分）
 
@@ -91,14 +93,14 @@ ok, schemaVersion: "xhs.observer.fleet.v1", generatedAt, degraded, sources, devi
 > 数值参数用 `Number.isFinite` 解析（**不**用 `Number(x) || default`，后者会把合法的 `0` 当假值回退到默认）。
 
 **`stale=true` 的两种情形**：
-1. **降级沿用旧缓存**：缓存未过期但本次重新加载失败（文件丢失 / 校验不符 / realpath 失败）且存在旧缓存 → 标记 `fallback:true` 沿用旧图，`stale:true`。
+1. **降级沿用旧缓存**：缓存未过期但本次重新加载失败（文件丢失 / 校验不符 / realpath 失败）且存在旧缓存 → 标记 `fallback:true` 沿用旧图，`stale:true`。**fallback 条目必须写回 `screenCache`**（带新的 `loadedAt`），否则后续请求会取到旧 `fallback:false` 条目并重复读盘 / 误报非 stale。
 2. **截图年龄超阈值**：`ageSeconds*1000 > SCREEN_STALE_AFTER_MS` → `stale:true`。
 
 正常新图 `stale:false`。
 
 ### 并发单飞（P1-6）
 
-`screenInflight Map<alias, Promise>`：per-alias 单飞，并发请求共用一次 DB + 文件读取，防缓存穿透。测试已证明并发请求只发生一次磁盘加载。
+`screenInflight Map<alias, Promise>`：per-alias 单飞，并发请求共用一次 DB + 文件读取，防缓存穿透。测试用 `--import` preload 在子进程里对 `fs.promises.readFile`/`realpath` 计数，**已用读盘计数证明**：冷缓存 8 路并发只发生 1 次截图字节读取；热缓存并发 0 次读盘。
 
 ### 响应头与缓存
 
@@ -121,6 +123,7 @@ ok, alias, sha256, bytes, capturedAt, jobId, contentType, ageSeconds, stale
 - **默认监听 `127.0.0.1`**（`--host 127.0.0.1`）；Observer API 不默认监听 `0.0.0.0`。对外通过 **abtop 后端或 Tailscale Serve** 暴露，浏览器不直连 registry。
 - 已**移除源码内硬编码默认 AgentToken**；token 仅在非空时拼入 `--agent-token` 等参数。
 - 四 token 全空且未显式 `-DebugMode` → **拒绝安装**。
+- 任意两个非空角色 token 相同 → **拒绝安装**（与启动期去重一致，防静默提权）。
 - **凭证现状措辞（必须照此口径，不得宣称「凭证问题已解决」）**：
   > 已移除源码默认凭证；受保护的凭证注入（计划任务环境 / 密钥管理）仍是部署前置条件。
 - 已知残留风险：CLI arg 在 Windows 计划任务配置 / 进程信息中仍可见。生产应以受保护的凭证注入替代明文 CLI arg。
@@ -152,8 +155,8 @@ ok, alias, sha256, bytes, capturedAt, jobId, contentType, ageSeconds, stale
 
 ## 6. 回归与验证
 
-- `node --test tests/registry.test.mjs`：33/33（含 13 项负向测试）。
-- `npm test`：42/42；`npm run check`：通过；`git diff --check`：无空白错误。
+- `node --test tests/registry.test.mjs`：37/37（含负向测试：命名空间锁定、query-token 拒绝、路径穿越、SHA 不符/空/非十六进制拒绝、超大拒绝、stale 标记、fallback 写回连续请求、displayName/model 规范化、降级不假 Ready、meta 无 runId、**单飞读盘计数**、**重复 token 启动拒绝**）。
+- `npm test`：45/45；`npm run check`：通过；`git diff --check`：无空白错误。
 - 手起验证用**临时空闲端口 + 临时 DB + 临时 runsRoot**（不固定 17930），observer token 走 header：
   - `GET /api/observer/v1/fleet` → 200，含 `schemaVersion` / `displayName` / `model` / `reportedActor` / `actorVerified:false` / `freshness` / `degraded`。
   - `GET /api/observer/v1/screen/01` → 200 真图，ETag 带引号；`If-None-Match: "<sha>"` → 304。
@@ -163,7 +166,8 @@ ok, alias, sha256, bytes, capturedAt, jobId, contentType, ageSeconds, stale
 
 ## 7. 本轮改动文件
 
-- `registry.mjs`：开放调试条件、命名空间闸门、observer/operator header-only token、路由改名、Operator 全冻结、Fleet DTO 版本化与脱敏、Screen 完整性 / 缓存 / 单飞 / stale 语义。
-- `tests/registry.test.mjs`：真图夹具（动态 SHA、真 PNG 魔数、实际 `Buffer.length`）、三测试更新到新契约、13 项负向测试。
-- `install-registry-task.ps1`：移除硬编码默认 token、默认 `127.0.0.1`、四空拒绝 / `-DebugMode`。
+- `registry.mjs`：开放调试条件、命名空间闸门、observer/operator header-only token、**角色 token 启动期去重**、路由改名、Operator 全冻结、Fleet DTO 版本化与脱敏、Screen 完整性（含 SHA 64-hex 严格校验）/ 缓存 / 单飞 / fallback 写回 / stale 语义。
+- `tests/registry.test.mjs`：真图夹具（动态 SHA、真 PNG 魔数、实际 `Buffer.length`）、三测试更新到新契约、负向测试（含 SHA 空/非十六进制拒绝、单飞读盘计数、fallback 写回连续请求、重复 token 启动拒绝）。
+- `tests/screen-count-preload.mjs`：`--import` preload，在子进程里对 runsRoot 下 `fs.promises.readFile`/`realpath` 计数，供单飞与 fallback 测试观测读盘次数。
+- `install-registry-task.ps1`：移除硬编码默认 token、默认 `127.0.0.1`、四空拒绝 / `-DebugMode`、**重复 token 拒绝安装**。
 - `docs/observer-api-20260729.md`：本文件。

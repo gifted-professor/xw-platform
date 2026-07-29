@@ -17,6 +17,11 @@ $ErrorActionPreference = "Stop"
 if (-not $AgentToken -and -not $HumanToken -and -not $ObserverToken -and -not $OperatorToken -and -not $DebugMode) {
   throw "拒绝安装：四 token 全空会使 registry 进入开放调试模式。请传入至少一个 token，或显式指定 -DebugMode。"
 }
+# 角色 token 去重：鉴权按 human→agent→observer→operator 顺序匹配，任意两个非空角色 token 相同会让
+# 低权限凭证被解析成更高权限角色（如 observer==human 时 observer 命中 human）。安装期即拒绝。
+$roleTokens = @($AgentToken, $HumanToken, $ObserverToken, $OperatorToken) | Where-Object { $_ }
+$dups = $roleTokens | Group-Object | Where-Object { $_.Count -gt 1 }
+if ($dups) { throw "拒绝安装：存在重复的非空角色 token（$($dups.Name -join ', ')），会导致低权限凭证被解析成更高权限角色。请确保四个角色 token 互不相同。" }
 $taskName = "XhsDeviceRegistry"
 $workDir = "C:\Users\Public\xhs-registry"
 # 默认仅监听 127.0.0.1；对外通过 abtop 后端或 Tailscale Serve 暴露，不让 Observer API 默认监听 0.0.0.0

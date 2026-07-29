@@ -53,6 +53,16 @@ const TRUST_LOOPBACK = argOf("trust-loopback", "true") !== "false";
 // 只读观察者 / 受控代提交者凭证（abtop 远程通道）：observer 只读；operator 仅能调 /api/operator/*。
 const OBSERVER_TOKEN = argOf("observer-token", "");
 const OPERATOR_TOKEN = argOf("operator-token", "");
+// 角色 token 去重：鉴权按 human→agent→observer→operator 顺序匹配，任意两个非空角色 token
+// 相同会让低权限凭证被解析成更高权限角色（如 observer==human 时 observer 命中 human）。
+// 启动期即拒绝，避免静默提权。
+{
+  const _roleTokens = [AGENT_TOKEN, HUMAN_TOKEN, OBSERVER_TOKEN, OPERATOR_TOKEN].filter(Boolean);
+  if (_roleTokens.length !== new Set(_roleTokens).size) {
+    console.error("[registry] 拒绝启动：两个或多个非空角色 token 重复，会导致低权限凭证被解析成更高权限角色。请确保四个角色 token 互不相同。");
+    process.exit(1);
+  }
+}
 // 控制面已采集的 evidence 截图根目录（cache-only Screen API 读字节用，绝不触发设备）。
 const RUNS_ROOT = argOf("runs-root", process.env.CONTROL_PLANE_RUNS_ROOT || "");
 const CONTROL_TIMEOUT_MS = 3000;
@@ -1421,7 +1431,10 @@ async function loadScreenEntry(alias, deviceId) {
   if (!buf || buf.length > SCREEN_MAX_BYTES) return null;
   if (row.bytes != null && buf.length !== row.bytes) return null;
   const sha = createHash("sha256").update(buf).digest("hex");
-  if (typeof row.sha256 === "string" && row.sha256 && !safeEqual(sha, row.sha256)) return null;
+  // SHA 校验收严：数据库摘要必须是合法 64 位十六进制 SHA-256，且与重算值严格一致。
+  // 空值或异常类型不得放行（否则绕过完整性校验），一律 404。
+  const expected = typeof row.sha256 === "string" ? row.sha256.trim().toLowerCase() : "";
+  if (!/^[0-9a-f]{64}$/.test(expected) || !safeEqual(sha, expected)) return null;
   const contentType = detectImageType(buf);
   if (!contentType) return null;
   return {
@@ -1472,7 +1485,9 @@ async function serveScreen(res, req, alias, metaOnly) {
         screenCache.set(alias, cached);
       } else if (cached) {
         // 无新图或校验失败：沿用旧缓存降级（标记 fallback），否则 404（绝不触发采集）
+        // 必须写回缓存：否则后续请求仍取到旧的 fallback=false 条目，会重复读盘并把 stale 误报成非 stale。
         cached = { ...cached, fallback: true, loadedAt: now };
+        screenCache.set(alias, cached);
       } else {
         return sendJson(res, 404, { ok: false, error: "no cached screenshot", alias });
       }

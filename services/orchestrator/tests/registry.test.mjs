@@ -3,10 +3,12 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import fs from "node:fs";
 import http from "node:http";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import test from "node:test";
 import { DatabaseSync } from "node:sqlite";
 
@@ -155,15 +157,15 @@ function json(res, status, value) {
   res.end(body);
 }
 
-async function startRegistry({ root, controlUrl, requireAuth = true, extraArgs = [], probeToken = null }) {
+async function startRegistry({ root, controlUrl, requireAuth = true, extraArgs = [], probeToken = null, nodeArgs = [], env = {} }) {
   const port = await freePort();
-  const args = [path.join(ROOT, "registry.mjs"), "--port", String(port), "--host", "127.0.0.1",
+  const args = [...nodeArgs, path.join(ROOT, "registry.mjs"), "--port", String(port), "--host", "127.0.0.1",
     "--control", controlUrl, "--db", path.join(root, "registry.db"), "--seed", path.join(root, "seed.json"),
     "--control-db", path.join(root, "control.db")];
   if (requireAuth) args.push("--agent-token", TOKEN, "--human-token", HUMAN_TOKEN, "--trust-loopback", "false",
     "--observer-token", OBSERVER_TOKEN, "--operator-token", OPERATOR_TOKEN);
   args.push(...extraArgs);
-  const child = spawn(process.execPath, args, { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(process.execPath, args, { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...env } });
   let logs = "";
   child.stdout.on("data", (chunk) => { logs += chunk; });
   child.stderr.on("data", (chunk) => { logs += chunk; });
@@ -677,7 +679,7 @@ async function writeRunsFile(runsRoot, runId, relPath, content) {
 }
 
 // 启动一个隔离 registry（自带 control.db + runsRoot），用 observer token 访问 Screen。
-async function bootScreenRegistry({ specs, runsFiles = [], seedIdentities, extraArgs = [] }) {
+async function bootScreenRegistry({ specs, runsFiles = [], seedIdentities, extraArgs = [], nodeArgs = [], env = {}, counterFile = null }) {
   const root = await mkdtemp(path.join(os.tmpdir(), "xhs-registry-screen-"));
   createRegistryDb(path.join(root, "registry.db"));
   buildScreenControlDb(path.join(root, "control.db"), specs);
@@ -685,9 +687,17 @@ async function bootScreenRegistry({ specs, runsFiles = [], seedIdentities, extra
   const runsRoot = path.join(root, "runs");
   await mkdir(runsRoot, { recursive: true });
   for (const f of runsFiles) await writeRunsFile(runsRoot, f.runId, f.relPath, f.content);
+  if (counterFile) {
+    // 在子进程里对 runsRoot 下的 fs 访问计数（runsRoot 在此处已知，避免调用方 TDZ）。
+    fs.writeFileSync(counterFile, "");
+    const preload = pathToFileURL(path.join(ROOT, "tests", "screen-count-preload.mjs")).href;
+    nodeArgs = ["--import", preload, ...nodeArgs];
+    env = { ...env, SCREEN_COUNTER_FILE: counterFile, SCREEN_COUNT_ROOT: runsRoot };
+  }
   const reg = await startRegistry({
     root, controlUrl: `http://127.0.0.1:${control.server.address().port}`,
     extraArgs: ["--runs-root", runsRoot, "--screen-cache-ttl-ms", "200", "--screen-min-interval-ms", "0", ...extraArgs],
+    nodeArgs, env,
   });
   return { reg, root, runsRoot };
 }
@@ -778,6 +788,32 @@ test("operator is frozen: submit/session/job all return 501; observer cannot rea
   assert.equal(obsSubmit.status, 403);
 });
 
+test("registry refuses to start when two non-empty role tokens are identical", async () => {
+  // 鉴权按 human→agent→observer→operator 顺序匹配；重复 token 会让低权限凭证命中更高权限角色。
+  // 启动期即拒绝（exit 1），不得进入监听。
+  const root = await mkdtemp(path.join(os.tmpdir(), "xhs-registry-dup-"));
+  createRegistryDb(path.join(root, "registry.db"));
+  await writeFile(path.join(root, "seed.json"), JSON.stringify({ identities: [] }));
+  try {
+    await startRegistry({
+      root, controlUrl: `http://127.0.0.1:${control.server.address().port}`,
+      requireAuth: false,
+      extraArgs: ["--observer-token", "DUP", "--human-token", "DUP", "--agent-token", "A", "--trust-loopback", "false"],
+    });
+    assert.fail("registry must not start with duplicate role tokens");
+  } catch (e) {
+    assert.match(String(e.message), /拒绝启动.*token 重复|token 重复/, `expected dup-token rejection in logs, got: ${e.message}`);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+// 读取 preload 计数文件中指定 tag（READ/REAL）的行数；文件不存在记 0。
+function countTag(counterFile, tag) {
+  if (!fs.existsSync(counterFile)) return 0;
+  return fs.readFileSync(counterFile, "utf8").split("\n").filter((l) => l.startsWith(`${tag} `)).length;
+}
+
 // ---------- 负向测试 ----------
 
 test("observer is locked to /api/observer/v1/* and 403 elsewhere", async () => {
@@ -803,16 +839,29 @@ test("GET screen does not produce job/session/lease on the control plane", async
   assert.equal(control.submissions.length, before, "screen GET must not submit any job");
 });
 
-test("concurrent observer screen requests share one load and do not trigger capture", async () => {
-  // 单飞是进程内机制；此处验证可观测契约：并发请求返回一致字节/ETag 且不触发采集。
+test("concurrent observer screen requests share one disk load (singleflight) and do not trigger capture", async () => {
+  // 单飞 + 限频是进程内机制；用 --import preload 在子进程里对 runsRoot 下的 readFile 计数，
+  // 直接证明并发请求只发生一次磁盘加载（而非仅"响应一致"）。
   const specs = [{
     deviceId: "dev-c", alias: "cc", jobId: "job-c", runId: "run-c", evidenceId: "ev-c",
     path: "evidence/shot-c.png", sha256: SCREEN_SHA, bytes: SCREEN_PNG.length, createdAt: now - 1000,
   }];
-  const { reg, root } = await bootScreenRegistry({ specs, runsFiles: [{ runId: "run-c", relPath: "evidence/shot-c.png", content: SCREEN_PNG }] });
+  const counterFile = path.join(os.tmpdir(), `screen-count-${process.pid}-${Math.floor(now)}.txt`);
+  const { reg, root } = await bootScreenRegistry({
+    specs, runsFiles: [{ runId: "run-c", relPath: "evidence/shot-c.png", content: SCREEN_PNG }],
+    counterFile,
+  });
   try {
     const h = { "x-registry-token": OBSERVER_TOKEN };
     const before = control.submissions.length;
+    // 预热：第一次 GET 把缓存填好。清零计数后并发，验证并发只读 0 次（命中单飞/缓存）。
+    const warm = await fetch(`${reg.base}/api/observer/v1/screen/cc`, { headers: h });
+    assert.equal(warm.status, 200);
+    await warm.arrayBuffer();
+    // 等待计数文件落盘并清零，使后续并发从干净计数开始。
+    await new Promise((r) => setTimeout(r, 30));
+    fs.writeFileSync(counterFile, "");
+
     const responses = await Promise.all(Array.from({ length: 8 }, () => fetch(`${reg.base}/api/observer/v1/screen/cc`, { headers: h })));
     for (const r of responses) {
       assert.equal(r.status, 200);
@@ -821,8 +870,41 @@ test("concurrent observer screen requests share one load and do not trigger capt
     const bodies = await Promise.all(responses.map((r) => r.arrayBuffer()));
     assert.ok(bodies.every((b) => Buffer.from(b).equals(SCREEN_PNG)), "all concurrent responses identical");
     assert.equal(control.submissions.length, before, "no capture triggered");
+    // 并发命中缓存（TTL 200ms 内），不应再读盘；若读盘则单飞/缓存失效。
+    await new Promise((r) => setTimeout(r, 30));
+    const reads = countTag(counterFile, "READ");
+    assert.equal(reads, 0, `concurrent screen requests must not re-read disk (got ${reads} READ calls); singleflight/cache must serve from memory`);
   } finally {
     await stopIsolated(reg, root);
+    try { fs.unlinkSync(counterFile); } catch {}
+  }
+});
+
+test("concurrent observer screen requests on a cold cache share exactly one disk load (singleflight)", async () => {
+  // 冷缓存并发：8 个请求同时打到未填充的 alias，单飞应保证只发生一次磁盘加载。
+  const specs = [{
+    deviceId: "dev-c2", alias: "c2", jobId: "job-c2", runId: "run-c2", evidenceId: "ev-c2",
+    path: "evidence/shot-c2.png", sha256: SCREEN_SHA, bytes: SCREEN_PNG.length, createdAt: now - 1000,
+  }];
+  const counterFile = path.join(os.tmpdir(), `screen-count-cold-${process.pid}-${Math.floor(now)}.txt`);
+  const { reg, root } = await bootScreenRegistry({
+    specs, runsFiles: [{ runId: "run-c2", relPath: "evidence/shot-c2.png", content: SCREEN_PNG }],
+    counterFile,
+  });
+  try {
+    const h = { "x-registry-token": OBSERVER_TOKEN };
+    const responses = await Promise.all(Array.from({ length: 8 }, () => fetch(`${reg.base}/api/observer/v1/screen/c2`, { headers: h })));
+    for (const r of responses) {
+      assert.equal(r.status, 200);
+      assert.equal(r.headers.get("etag"), `"${SCREEN_SHA}"`);
+    }
+    await Promise.all(responses.map((r) => r.arrayBuffer()));
+    await new Promise((r) => setTimeout(r, 30));
+    const reads = countTag(counterFile, "READ");
+    assert.equal(reads, 1, `cold-cache concurrent requests must share exactly one disk load (got ${reads} READ calls); singleflight must coalesce`);
+  } finally {
+    await stopIsolated(reg, root);
+    try { fs.unlinkSync(counterFile); } catch {}
   }
 });
 
@@ -851,6 +933,24 @@ test("screen rejects evidence whose sha256 does not match file content", async (
     assert.equal(r.status, 404);
   } finally {
     await stopIsolated(reg, root);
+  }
+});
+
+test("screen rejects evidence with empty or non-hex sha256 (strict digest required)", async () => {
+  // 数据库摘要为空或非合法 64 位十六进制时，不得绕过完整性校验放行，一律 404。
+  for (const bad of ["", "not-a-sha", "abcd".repeat(7) /* 56 chars, too short */]) {
+    const alias = `badsha-${bad.length || "empty"}`;
+    const specs = [{
+      deviceId: `dev-${alias}`, alias, jobId: `job-${alias}`, runId: `run-${alias}`, evidenceId: `ev-${alias}`,
+      path: "evidence/shot.png", sha256: bad, bytes: SCREEN_PNG.length, createdAt: now - 1000,
+    }];
+    const { reg, root } = await bootScreenRegistry({ specs, runsFiles: [{ runId: `run-${alias}`, relPath: "evidence/shot.png", content: SCREEN_PNG }] });
+    try {
+      const r = await fetch(`${reg.base}/api/observer/v1/screen/${alias}`, { headers: { "x-registry-token": OBSERVER_TOKEN } });
+      assert.equal(r.status, 404, `empty/non-hex sha256 '${bad}' must be rejected (got ${r.status})`);
+    } finally {
+      await stopIsolated(reg, root);
+    }
   }
 });
 
@@ -918,6 +1018,46 @@ test("screen meta marks stale when fresh load fails and old cache is reused (fal
     assert.equal(meta.stale, true);
   } finally {
     await stopIsolated(reg, root);
+  }
+});
+
+test("fallback marker is written back to cache so the next request stays stale without re-reading", async () => {
+  // 回归 P1：fallback=true 必须写回 screenCache。否则后续请求取到旧 fallback=false 条目，
+  // 在旧 loadedAt 的 TTL 已过后会再次重载（这里用 REAL 计数观测）。
+  // 写回后，紧接的第二次请求落在 fallback 条目的新 TTL 内 → 命中缓存、不再重载、仍 stale。
+  const specs = [{
+    deviceId: "dev-fb", alias: "fb", jobId: "job-fb", runId: "run-fb", evidenceId: "ev-fb",
+    path: "evidence/shot-fb.png", sha256: SCREEN_SHA, bytes: SCREEN_PNG.length, createdAt: now - 1000,
+  }];
+  const counterFile = path.join(os.tmpdir(), `screen-fb-${process.pid}-${Math.floor(now)}.txt`);
+  const { reg, root, runsRoot } = await bootScreenRegistry({
+    specs, runsFiles: [{ runId: "run-fb", relPath: "evidence/shot-fb.png", content: SCREEN_PNG }],
+    counterFile,
+  });
+  try {
+    const h = { "x-registry-token": OBSERVER_TOKEN };
+    // 首次加载填充缓存（fallback=false）
+    const first = await fetch(`${reg.base}/api/observer/v1/screen/fb`, { headers: h });
+    assert.equal(first.status, 200);
+    await first.arrayBuffer();
+    // 删除磁盘文件，等 TTL（200ms）过期后重载必失败 → 沿用旧缓存 fallback
+    await rm(path.join(runsRoot, "run-fb", "evidence", "shot-fb.png"), { force: true });
+    await new Promise((r) => setTimeout(r, 260));
+    // 第一次 fallback 请求：触发一次重载尝试（realpath 失败，无 readFile），写回 fallback 缓存
+    const meta1 = await (await fetch(`${reg.base}/api/observer/v1/screen/fb/meta`, { headers: h })).json();
+    assert.equal(meta1.stale, true, "first fallback request must be stale");
+    await new Promise((r) => setTimeout(r, 30));
+    const realAfter1 = countTag(counterFile, "REAL");
+    assert.ok(realAfter1 >= 2, `first fallback must have attempted a reload (got ${realAfter1} REAL calls)`);
+    // 紧接第二次请求：落在 fallback 条目新 TTL 内 → 应命中缓存，不再重载，仍 stale。
+    const meta2 = await (await fetch(`${reg.base}/api/observer/v1/screen/fb/meta`, { headers: h })).json();
+    assert.equal(meta2.stale, true, "second request must stay stale via written-back fallback cache");
+    await new Promise((r) => setTimeout(r, 30));
+    const realAfter2 = countTag(counterFile, "REAL");
+    assert.equal(realAfter2, realAfter1, `second request must not reload (REAL went ${realAfter1}->${realAfter2}); fallback must be served from cache`);
+  } finally {
+    await stopIsolated(reg, root);
+    try { fs.unlinkSync(counterFile); } catch {}
   }
 });
 
