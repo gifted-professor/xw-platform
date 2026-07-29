@@ -119,7 +119,7 @@ function bgControl(label, { cBounds = [222, 122, 395, 199], lBounds = [222, 122,
 test("findProfileFollowBtn selects the wide overlay CTA below the avatar, not background/statistic labels", () => {
   const nodes = [
     root(),
-    avatar("Mina姐姐", [5, 215, 302, 512]),
+    avatar("U", [5, 215, 302, 512]),
     ...bgControl("关注"), // y=161 头像上方
     ...statTab("关注"), // y=567 窄统计 tab
     ...overlayCta("关注"), // y=999 宽主 CTA
@@ -204,4 +204,65 @@ test("findProfileFollowBtn derives screen width from root, not global max R (off
   assert.equal(hit.matched, "关注");
   assert.equal(hit.x, 254);
   assert.equal(hit.y, 998);
+});
+
+// ---------- Supplemental findings（Hermes 第二轮只读复验，20-VERIFICATION-RESULT.md 第 185 行后） ----------
+
+// P1a 回归 #1：稀疏 dump 缺可信全屏 root（仅头像 + 140px 统计 tab）→ 旧以 nodes[0]=avatar(宽297) 当屏宽，
+// 阈值 89，统计 140 通过 → 误点统计「关注」。应 fail-closed。
+test("findProfileFollowBtn returns null when no trustworthy full-screen root exists (sparse dump)", () => {
+  const nodes = [
+    avatar("U", [5, 215, 302, 512]),
+    ...statTab("关注"), // 容器 [44,534][184,600] 宽 140
+  ];
+  assert.equal(findProfileFollowBtn(xml(nodes)), null);
+});
+
+// P1a 回归 #2：截断 dump 首节点为子屏片段（不含头像），无全屏 root → 旧以该片段(宽200)当屏宽误点统计。
+test("findProfileFollowBtn returns null on a truncated dump whose first node is sub-screen and does not wrap the avatar", () => {
+  const nodes = [
+    node({ cls: "FrameLayout", clickable: false, bounds: [0, 500, 200, 700] }), // 子屏片段，不含头像
+    avatar("U", [5, 215, 302, 512]),
+    ...statTab("关注"),
+  ];
+  assert.equal(findProfileFollowBtn(xml(nodes)), null);
+});
+
+// P1b 回归：全屏 clickable wrapper 包住裸 follow label 但无真实 CTA → 旧返回页面中心 (540,1200)。应 null。
+test("findProfileFollowBtn excludes a page-sized clickable wrapper from CTA ancestors", () => {
+  const nodes = [
+    node({ cls: "FrameLayout", clickable: true, bounds: [0, 0, 1080, 2400] }), // 全屏 wrapper
+    avatar("U", [5, 215, 302, 512]),
+    node({ text: "关注", cls: "TextView", clickable: false, bounds: [500, 1180, 580, 1220] }), // 裸 label 中心 (540,1200)
+  ];
+  assert.equal(findProfileFollowBtn(xml(nodes)), null);
+});
+
+// P2-desc 回归：text="按钮" 与 content-desc="关注" 冲突 → matched 应取四态字段「关注」，而非 text||desc="按钮"。
+test("findProfileFollowBtn picks the follow-state field when text and desc conflict", () => {
+  const nodes = [
+    root(),
+    avatar("U", [5, 215, 302, 512]),
+    node({ cls: "FrameLayout", clickable: true, bounds: [33, 954, 474, 1042] }),
+    node({ text: "按钮", desc: "关注", cls: "TextView", clickable: false, bounds: [215, 971, 293, 1026] }),
+  ];
+  const hit = findProfileFollowBtn(xml(nodes));
+  assert.ok(hit, "expected a CTA hit");
+  assert.equal(hit.matched, "关注"); // 修复前为 "按钮"
+  assert.equal(followState(hit.matched), "unfollowed");
+});
+
+// 唯一性回归：两个同面积(88000)、不同 bounds 的最小 clickable 容器都包住 label → 旧按输入序取 anc[0] 返回其一。
+// 应 fail-closed（最小可操作容器不唯一）。
+test("findProfileFollowBtn fails closed when the minimal clickable ancestor is not unique (same area, different bounds)", () => {
+  // C1=[0,900][440,1100] 与 C2=[200,900][640,1100]：均 440x200=88000，互不包含但重叠；
+  // label [300,1000][340,1010] 落在重叠区 → 两个都是最小容器 → 多候选 → null。
+  const nodes = [
+    root(),
+    avatar("U", [5, 215, 302, 512]),
+    node({ cls: "FrameLayout", clickable: true, bounds: [0, 900, 440, 1100] }),
+    node({ cls: "FrameLayout", clickable: true, bounds: [200, 900, 640, 1100] }),
+    node({ text: "关注", cls: "TextView", clickable: false, bounds: [300, 1000, 340, 1010] }),
+  ];
+  assert.equal(findProfileFollowBtn(xml(nodes)), null);
 });

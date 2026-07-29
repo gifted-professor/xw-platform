@@ -394,10 +394,13 @@ export function findFollowBtn(xml) {
  *  同屏可能有多个精确「关注」label（背景/普通 detail 控件 y≈161、统计 tab y≈567、浮层主 CTA y≈999），
  *  通用 findFollowBtn 取 first-match 会命中背景节点。本函数仅在 tier-1 头像指纹存在时定位浮层主 CTA：
  *  1) 必须有 tier-1 头像（ImageView clickable cy<600 content-desc ^头像[,，]），否则非浮层 → null；
- *  2) 候选 label（text/desc 精确属于四态）必须在头像下方（cy > 头像 cy）；
- *  3) 解析包含 label 的最小 enabled clickable 容器（几何包含），label 自身坐标不可点；
- *  4) 主 CTA 容器宽 ≥ 屏宽 30%（屏宽取自 root bounds，非全局 max R；无可用 root → fail-closed），过滤窄统计 tab；
- *  5) 唯一可点候选才返回其容器中心；零或多个 → null（fail-closed，绝不猜坐标）；同 bounds 容器去重，不同容器即便同中心也算多候选。
+ *  2) 候选 label（text/desc 精确属于四态）必须在头像下方（cy > 头像 cy）；text/desc 冲突时 matched 取真正属于四态的字段；
+ *  3) 解析包含 label 的最小面积 enabled clickable 容器（几何包含）；同面积并列容器全收、不靠输入序取首个；
+ *  4) 屏宽取自「可信 root」——在包含头像的节点里面积最大者（全屏窗口，远大于头部卡片/统计 tab），非全局 max R 也非首个解析节点；
+ *     allNodes() 只解析 <node>、不以首节点为根；稀疏/截断 dump 无此节点 → 无法确立屏宽 → fail-closed；
+ *  5) 排除全屏/近全屏（宽 ≥ 屏宽 90%）clickable wrapper（点击消散层），非 CTA；不硬编码屏幕坐标，用比例；
+ *  6) 剩余容器宽 ≥ 屏宽 30%，过滤窄统计 tab；
+ *  7) 唯一可点候选才返回其容器中心；零或多个 → null（fail-closed，绝不猜坐标）；同 bounds 去重，不同容器即便同中心也算多候选。
  *  返回形状与 findFollowBtn 一致：{x,y,desc,matched,L,T,R,B}，便于调用方在浮层场景直接替换。 */
 export function findProfileFollowBtn(xml) {
   const nodes = allNodes(xml);
@@ -409,13 +412,20 @@ export function findProfileFollowBtn(xml) {
       /^头像[,，]/.test(String(n.desc || "")),
   );
   if (!av) return null; // 无 tier-1 头像指纹 → 非主页浮层，交给通用 findFollowBtn
-  // 屏宽取自 root（首个解析节点 = UIAutomator dump 的 hierarchy 根，全屏 bounds）；
-  // 不用全局 max R——离屏/无关节点的大 R 会抬高阈值误拒真实 CTA。无可用 root → fail-closed。
-  const root = nodes[0];
-  const screenW = root ? root.R - root.L : 0;
+  const contains = (a, b) => a.L <= b.L && a.T <= b.T && a.R >= b.R && a.B >= b.B;
+  const area = (n) => (n.R - n.L) * (n.B - n.T);
+
+  // 可信 root：在「包含 tier-1 头像」的节点里取面积最大者（全屏窗口，远大于头部卡片/统计 tab 等子容器）。
+  // 头像自身被排除；统计 tab/头部卡片不包含头像 → 不会当选。稀疏/截断 dump（仅头像+窄统计 tab，无全屏根）
+  // → 无任何节点包含头像 → 无可信 root → 无法确立屏宽 → fail-closed。
+  const root = nodes
+    .filter((n) => n !== av && contains(n, av))
+    .sort((a, b) => area(b) - area(a))[0];
+  if (!root) return null;
+  const screenW = root.R - root.L;
   if (screenW < 100) return null;
   const minCtaW = screenW * 0.3;
-  const contains = (a, b) => a.L <= b.L && a.T <= b.T && a.R >= b.R && a.B >= b.B;
+
   const seen = new Set();
   const cands = [];
   for (const l of nodes) {
@@ -423,17 +433,23 @@ export function findProfileFollowBtn(xml) {
     const d = String(l.desc || "").trim();
     if (!FOLLOW_LABELS.has(t) && !FOLLOW_LABELS.has(d)) continue;
     if (l.cy <= av.cy) continue; // 头像上方（含同高）→ 背景/普通 detail 控件，拒
-    // 最小 enabled clickable 容器（几何包含 label）
+    const matched = FOLLOW_LABELS.has(t) ? t : d; // text/desc 冲突时取真正属于四态的字段，非 text||desc
+    // 包含 label 的全部 enabled clickable 容器，按面积升序排
     const anc = nodes
       .filter((n) => n !== l && n.clickable && n.enabled !== false && contains(n, l))
-      .sort((a, b) => (a.R - a.L) * (a.B - a.T) - (b.R - b.L) * (b.B - b.T));
-    const c = anc[0];
-    if (!c) continue; // 无可点容器 → 非可操作
-    if (c.R - c.L < minCtaW) continue; // 窄容器 → 统计 tab，拒
-    const key = `${c.L},${c.T},${c.R},${c.B}`;
-    if (seen.has(key)) continue; // 同 bounds 容器去重；不同容器即便同中心也算多候选
-    seen.add(key);
-    cands.push({ c, matched: l.text || l.desc });
+      .sort((a, b) => area(a) - area(b));
+    if (!anc.length) continue; // 无可点容器 → 非可操作
+    // 最小面积容器集合：同面积并列则全收（不靠输入序取 anc[0]），交下游唯一性判断
+    const minA = area(anc[0]);
+    const minimal = anc.filter((a) => area(a) === minA);
+    for (const c of minimal) {
+      if (c.R - c.L >= screenW * 0.9) continue; // 全屏/近全屏 wrapper（点击消散层）→ 非 CTA，排除
+      if (c.R - c.L < minCtaW) continue; // 窄容器 → 统计 tab，拒
+      const key = `${c.L},${c.T},${c.R},${c.B}`;
+      if (seen.has(key)) continue; // 同 bounds 容器去重；不同容器即便同中心也算多候选
+      seen.add(key);
+      cands.push({ c, matched });
+    }
   }
   if (cands.length !== 1) return null; // 零或多个 → fail-closed，绝不猜坐标
   const { c, matched } = cands[0];
