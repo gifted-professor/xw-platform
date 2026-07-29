@@ -6,6 +6,9 @@ import { normalizeRecoveryVisualAnalysis } from "./recovery-inspection.mjs";
 import { MissionRuntime } from "./mission-runtime.mjs";
 import { DeviceRunRuntime } from "./device-run.mjs";
 import { EffectFirewall } from "./effect-firewall.mjs";
+import { EffectLedger } from "./effect-ledger.mjs";
+import { EffectCommitProtocol } from "./effect-commit-protocol.mjs";
+import { ProtectedHumanCommit } from "./protected-human-commit.mjs";
 import { acquireTransportLock as defaultAcquireTransportLock } from "./xiaowei-transport.mjs";
 
 function collectEvidenceFiles(...values) {
@@ -119,6 +122,7 @@ export class ControlPlane {
       leaseHeartbeatMs,
     });
     this.firewall = new EffectFirewall();
+    this.effectLedger = new EffectLedger({ state });
     this.acquireTransportLock = typeof acquireTransportLock === "function"
       ? acquireTransportLock
       : defaultAcquireTransportLock;
@@ -166,6 +170,30 @@ export class ControlPlane {
     const run = this.deviceRuns.markControlLost(deviceRunId, input);
     this.deviceRuns.stopRunnerHeartbeat(deviceRunId);
     return run;
+  }
+
+  createEffectCommitProtocol(handlers) {
+    return new EffectCommitProtocol({
+      state: this.state,
+      ledger: this.effectLedger,
+      deviceRuns: this.deviceRuns,
+      ...handlers,
+    });
+  }
+
+  createProtectedHumanCommit(handlers) {
+    return new ProtectedHumanCommit({
+      audit: (event) => {
+        if (event?.missionId) {
+          this.state.appendMissionEvent({
+            missionId: event.missionId,
+            type: event.type,
+            payload: { commitId: event.commitId, action: event.action, actorId: event.actorId || null },
+          });
+        }
+      },
+      ...handlers,
+    });
   }
 
   // Mission-bound Explorer primitive. Validates the complete control tuple, classifies the

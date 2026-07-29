@@ -85,6 +85,18 @@ function publicJob(row) {
   };
 }
 
+// The durable effect ledger persists only an allowlisted, redacted intent summary. Raw
+// credentials, runtime IDs, serials, and unredacted snapshot text never reach public fields;
+// full snapshots link to existing evidence hashes/paths instead.
+function redactEffectIntent(intent) {
+  if (!intent || typeof intent !== "object") return {};
+  const out = {};
+  if (typeof intent.surface === "string") out.surface = intent.surface;
+  if (typeof intent.effectAction === "string") out.effectAction = intent.effectAction;
+  if (typeof intent.pageFingerprint === "string") out.pageFingerprint = intent.pageFingerprint;
+  return out;
+}
+
 function publicLease(row, token) {
   return {
     leaseId: row.lease_id,
@@ -276,6 +288,26 @@ export class StateStore {
         updated_at INTEGER NOT NULL,
         finished_at INTEGER
       );
+      CREATE TABLE IF NOT EXISTS mission_effects (
+        effect_id TEXT PRIMARY KEY,
+        mission_id TEXT NOT NULL REFERENCES missions(mission_id),
+        device_run_id TEXT NOT NULL REFERENCES device_runs(device_run_id),
+        idempotency_key TEXT NOT NULL UNIQUE,
+        action TEXT NOT NULL,
+        target_hash TEXT NOT NULL,
+        intent_json TEXT NOT NULL,
+        status TEXT NOT NULL,
+        reservation_json TEXT NOT NULL,
+        reservation_consumed INTEGER NOT NULL DEFAULT 0,
+        reservation_released INTEGER NOT NULL DEFAULT 0,
+        retry_blocked INTEGER NOT NULL DEFAULT 0,
+        evidence_refs_json TEXT NOT NULL DEFAULT '[]',
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        finished_at INTEGER
+      );
+      CREATE INDEX IF NOT EXISTS mission_effects_budget_idx
+        ON mission_effects(mission_id, action, target_hash, created_at);
       CREATE INDEX IF NOT EXISTS device_runs_mission_idx ON device_runs(mission_id, phase);
     `);
     this.#ensureColumn(
@@ -288,7 +320,7 @@ export class StateStore {
     this.#ensureColumn("sessions", "scope_capability_id", "TEXT");
     this.#ensureColumn("sessions", "placement_decision_json", "TEXT");
     this.#ensureColumn("leases", "owner_device_run_id", "TEXT");
-    this.db.exec("PRAGMA user_version = 2;");
+    this.db.exec("PRAGMA user_version = 3;");
   }
 
   #ensureColumn(table, column, definition) {
@@ -321,6 +353,7 @@ export class StateStore {
     if (interrupted.length === 0) {
       const now = this.now();
       this.#recoverInterruptedDeviceRuns(now);
+      this.#recoverInterruptedEffects(now);
       this.db.exec("DELETE FROM sessions; DELETE FROM leases;");
       return [];
     }
@@ -344,6 +377,7 @@ export class StateStore {
         });
       }
       this.#recoverInterruptedDeviceRuns(now);
+      this.#recoverInterruptedEffects(now);
       this.db.exec("DELETE FROM sessions; DELETE FROM leases;");
     });
     return interrupted.map((row) => row.job_id);
@@ -365,6 +399,29 @@ export class StateStore {
       });
     }
     return active.length;
+  }
+
+  #recoverInterruptedEffects(now) {
+    const interrupted = this.db.prepare(`
+      SELECT effect_id, mission_id FROM mission_effects
+      WHERE reservation_released=0
+        AND status IN ('started', 'pending_authorization', 'waiting_authorization')
+    `).all();
+    for (const row of interrupted) {
+      this.db.prepare(`
+        UPDATE mission_effects SET
+          status='ambiguous', reservation_consumed=1, retry_blocked=1,
+          updated_at=?, finished_at=?
+        WHERE effect_id=?
+      `).run(now, now, row.effect_id);
+      this.#insertMissionEvent({
+        missionId: row.mission_id,
+        type: "effect.recovered_ambiguous",
+        payload: { effectId: row.effect_id, reason: "CONTROL_RESTART" },
+        createdAt: now,
+      });
+    }
+    return interrupted.map((row) => row.effect_id);
   }
 
   upsertNode({
@@ -1328,6 +1385,204 @@ export class StateStore {
       type: row.type,
       payload: parseJson(row.payload_json, {}),
     }));
+  }
+
+  #publicMissionEffect(row) {
+    if (!row) return null;
+    return {
+      effectId: row.effect_id,
+      missionId: row.mission_id,
+      deviceRunId: row.device_run_id,
+      idempotencyKey: row.idempotency_key,
+      action: row.action,
+      targetFingerprint: row.target_hash,
+      intent: parseJson(row.intent_json, {}),
+      status: row.status,
+      reservation: parseJson(row.reservation_json, {}),
+      reservationConsumed: Boolean(row.reservation_consumed),
+      reservationReleased: Boolean(row.reservation_released),
+      retryBlocked: Boolean(row.retry_blocked),
+      evidenceRefs: parseJson(row.evidence_refs_json, []),
+      createdAt: iso(row.created_at),
+      updatedAt: iso(row.updated_at),
+      finishedAt: row.finished_at ? iso(row.finished_at) : null,
+    };
+  }
+
+  listMissionEffects(missionId) {
+    return this.db.prepare(
+      "SELECT * FROM mission_effects WHERE mission_id=? ORDER BY created_at, effect_id",
+    ).all(missionId).map((row) => this.#publicMissionEffect(row));
+  }
+
+  beginMissionEffect({ mission, deviceRunId, action, targetHash, intent = {}, idempotencyKey, status = "started" }) {
+    if (!mission?.missionId || !deviceRunId || !action || !targetHash || !idempotencyKey) {
+      throw new TypeError("mission, deviceRunId, action, targetHash, and idempotencyKey are required");
+    }
+    const now = this.now();
+    return this.transaction(() => {
+      const existing = this.db.prepare("SELECT * FROM mission_effects WHERE idempotency_key=?").get(idempotencyKey);
+      if (existing) return { effect: this.#publicMissionEffect(existing), reused: true };
+      const blockedRetry = this.db.prepare(`
+        SELECT effect_id FROM mission_effects
+        WHERE mission_id=? AND action=? AND target_hash=? AND retry_blocked=1
+        LIMIT 1
+      `).get(mission.missionId, action, targetHash);
+      if (blockedRetry) {
+        throw new ControlPlaneError("AMBIGUOUS_NO_RETRY", "an ambiguous effect for this target cannot be retried", {
+          status: 409, details: { effectId: blockedRetry.effect_id },
+        });
+      }
+      if (!mission.scope?.actions?.includes(action) || !mission.scope?.targets?.values?.includes(targetHash)) {
+        throw new ControlPlaneError("SCOPE_VIOLATION", "effect action or target is outside Mission scope", { status: 409 });
+      }
+      const live = this.db.prepare(`
+        SELECT action, target_hash, created_at FROM mission_effects
+        WHERE mission_id=? AND reservation_released=0
+      `).all(mission.missionId);
+      const totalCount = Number(mission.scope.totalCount || 0);
+      const perTargetCount = Number(mission.scope.perTargetCount || 0);
+      const frequency = mission.scope.frequency || {};
+      if (totalCount > 0 && live.length >= totalCount) {
+        throw new ControlPlaneError("BUDGET_EXCEEDED", "Mission total effect budget is exhausted", { status: 409 });
+      }
+      if (perTargetCount > 0 && live.filter((row) => row.target_hash === targetHash).length >= perTargetCount) {
+        throw new ControlPlaneError("BUDGET_PER_TARGET_EXCEEDED", "Mission per-target budget is exhausted", { status: 409 });
+      }
+      const frequencyCount = Number(frequency.count || 0);
+      const windowMs = Number(frequency.windowSeconds || 0) * 1000;
+      if (frequencyCount > 0 && windowMs > 0 && live.filter((row) => row.created_at >= now - windowMs).length >= frequencyCount) {
+        throw new ControlPlaneError("BUDGET_THROTTLED", "Mission frequency budget is exhausted", { status: 409 });
+      }
+      const effectId = newId("effect");
+      const reservation = { total: 1, perTarget: 1, frequency: 1 };
+      this.db.prepare(`
+        INSERT INTO mission_effects (
+          effect_id, mission_id, device_run_id, idempotency_key, action, target_hash,
+          intent_json, status, reservation_json, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        effectId, mission.missionId, deviceRunId, idempotencyKey, action, targetHash,
+        canonicalJson(redactEffectIntent(intent)), status, canonicalJson(reservation), now, now,
+      );
+      this.#insertMissionEvent({
+        missionId: mission.missionId,
+        type: status === "started" ? "effect.started" : "effect.reserved",
+        payload: { effectId, deviceRunId, action, targetFingerprint: targetHash },
+        createdAt: now,
+      });
+      return {
+        effect: this.#publicMissionEffect(this.db.prepare("SELECT * FROM mission_effects WHERE effect_id=?").get(effectId)),
+        reused: false,
+      };
+    });
+  }
+
+  recordMissionEffectOutcome(effectId, { status, evidenceRefs = [] } = {}) {
+    if (!["verified", "ambiguous", "not_sent", "cancelled"].includes(status)) {
+      throw new TypeError("unsupported mission effect outcome");
+    }
+    const now = this.now();
+    return this.transaction(() => {
+      const row = this.db.prepare("SELECT * FROM mission_effects WHERE effect_id=?").get(effectId);
+      if (!row) throw new ControlPlaneError("EFFECT_NOT_FOUND", `unknown effect ${effectId}`, { status: 404 });
+      const consumed = status !== "not_sent";
+      const retryBlocked = status === "ambiguous";
+      this.db.prepare(`
+        UPDATE mission_effects SET
+          status=?, reservation_consumed=?, retry_blocked=?, evidence_refs_json=?,
+          updated_at=?, finished_at=?
+        WHERE effect_id=?
+      `).run(status, consumed ? 1 : 0, retryBlocked ? 1 : 0, canonicalJson(evidenceRefs), now, now, effectId);
+      this.#insertMissionEvent({
+        missionId: row.mission_id,
+        type: `effect.${status}`,
+        payload: { effectId, evidenceRefs },
+        createdAt: now,
+      });
+      return this.#publicMissionEffect(this.db.prepare("SELECT * FROM mission_effects WHERE effect_id=?").get(effectId));
+    });
+  }
+
+  setMissionEffectWaitingAuthorization(effectId) {
+    const now = this.now();
+    return this.transaction(() => {
+      const row = this.db.prepare("SELECT * FROM mission_effects WHERE effect_id=?").get(effectId);
+      if (!row) throw new ControlPlaneError("EFFECT_NOT_FOUND", `unknown effect ${effectId}`, { status: 404 });
+      if (row.status !== "pending_authorization") {
+        throw new ControlPlaneError("EFFECT_AUTHORIZATION_INVALID", "effect is not pending authorization", { status: 409 });
+      }
+      this.db.prepare("UPDATE mission_effects SET status='waiting_authorization', updated_at=? WHERE effect_id=?")
+        .run(now, effectId);
+      this.#insertMissionEvent({
+        missionId: row.mission_id,
+        type: "protected_human_commit.waiting_authorization",
+        payload: { effectId },
+        createdAt: now,
+      });
+      return this.#publicMissionEffect(this.db.prepare("SELECT * FROM mission_effects WHERE effect_id=?").get(effectId));
+    });
+  }
+
+  startAuthorizedMissionEffect(effectId) {
+    const now = this.now();
+    return this.transaction(() => {
+      const row = this.db.prepare("SELECT * FROM mission_effects WHERE effect_id=?").get(effectId);
+      if (!row) throw new ControlPlaneError("EFFECT_NOT_FOUND", `unknown effect ${effectId}`, { status: 404 });
+      if (!['pending_authorization', 'waiting_authorization'].includes(row.status)) {
+        throw new ControlPlaneError("EFFECT_START_INVALID", "effect cannot start from its current state", { status: 409 });
+      }
+      this.db.prepare("UPDATE mission_effects SET status='started', updated_at=? WHERE effect_id=?").run(now, effectId);
+      this.#insertMissionEvent({
+        missionId: row.mission_id,
+        type: "effect.started",
+        payload: { effectId },
+        createdAt: now,
+      });
+      return this.#publicMissionEffect(this.db.prepare("SELECT * FROM mission_effects WHERE effect_id=?").get(effectId));
+    });
+  }
+
+  retryNotSentMissionEffect(effectId) {
+    const now = this.now();
+    return this.transaction(() => {
+      const row = this.db.prepare("SELECT * FROM mission_effects WHERE effect_id=?").get(effectId);
+      if (!row) throw new ControlPlaneError("EFFECT_NOT_FOUND", `unknown effect ${effectId}`, { status: 404 });
+      if (row.status !== "not_sent" || row.reservation_released) {
+        throw new ControlPlaneError("EFFECT_RETRY_UNSAFE", "only a reserved not_sent effect may retry", { status: 409 });
+      }
+      this.db.prepare(`
+        UPDATE mission_effects SET status='started', updated_at=?, finished_at=NULL WHERE effect_id=?
+      `).run(now, effectId);
+      this.#insertMissionEvent({
+        missionId: row.mission_id,
+        type: "effect.retry_started",
+        payload: { effectId },
+        createdAt: now,
+      });
+      return this.#publicMissionEffect(this.db.prepare("SELECT * FROM mission_effects WHERE effect_id=?").get(effectId));
+    });
+  }
+
+  abandonNotSentMissionEffect(effectId) {
+    const now = this.now();
+    return this.transaction(() => {
+      const row = this.db.prepare("SELECT * FROM mission_effects WHERE effect_id=?").get(effectId);
+      if (!row) throw new ControlPlaneError("EFFECT_NOT_FOUND", `unknown effect ${effectId}`, { status: 404 });
+      if (row.status !== "not_sent" || row.reservation_released) {
+        throw new ControlPlaneError("EFFECT_RELEASE_UNSAFE", "only a reserved not_sent effect may be abandoned", { status: 409 });
+      }
+      this.db.prepare(`
+        UPDATE mission_effects SET status='abandoned', reservation_released=1, updated_at=?, finished_at=? WHERE effect_id=?
+      `).run(now, now, effectId);
+      this.#insertMissionEvent({
+        missionId: row.mission_id,
+        type: "effect.abandoned",
+        payload: { effectId },
+        createdAt: now,
+      });
+      return this.#publicMissionEffect(this.db.prepare("SELECT * FROM mission_effects WHERE effect_id=?").get(effectId));
+    });
   }
 
   #publicDeviceRun(row) {
