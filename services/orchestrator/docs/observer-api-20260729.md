@@ -156,7 +156,7 @@ ok, alias, sha256, bytes, capturedAt, jobId, contentType, ageSeconds, stale
 ## 6. 回归与验证
 
 - `node --test tests/registry.test.mjs`：37/37（含负向测试：命名空间锁定、query-token 拒绝、路径穿越、SHA 不符/空/非十六进制拒绝、超大拒绝、stale 标记、fallback 写回连续请求、displayName/model 规范化、降级不假 Ready、meta 无 runId、**单飞读盘计数**、**重复 token 启动拒绝**）。
-- `npm test`：45/45；`npm run check`：通过；`git diff --check`：无空白错误。
+- `npm test`：46/46；`npm run check`：通过；`git diff --check`：无空白错误。
 - 手起验证用**临时空闲端口 + 临时 DB + 临时 runsRoot**（不固定 17930），observer token 走 header：
   - `GET /api/observer/v1/fleet` → 200，含 `schemaVersion` / `displayName` / `model` / `reportedActor` / `actorVerified:false` / `freshness` / `degraded`。
   - `GET /api/observer/v1/screen/01` → 200 真图，ETag 带引号；`If-None-Match: "<sha>"` → 304。

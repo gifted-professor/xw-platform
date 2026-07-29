@@ -59,7 +59,7 @@ const OPERATOR_TOKEN = argOf("operator-token", "");
 {
   const _roleTokens = [AGENT_TOKEN, HUMAN_TOKEN, OBSERVER_TOKEN, OPERATOR_TOKEN].filter(Boolean);
   if (_roleTokens.length !== new Set(_roleTokens).size) {
-    console.error("[registry] 拒绝启动：两个或多个非空角色 token 重复，会导致低权限凭证被解析成更高权限角色。请确保四个角色 token 互不相同。");
+    console.log("[registry] 拒绝启动：两个或多个非空角色 token 重复，会导致低权限凭证被解析成更高权限角色。请确保四个角色 token 互不相同。");
     process.exit(1);
   }
 }
