@@ -266,3 +266,51 @@ test("findProfileFollowBtn fails closed when the minimal clickable ancestor is n
   ];
   assert.equal(findProfileFollowBtn(xml(nodes)), null);
 });
+
+// ---------- Round-3 Hermes 复验新发现（21-VERIFICATION-RESULT-r3.md） ----------
+
+// P1 #1：截断 wrapper 只要包含头像，旧「最大含头像节点」仍当可信 root → 误点统计 (114,567)。
+// 修：可信 root 须含头像且宽 > 2× 头像宽（全屏窗口远宽于头像块）；wrapper=[0,0][400,700] 宽 400 < 594 → 不可信 → null。
+test("findProfileFollowBtn returns null when only a sub-screen wrapper (not full-width) contains the avatar", () => {
+  const nodes = [
+    node({ cls: "FrameLayout", clickable: false, bounds: [0, 0, 400, 700] }), // 子屏 wrapper，含头像但非全屏
+    avatar("U", [5, 215, 302, 512]),
+    ...statTab("关注"), // [44,534][184,600] 宽 140
+  ];
+  assert.equal(findProfileFollowBtn(xml(nodes)), null);
+});
+
+// P1 #2：同一物理 CTA 出现冲突 follow 态时，旧按 bounds 去重 + XML 顺序决定 matched。
+// 修：按容器 bounds 聚合所有态，>1 distinct state → null（不点击）。顺序无关。
+test("findProfileFollowBtn fails closed on conflicting follow states in the same CTA (order: 关注 then 已关注)", () => {
+  const nodes = [
+    root(),
+    avatar("U", [5, 215, 302, 512]),
+    node({ cls: "FrameLayout", clickable: true, bounds: [33, 954, 474, 1042] }),
+    node({ text: "关注", cls: "TextView", clickable: false, bounds: [215, 971, 293, 1026] }),
+    node({ text: "已关注", cls: "TextView", clickable: false, bounds: [250, 975, 290, 1020] }),
+  ];
+  assert.equal(findProfileFollowBtn(xml(nodes)), null);
+});
+
+test("findProfileFollowBtn fails closed on conflicting follow states in the same CTA (order: 已关注 then 关注)", () => {
+  const nodes = [
+    root(),
+    avatar("U", [5, 215, 302, 512]),
+    node({ cls: "FrameLayout", clickable: true, bounds: [33, 954, 474, 1042] }),
+    node({ text: "已关注", cls: "TextView", clickable: false, bounds: [215, 971, 293, 1026] }),
+    node({ text: "关注", cls: "TextView", clickable: false, bounds: [250, 975, 290, 1020] }),
+  ];
+  assert.equal(findProfileFollowBtn(xml(nodes)), null);
+});
+
+// P1 #2 单节点：text 与 desc 都是四态且不同 → 节点自身歧义 → null（旧 text 优先取 "关注" 错）。
+test("findProfileFollowBtn fails closed when one node has contradictory text and desc follow states", () => {
+  const nodes = [
+    root(),
+    avatar("U", [5, 215, 302, 512]),
+    node({ cls: "FrameLayout", clickable: true, bounds: [33, 954, 474, 1042] }),
+    node({ text: "关注", desc: "已关注", cls: "TextView", clickable: false, bounds: [215, 971, 293, 1026] }),
+  ];
+  assert.equal(findProfileFollowBtn(xml(nodes)), null);
+});
