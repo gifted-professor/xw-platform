@@ -101,7 +101,7 @@
   5. **maturity/availability 取舍**：保留 `maturity=E2`+`availability=approval_gated`——E0/E1 会触发 canary-session 闸门违背 req#1 job-only 模型；`dependency_pending_*` 会触发 `NO_ELIGIBLE_DEVICE` 硬闸连回归 job 都提交不了。manifest 是契约 spec（R2 人审批门），「尚未真机验证」由 `evidence=[]`+未部署 Windows live config+本节诚实记录体现，不靠 availability（availability 是路由硬闸，非文档字段）。
 - **待办（诚实）**：
   - **未 push/未部署**：GPFS worktree 改动尚未 commit/push/PR/合 main；Windows 控制面未 pull/未重启；`config/control-plane.devices.json`（Windows 本地 live）01 capabilityIds 未加；registry `_xhs-parse.mjs` 未按 SHA256 传 Windows。
-  - **`头像,<name>` content-desc 格式已实证**（2026-07-29 Explorer 在 01 抓真实主页浮层 dump `overlay-01.xml` 确认：`ImageView clickable cy=364 content-desc="头像,<nickname>"` 半角逗号，`findProfileAuthor` tier-1 命中）；**overlay 关注按钮定位 bug 已修**（`findProfileFollowBtn` 取宽 CTA 容器 (254,998)，旧 `findFollowBtn` first-match 误中 y=161 背景节点）——**Risk #1 解析侧已闭**，剩 GPFS `fast-operator.mjs` port 同选择器 + Hermes 真机回归。
+  - **`头像,<name>` content-desc 格式已实证**（2026-07-29 Explorer 在 01 抓真实主页浮层 dump `overlay-01.xml` 确认：`ImageView clickable cy=364 content-desc="头像,<nickname>"` 半角逗号，`findProfileAuthor` tier-1 命中）；**overlay 关注按钮定位 bug 已修**（`findProfileFollowBtn` 取宽 CTA 容器 (254,998)，旧 `findFollowBtn` first-match 误中 y=161 背景节点）——**Risk #1 解析侧已闭**（registry parser 实现完成，Engineer 自测与离线 replay 通过，等待 Hermes 独立验证），剩 GPFS `fast-operator.mjs` port 同选择器 + 部署 + Hermes 真机回归。
   - **Hermes 10+ 真机回归（req#12）未执行**：独立验收，执行者不自评；需独立 setup 把 01 开到目标用户主页浮层（deep-link `xhs://note/<noteId>` → tap 作者头像），本 capability 按设计不导航，setup 不属 capability 范围。
   - **知识库 recipe `recipe-xhs-follow-ensure-20260729` 待写**（留痕契约）。
   - **合规 setup 路径缺口**（feat 分支并入）：需补 `xhs.profile.inspect`（R0 只读）+ `xhs.profile.open_dry_run`（R1 可逆导航）两个分层能力做 10+ 回归的 deterministic setup，或人手预置浮层后用正式只读 capability 观察；**禁止 bypass 做 acceptance**。
@@ -224,7 +224,7 @@
 11. ~~编号冲突~~ 已解决（2026-07-24 20:01）：飞书 02/03 编号是 07-13 旧数据，已按 serial 锚定改正为 02=REPLACE_SERIAL_02（棕色手机）、03=REPLACE_SERIAL_03（三店），与 seed 的 07-22/07-24 实证一致
 12. `/control/v1/devices` 公开视图不含 routingProfile（排查要看 control.db 或 query-routing.mjs）
 13. **watchdog 实际驱动者是临时终端循环（2026-07-27 发现）**：launchd `com.xhs.scout-watchdog` 因 macOS TCC 拒绝执行 Desktop 下脚本已被禁用（`.plist.disabled`），当前靠一个手工 `while true; do watchdog.sh; sleep 1800; done` 终端进程（s009 会话）驱动——终端一关 watchdog 就停。待办：把脚本移出 Desktop（或给 bash 授 Full Disk Access）后恢复 launchd 托管。
-14. **xhs.follow.ensure 待部署 + 待实证（2026-07-29）**：capability 代码+测试已就绪（GPFS 233/233、registry 39/39）但**未部署 Windows**；`头像,<name>` 头像 content-desc 格式**已真实 dump 实证**（overlay-01.xml），overlay 关注按钮定位 bug 已修（`findProfileFollowBtn`），**Risk #1 解析侧已闭**——剩 GPFS operator port 同选择器 + Hermes 10+ 真机回归（req#12，独立验收，未执行）。详见上文 `xhs.follow.ensure capability` 节。
+14. **xhs.follow.ensure 待部署 + 待实证（2026-07-29）**：capability 代码+测试已就绪（GPFS 233/233、registry 39/39）但**未部署 Windows**；`头像,<name>` 头像 content-desc 格式**已真实 dump 实证**（overlay-01.xml），overlay 关注按钮定位 bug 已修（`findProfileFollowBtn`）；registry parser 实现完成、Engineer 自测与离线 replay 通过，等待 Hermes 独立验证——剩 GPFS operator port 同选择器 + 部署 + Hermes 10+ 真机回归（req#12，独立验收，未执行）。详见上文 `xhs.follow.ensure capability` 节。
 
 ## 工具
 
