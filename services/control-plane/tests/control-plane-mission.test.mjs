@@ -41,6 +41,7 @@ function setup({
   missionAutoApprovalEnabled = false,
   adrAccepted = null,
   capabilities = [r2Capability()],
+  effectIntentSchema = undefined,
 } = {}) {
   const root = mkdtempSync(join(tmpdir(), "mission-cmd-"));
   const state = new StateStore({ dbPath: join(root, "control.db") });
@@ -76,6 +77,7 @@ function setup({
     leaseHeartbeatMs: 5000,
     missionAutoApprovalEnabled,
     adrAccepted,
+    effectIntentSchema,
     acquireTransportLock: () => Promise.resolve(() => {}),
   });
   control.start();
@@ -259,6 +261,32 @@ test("an invalid effect-intent envelope is rejected by the runtime schema and cr
       { code: "ENVELOPE_SCHEMA_INVALID" },
     );
     assert.equal(f.state.listMissionEffects(run.mission.missionId).length, 0);
+  } finally {
+    await f.close();
+  }
+});
+
+test("missing or unparseable effect-intent schema fails closed before a Mission primitive runs", async () => {
+  const f = setup({ missionAutoApprovalEnabled: true, adrAccepted: true, effectIntentSchema: null });
+  try {
+    const run = f.control.submitMission({
+      actor: "human:operator",
+      idempotencyKey: "freedom-schema-unavailable-01",
+      policy: socialPolicy,
+    });
+    await assert.rejects(
+      () => f.control.executeMissionPrimitive(run.run.tuple, {
+        primitive: "tap",
+        envelope: {
+          declaredIntent: "tap",
+          snapshot: freshSnapshot("social-effect", { effectAction: "follow" }),
+          observedTargetFingerprint: "target-hash-aaa",
+        },
+      }),
+      { code: "EFFECT_INTENT_SCHEMA_UNAVAILABLE" },
+    );
+    assert.equal(f.state.listMissionEffects(run.mission.missionId).length, 0);
+    assert.equal(f.state.listMissionEvents(run.mission.missionId).some((event) => event.type === "mission.primitive"), false);
   } finally {
     await f.close();
   }

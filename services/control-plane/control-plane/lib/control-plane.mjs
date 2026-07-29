@@ -135,6 +135,7 @@ export class ControlPlane {
     missionAutoApprovalEnabled = process.env.MISSION_AUTO_APPROVAL_ENABLED === "1",
     adrAccepted = null,
     adrPath = DEFAULT_ADR_0008_PATH,
+    effectIntentSchema = EFFECT_INTENT_SCHEMA,
   }) {
     this.state = state;
     this.capabilities = capabilities;
@@ -173,6 +174,7 @@ export class ControlPlane {
     this.missionAutoApprovalEnabled = Boolean(missionAutoApprovalEnabled);
     this.adrAcceptedOverride = adrAccepted;
     this.adrPath = adrPath;
+    this.effectIntentSchema = effectIntentSchema;
     state.upsertNode({
       nodeId: authorityNodeId,
       status: "online",
@@ -366,15 +368,20 @@ export class ControlPlane {
     // callers (which pass primitive separately) compliant without changing their payloads.
     // A schema-invalid envelope is rejected before any tuple check, classification, or effect.
     const mergedEnvelope = { schemaVersion: 1, primitive, ...envelope };
-    if (EFFECT_INTENT_SCHEMA) {
-      const errors = validateJsonSchema(mergedEnvelope, EFFECT_INTENT_SCHEMA);
-      if (errors.length > 0) {
-        throw new ControlPlaneError(
-          "ENVELOPE_SCHEMA_INVALID",
-          "effect-intent envelope does not match the runtime schema",
-          { status: 400, details: { errors: errors.slice(0, 10) } },
-        );
-      }
+    if (!this.effectIntentSchema) {
+      throw new ControlPlaneError(
+        "EFFECT_INTENT_SCHEMA_UNAVAILABLE",
+        "effect-intent schema is unavailable; Mission primitives are blocked",
+        { status: 503 },
+      );
+    }
+    const errors = validateJsonSchema(mergedEnvelope, this.effectIntentSchema);
+    if (errors.length > 0) {
+      throw new ControlPlaneError(
+        "ENVELOPE_SCHEMA_INVALID",
+        "effect-intent envelope does not match the runtime schema",
+        { status: 400, details: { errors: errors.slice(0, 10) } },
+      );
     }
     const run = this.assertControlTuple(tuple);
     const mission = this.missions.requireActiveMission(tuple.missionId);
