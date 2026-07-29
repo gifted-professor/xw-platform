@@ -111,3 +111,88 @@ test("ECP blocks scope and correctness failures before ledger or adapter executi
     rmSync(fixture.root, { recursive: true, force: true });
   }
 });
+
+test("ECP retries a notSent effect in place only after a full recheck, retaining its reservation", async () => {
+  const fixture = setup();
+  const calls = [];
+  const restores = [];
+  let attempt = 0;
+  try {
+    const ecp = new EffectCommitProtocol({
+      state: fixture.state, ledger: new EffectLedger({ state: fixture.state }), deviceRuns: fixture.runs,
+      recheck: async (input) => correctState(input.target),
+      execute: async (input) => {
+        calls.push(input);
+        attempt += 1;
+        if (attempt === 1) throw Object.assign(new Error("definitively not sent"), { code: "NOT_SENT" });
+        return { httpStatus: 200 };
+      },
+      verify: async () => ({ ok: true, evidenceRefs: ["retry-verified"] }),
+      restore: async (input) => { restores.push(input); return { ok: true }; },
+    });
+    const initial = await ecp.commit({
+      tuple: fixture.run.tuple, mission: fixture.mission, action: "follow", target: "target-a",
+      intent: { surface: "social-effect" }, idempotencyKey: "retry-not-sent",
+    });
+    assert.equal(initial.status, "not_sent");
+    const reserved = fixture.state.listMissionEffects(fixture.mission.missionId).find((effect) => effect.effectId === initial.effect.effectId);
+    assert.equal(reserved.reservationReleased, false);
+    new EffectLedger({ state: fixture.state }).beginEffect({
+      mission: fixture.mission, deviceRunId: fixture.run.deviceRunId, action: "comment", target: "target-a",
+      intent: { surface: "social-effect" }, idempotencyKey: "other-reserved-slot",
+    });
+
+    const retried = await ecp.retryNotSentInPlace({
+      effectId: initial.effect.effectId, tuple: fixture.run.tuple, mission: fixture.mission, target: "target-a",
+      intent: { surface: "social-effect" },
+    });
+    assert.equal(retried.status, "verified");
+    assert.equal(retried.effect.effectId, initial.effect.effectId);
+    assert.equal(calls.length, 2);
+    assert.equal(calls[1].target, "target-a");
+    assert.equal(restores.length, 2);
+    assert.equal(fixture.state.listMissionEffects(fixture.mission.missionId).length, 2);
+    assert.throws(() => new EffectLedger({ state: fixture.state }).beginEffect({
+      mission: fixture.mission, deviceRunId: fixture.run.deviceRunId, action: "follow", target: "target-a",
+      intent: { surface: "social-effect" }, idempotencyKey: "retry-must-not-overspend",
+    }), { code: "BUDGET_EXCEEDED" });
+  } finally {
+    fixture.state.close();
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("ECP notSent retry keeps the durable reservation when target or control recheck fails", async () => {
+  const fixture = setup();
+  let recheckedTarget = "target-a";
+  let executeCount = 0;
+  try {
+    const ecp = new EffectCommitProtocol({
+      state: fixture.state, ledger: new EffectLedger({ state: fixture.state }), deviceRuns: fixture.runs,
+      recheck: async () => correctState(recheckedTarget),
+      execute: async () => { executeCount += 1; throw Object.assign(new Error("not sent"), { code: "NOT_SENT" }); },
+      verify: async () => ({ ok: true }), restore: async () => ({ ok: true }),
+    });
+    const initial = await ecp.commit({
+      tuple: fixture.run.tuple, mission: fixture.mission, action: "follow", target: "target-a",
+      intent: { surface: "social-effect" }, idempotencyKey: "retry-recheck-failure",
+    });
+    assert.equal(initial.status, "not_sent");
+    recheckedTarget = "other-target";
+    const targetBlocked = await ecp.retryNotSentInPlace({
+      effectId: initial.effect.effectId, tuple: fixture.run.tuple, mission: fixture.mission, action: "follow", target: "target-a",
+      intent: { surface: "social-effect" },
+    });
+    assert.deepEqual(targetBlocked, { status: "blocked", code: "TARGET_MISMATCH" });
+    assert.equal(executeCount, 1);
+    assert.equal(fixture.state.listMissionEffects(fixture.mission.missionId)[0].status, "not_sent");
+    await assert.rejects(() => ecp.retryNotSentInPlace({
+      effectId: initial.effect.effectId, tuple: { ...fixture.run.tuple, controllerEpoch: 0 }, mission: fixture.mission,
+      action: "follow", target: "target-a", intent: { surface: "social-effect" },
+    }), { code: "EPOCH_MISMATCH" });
+    assert.equal(fixture.state.listMissionEffects(fixture.mission.missionId)[0].status, "not_sent");
+  } finally {
+    fixture.state.close();
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});

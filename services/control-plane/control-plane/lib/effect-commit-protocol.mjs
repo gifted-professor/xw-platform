@@ -87,6 +87,46 @@ export class EffectCommitProtocol {
     return this.executePrepared({ ...prepared, ...input });
   }
 
+  // A not_sent retry is intentionally not exposed as a ledger-only convenience. It binds the
+  // durable reservation back to its original run and repeats the same observed-state checks
+  // before one retry; caller-provided booleans cannot authorize an external effect.
+  async retryNotSentInPlace(input) {
+    const { effectId, tuple, mission, target } = input || {};
+    this.deviceRuns.assertControlTuple(tuple);
+    const effect = this.state.listMissionEffects(mission?.missionId)
+      .find((candidate) => candidate.effectId === effectId);
+    const action = input?.action || effect?.action;
+    if (!effect || effect.deviceRunId !== tuple.deviceRunId || (input?.action && effect.action !== input.action)
+      || effect.targetFingerprint !== targetFingerprint(target)) {
+      return blocked("EFFECT_BINDING_MISMATCH");
+    }
+    const policy = evaluateMissionEffect(mission, { action, target });
+    if (policy.decision === "scope_violation") return blocked("SCOPE_VIOLATION");
+    if (policy.decision === "blocked") return blocked(policy.reason);
+    const rechecked = await this.recheck(input);
+    const code = correctnessCode(mission, target, rechecked);
+    if (code) return blocked(code);
+
+    const retried = this.ledger.retryNotSent(effectId, { rechecked: true });
+    let outcome = null;
+    try {
+      const execution = await this.execute({ ...input, action, effectId, target: rechecked.targetFingerprint });
+      const verification = await this.verify({ ...input, action, effectId, execution, afterState: rechecked.beforeState });
+      outcome = this.ledger.recordOutcome(effectId, {
+        status: verification?.ok === true ? "verified" : "ambiguous",
+        evidenceRefs: verification?.evidenceRefs || [],
+      });
+      if (typeof this.recordEvidence === "function") this.recordEvidence({ effectId, evidenceRefs: outcome.evidenceRefs });
+      return { status: outcome.status, effect: outcome, retried };
+    } catch (error) {
+      const notSent = error?.code === "NOT_SENT";
+      outcome = this.ledger.recordOutcome(effectId, { status: notSent ? "not_sent" : "ambiguous" });
+      return { status: outcome.status, effect: outcome, retried, error: { code: error?.code || "EFFECT_EXECUTION_FAILED" } };
+    } finally {
+      await this.restore({ ...input, action, effectId, outcome: outcome?.status || "ambiguous" });
+    }
+  }
+
   async cancelPrepared(prepared) {
     if (prepared?.status !== "prepared") return prepared;
     const { effect, ...input } = prepared;
