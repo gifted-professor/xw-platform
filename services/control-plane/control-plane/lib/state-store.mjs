@@ -309,6 +309,17 @@ export class StateStore {
       CREATE INDEX IF NOT EXISTS mission_effects_budget_idx
         ON mission_effects(mission_id, action, target_hash, created_at);
       CREATE INDEX IF NOT EXISTS device_runs_mission_idx ON device_runs(mission_id, phase);
+      CREATE TABLE IF NOT EXISTS protected_commits (
+        commit_id TEXT PRIMARY KEY,
+        mission_id TEXT NOT NULL REFERENCES missions(mission_id),
+        effect_id TEXT NOT NULL,
+        action TEXT NOT NULL,
+        target_hash TEXT NOT NULL,
+        status TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS protected_commits_mission_idx ON protected_commits(mission_id, status);
     `);
     this.#ensureColumn(
       "devices",
@@ -320,7 +331,7 @@ export class StateStore {
     this.#ensureColumn("sessions", "scope_capability_id", "TEXT");
     this.#ensureColumn("sessions", "placement_decision_json", "TEXT");
     this.#ensureColumn("leases", "owner_device_run_id", "TEXT");
-    this.db.exec("PRAGMA user_version = 3;");
+    this.db.exec("PRAGMA user_version = 4;");
   }
 
   #ensureColumn(table, column, definition) {
@@ -354,6 +365,7 @@ export class StateStore {
       const now = this.now();
       this.#recoverInterruptedDeviceRuns(now);
       this.#recoverInterruptedEffects(now);
+      this.#recoverInterruptedProtectedCommits(now);
       this.db.exec("DELETE FROM sessions; DELETE FROM leases;");
       return [];
     }
@@ -378,6 +390,7 @@ export class StateStore {
       }
       this.#recoverInterruptedDeviceRuns(now);
       this.#recoverInterruptedEffects(now);
+      this.#recoverInterruptedProtectedCommits(now);
       this.db.exec("DELETE FROM sessions; DELETE FROM leases;");
     });
     return interrupted.map((row) => row.job_id);
@@ -1264,6 +1277,11 @@ export class StateStore {
   #publicMission(row) {
     if (!row) return null;
     const policy = parseJson(row.policy_json, {});
+    // Constrained public projection of the immutable policy. Spreading the whole policy
+    // leaked the caller's private idempotency dedup handle and the internal redaction config
+    // and would blindly expose any future policy field. The stable public Mission contract is
+    // an explicit allowlist: identity (missionId/hash/version), lifecycle, and the authorizing
+    // scope/policy/validity — never the private dedup key or internal redaction rules.
     return {
       missionId: row.mission_id,
       version: row.version,
@@ -1275,7 +1293,15 @@ export class StateStore {
       expiresAt: iso(row.expires_at),
       revokedAt: row.revoked_at ? iso(row.revoked_at) : null,
       revokedReason: row.revoked_reason,
-      ...policy,
+      schemaVersion: policy.schemaVersion,
+      issuer: policy.issuer,
+      app: policy.app,
+      account: policy.account,
+      parallelism: policy.parallelism,
+      controllers: policy.controllers,
+      scope: policy.scope,
+      validity: policy.validity,
+      policy: policy.policy,
     };
   }
 
@@ -1385,6 +1411,78 @@ export class StateStore {
       type: row.type,
       payload: parseJson(row.payload_json, {}),
     }));
+  }
+
+  // Protected Human Commit durable records. The commitId is the human's per-commit handle; it
+  // is persisted so a pending commit is observable and survives a StateStore reconstruct rather
+  // than living only in a process-local Map. Control-plane restart cannot resume a pending human
+  // commit (the device control tuple was lost), so recovery cancels it fail-closed; the durable
+  // row remains the audit record until then.
+  addProtectedCommit({ commitId, missionId, effectId, action, targetHash, status = "waiting_authorization" }) {
+    if (!commitId || !missionId || !effectId || !action || !targetHash) {
+      throw new TypeError("commitId, missionId, effectId, action, targetHash are required");
+    }
+    const now = this.now();
+    this.db.prepare(`
+      INSERT INTO protected_commits (commit_id, mission_id, effect_id, action, target_hash, status, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(commitId, missionId, effectId, action, targetHash, status, now, now);
+    return this.getProtectedCommit(commitId);
+  }
+
+  getProtectedCommit(commitId) {
+    const row = this.db.prepare("SELECT * FROM protected_commits WHERE commit_id=?").get(commitId);
+    if (!row) return null;
+    return this.#publicProtectedCommit(row);
+  }
+
+  listProtectedCommits({ missionId = null, status = null } = {}) {
+    let sql = "SELECT * FROM protected_commits";
+    const conditions = [];
+    const params = [];
+    if (missionId) { conditions.push("mission_id=?"); params.push(missionId); }
+    if (status) { conditions.push("status=?"); params.push(status); }
+    if (conditions.length) sql += ` WHERE ${conditions.join(" AND ")}`;
+    sql += " ORDER BY created_at";
+    return this.db.prepare(sql).all(...params).map((row) => this.#publicProtectedCommit(row));
+  }
+
+  removeProtectedCommit(commitId) {
+    this.db.prepare("DELETE FROM protected_commits WHERE commit_id=?").run(commitId);
+  }
+
+  #publicProtectedCommit(row) {
+    return {
+      commitId: row.commit_id,
+      missionId: row.mission_id,
+      effectId: row.effect_id,
+      action: row.action,
+      targetFingerprint: row.target_hash,
+      status: row.status,
+      createdAt: iso(row.created_at),
+      updatedAt: iso(row.updated_at),
+    };
+  }
+
+  #recoverInterruptedProtectedCommits(now) {
+    const pending = this.db.prepare(
+      "SELECT * FROM protected_commits WHERE status='waiting_authorization'",
+    ).all();
+    for (const row of pending) {
+      // A restart invalidates the in-memory prepared handle. Mark this durable commit terminal
+      // so it cannot be decided or resumed after control was lost, while retaining commitId
+      // and the terminal decision for audit.
+      this.db.prepare(
+        "UPDATE protected_commits SET status='recovered_cancelled', updated_at=? WHERE commit_id=?",
+      ).run(now, row.commit_id);
+      this.#insertMissionEvent({
+        missionId: row.mission_id,
+        type: "protected_human_commit.recovered_cancelled",
+        payload: { commitId: row.commit_id, effectId: row.effect_id, action: row.action },
+        createdAt: now,
+      });
+    }
+    return pending.length;
   }
 
   #publicMissionEffect(row) {

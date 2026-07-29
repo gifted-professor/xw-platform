@@ -28,6 +28,68 @@ function publicJob(job) {
   };
 }
 
+// Mission policy is authoritative control-plane state, but not a public API payload. In
+// particular, account aliases, target fingerprints, controller identities, idempotency keys,
+// and policy/redaction internals must not leave the control-plane boundary through list, submit,
+// show, or revoke responses.
+function publicMissionView(mission) {
+  if (!mission) return mission;
+  const {
+    missionId,
+    version,
+    missionHash,
+    app,
+    status,
+    createdAt,
+    updatedAt,
+    expiresAt,
+    revokedAt,
+    revokedReason,
+  } = mission;
+  const sourceScope = mission.scope && typeof mission.scope === "object" ? mission.scope : {};
+  const sourceTargets = sourceScope.targets && typeof sourceScope.targets === "object" ? sourceScope.targets : {};
+  const frequency = sourceScope.frequency && typeof sourceScope.frequency === "object" ? sourceScope.frequency : {};
+  return {
+    missionId,
+    version,
+    missionHash,
+    app,
+    status,
+    createdAt,
+    updatedAt,
+    expiresAt,
+    revokedAt,
+    revokedReason,
+    scope: {
+      actions: Array.isArray(sourceScope.actions) ? sourceScope.actions.filter((action) => typeof action === "string") : [],
+      targetKind: typeof sourceTargets.kind === "string" ? sourceTargets.kind : null,
+      targetCount: Array.isArray(sourceTargets.values) ? sourceTargets.values.length : 0,
+      totalCount: Number.isSafeInteger(sourceScope.totalCount) ? sourceScope.totalCount : 0,
+      perTargetCount: Number.isSafeInteger(sourceScope.perTargetCount) ? sourceScope.perTargetCount : 0,
+      frequency: {
+        count: Number.isSafeInteger(frequency.count) ? frequency.count : 0,
+        windowSeconds: Number.isSafeInteger(frequency.windowSeconds) ? frequency.windowSeconds : 0,
+      },
+    },
+  };
+}
+
+function publicMissionSubmission(result) {
+  const { mission, run, ...safe } = result;
+  return {
+    ...safe,
+    mission: publicMissionView(mission),
+    ...(run ? {
+      run: {
+        deviceRunId: run.deviceRunId,
+        missionId: run.missionId,
+        phase: run.phase,
+        createdAt: run.createdAt,
+      },
+    } : {}),
+  };
+}
+
 export class ControlRouter {
   constructor({ control, state, capabilities, evidence, nodeId = "DESKTOP-3I1EVHE" }) {
     this.control = control;
@@ -219,6 +281,23 @@ export class ControlRouter {
       });
       return { status: 200, body: { ...result } };
     }
+    if (method === "POST" && path === "/control/v1/missions/submit") {
+      const input = requireBody(body);
+      const result = this.control.submitMission(input);
+      return { status: result.status === "blocked" ? 200 : 201, body: publicMissionSubmission(result) };
+    }
+    if (method === "GET" && path === "/control/v1/missions") {
+      return { status: 200, body: { missions: this.state.listMissions().map(publicMissionView) } };
+    }
+    match = path.match(/^\/control\/v1\/missions\/([^/]+)$/);
+    if (method === "GET" && match) {
+      const result = this.control.showMission(decodeURIComponent(match[1]));
+      return { status: 200, body: { ...result, mission: publicMissionView(result.mission) } };
+    }
+    match = path.match(/^\/control\/v1\/missions\/([^/]+)\/status$/);
+    if (method === "GET" && match) {
+      return { status: 200, body: { ...this.control.missionStatus(decodeURIComponent(match[1])) } };
+    }
     match = path.match(/^\/control\/v1\/missions\/([^/]+)\/device-runs$/);
     if (method === "GET" && match) {
       return {
@@ -226,6 +305,14 @@ export class ControlRouter {
         body: {
           deviceRuns: this.control.deviceRuns.listDeviceRuns({ missionId: decodeURIComponent(match[1]) }),
         },
+      };
+    }
+    match = path.match(/^\/control\/v1\/missions\/([^/]+)\/revoke$/);
+    if (method === "POST" && match) {
+      const input = requireBody(body);
+      return {
+        status: 200,
+        body: { mission: publicMissionView(this.control.revokeMission(decodeURIComponent(match[1]), input)) },
       };
     }
 

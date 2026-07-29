@@ -1,5 +1,10 @@
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { ControlPlaneError, asControlError } from "./errors.mjs";
 import { fingerprint } from "./canonical.mjs";
+import { validateJsonSchema } from "./json-schema-validator.mjs";
 import { evaluateCapabilityPolicy } from "./policy.mjs";
 import { inspectTransportLock } from "./xiaowei-transport.mjs";
 import { normalizeRecoveryVisualAnalysis } from "./recovery-inspection.mjs";
@@ -10,6 +15,38 @@ import { EffectLedger } from "./effect-ledger.mjs";
 import { EffectCommitProtocol } from "./effect-commit-protocol.mjs";
 import { ProtectedHumanCommit } from "./protected-human-commit.mjs";
 import { acquireTransportLock as defaultAcquireTransportLock } from "./xiaowei-transport.mjs";
+
+const moduleDir = dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = resolve(moduleDir, "..", "..");
+const EFFECT_INTENT_SCHEMA_PATH = join(moduleDir, "..", "schema", "effect-intent.schema.json");
+const DEFAULT_ADR_0008_PATH = join(REPO_ROOT, "docs", "adr", "0008-mission-driven-exploration-authorization.md");
+
+// Load the canonical effect-intent envelope schema once at module load so the runtime
+// validation is driven by the schema file (the source of truth), not a parallel copy.
+let EFFECT_INTENT_SCHEMA = null;
+try {
+  if (existsSync(EFFECT_INTENT_SCHEMA_PATH)) {
+    EFFECT_INTENT_SCHEMA = JSON.parse(readFileSync(EFFECT_INTENT_SCHEMA_PATH, "utf8"));
+  }
+} catch {
+  // A missing/unreadable schema must fail closed for envelopes, handled per-call below.
+  EFFECT_INTENT_SCHEMA = null;
+}
+
+// ADR 0008 acceptance is decided OUTSIDE code review (by the authorized decision maker). The
+// guard reads the ADR's Status line so enabling the automatic-R2 Mission path requires a real
+// accepted ADR on disk, not a code change. A missing ADR (still Proposed / not yet written) is
+// treated as not accepted. Tests may inject adrAccepted to exercise the enabled branch without
+// touching the ADR file.
+function readAdr0008StatusAccepted(adrPath) {
+  try {
+    if (!existsSync(adrPath)) return false;
+    const text = readFileSync(adrPath, "utf8");
+    return /^\s*Status:\s*Accepted\b/im.test(text);
+  } catch {
+    return false;
+  }
+}
 
 function collectEvidenceFiles(...values) {
   return values.flatMap((value) => Array.isArray(value?.evidenceFiles) ? value.evidenceFiles : []);
@@ -95,6 +132,9 @@ export class ControlPlane {
     leaseHeartbeatMs = 10000,
     missions = null,
     acquireTransportLock = null,
+    missionAutoApprovalEnabled = process.env.MISSION_AUTO_APPROVAL_ENABLED === "1",
+    adrAccepted = null,
+    adrPath = DEFAULT_ADR_0008_PATH,
   }) {
     this.state = state;
     this.capabilities = capabilities;
@@ -126,6 +166,13 @@ export class ControlPlane {
     this.acquireTransportLock = typeof acquireTransportLock === "function"
       ? acquireTransportLock
       : defaultAcquireTransportLock;
+    // Mission automatic-R2 gating (ADR 0008). Default false: the manual per-effect gate stays
+    // intact until the authorized decision maker accepts ADR 0008 outside code review AND the
+    // flag is enabled. adrAccepted===null reads the ADR file lazily; an explicit boolean
+    // override is for tests only and never mutates the ADR file.
+    this.missionAutoApprovalEnabled = Boolean(missionAutoApprovalEnabled);
+    this.adrAcceptedOverride = adrAccepted;
+    this.adrPath = adrPath;
     state.upsertNode({
       nodeId: authorityNodeId,
       status: "online",
@@ -183,6 +230,7 @@ export class ControlPlane {
 
   createProtectedHumanCommit(handlers) {
     return new ProtectedHumanCommit({
+      state: this.state,
       audit: (event) => {
         if (event?.missionId) {
           this.state.appendMissionEvent({
@@ -194,6 +242,111 @@ export class ControlPlane {
       },
       ...handlers,
     });
+  }
+
+  // ADR 0008 acceptance is read out-of-band from the ADR file unless a boolean override was
+  // injected (tests). The file remains the source of truth; this method never mutates it.
+  isAdr0008Accepted() {
+    if (this.adrAcceptedOverride !== null && this.adrAcceptedOverride !== undefined) {
+      return Boolean(this.adrAcceptedOverride);
+    }
+    return readAdr0008StatusAccepted(this.adrPath);
+  }
+
+  // The automatic-R2 Mission path requires BOTH the feature flag AND an accepted ADR 0008.
+  // On either failure it must block before any DeviceRun/lease/Session/effect is allocated and
+  // never degrade to legacy manual-per-effect handling. The single failure code is
+  // ADR_0008_NOT_ACCEPTED so callers cannot tell "flag off" from "ADR not accepted" and
+  // infer a partial rollout state.
+  #missionAutoApprovalGate() {
+    if (!this.missionAutoApprovalEnabled || !this.isAdr0008Accepted()) {
+      return { ok: false, code: "ADR_0008_NOT_ACCEPTED" };
+    }
+    return { ok: true };
+  }
+
+  // The one authenticated command that creates/reuses the immutable Mission and runs it. It
+  // never accepts a client-selected private runtime/device id (placement is server-side). With
+  // the gate closed it persists only a blocked Mission/audit event and returns
+  // ADR_0008_NOT_ACCEPTED before any run/lease/Session/effect row exists. With the gate open an
+  // in-scope social Mission opens its atomic DeviceRun with no whole-Mission or per-job
+  // approval; payment and unreleased publish/delete still route to the PHC at effect time.
+  submitMission({ actor, idempotencyKey, policy, controllerAgent, placement = {} }) {
+    if (typeof actor !== "string" || actor.trim() === "") {
+      throw new ControlPlaneError("ACTOR_REQUIRED", "actor is required", { status: 400 });
+    }
+    if (typeof idempotencyKey !== "string" || idempotencyKey.trim() === "") {
+      throw new ControlPlaneError("IDEMPOTENCY_KEY_REQUIRED", "idempotencyKey is required", { status: 400 });
+    }
+    if (!policy || typeof policy !== "object") {
+      throw new ControlPlaneError("MISSION_POLICY_INVALID", "policy is required", { status: 400 });
+    }
+    // The bound device runtime is selected by the control plane, never by the caller. Rejecting
+    // a client-supplied runtimeId/deviceId keeps a private runtime anchor from being spoofed.
+    if (policy.runtimeId !== undefined || policy.deviceId !== undefined) {
+      throw new ControlPlaneError(
+        "CLIENT_RUNTIME_FORBIDDEN",
+        "mission submit does not accept a client-selected private runtime or device id",
+        { status: 400 },
+      );
+    }
+    const controller = (typeof controllerAgent === "string" && controllerAgent.trim())
+      ? controllerAgent.trim()
+      : "agent:runner";
+    const controllers = (Array.isArray(policy.controllers) && policy.controllers.length)
+      ? policy.controllers
+      : [controller];
+    const { mission, reused } = this.missions.createMission({
+      ...policy,
+      issuer: { actorId: actor.trim() },
+      idempotencyKey: idempotencyKey.trim(),
+      controllers,
+    });
+    const gate = this.#missionAutoApprovalGate();
+    if (!gate.ok) {
+      this.state.appendMissionEvent({
+        missionId: mission.missionId,
+        type: "mission.submit.blocked",
+        payload: { code: gate.code, actorId: actor.trim(), controllerAgent: controller },
+      });
+      return { status: "blocked", reason: gate.code, mission, reused, approvalRequired: false };
+    }
+    const run = this.openDeviceRun({ missionId: mission.missionId, controllerAgent: controller, placement });
+    this.state.appendMissionEvent({
+      missionId: mission.missionId,
+      type: "mission.submitted",
+      payload: { actorId: actor.trim(), deviceRunId: run.deviceRunId, controllerAgent: controller },
+    });
+    return { status: "running", mission, reused, run, approvalRequired: false };
+  }
+
+  showMission(missionId) {
+    const mission = this.state.getMission(missionId);
+    if (!mission) throw new ControlPlaneError("MISSION_NOT_FOUND", `unknown mission ${missionId}`, { status: 404 });
+    return {
+      mission,
+      deviceRuns: this.state.listDeviceRuns({ missionId }),
+      events: this.state.listMissionEvents(missionId),
+    };
+  }
+
+  missionStatus(missionId) {
+    const mission = this.state.getMission(missionId);
+    if (!mission) throw new ControlPlaneError("MISSION_NOT_FOUND", `unknown mission ${missionId}`, { status: 404 });
+    const deviceRuns = this.state.listDeviceRuns({ missionId });
+    return {
+      missionId,
+      status: mission.status,
+      deviceRunCount: deviceRuns.length,
+      effectCount: this.state.listMissionEffects(missionId).length,
+    };
+  }
+
+  // revoke cancels further work: the mission flips to revoked so every later primitive/effect
+  // is blocked by the classifier. It makes no claim that an already-ambiguous external effect
+  // was undone (terminal effects stay terminal). It does not fabricate a human approval.
+  revokeMission(missionId, { actorId, reason = null } = {}) {
+    return this.missions.revokeMission(missionId, { actorId, reason });
   }
 
   // Mission-bound Explorer primitive. Validates the complete control tuple, classifies the
@@ -208,9 +361,24 @@ export class ControlPlane {
     if (!envelope || typeof envelope !== "object") {
       throw new ControlPlaneError("ENVELOPE_REQUIRED", "effect-intent envelope is required", { status: 400 });
     }
+    // Validate the envelope against the canonical effect-intent schema. The primitive is part
+    // of the envelope contract, so it is merged in before validation; this keeps existing
+    // callers (which pass primitive separately) compliant without changing their payloads.
+    // A schema-invalid envelope is rejected before any tuple check, classification, or effect.
+    const mergedEnvelope = { schemaVersion: 1, primitive, ...envelope };
+    if (EFFECT_INTENT_SCHEMA) {
+      const errors = validateJsonSchema(mergedEnvelope, EFFECT_INTENT_SCHEMA);
+      if (errors.length > 0) {
+        throw new ControlPlaneError(
+          "ENVELOPE_SCHEMA_INVALID",
+          "effect-intent envelope does not match the runtime schema",
+          { status: 400, details: { errors: errors.slice(0, 10) } },
+        );
+      }
+    }
     const run = this.assertControlTuple(tuple);
     const mission = this.missions.requireActiveMission(tuple.missionId);
-    const verdict = this.firewall.classify(envelope, mission);
+    const verdict = this.firewall.classify(mergedEnvelope, mission);
     const release = await this.acquireTransportLock();
     try {
       const payload = {

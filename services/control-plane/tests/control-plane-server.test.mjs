@@ -225,6 +225,63 @@ test("router exposes job recovery without returning credentials", async () => {
   assert.doesNotMatch(JSON.stringify(result.body), /token|runtime/i);
 });
 
+test("router Mission lifecycle responses redact account, targets, and internal policy fields", async () => {
+  const privateMission = {
+    missionId: "mission_public",
+    version: 1,
+    missionHash: "a".repeat(64),
+    app: "xhs",
+    account: "private-account-alias",
+    scope: {
+      actions: ["follow"],
+      targets: { kind: "fingerprint", values: ["private-target-hash"] },
+      totalCount: 3,
+      perTargetCount: 1,
+      frequency: { count: 1, windowSeconds: 3600 },
+    },
+    policy: { payment: "confirm", internal: "private-policy-value" },
+    controllers: ["agent:private"],
+    idempotencyKey: "private-dedup-key",
+    redaction: { internal: true },
+    status: "active",
+    createdAt: "2026-07-29T00:00:00.000Z",
+    updatedAt: "2026-07-29T00:00:00.000Z",
+    expiresAt: "2099-07-29T00:00:00.000Z",
+    revokedAt: null,
+    revokedReason: null,
+  };
+  const router = new ControlRouter({
+    control: {
+      submitMission() { return { status: "blocked", reason: "ADR_0008_NOT_ACCEPTED", mission: privateMission, reused: false, approvalRequired: false }; },
+      showMission() { return { mission: privateMission, deviceRuns: [], events: [] }; },
+      missionStatus() { return { missionId: privateMission.missionId, status: "active", deviceRunCount: 0, effectCount: 0 }; },
+      revokeMission() { return privateMission; },
+    },
+    state: { listMissions() { return [privateMission]; } },
+    capabilities: {},
+    evidence: {},
+  });
+  const listed = await router.handle({ method: "GET", path: "/control/v1/missions" });
+  const submitted = await router.handle({ method: "POST", path: "/control/v1/missions/submit", body: { actor: "human:operator", idempotencyKey: "x", policy: {} } });
+  const shown = await router.handle({ method: "GET", path: "/control/v1/missions/mission_public" });
+  const revoked = await router.handle({ method: "POST", path: "/control/v1/missions/mission_public/revoke", body: { actorId: "human:operator" } });
+  for (const body of [listed.body, submitted.body, shown.body, revoked.body]) {
+    assert.doesNotMatch(JSON.stringify(body), /private-account-alias|private-target-hash|private-policy-value|private-dedup-key|agent:private|redaction/);
+  }
+  assert.equal(listed.body.missions[0].missionId, "mission_public");
+  assert.equal(submitted.body.mission.missionId, "mission_public");
+  assert.equal(shown.body.mission.missionId, "mission_public");
+  assert.equal(revoked.body.mission.missionId, "mission_public");
+  assert.deepEqual(listed.body.missions[0].scope, {
+    actions: ["follow"],
+    targetKind: "fingerprint",
+    targetCount: 1,
+    totalCount: 3,
+    perTargetCount: 1,
+    frequency: { count: 1, windowSeconds: 3600 },
+  });
+});
+
 test("router exposes read-only recovery inspection without returning credentials", async () => {
   const calls = [];
   const router = new ControlRouter({

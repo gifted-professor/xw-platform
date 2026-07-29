@@ -133,7 +133,12 @@ function help() {
   session heartbeat|release --session ID --token TOKEN
   session action --session ID --token TOKEN --capability ID --idempotency-key KEY [--params JSON]
   lab action --session ID --token TOKEN --action NAME --idempotency-key KEY [--data JSON]
-  evidence show --run ID`;
+  evidence show --run ID
+  mission submit --actor ID --idempotency-key KEY --policy JSON [--controller ID | placement selectors]
+  mission show --mission ID
+  mission status --mission ID
+  mission revoke --mission ID --actor ID [--reason TEXT]
+  mission list`;
 }
 
 export async function main(argv = process.argv.slice(2)) {
@@ -261,6 +266,30 @@ export async function main(argv = process.argv.slice(2)) {
     });
   } else if (group === "evidence" && action === "show") {
     result = await requestJson(baseUrl, "GET", `/control/v1/runs/${encodeURIComponent(requireOption(argv, "--run"))}/evidence`);
+  } else if (group === "mission" && action === "submit") {
+    result = await requestJson(baseUrl, "POST", "/control/v1/missions/submit", {
+      actor: requireOption(argv, "--actor"),
+      idempotencyKey: requireOption(argv, "--idempotency-key"),
+      policy: parseJsonOption(argv, "--policy", {}),
+      ...(option(argv, "--controller") !== undefined ? { controllerAgent: option(argv, "--controller") } : {}),
+      ...placementOptions(argv),
+    });
+  } else if (group === "mission" && action === "show") {
+    result = await requestJson(baseUrl, "GET", `/control/v1/missions/${encodeURIComponent(requireOption(argv, "--mission"))}`);
+  } else if (group === "mission" && action === "status") {
+    result = await requestJson(baseUrl, "GET", `/control/v1/missions/${encodeURIComponent(requireOption(argv, "--mission"))}/status`);
+  } else if (group === "mission" && action === "revoke") {
+    result = await requestJson(
+      baseUrl,
+      "POST",
+      `/control/v1/missions/${encodeURIComponent(requireOption(argv, "--mission"))}/revoke`,
+      {
+        actorId: requireOption(argv, "--actor"),
+        reason: option(argv, "--reason", null),
+      },
+    );
+  } else if (group === "mission" && action === "list") {
+    result = await requestJson(baseUrl, "GET", "/control/v1/missions");
   } else {
     throw new ControlPlaneError("CLI_COMMAND_UNKNOWN", `unknown command: ${argv.slice(0, 2).join(" ")}`);
   }

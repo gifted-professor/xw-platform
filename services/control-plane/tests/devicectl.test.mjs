@@ -157,3 +157,137 @@ test("job recover-inspect-record forwards the normalized analysis envelope", asy
     analysis,
   });
 });
+
+test("mission submit posts the policy to the guarded mission submit endpoint", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalLog = console.log;
+  const requests = [];
+  console.log = () => {};
+  globalThis.fetch = async (url, options) => {
+    requests.push({ url: String(url), options });
+    return new Response(JSON.stringify({ status: "blocked", reason: "ADR_0008_NOT_ACCEPTED" }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const policy = {
+    app: "xhs",
+    account: "local-alias",
+    parallelism: 1,
+    scope: {
+      actions: ["follow"],
+      targets: { kind: "fingerprint", values: ["target-hash"] },
+      totalCount: 1,
+      perTargetCount: 1,
+      frequency: { count: 1, windowSeconds: 3600 },
+    },
+    validity: { expiresAt: "2026-07-29T16:00:00Z" },
+  };
+  try {
+    await main([
+      "--local",
+      "mission",
+      "submit",
+      "--actor",
+      "human:operator",
+      "--idempotency-key",
+      "freedom-20260729-01",
+      "--controller",
+      "agent:runner",
+      "--policy",
+      JSON.stringify(policy),
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.log = originalLog;
+  }
+  assert.equal(new URL(requests[0].url).pathname, "/control/v1/missions/submit");
+  assert.equal(requests[0].options.method, "POST");
+  const body = JSON.parse(requests[0].options.body);
+  assert.equal(body.actorId, undefined);
+  assert.equal(body.actor, "human:operator");
+  assert.equal(body.idempotencyKey, "freedom-20260729-01");
+  assert.equal(body.controllerAgent, "agent:runner");
+  assert.deepEqual(body.policy, policy);
+});
+
+test("mission revoke posts actor and reason to the mission revoke endpoint", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalLog = console.log;
+  const requests = [];
+  console.log = () => {};
+  globalThis.fetch = async (url, options) => {
+    requests.push({ url: String(url), options });
+    return new Response(JSON.stringify({ mission: { missionId: "mission_x", status: "revoked" } }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  try {
+    await main([
+      "--local",
+      "mission",
+      "revoke",
+      "--mission",
+      "mission_x",
+      "--actor",
+      "human:operator",
+      "--reason",
+      "user-stop",
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.log = originalLog;
+  }
+  assert.equal(new URL(requests[0].url).pathname, "/control/v1/missions/mission_x/revoke");
+  assert.deepEqual(JSON.parse(requests[0].options.body), {
+    actorId: "human:operator",
+    reason: "user-stop",
+  });
+});
+
+test("mission show and status target the read-only mission endpoints", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalLog = console.log;
+  const requests = [];
+  console.log = () => {};
+  globalThis.fetch = async (url, options) => {
+    requests.push({ url: String(url), options });
+    return new Response(JSON.stringify({ mission: { missionId: "mission_x" } }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  try {
+    await main(["--local", "mission", "show", "--mission", "mission_x"]);
+    await main(["--local", "mission", "status", "--mission", "mission_x"]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.log = originalLog;
+  }
+  assert.equal(new URL(requests[0].url).pathname, "/control/v1/missions/mission_x");
+  assert.equal(requests[0].options.method, "GET");
+  assert.equal(new URL(requests[1].url).pathname, "/control/v1/missions/mission_x/status");
+});
+
+test("mission list targets the read-only mission collection endpoint", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalLog = console.log;
+  const requests = [];
+  console.log = () => {};
+  globalThis.fetch = async (url, options) => {
+    requests.push({ url: String(url), options });
+    return new Response(JSON.stringify({ missions: [] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  try {
+    await main(["--local", "mission", "list"]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.log = originalLog;
+  }
+  assert.equal(new URL(requests[0].url).pathname, "/control/v1/missions");
+  assert.equal(requests[0].options.method, "GET");
+});
