@@ -2,7 +2,7 @@
 // inline XML 字符串经 allNodes 解析；纯解析、无设备 IO。
 import assert from "node:assert/strict";
 import test from "node:test";
-import { findFollowBtn, findProfileAuthor, followState } from "../ops/_xhs-parse.mjs";
+import { findFollowBtn, findProfileAuthor, findProfileFollowBtn, followState } from "../ops/_xhs-parse.mjs";
 
 // 合成 <node> 标签。allNodes 读 text/content-desc/class/clickable/bounds。
 function node({ text = "", desc = "", cls = "android.widget.TextView", clickable = false, bounds = [800, 150, 1000, 210] } = {}) {
@@ -88,4 +88,87 @@ test("findProfileAuthor wrong-target mismatch is detectable by caller", () => {
   const r = findProfileAuthor(xml([avatar("张三"), followBtn("关注")]));
   assert.equal(r.name, "张三");
   assert.notEqual(r.name, "李四");
+});
+
+// ---------- findProfileFollowBtn：浮层主 CTA 消歧（重放 overlay-01 的三 label 结构） ----------
+// 合成 fixture 复刻 overlay-01.xml 的几何：头像 cy=364；背景控件 y=161（头像上方）；
+// 统计 tab y=567（窄容器）；浮层主 CTA y=999（非 clickable label 套在 clickable 宽 FrameLayout 内）。
+function root(bounds = [0, 0, 1080, 2400]) {
+  const [L, T, R, B] = bounds;
+  return `<node text="" content-desc="" class="android.widget.FrameLayout" clickable="false" bounds="[${L},${T}][${R},${B}]" />`;
+}
+function overlayCta(label, { cBounds = [33, 954, 474, 1042], lBounds = [215, 971, 293, 1026] } = {}) {
+  return [
+    node({ cls: "FrameLayout", clickable: true, bounds: cBounds }),
+    node({ text: label, cls: "TextView", clickable: false, bounds: lBounds }),
+  ];
+}
+function statTab(label, { cBounds = [44, 534, 184, 600], lBounds = [108, 536, 184, 597] } = {}) {
+  return [
+    node({ cls: "Button", clickable: true, bounds: cBounds }),
+    node({ text: label, cls: "TextView", clickable: false, bounds: lBounds }),
+  ];
+}
+function bgControl(label, { cBounds = [222, 122, 395, 199], lBounds = [222, 122, 395, 199] } = {}) {
+  return [
+    node({ cls: "FrameLayout", clickable: true, bounds: cBounds }),
+    node({ text: label, cls: "TextView", clickable: false, bounds: lBounds }),
+  ];
+}
+
+test("findProfileFollowBtn selects the wide overlay CTA below the avatar, not background/statistic labels", () => {
+  const nodes = [
+    root(),
+    avatar("Mina姐姐", [5, 215, 302, 512]),
+    ...bgControl("关注"), // y=161 头像上方
+    ...statTab("关注"), // y=567 窄统计 tab
+    ...overlayCta("关注"), // y=999 宽主 CTA
+  ];
+  const hit = findProfileFollowBtn(xml(nodes));
+  assert.equal(hit.matched, "关注");
+  assert.equal(hit.x, 254);
+  assert.equal(hit.y, 998);
+  assert.deepEqual([hit.L, hit.T, hit.R, hit.B], [33, 954, 474, 1042]);
+});
+
+test("findProfileFollowBtn preserves four-state handling under overlay mode", () => {
+  for (const label of ["已关注", "回关", "相互关注"]) {
+    const hit = findProfileFollowBtn(xml([root(), avatar("U", [5, 215, 302, 512]), ...overlayCta(label)]));
+    assert.equal(hit.matched, label);
+    assert.equal(hit.x, 254);
+    assert.equal(hit.y, 998);
+  }
+});
+
+test("findProfileFollowBtn returns null without tier-1 avatar (ordinary detail, not overlay)", () => {
+  const nodes = [root(), ...bgControl("关注")];
+  // 非浮层 → findProfileFollowBtn 不接管
+  assert.equal(findProfileFollowBtn(xml(nodes)), null);
+  // 通用 findFollowBtn 仍命中普通 detail 控件（既有行为保持）
+  assert.equal(findFollowBtn(xml(nodes)).matched, "关注");
+});
+
+test("findProfileFollowBtn fails closed when no actionable candidate exists", () => {
+  // 头像下方仅窄统计 tab；背景控件在头像上方 → 无宽 CTA
+  const nodes = [root(), avatar("U", [5, 215, 302, 512]), ...bgControl("关注"), ...statTab("关注")];
+  assert.equal(findProfileFollowBtn(xml(nodes)), null);
+});
+
+test("findProfileFollowBtn fails closed on two equally valid overlay CTAs", () => {
+  const nodes = [
+    root(),
+    avatar("U", [5, 215, 302, 512]),
+    ...overlayCta("关注", { cBounds: [33, 900, 474, 988], lBounds: [215, 917, 293, 972] }),
+    ...overlayCta("关注", { cBounds: [33, 1100, 474, 1188], lBounds: [215, 1117, 293, 1172] }),
+  ];
+  assert.equal(findProfileFollowBtn(xml(nodes)), null);
+});
+
+test("findProfileFollowBtn fails closed when the below-avatar label has no clickable container", () => {
+  const nodes = [
+    root(),
+    avatar("U", [5, 215, 302, 512]),
+    node({ text: "关注", cls: "TextView", clickable: false, bounds: [215, 971, 293, 1026] }),
+  ];
+  assert.equal(findProfileFollowBtn(xml(nodes)), null);
 });

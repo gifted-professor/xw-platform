@@ -390,6 +390,53 @@ export function findFollowBtn(xml) {
   };
 }
 
+/** 主页浮层关注 CTA 选择器（xhs.follow.ensure overlay 模式）。
+ *  同屏可能有多个精确「关注」label（背景/普通 detail 控件 y≈161、统计 tab y≈567、浮层主 CTA y≈999），
+ *  通用 findFollowBtn 取 first-match 会命中背景节点。本函数仅在 tier-1 头像指纹存在时定位浮层主 CTA：
+ *  1) 必须有 tier-1 头像（ImageView clickable cy<600 content-desc ^头像[,，]），否则非浮层 → null；
+ *  2) 候选 label（text/desc 精确属于四态）必须在头像下方（cy > 头像 cy）；
+ *  3) 解析包含 label 的最小 enabled clickable 容器（几何包含），label 自身坐标不可点；
+ *  4) 主 CTA 容器宽 ≥ 屏宽 30%（屏宽由最大 R 推导，不硬编码坐标），过滤窄统计 tab；
+ *  5) 唯一可点候选才返回其容器中心；零或多个 → null（fail-closed，绝不猜坐标）。
+ *  返回形状与 findFollowBtn 一致：{x,y,desc,matched,L,T,R,B}，便于调用方在浮层场景直接替换。 */
+export function findProfileFollowBtn(xml) {
+  const nodes = allNodes(xml);
+  const av = nodes.find(
+    (n) =>
+      n.cls === "ImageView" &&
+      n.clickable &&
+      n.cy < 600 &&
+      /^头像[,，]/.test(String(n.desc || "")),
+  );
+  if (!av) return null; // 无 tier-1 头像指纹 → 非主页浮层，交给通用 findFollowBtn
+  // 屏宽由最大 R 推导（root bounds），不硬编码坐标
+  const screenW = nodes.reduce((mx, n) => (n.R > mx ? n.R : mx), 0) || 1080;
+  const minCtaW = screenW * 0.3;
+  const contains = (a, b) => a.L <= b.L && a.T <= b.T && a.R >= b.R && a.B >= b.B;
+  const seen = new Set();
+  const cands = [];
+  for (const l of nodes) {
+    const t = String(l.text || "").trim();
+    const d = String(l.desc || "").trim();
+    if (!FOLLOW_LABELS.has(t) && !FOLLOW_LABELS.has(d)) continue;
+    if (l.cy <= av.cy) continue; // 头像上方（含同高）→ 背景/普通 detail 控件，拒
+    // 最小 enabled clickable 容器（几何包含 label）
+    const anc = nodes
+      .filter((n) => n !== l && n.clickable && n.enabled !== false && contains(n, l))
+      .sort((a, b) => (a.R - a.L) * (a.B - a.T) - (b.R - b.L) * (b.B - b.T));
+    const c = anc[0];
+    if (!c) continue; // 无可点容器 → 非可操作
+    if (c.R - c.L < minCtaW) continue; // 窄容器 → 统计 tab，拒
+    const key = `${c.cx}_${c.cy}`;
+    if (seen.has(key)) continue; // 同一容器去重
+    seen.add(key);
+    cands.push({ c, matched: l.text || l.desc });
+  }
+  if (cands.length !== 1) return null; // 零或多个 → fail-closed，绝不猜坐标
+  const { c, matched } = cands[0];
+  return { x: c.cx, y: c.cy, desc: matched, matched, L: c.L, T: c.T, R: c.R, B: c.B };
+}
+
 /** 主页浮层作者名提取（供 xhs.follow.ensure 的 targetUser 核对）。
  *  tier-1：clickable 头像 ImageView 的 content-desc「头像,<name>」取逗号后；tier-2（仅诊断，不采信）：
  *  浮层顶部 y<600 内、非数字非 meta、长 2-24 的 TextView。返回 { name, fallback }。
