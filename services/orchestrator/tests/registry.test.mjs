@@ -226,6 +226,12 @@ test("agent entry aggregates leases, jobs, blockers and omits private identity f
   assert.equal(response.headers.get("cache-control"), "no-store");
   const entry = await response.json();
   assert.equal(entry.schemaVersion, "xhs.agent-entry.v2");
+  assert.match(entry.protocol.entrypoints.controlPlaneReload, /XhsDeviceControlPlaneV1|control-plane-task\.ps1/);
+  for (const alias of ["01", "02", "03", "04"]) {
+    assert.match(entry.protocol.entrypoints[`serveReload${alias}`], new RegExp(`serve-restart-${alias}\\.ps1`));
+  }
+  const protocol = JSON.stringify(entry.protocol);
+  assert.doesNotMatch(protocol, /--serial\b|--token\b|x-control-token|22222|XHS_ALLOW_BYPASS|fast-operator\.mjs/i);
   const dev01 = entry.devices.find((item) => item.alias === "01");
   const dev03 = entry.devices.find((item) => item.alias === "03");
   assert.equal(dev01.activeJobs[0].jobId, "job-running");
@@ -268,6 +274,11 @@ test("markdown entry is curl-readable and carries protocol red lines", async () 
   assert.match(body, /job 还是 session/);
   assert.match(body, /5038/);
   assert.match(body, /--ssh xhs-windows/);
+  assert.match(body, /controlPlaneReload/);
+  assert.match(body, /XhsDeviceControlPlaneV1|control-plane-task\.ps1/);
+  for (const alias of ["01", "02", "03", "04"]) {
+    assert.match(body, new RegExp(`serveReload${alias}.*serve-restart-${alias}\\.ps1`));
+  }
   assert.match(body, /online=yes/);
   assert.match(body, /ready=/);
   assert.match(body, /unresolvedFailure=none/);
