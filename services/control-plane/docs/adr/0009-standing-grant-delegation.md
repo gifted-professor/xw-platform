@@ -22,3 +22,8 @@ approval.
 Key rotation/recovery is an out-of-band human/admin ceremony: disable flags,
 install a new allowlist version, revoke the old key, restart fail-closed, and
 reconcile its grants before adapters run. Multi-device fan-out is out of scope.
+
+Verified-discovery children additionally depend on proposed ADR 0010. Until its
+pre-Mission DiscoverySession lineage is implemented and independently reviewed, a
+client-supplied snapshot/evidence hash is never authority and explicit targets remain the
+only governed fallback.
