@@ -50,6 +50,19 @@ test("DiscoveryPolicy is proof-bound and policy widening writes no grant rows", 
   } finally { state.close(); rmSync(root, { recursive: true, force: true }); }
 });
 
+test("legacy Grant bytes without DiscoveryPolicy are rejected before any runtime write", () => {
+  const root = mkdtempSync(join(tmpdir(), "grant-runtime-"));
+  const { publicKey } = generateKeyPairSync("ed25519");
+  const state = new StateStore({ dbPath: join(root, "control.db") });
+  try {
+    const legacy = draft();
+    delete legacy.discoveryPolicy;
+    const runtime = new DelegationGrantRuntime({ state, issuer: new TrustedHumanIssuer({ allowlist: { version: 1, keys: [{ keyId: "test-key", subject: "user:a1234", publicKey: publicKey.export({ type: "spki", format: "pem" }), status: "active" }] } }) });
+    assert.throws(() => runtime.issue({ grant: legacy, proof: { keyId: "test-key", allowlistVersion: 1, signature: "unused" } }), { code: "GRANT_POLICY_INVALID" });
+    assert.equal(state.listDelegationGrants().length, 0);
+  } finally { state.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
 test("proof failures write no rows, revoked grants remain revoked, and key reconciliation is durable", () => {
   const root = mkdtempSync(join(tmpdir(), "grant-runtime-"));
   const { privateKey, publicKey } = generateKeyPairSync("ed25519");

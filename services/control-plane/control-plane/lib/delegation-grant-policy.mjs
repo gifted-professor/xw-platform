@@ -14,6 +14,7 @@ const DISCOVERY_ANCHOR_RELATIONS = new Map([
 ]);
 const DISCOVERY_RELATIONS = new Set([...new Set([...DISCOVERY_ANCHOR_RELATIONS.values()].flatMap((items) => [...items]))]);
 const DISCOVERY_LIMITS = Object.freeze({
+  defaults: Object.freeze({ durationMs: 600000, maxPrimitives: 80, maxCandidates: 10 }),
   maxima: Object.freeze({ durationMs: 1800000, maxPrimitives: 300, maxCandidates: 50 }),
 });
 const HASH = /^[0-9a-f]{64}$/i;
@@ -62,7 +63,7 @@ function discoveryPolicy(value) {
   const defaults = limit(input.defaults, "discoveryPolicy.defaults");
   const maxima = limit(input.maxima, "discoveryPolicy.maxima");
   for (const key of Object.keys(DISCOVERY_LIMITS.maxima)) {
-    if (maxima[key] > DISCOVERY_LIMITS.maxima[key] || defaults[key] > maxima[key]) error("discoveryPolicy defaults/maxima are invalid");
+    if (defaults[key] !== DISCOVERY_LIMITS.defaults[key] || maxima[key] !== DISCOVERY_LIMITS.maxima[key]) error("discoveryPolicy defaults/maxima must match v1 limits");
   }
   const scope = object(input.targetScope, "discoveryPolicy.targetScope");
   keys(scope, "discoveryPolicy.targetScope", ["anchors", "relationKinds", "maxHops"]);

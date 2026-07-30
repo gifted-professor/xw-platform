@@ -6,99 +6,59 @@
   "required": ["schemaVersion", "grantId", "issuanceNonce", "issuer", "app", "accountFingerprint", "controllers", "maxParallelism", "authorization", "targets", "budget", "discoveryPolicy", "validity", "redaction"],
   "properties": {
     "schemaVersion": { "const": 1 },
-    "grantId": { "type": "string", "minLength": 1 },
-    "issuanceNonce": { "type": "string", "minLength": 1 },
-    "issuer": { "type": "object", "additionalProperties": false, "required": ["subject", "keyId"], "properties": { "subject": { "const": "user:a1234" }, "keyId": { "type": "string", "minLength": 1 } } },
+    "grantId": { "$ref": "#/$defs/nonEmptyString" },
+    "issuanceNonce": { "$ref": "#/$defs/nonEmptyString" },
+    "issuer": { "type": "object", "additionalProperties": false, "required": ["subject", "keyId"], "properties": { "subject": { "const": "user:a1234" }, "keyId": { "$ref": "#/$defs/nonEmptyString" } } },
+    "app": { "$ref": "#/$defs/nonEmptyString" },
+    "accountFingerprint": { "$ref": "#/$defs/nonEmptyString" },
+    "controllers": { "$ref": "#/$defs/nonEmptyStrings" },
     "maxParallelism": { "const": 1 },
-    "discoveryPolicy": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["enabled", "allowedPrimitives", "defaults", "maxima", "maxParallelism", "targetScope", "identityPolicy", "clocks", "retention", "accessPolicy"],
+    "authorization": {
+      "type": "object", "additionalProperties": false, "required": ["primitives", "socialActions", "missionOnlyActions", "prohibitedActions"],
       "properties": {
-        "enabled": { "type": "boolean" },
-        "allowedPrimitives": {
-          "type": "array",
-          "minItems": 1,
-          "uniqueItems": true,
-          "items": { "enum": ["screenshot", "dump", "focus", "launch", "back", "home", "tap", "swipe", "input", "restore"] }
-        },
-        "defaults": { "$ref": "#/$defs/discoveryLimits" },
-        "maxima": { "$ref": "#/$defs/discoveryLimits" },
-        "maxParallelism": { "const": 1 },
-        "targetScope": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["anchors", "relationKinds", "maxHops"],
-          "properties": {
-            "anchors": {
-              "type": "array",
-              "minItems": 1,
-              "uniqueItems": true,
-              "items": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": ["type", "hash"],
-                "properties": {
-                  "type": { "enum": ["searchQueryHash", "seedIdentityFingerprint", "contentContextHash", "identityFingerprint"] },
-                  "hash": { "type": "string", "pattern": "^[0-9a-fA-F]{64}$" }
-                }
-              }
-            },
-            "relationKinds": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "enum": ["search_result", "seed_profile_relation", "content_author", "content_mentioned_profile", "explicit_target"] } },
-            "maxHops": { "const": 1 }
-          }
-        },
-        "identityPolicy": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["stableUserId", "fallback", "onAmbiguity"],
-          "properties": {
-            "stableUserId": { "const": "preferred" },
-            "fallback": { "const": "exact_nickname_avatar_profile_fingerprint" },
-            "onAmbiguity": { "const": "stop" }
-          }
-        },
-        "clocks": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["snapshotFreshnessMs", "observationCompileWindowMs"],
-          "properties": {
-            "snapshotFreshnessMs": { "const": 5000 },
-            "observationCompileWindowMs": { "const": 60000 }
-          }
-        },
-        "retention": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["rawScreenshotDays", "redactedHashAuditDays"],
-          "properties": {
-            "rawScreenshotDays": { "const": 7 },
-            "redactedHashAuditDays": { "const": 90 }
-          }
-        },
-        "accessPolicy": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["ownerSubjectHash", "reviewerAllowlistVersion"],
-          "properties": {
-            "ownerSubjectHash": { "type": "string", "pattern": "^[0-9a-fA-F]{64}$" },
-            "reviewerAllowlistVersion": { "type": "integer", "minimum": 1 }
-          }
-        }
+        "primitives": { "$ref": "#/$defs/primitives" },
+        "socialActions": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "enum": ["follow", "like", "collect", "comment", "dm"] } },
+        "missionOnlyActions": { "type": "array", "maxItems": 0 },
+        "prohibitedActions": { "type": "array", "minItems": 2, "maxItems": 2, "uniqueItems": true, "items": { "enum": ["payment", "publish"] } }
       }
     },
-    "validity": { "type": "object", "additionalProperties": false, "required": ["expiresAt"], "properties": { "expiresAt": { "type": ["string", "null"] } } }
+    "targets": { "oneOf": [
+      { "type": "object", "additionalProperties": false, "required": ["mode"], "properties": { "mode": { "const": "verified_discovery" } } },
+      { "type": "object", "additionalProperties": false, "required": ["mode", "values"], "properties": { "mode": { "const": "explicit_fingerprints" }, "values": { "$ref": "#/$defs/nonEmptyStrings" } } }
+    ] },
+    "budget": {
+      "type": "object", "additionalProperties": false, "required": ["maxima", "defaults"],
+      "properties": { "maxima": { "$ref": "#/$defs/budgetLimits" }, "defaults": { "$ref": "#/$defs/budgetLimits" } }
+    },
+    "discoveryPolicy": {
+      "type": "object", "additionalProperties": false,
+      "required": ["enabled", "allowedPrimitives", "defaults", "maxima", "maxParallelism", "targetScope", "identityPolicy", "clocks", "retention", "accessPolicy"],
+      "properties": {
+        "enabled": { "type": "boolean" }, "allowedPrimitives": { "$ref": "#/$defs/primitives" },
+        "defaults": { "$ref": "#/$defs/discoveryDefaults" }, "maxima": { "$ref": "#/$defs/discoveryMaxima" }, "maxParallelism": { "const": 1 },
+        "targetScope": {
+          "type": "object", "additionalProperties": false, "required": ["anchors", "relationKinds", "maxHops"],
+          "properties": {
+            "anchors": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "object", "additionalProperties": false, "required": ["type", "hash"], "properties": { "type": { "enum": ["searchQueryHash", "seedIdentityFingerprint", "contentContextHash", "identityFingerprint"] }, "hash": { "$ref": "#/$defs/hash" } } } },
+            "relationKinds": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "enum": ["search_result", "seed_profile_relation", "content_author", "content_mentioned_profile", "explicit_target"] } }, "maxHops": { "const": 1 }
+          }
+        },
+        "identityPolicy": { "type": "object", "additionalProperties": false, "required": ["stableUserId", "fallback", "onAmbiguity"], "properties": { "stableUserId": { "const": "preferred" }, "fallback": { "const": "exact_nickname_avatar_profile_fingerprint" }, "onAmbiguity": { "const": "stop" } } },
+        "clocks": { "type": "object", "additionalProperties": false, "required": ["snapshotFreshnessMs", "observationCompileWindowMs"], "properties": { "snapshotFreshnessMs": { "const": 5000 }, "observationCompileWindowMs": { "const": 60000 } } },
+        "retention": { "type": "object", "additionalProperties": false, "required": ["rawScreenshotDays", "redactedHashAuditDays"], "properties": { "rawScreenshotDays": { "const": 7 }, "redactedHashAuditDays": { "const": 90 } } },
+        "accessPolicy": { "type": "object", "additionalProperties": false, "required": ["ownerSubjectHash", "reviewerAllowlistVersion"], "properties": { "ownerSubjectHash": { "$ref": "#/$defs/hash" }, "reviewerAllowlistVersion": { "type": "integer", "minimum": 1 } } }
+      }
+    },
+    "validity": { "type": "object", "additionalProperties": false, "required": ["expiresAt"], "properties": { "expiresAt": { "type": ["string", "null"] } } },
+    "redaction": { "type": "object", "additionalProperties": false, "required": ["publicFields"], "properties": { "publicFields": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "enum": ["alias", "fingerprint", "counts", "states", "evidenceHash"] } } } }
   },
   "$defs": {
-    "discoveryLimits": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["durationMs", "maxPrimitives", "maxCandidates"],
-      "properties": {
-        "durationMs": { "type": "integer", "minimum": 1, "maximum": 1800000 },
-        "maxPrimitives": { "type": "integer", "minimum": 1, "maximum": 300 },
-        "maxCandidates": { "type": "integer", "minimum": 1, "maximum": 50 }
-      }
-    }
+    "nonEmptyString": { "type": "string", "minLength": 1 },
+    "nonEmptyStrings": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/nonEmptyString" } },
+    "hash": { "type": "string", "pattern": "^[0-9a-fA-F]{64}$" },
+    "primitives": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "enum": ["screenshot", "dump", "focus", "launch", "back", "home", "tap", "swipe", "input", "restore"] } },
+    "discoveryDefaults": { "type": "object", "additionalProperties": false, "required": ["durationMs", "maxPrimitives", "maxCandidates"], "properties": { "durationMs": { "const": 600000 }, "maxPrimitives": { "const": 80 }, "maxCandidates": { "const": 10 } } },
+    "discoveryMaxima": { "type": "object", "additionalProperties": false, "required": ["durationMs", "maxPrimitives", "maxCandidates"], "properties": { "durationMs": { "const": 1800000 }, "maxPrimitives": { "const": 300 }, "maxCandidates": { "const": 50 } } },
+    "budgetLimits": { "type": "object", "additionalProperties": false, "required": ["totalCount", "perTargetCount", "frequency"], "properties": { "totalCount": { "type": "integer", "minimum": 1 }, "perTargetCount": { "type": "integer", "minimum": 1 }, "frequency": { "type": "object", "additionalProperties": false, "required": ["count", "windowSeconds"], "properties": { "count": { "type": "integer", "minimum": 1 }, "windowSeconds": { "type": "integer", "minimum": 1 } } } } }
   }
 }

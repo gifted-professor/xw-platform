@@ -128,6 +128,18 @@ function standingGrant() {
       maxima: { totalCount: 2, perTargetCount: 1, frequency: { count: 1, windowSeconds: 3600 } },
       defaults: { totalCount: 1, perTargetCount: 1, frequency: { count: 1, windowSeconds: 3600 } },
     },
+    discoveryPolicy: {
+      enabled: true,
+      allowedPrimitives: ["screenshot"],
+      defaults: { durationMs: 600000, maxPrimitives: 80, maxCandidates: 10 },
+      maxima: { durationMs: 1800000, maxPrimitives: 300, maxCandidates: 50 },
+      maxParallelism: 1,
+      targetScope: { anchors: [{ type: "identityFingerprint", hash: "a".repeat(64) }], relationKinds: ["explicit_target"], maxHops: 1 },
+      identityPolicy: { stableUserId: "preferred", fallback: "exact_nickname_avatar_profile_fingerprint", onAmbiguity: "stop" },
+      clocks: { snapshotFreshnessMs: 5000, observationCompileWindowMs: 60000 },
+      retention: { rawScreenshotDays: 7, redactedHashAuditDays: 90 },
+      accessPolicy: { ownerSubjectHash: "b".repeat(64), reviewerAllowlistVersion: 1 },
+    },
     validity: { expiresAt: null },
     redaction: { publicFields: ["alias"] },
   };
@@ -174,7 +186,10 @@ test("a grant child is subset-compiled from immutable parent scope and only runs
     assert.equal(result.status, "running");
     assert.equal(result.mission.parentGrantId, grant.grantId);
     assert.equal(result.mission.issuer.actorId, "user:a1234");
+    assert.deepEqual(result.mission.scope.targets, { kind: "fingerprint", values: grant.targets.values });
     assert.equal(result.mission.scope.totalCount, grant.budget.defaults.totalCount);
+    assert.equal(result.mission.scope.perTargetCount, grant.budget.defaults.perTargetCount);
+    assert.deepEqual(result.mission.scope.frequency, grant.budget.defaults.frequency);
     assert.equal(f.state.listDeviceRuns({ missionId: result.mission.missionId }).length, 1);
 
     const cases = [

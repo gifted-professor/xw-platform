@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
@@ -8,6 +9,9 @@ import {
   validateDelegationGrantDraft,
 } from "../control-plane/lib/delegation-grant-policy.mjs";
 import { validateMissionPolicy } from "../control-plane/lib/mission-policy.mjs";
+import { validateJsonSchema } from "../control-plane/lib/json-schema-validator.mjs";
+
+const grantSchema = JSON.parse(readFileSync(new URL("../control-plane/schema/delegation-grant.schema.json", import.meta.url), "utf8"));
 
 const grant = {
   schemaVersion: 1,
@@ -70,7 +74,7 @@ test("normalizes an immutable permanent Standing Grant and its signing payload",
 
 test("DiscoveryPolicy is signed canonical authority with strict anchors and governed explicit target", () => {
   const normalized = validateDelegationGrantDraft(grant);
-  const changedPolicy = { ...grant, discoveryPolicy: { ...grant.discoveryPolicy, defaults: { ...grant.discoveryPolicy.defaults, maxCandidates: 9 } } };
+  const changedPolicy = { ...grant, discoveryPolicy: { ...grant.discoveryPolicy, enabled: false } };
   assert.notEqual(delegationGrantContentHash(grant), delegationGrantContentHash(changedPolicy));
   const payload = { subject: "user:a1234", grantId: grant.grantId, issuanceNonce: grant.issuanceNonce, allowlistVersion: 1, grantHash: delegationGrantContentHash(grant), grant };
   const reordered = { ...grant, discoveryPolicy: { ...grant.discoveryPolicy, targetScope: { ...grant.discoveryPolicy.targetScope, anchors: [...grant.discoveryPolicy.targetScope.anchors].reverse(), relationKinds: [...grant.discoveryPolicy.targetScope.relationKinds].reverse() } } };
@@ -88,6 +92,21 @@ test("DiscoveryPolicy rejects widening, non-R0/R1 effects, and caller role autho
   assert.throws(() => validateDelegationGrantDraft({ ...grant, discoveryPolicy: { ...grant.discoveryPolicy, maxima: { ...grant.discoveryPolicy.maxima, maxCandidates: 51 } } }), { code: "GRANT_POLICY_INVALID" });
   assert.throws(() => validateDelegationGrantDraft({ ...grant, discoveryPolicy: { ...grant.discoveryPolicy, accessPolicy: { ...grant.discoveryPolicy.accessPolicy, role: "reviewer" } } }), { code: "GRANT_POLICY_INVALID" });
   assert.throws(() => validateDelegationGrantDraft({ ...grant, discoveryPolicy: { ...grant.discoveryPolicy, unknownExpansion: true } }), { code: "GRANT_POLICY_INVALID" });
+});
+
+test("DiscoveryPolicy locks v1 defaults and maxima and its executable schema agrees", () => {
+  assert.deepEqual(validateJsonSchema(grant, grantSchema), []);
+  for (const discoveryPolicy of [
+    { ...grant.discoveryPolicy, defaults: { ...grant.discoveryPolicy.maxima } },
+    { ...grant.discoveryPolicy, maxima: { durationMs: 600000, maxPrimitives: 80, maxCandidates: 10 } },
+  ]) {
+    assert.throws(
+      () => validateDelegationGrantDraft({ ...grant, discoveryPolicy }),
+      { code: "GRANT_POLICY_INVALID" },
+    );
+    assert.notEqual(validateJsonSchema({ ...grant, discoveryPolicy }, grantSchema).length, 0);
+  }
+  assert.notEqual(validateJsonSchema({ ...grant, authorization: { ...grant.authorization, unreviewedExpansion: true } }, grantSchema).length, 0);
 });
 
 test("rejects prohibited widening, bad parallelism, and invalid budget defaults", () => {
