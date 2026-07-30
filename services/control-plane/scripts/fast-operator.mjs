@@ -1532,16 +1532,19 @@ function applyCommentFlags(opP) {
   });
 }
 
-function serve(port) {
-  const adb = arg("--adb");
-  const serial = arg("--serial");
+export function serve(port, options = {}) {
+  const adb = options.adb ?? arg("--adb");
+  const serial = options.serial ?? arg("--serial");
   if (!adb || !serial) throw new Error("usage: --adb <path> --serial <serial> serve [--port N]");
   // Do not open an ADB session while the serve is merely listening. The first
   // authorized request starts the shared operator; rejected requests must not
   // touch the device as a side effect of metrics/error reporting.
   let opP = null;
+  const authorize = options.authorize ?? authorizeServeRequest;
+  const operatorFactory = options.operatorFactory
+    ?? (() => applyCommentFlags(new FastOperator({ adbPath: adb, serial }).start()));
   const getOp = () => {
-    if (!opP) opP = applyCommentFlags(new FastOperator({ adbPath: adb, serial }).start());
+    if (!opP) opP = Promise.resolve(operatorFactory());
     return opP;
   };
   const server = createServer(async (req, res) => {
@@ -1552,7 +1555,7 @@ function serve(port) {
     try { q = JSON.parse(body || "{}"); } catch { res.writeHead(400); return res.end("bad json"); }
     let op = null;
     try {
-      await authorizeServeRequest({ headers: req.headers, runtimeId: serial });
+      await authorize({ headers: req.headers, runtimeId: serial });
       op = await getOp();
       let out;
       switch (q.action) {
@@ -1572,7 +1575,7 @@ function serve(port) {
         case "favoriteDetail": { const d = await op.dump({ label: "favoriteDetail" }); const bar = op.detailEngagementBar(d); out = { resolved: !!bar?.favorite?.icon?.center, bar, tapped: bar?.favorite?.icon?.center ? await op.favoriteDetail(bar) : null }; break; }
         case "collectOnOpenNote": {
           if (typeof q.observationReceiptId !== "string" || q.observationReceiptId === ""
-            || q.targetFingerprint !== q.observation?.targetFingerprint) {
+            || typeof q.targetFingerprint !== "string" || q.targetFingerprint === "") {
             out = { ok: false, notSent: true, step: "receiptBindingInvalid" };
             break;
           }
@@ -1694,6 +1697,7 @@ function serve(port) {
     }
   });
   server.listen(port, "127.0.0.1", () => console.log(JSON.stringify({ phase: "serving", port, serial })));
+  return server;
 }
 
 const cmd = process.argv.find((a) => a === "serve" || a === "demo-scroll");
