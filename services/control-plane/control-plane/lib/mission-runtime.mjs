@@ -81,12 +81,20 @@ export class MissionRuntime {
       }
     } else {
       const provenance = targets.provenance;
-      const observedAt = Date.parse(provenance?.observedAt);
-      if (!provenance || !Number.isFinite(observedAt) || this.now() - observedAt > SNAPSHOT_MAX_AGE_MS
-        || provenance.accountFingerprint !== parent.accountFingerprint || !provenance.snapshotHash
-        || !provenance.pageFingerprint || !provenance.observedTargetFingerprint || !provenance.identityEvidenceHash) {
-        throw new ControlPlaneError("GRANT_SUBSET_INVALID", "verified discovery provenance is stale or incomplete", { status: 400 });
-      }
+      const observation = this.requireAuthoritativeDiscovery(provenance, parent);
+      input = {
+        ...input,
+        scope: {
+          ...input.scope,
+          // Compiling the trusted observation to the existing fingerprint target form keeps
+          // the evaluator/ledger fail-closed without teaching either to trust caller input.
+          targets: { kind: "fingerprint", values: [observation.observedTargetFingerprint] },
+        },
+        verifiedDiscovery: {
+          snapshotHash: observation.snapshotHash,
+          identityEvidenceHash: observation.identityEvidenceHash,
+        },
+      };
     }
     const defaults = parent.budget.defaults;
     const maxima = parent.budget.maxima;
@@ -113,8 +121,49 @@ export class MissionRuntime {
     return this.createMission(policy, { parentGrantId: record.grantId, parentGrantHash: record.grantHash });
   }
 
+  requireAuthoritativeDiscovery(provenance, parent) {
+    if (!provenance || typeof provenance !== "object" || typeof provenance.snapshotHash !== "string") {
+      throw new ControlPlaneError("AUTHORITATIVE_OBSERVATION_REQUIRED", "verified discovery requires an authoritative observation", { status: 409 });
+    }
+    const observation = this.state.getAuthoritativeObservation(provenance.snapshotHash);
+    if (!observation) {
+      throw new ControlPlaneError("AUTHORITATIVE_OBSERVATION_REQUIRED", "verified discovery observation is not available", { status: 409 });
+    }
+    const observedAt = Date.parse(observation.observedAt);
+    const claimedObservedAt = Date.parse(provenance.observedAt);
+    const same = Number.isFinite(observedAt) && observedAt === claimedObservedAt
+      && this.now() >= observedAt && this.now() - observedAt <= SNAPSHOT_MAX_AGE_MS
+      && observation.app === parent.app && observation.accountFingerprint === parent.accountFingerprint
+      && observation.pageFingerprint === provenance.pageFingerprint
+      && observation.observedTargetFingerprint === provenance.observedTargetFingerprint
+      && observation.identityEvidenceHash === provenance.identityEvidenceHash;
+    if (!same) {
+      throw new ControlPlaneError("AUTHORITATIVE_OBSERVATION_MISMATCH", "verified discovery does not match authoritative observation", { status: 409 });
+    }
+    return observation;
+  }
+
+  verifyAuthoritativeDiscovery(mission) {
+    const current = mission?.missionId ? this.state.getMissionForRuntime(mission.missionId) : mission;
+    if (!current?.verifiedDiscovery) return { ok: true };
+    const parent = this.state.getDelegationGrantRecord(current.parentGrantId)?.grant;
+    if (!parent) return { ok: false, code: "PARENT_GRANT_INACTIVE" };
+    try {
+      // The stored child has only hash anchors, while the authoritative row supplies the
+      // observed fields. Reconstruct the claim from that row so caller data is never reused.
+      const observation = this.state.getAuthoritativeObservation(current.verifiedDiscovery.snapshotHash);
+      this.requireAuthoritativeDiscovery(observation, parent);
+      if (observation?.identityEvidenceHash !== current.verifiedDiscovery.identityEvidenceHash) {
+        return { ok: false, code: "AUTHORITATIVE_OBSERVATION_MISMATCH" };
+      }
+      return { ok: true, observation };
+    } catch (error) {
+      return { ok: false, code: error.code || "AUTHORITATIVE_OBSERVATION_REQUIRED" };
+    }
+  }
+
   requireActiveMission(missionId) {
-    const mission = this.state.getMission(missionId);
+    const mission = this.state.getMissionForRuntime(missionId);
     if (!mission) throw new ControlPlaneError("MISSION_NOT_FOUND", `unknown mission ${missionId}`, { status: 404 });
     if (mission.status === "revoked") {
       throw new ControlPlaneError("MISSION_REVOKED", `mission ${missionId} was revoked`, { status: 409 });
@@ -122,6 +171,10 @@ export class MissionRuntime {
     const expiresAtMs = Date.parse(mission.validity?.expiresAt);
     if (Number.isFinite(expiresAtMs) && this.now() >= expiresAtMs) {
       throw new ControlPlaneError("MISSION_EXPIRED", `mission ${missionId} has expired`, { status: 409 });
+    }
+    const discovery = this.verifyAuthoritativeDiscovery(mission);
+    if (!discovery.ok) {
+      throw new ControlPlaneError(discovery.code, "Mission verified discovery is no longer authoritative", { status: 409 });
     }
     return mission;
   }
@@ -149,7 +202,7 @@ export class MissionRuntime {
     if (!mission || typeof mission !== "object") {
       throw new ControlPlaneError("MISSION_POLICY_INVALID", "mission must be an object", { status: 400 });
     }
-    const current = mission.missionId ? this.state.getMission(mission.missionId) : mission;
+    const current = mission.missionId ? this.state.getMissionForRuntime(mission.missionId) : mission;
     if (!current) {
       return { decision: "blocked", reason: "MISSION_NOT_FOUND" };
     }

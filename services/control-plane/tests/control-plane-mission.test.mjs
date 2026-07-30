@@ -121,7 +121,7 @@ function standingGrant() {
     controllers: ["agent:runner"],
     maxParallelism: 1,
     authorization: {
-      primitives: ["screenshot"], socialActions: ["follow"], missionOnlyActions: ["delete"], prohibitedActions: ["payment", "publish"],
+      primitives: ["screenshot"], socialActions: ["follow"], missionOnlyActions: [], prohibitedActions: ["payment", "publish"],
     },
     targets: { mode: "explicit_fingerprints", values: ["target-hash-aaa"] },
     budget: {
@@ -192,6 +192,91 @@ test("a grant child is subset-compiled from immutable parent scope and only runs
     assert.throws(() => f.control.submitMission({ actor: "agent:runner", parentGrantId: grant.grantId, idempotencyKey: "grant-child-revoked", policy }), { code: "PARENT_GRANT_INACTIVE" });
   } finally {
     f.close();
+  }
+});
+
+test("verified discovery requires a control-plane-authored observation before Mission allocation and ECP rechecks it", async () => {
+  const f = setup({ missionAutoApprovalEnabled: true, standingGrantEnabled: true, adrAccepted: true });
+  try {
+    const grant = persistStandingGrant(f.state, {
+      ...standingGrant(),
+      grantId: "grant_discovery_test_001",
+      issuanceNonce: "nonce_discovery_test_001",
+      targets: { mode: "verified_discovery" },
+    });
+    const provenance = {
+      snapshotHash: "snapshot-authoritative-001",
+      observedAt: new Date().toISOString(),
+      accountFingerprint: grant.accountFingerprint,
+      pageFingerprint: "page-authoritative-001",
+      observedTargetFingerprint: "target-authoritative-001",
+      identityEvidenceHash: "identity-authoritative-001",
+    };
+    const child = {
+      ...socialPolicy,
+      account: grant.accountFingerprint,
+      scope: { ...socialPolicy.scope, targets: { kind: "verified_discovery", provenance } },
+    };
+    assert.throws(
+      () => f.control.submitMission({ actor: "agent:runner", parentGrantId: grant.grantId, idempotencyKey: "discovery-client-claimed", policy: child }),
+      { code: "AUTHORITATIVE_OBSERVATION_REQUIRED" },
+    );
+    assert.equal(f.state.listDeviceRuns().length, 0);
+    assert.equal(f.state.listLeases().length, 0);
+    assert.equal(f.state.listMissions().length, 0);
+
+    // The table is a private control-plane store; this unit injects the trusted observation
+    // directly, while production writes use recordAuthoritativeObservation with a fenced tuple.
+    f.state.recordAuthoritativeObservation({ ...provenance, app: grant.app });
+    const accepted = f.control.submitMission({ actor: "agent:runner", parentGrantId: grant.grantId, idempotencyKey: "discovery-authoritative", policy: child });
+    assert.equal(accepted.status, "running");
+    assert.deepEqual(accepted.mission.scope.targets, { kind: "fingerprint", values: [provenance.observedTargetFingerprint] });
+    assert.equal(Object.hasOwn(accepted.mission, "verifiedDiscovery"), false);
+    const ecp = f.control.createEffectCommitProtocol({
+      recheck: async () => ({ readiness: { ready: true, source: "control-plane", fresh: true }, app: "xhs", account: grant.accountFingerprint, targetFingerprint: provenance.observedTargetFingerprint, pageFingerprint: provenance.pageFingerprint, beforeState: "before", control: true }),
+      execute: async () => ({ ok: true }), verify: async () => ({ ok: true }), restore: async () => ({ ok: true }),
+    });
+    const prepared = await ecp.prepare({ mission: accepted.mission, action: "follow", target: provenance.observedTargetFingerprint, tuple: accepted.run.tuple, idempotencyKey: "discovery-ecp-before" });
+    assert.equal(prepared.status, "prepared");
+    await ecp.cancelPrepared(prepared);
+    assert.throws(
+      () => f.control.submitMission({
+        actor: "agent:runner", parentGrantId: grant.grantId, idempotencyKey: "discovery-wrong-page",
+        policy: { ...child, scope: { ...child.scope, targets: { kind: "verified_discovery", provenance: { ...provenance, pageFingerprint: "forged-page" } } } },
+      }),
+      { code: "AUTHORITATIVE_OBSERVATION_MISMATCH" },
+    );
+    // Simulate a process reconstruction where the durable observation no longer resolves:
+    // ECP must reread authority and block before a second effect reservation or adapter call.
+    f.state.db.prepare("DELETE FROM authoritative_observations WHERE snapshot_hash=?").run(provenance.snapshotHash);
+    const afterRestart = await ecp.prepare({ mission: accepted.mission, action: "follow", target: provenance.observedTargetFingerprint, tuple: accepted.run.tuple, idempotencyKey: "discovery-ecp-after" });
+    assert.deepEqual(afterRestart, { status: "blocked", code: "AUTHORITATIVE_OBSERVATION_REQUIRED" });
+  } finally {
+    f.close();
+  }
+});
+
+test("every parent-grant flag/ADR denial is zero-allocation and legacy R2 stays manual", () => {
+  for (const gates of [
+    { missionAutoApprovalEnabled: false, standingGrantEnabled: true, adrAccepted: true },
+    { missionAutoApprovalEnabled: true, standingGrantEnabled: false, adrAccepted: true },
+    { missionAutoApprovalEnabled: false, standingGrantEnabled: false, adrAccepted: true },
+    { missionAutoApprovalEnabled: true, standingGrantEnabled: true, adrAccepted: false },
+  ]) {
+    const f = setup(gates);
+    try {
+      const grant = persistStandingGrant(f.state, { ...standingGrant(), grantId: `grant-gate-${JSON.stringify(gates)}`, issuanceNonce: `nonce-gate-${JSON.stringify(gates)}` });
+      const blocked = f.control.submitMission({ actor: "agent:runner", parentGrantId: grant.grantId, idempotencyKey: `blocked-${JSON.stringify(gates)}`, policy: { ...socialPolicy, account: grant.accountFingerprint } });
+      assert.equal(blocked.status, "blocked");
+      assert.equal(f.state.listDeviceRuns({ missionId: blocked.mission.missionId }).length, 0);
+      assert.equal(f.state.listLeases().length, 0);
+      assert.equal(f.state.listMissionEffects(blocked.mission.missionId).length, 0);
+      assert.equal(f.state.db.prepare("SELECT COUNT(*) AS c FROM approvals").get().c, 0);
+      const legacy = f.control.submitJob({ idempotencyKey: `legacy-${JSON.stringify(gates)}`, actorId: "agent:r2", capabilityId: "xhs.follow.r2", params: {} });
+      assert.equal(legacy.job.status, "waiting_approval");
+    } finally {
+      f.close();
+    }
   }
 });
 

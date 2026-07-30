@@ -20,7 +20,7 @@ const grant = {
   authorization: {
     primitives: ["screenshot", "dump", "launch", "back", "home", "tap", "swipe", "input", "restore"],
     socialActions: ["follow", "like", "collect", "comment", "dm"],
-    missionOnlyActions: ["delete", "profile", "settings"],
+    missionOnlyActions: [],
     prohibitedActions: ["payment", "publish"],
   },
   targets: { mode: "verified_discovery" },
@@ -70,4 +70,16 @@ test("finite parent time bounds and discovery target modes are explicit", () => 
       totalCount: 1, perTargetCount: 1, frequency: { count: 1, windowSeconds: 3600 },
     }, validity: { expiresAt: "2099-01-01T00:00:00Z" },
   }), { code: "MISSION_POLICY_INVALID" });
+});
+
+test("Standing Grant v1 rejects unknown fields and unsupported delete/profile/settings authority", () => {
+  assert.throws(() => validateDelegationGrantDraft({ ...grant, unreviewedExpansion: true }), { code: "GRANT_POLICY_INVALID" });
+  assert.throws(() => validateDelegationGrantDraft({
+    ...grant,
+    authorization: { ...grant.authorization, missionOnlyActions: ["delete"] },
+  }), { code: "GRANT_POLICY_INVALID" });
+  assert.throws(() => validateDelegationGrantDraft({
+    ...grant,
+    authorization: { ...grant.authorization, socialActions: ["follow"], unreviewedExpansion: true },
+  }), { code: "GRANT_POLICY_INVALID" });
 });

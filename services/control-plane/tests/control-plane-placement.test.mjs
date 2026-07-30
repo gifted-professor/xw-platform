@@ -383,7 +383,7 @@ test("v1 SQLite state migrates additively and preserves legacy idempotency", () 
 
   const state = new StateStore({ dbPath });
   try {
-    assert.equal(state.db.prepare("PRAGMA user_version").get().user_version, 6);
+    assert.equal(state.db.prepare("PRAGMA user_version").get().user_version, 7);
     assert.ok(state.db.prepare("PRAGMA table_info(jobs)").all().some((column) => column.name === "placement_decision_json"));
     assert.ok(state.db.prepare("PRAGMA table_info(sessions)").all().some((column) => column.name === "scope_capability_id"));
     assert.equal(state.requireJob("job_legacy").status, "succeeded");

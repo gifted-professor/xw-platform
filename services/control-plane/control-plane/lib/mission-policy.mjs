@@ -92,6 +92,17 @@ export function validateMissionPolicy(input) {
       grantHash: requireString(input.parentGrant.grantHash, "parentGrant.grantHash"),
     };
   }
+  let verifiedDiscovery = null;
+  if (input.verifiedDiscovery !== undefined) {
+    if (!parentGrant || !isObject(input.verifiedDiscovery)
+      || Object.keys(input.verifiedDiscovery).some((key) => !["snapshotHash", "identityEvidenceHash"].includes(key))) {
+      throw new ControlPlaneError("MISSION_POLICY_INVALID", "verifiedDiscovery is only an internal parent-grant record", { status: 400 });
+    }
+    verifiedDiscovery = {
+      snapshotHash: requireString(input.verifiedDiscovery.snapshotHash, "verifiedDiscovery.snapshotHash"),
+      identityEvidenceHash: requireString(input.verifiedDiscovery.identityEvidenceHash, "verifiedDiscovery.identityEvidenceHash"),
+    };
+  }
 
   const parallelism = input.parallelism ?? 1;
   if (!Number.isInteger(parallelism) || parallelism !== 1) {
@@ -203,6 +214,7 @@ export function validateMissionPolicy(input) {
     app,
     account,
     ...(parentGrant ? { parentGrant } : {}),
+    ...(verifiedDiscovery ? { verifiedDiscovery } : {}),
     parallelism,
     controllers,
     scope: {

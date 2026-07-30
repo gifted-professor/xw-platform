@@ -10,7 +10,7 @@ import { DelegationGrantRuntime } from "../control-plane/lib/delegation-grant-ru
 import { TrustedHumanIssuer } from "../control-plane/lib/trusted-human-issuer.mjs";
 import { StateStore } from "../control-plane/lib/state-store.mjs";
 
-function draft() { return { schemaVersion: 1, grantId: "grant_test_001", issuanceNonce: "nonce_test_001", issuer: { subject: "user:a1234", keyId: "test-key" }, app: "xhs", accountFingerprint: "account-fingerprint", controllers: ["agent:runner"], maxParallelism: 1, authorization: { primitives: ["screenshot"], socialActions: ["collect"], missionOnlyActions: ["delete"], prohibitedActions: ["payment", "publish"] }, targets: { mode: "verified_discovery" }, budget: { maxima: { totalCount: 2, perTargetCount: 1, frequency: { count: 1, windowSeconds: 3600 } }, defaults: { totalCount: 1, perTargetCount: 1, frequency: { count: 1, windowSeconds: 3600 } } }, validity: { expiresAt: null }, redaction: { publicFields: ["alias"] } }; }
+function draft() { return { schemaVersion: 1, grantId: "grant_test_001", issuanceNonce: "nonce_test_001", issuer: { subject: "user:a1234", keyId: "test-key" }, app: "xhs", accountFingerprint: "account-fingerprint", controllers: ["agent:runner"], maxParallelism: 1, authorization: { primitives: ["screenshot"], socialActions: ["collect"], missionOnlyActions: [], prohibitedActions: ["payment", "publish"] }, targets: { mode: "verified_discovery" }, budget: { maxima: { totalCount: 2, perTargetCount: 1, frequency: { count: 1, windowSeconds: 3600 } }, defaults: { totalCount: 1, perTargetCount: 1, frequency: { count: 1, windowSeconds: 3600 } } }, validity: { expiresAt: null }, redaction: { publicFields: ["alias"] } }; }
 
 function signedProof({ grant, privateKey, keyId = "test-key", allowlistVersion = 1 }) {
   const grantHash = delegationGrantContentHash(grant);
@@ -43,6 +43,8 @@ test("proof failures write no rows, revoked grants remain revoked, and key recon
     const active = { version: 1, keys: [{ keyId: "test-key", subject: "user:a1234", publicKey: publicKey.export({ type: "spki", format: "pem" }), status: "active" }] };
     const runtime = new DelegationGrantRuntime({ state, issuer: new TrustedHumanIssuer({ allowlist: active }) });
     assert.throws(() => runtime.issue({ grant }), { code: "GRANT_PROOF_INVALID" });
+    const keyMismatch = { ...grant, issuer: { ...grant.issuer, keyId: "other-active-key" } };
+    assert.throws(() => runtime.issue({ grant: keyMismatch, proof: signedProof({ grant: keyMismatch, privateKey }) }), { code: "ISSUER_KEY_MISMATCH" });
     assert.throws(() => runtime.issue({ grant, proof: { ...signedProof({ grant, privateKey }), signature: "forged" } }), { code: "GRANT_PROOF_INVALID" });
     assert.equal(state.listDelegationGrants().length, 0);
     runtime.issue({ grant, proof: signedProof({ grant, privateKey }) });

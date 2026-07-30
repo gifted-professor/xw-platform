@@ -4,7 +4,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { assertPinnedNodeVersion } from "../control-plane/bootstrap.mjs";
+import { assertPinnedNodeVersion, loadStandingGrantIssuer } from "../control-plane/bootstrap.mjs";
 import { CapabilityRegistry } from "../control-plane/lib/capability-registry.mjs";
 import { AdapterRegistry, ControlPlane } from "../control-plane/lib/control-plane.mjs";
 import { EvidenceStore } from "../control-plane/lib/evidence-store.mjs";
@@ -180,6 +180,11 @@ test("production startup pins the verified Windows Node version", () => {
     expected: "24.11.1",
     actual: "24.12.0",
   }), { code: "NODE_VERSION_MISMATCH" });
+});
+
+test("standing-grant issuer configuration is ignored while disabled and required while enabled", () => {
+  assert.equal(loadStandingGrantIssuer({ standingGrantEnabled: false, issuerKeysPath: "C:\\missing\\placeholder.json" }), null);
+  assert.throws(() => loadStandingGrantIssuer({ standingGrantEnabled: true, issuerKeysPath: "" }), { code: "STANDING_GRANT_ISSUER_UNAVAILABLE" });
 });
 
 test("production launch assets keep retired legacy UI routes enforced", () => {

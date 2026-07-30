@@ -351,6 +351,20 @@ export class StateStore {
       );
       CREATE INDEX IF NOT EXISTS delegation_grant_events_idx
         ON delegation_grant_events(grant_id, event_id);
+      -- This private control-plane record is the sole durable authority for a
+      -- verified-discovery reference. Mission/API inputs can only reference its hashes.
+      CREATE TABLE IF NOT EXISTS authoritative_observations (
+        snapshot_hash TEXT PRIMARY KEY,
+        app TEXT NOT NULL,
+        account_fingerprint TEXT NOT NULL,
+        page_fingerprint TEXT NOT NULL,
+        observed_target_fingerprint TEXT NOT NULL,
+        identity_evidence_hash TEXT NOT NULL,
+        observed_at INTEGER NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS authoritative_observations_fresh_idx
+        ON authoritative_observations(observed_at);
     `);
     this.#ensureColumn(
       "devices",
@@ -365,7 +379,7 @@ export class StateStore {
     this.#ensureColumn("missions", "parent_grant_id", "TEXT");
     this.#ensureColumn("missions", "parent_grant_hash", "TEXT");
     this.db.exec("CREATE INDEX IF NOT EXISTS missions_parent_grant_idx ON missions(parent_grant_id, status)");
-    this.db.exec("PRAGMA user_version = 6;");
+    this.db.exec("PRAGMA user_version = 7;");
   }
 
   #ensureColumn(table, column, definition) {
@@ -1443,6 +1457,65 @@ export class StateStore {
     }));
   }
 
+  // There is deliberately no public router/API writer for this table. The control-plane's
+  // trusted observation path records hash-only facts after it owns the device/control tuple.
+  recordAuthoritativeObservation({
+    snapshotHash,
+    app,
+    accountFingerprint,
+    pageFingerprint,
+    observedTargetFingerprint,
+    identityEvidenceHash,
+    observedAt,
+  }) {
+    const fields = { snapshotHash, app, accountFingerprint, pageFingerprint, observedTargetFingerprint, identityEvidenceHash };
+    for (const [name, value] of Object.entries(fields)) {
+      if (typeof value !== "string" || value.trim() === "") throw new TypeError(`${name} is required`);
+    }
+    const observedAtMs = Date.parse(observedAt);
+    if (!Number.isFinite(observedAtMs)) throw new TypeError("observedAt must be an ISO timestamp");
+    const normalized = {
+      snapshotHash: snapshotHash.trim(), app: app.trim(), accountFingerprint: accountFingerprint.trim(),
+      pageFingerprint: pageFingerprint.trim(), observedTargetFingerprint: observedTargetFingerprint.trim(),
+      identityEvidenceHash: identityEvidenceHash.trim(), observedAt: new Date(observedAtMs).toISOString(),
+    };
+    return this.transaction(() => {
+      const existing = this.db.prepare("SELECT * FROM authoritative_observations WHERE snapshot_hash=?").get(normalized.snapshotHash);
+      if (existing) {
+        const same = existing.app === normalized.app && existing.account_fingerprint === normalized.accountFingerprint
+          && existing.page_fingerprint === normalized.pageFingerprint && existing.observed_target_fingerprint === normalized.observedTargetFingerprint
+          && existing.identity_evidence_hash === normalized.identityEvidenceHash && existing.observed_at === observedAtMs;
+        if (!same) throw new ControlPlaneError("AUTHORITATIVE_OBSERVATION_CONFLICT", "snapshot hash is already bound to different observed facts", { status: 409 });
+        return this.#publicAuthoritativeObservation(existing);
+      }
+      this.db.prepare(`
+        INSERT INTO authoritative_observations (
+          snapshot_hash, app, account_fingerprint, page_fingerprint, observed_target_fingerprint,
+          identity_evidence_hash, observed_at, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(normalized.snapshotHash, normalized.app, normalized.accountFingerprint, normalized.pageFingerprint,
+        normalized.observedTargetFingerprint, normalized.identityEvidenceHash, observedAtMs, this.now());
+      return this.#publicAuthoritativeObservation(this.db.prepare("SELECT * FROM authoritative_observations WHERE snapshot_hash=?").get(normalized.snapshotHash));
+    });
+  }
+
+  #publicAuthoritativeObservation(row) {
+    if (!row) return null;
+    return {
+      snapshotHash: row.snapshot_hash,
+      app: row.app,
+      accountFingerprint: row.account_fingerprint,
+      pageFingerprint: row.page_fingerprint,
+      observedTargetFingerprint: row.observed_target_fingerprint,
+      identityEvidenceHash: row.identity_evidence_hash,
+      observedAt: iso(row.observed_at),
+    };
+  }
+
+  getAuthoritativeObservation(snapshotHash) {
+    return this.#publicAuthoritativeObservation(this.db.prepare("SELECT * FROM authoritative_observations WHERE snapshot_hash=?").get(snapshotHash));
+  }
+
   #publicMission(row) {
     if (!row) return null;
     const policy = parseJson(row.policy_json, {});
@@ -1542,6 +1615,13 @@ export class StateStore {
 
   getMission(missionId) {
     return this.#publicMission(this.db.prepare("SELECT * FROM missions WHERE mission_id=?").get(missionId));
+  }
+
+  getMissionForRuntime(missionId) {
+    const row = this.db.prepare("SELECT * FROM missions WHERE mission_id=?").get(missionId);
+    if (!row) return null;
+    const policy = parseJson(row.policy_json, {});
+    return { ...this.#publicMission(row), ...(policy.verifiedDiscovery ? { verifiedDiscovery: policy.verifiedDiscovery } : {}) };
   }
 
   getMissionByIdempotencyKey(idempotencyKey) {

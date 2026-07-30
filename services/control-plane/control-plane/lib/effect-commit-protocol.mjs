@@ -17,7 +17,7 @@ function correctnessCode(mission, target, result) {
 }
 
 export class EffectCommitProtocol {
-  constructor({ state, ledger, deviceRuns, recheck, execute, verify, restore, recordEvidence = null } = {}) {
+  constructor({ state, ledger, deviceRuns, missions = null, recheck, execute, verify, restore, recordEvidence = null } = {}) {
     if (!state || !ledger || !deviceRuns) throw new TypeError("ECP requires state, ledger, and deviceRuns");
     if (typeof recheck !== "function" || typeof execute !== "function" || typeof verify !== "function" || typeof restore !== "function") {
       throw new TypeError("ECP requires recheck, execute, verify, and restore handlers");
@@ -25,6 +25,7 @@ export class EffectCommitProtocol {
     this.state = state;
     this.ledger = ledger;
     this.deviceRuns = deviceRuns;
+    this.missions = missions;
     this.recheck = recheck;
     this.execute = execute;
     this.verify = verify;
@@ -33,6 +34,8 @@ export class EffectCommitProtocol {
   }
 
   async prepare(input) {
+    const discovery = this.missions?.verifyAuthoritativeDiscovery(input.mission);
+    if (discovery && !discovery.ok) return blocked(discovery.code);
     const policy = evaluateMissionEffect(input.mission, { action: input.action, target: input.target });
     if (policy.decision === "scope_violation") return blocked("SCOPE_VIOLATION");
     if (policy.decision === "blocked") return blocked(policy.reason);
@@ -54,6 +57,11 @@ export class EffectCommitProtocol {
     const { effect, rechecked, policy, ...input } = prepared;
     let outcome = null;
     try {
+      const discovery = this.missions?.verifyAuthoritativeDiscovery(input.mission);
+      if (discovery && !discovery.ok) {
+        outcome = this.ledger.recordOutcome(effect.effectId, { status: "cancelled" });
+        return blocked(discovery.code);
+      }
       this.deviceRuns.assertControlTuple(input.tuple);
       const current = await this.recheck(input);
       const code = correctnessCode(input.mission, input.target, current);
@@ -93,6 +101,8 @@ export class EffectCommitProtocol {
   async retryNotSentInPlace(input) {
     const { effectId, tuple, mission, target } = input || {};
     this.deviceRuns.assertControlTuple(tuple);
+    const discovery = this.missions?.verifyAuthoritativeDiscovery(mission);
+    if (discovery && !discovery.ok) return blocked(discovery.code);
     const effect = this.state.listMissionEffects(mission?.missionId)
       .find((candidate) => candidate.effectId === effectId);
     const action = input?.action || effect?.action;

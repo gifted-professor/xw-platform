@@ -223,11 +223,24 @@ export class ControlPlane {
     return run;
   }
 
+  // Internal-only control-plane ingestion point. No router exposes this method: callers must
+  // already hold the full fenced tuple for a control-plane-owned DeviceRun before a hash-only
+  // observation can become authority for a later Standing Grant Mission.
+  recordAuthoritativeObservation({ tuple, observation }) {
+    const run = this.assertControlTuple(tuple);
+    const mission = this.missions.requireActiveMission(run.missionId);
+    if (!observation || observation.app !== mission.app || observation.accountFingerprint !== mission.account) {
+      throw new ControlPlaneError("AUTHORITATIVE_OBSERVATION_MISMATCH", "observation does not match the controlled Mission", { status: 409 });
+    }
+    return this.state.recordAuthoritativeObservation(observation);
+  }
+
   createEffectCommitProtocol(handlers) {
     return new EffectCommitProtocol({
       state: this.state,
       ledger: this.effectLedger,
       deviceRuns: this.deviceRuns,
+      missions: this.missions,
       ...handlers,
     });
   }

@@ -70,6 +70,16 @@ function loadDeviceConfig(path) {
   return config;
 }
 
+export function loadStandingGrantIssuer({ standingGrantEnabled, issuerKeysPath } = {}) {
+  // A disabled feature must not make ordinary flag-off startup depend on an example or
+  // future deployment path. Enabling it is the explicit fail-closed boundary.
+  if (!standingGrantEnabled) return null;
+  if (typeof issuerKeysPath !== "string" || issuerKeysPath.trim() === "") {
+    throw new ControlPlaneError("STANDING_GRANT_ISSUER_UNAVAILABLE", "standing grant issuer configuration is required when enabled", { status: 503 });
+  }
+  return TrustedHumanIssuer.fromFile(issuerKeysPath);
+}
+
 export function createControlPlaneRuntime({
   nodeId = process.env.CONTROL_PLANE_NODE_ID || "DESKTOP-3I1EVHE",
   dbPath,
@@ -84,6 +94,7 @@ export function createControlPlaneRuntime({
   leaseTtlMs,
   leaseHeartbeatMs,
   issuerKeysPath = process.env.STANDING_GRANT_ISSUER_KEYS_PATH,
+  standingGrantEnabled = process.env.STANDING_GRANT_ENABLED === "1",
 } = {}) {
   const defaults = defaultRuntimePaths();
   const resolvedDbPath = dbPath || process.env.CONTROL_PLANE_DB || defaults.dbPath;
@@ -91,7 +102,7 @@ export function createControlPlaneRuntime({
   const runtimeState = state || new StateStore({ dbPath: resolvedDbPath });
   // An allowlist is optional while both standing-grant gates remain off. If an operator
   // explicitly supplies one, load and reconcile it before any scheduler can be started.
-  const trustedIssuer = issuerKeysPath ? TrustedHumanIssuer.fromFile(issuerKeysPath) : null;
+  const trustedIssuer = loadStandingGrantIssuer({ standingGrantEnabled, issuerKeysPath });
   const delegationGrants = trustedIssuer ? new DelegationGrantRuntime({ state: runtimeState, issuer: trustedIssuer }) : null;
   delegationGrants?.reconcileIssuerKeys();
   const registry = capabilities || CapabilityRegistry.load(resolve(appsRoot));
@@ -128,6 +139,7 @@ export function createControlPlaneRuntime({
     schedulerIntervalMs,
     leaseTtlMs,
     leaseHeartbeatMs,
+    standingGrantEnabled,
   });
   return {
     root,

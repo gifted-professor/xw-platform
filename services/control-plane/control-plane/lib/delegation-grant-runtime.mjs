@@ -17,6 +17,9 @@ export class DelegationGrantRuntime {
       throw new ControlPlaneError("GRANT_PROOF_INVALID", "signed issuer proof is required", { status: 403 });
     }
     const normalizedGrant = validateDelegationGrantDraft(grant);
+    if (proof.keyId !== normalizedGrant.issuer.keyId) {
+      throw new ControlPlaneError("ISSUER_KEY_MISMATCH", "proof keyId must match the signed grant issuer keyId", { status: 403 });
+    }
     const grantHash = delegationGrantContentHash(normalizedGrant);
     const payload = grantIssueSigningPayload({
       subject: normalizedGrant.issuer.subject,
