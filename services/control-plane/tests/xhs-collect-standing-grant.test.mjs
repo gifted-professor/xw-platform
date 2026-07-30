@@ -302,6 +302,37 @@ test("supported one-command canary re-observes, collects once, restores, and rel
     const notSent = await control.runStandingGrantCollectCanary({ actor: "user:a1234", idempotencyKey: "supported-canary-not-sent", parentGrantId: grant.grantId, sourceJobId: sourceJob.jobId, adapterReceiptId: sourceReceipt.receiptId });
     assert.equal(notSent.effectStatus, "not_sent");
     assertZeroActiveCanaryState();
+
+    control.createEffectCommitProtocol = () => ({ commit: async () => {
+      const collectJobId = state.getStandingGrantCanary().collect_job_id;
+      state.transitionJob(collectJobId, "running");
+      state.transitionJob(collectJobId, "ambiguous", { errorCode: "ADAPTER_TIMEOUT" });
+      return { status: "ambiguous", error: { code: "ADAPTER_TIMEOUT" } };
+    } });
+    const ambiguous = await control.runStandingGrantCollectCanary({ actor: "user:a1234", idempotencyKey: "supported-canary-ambiguous", parentGrantId: grant.grantId, sourceJobId: sourceJob.jobId, adapterReceiptId: sourceReceipt.receiptId });
+    assert.equal(ambiguous.effectStatus, "ambiguous");
+    assert.equal(state.getStandingGrantCanary().status, "ambiguous");
+    await assert.rejects(
+      () => control.runStandingGrantCollectCanary({ actor: "user:a1234", idempotencyKey: "supported-canary-after-ambiguous", parentGrantId: grant.grantId, sourceJobId: sourceJob.jobId, adapterReceiptId: sourceReceipt.receiptId }),
+      { code: "CANARY_ALREADY_COMPLETED" },
+    );
+
+    state.clearStandingGrantCanary({ actor: "reviewer:test", reason: "exercise recovery-required exception" });
+    control.createEffectCommitProtocol = () => ({ commit: async () => {
+      const collectJobId = state.getStandingGrantCanary().collect_job_id;
+      state.transitionJob(collectJobId, "running");
+      state.transitionJob(collectJobId, "recovery_required", { errorCode: "RECOVERY_REQUIRED" });
+      throw Object.assign(new Error("collect recovery required"), { code: "RECOVERY_REQUIRED", ambiguous: true });
+    } });
+    await assert.rejects(
+      () => control.runStandingGrantCollectCanary({ actor: "user:a1234", idempotencyKey: "supported-canary-recovery-required", parentGrantId: grant.grantId, sourceJobId: sourceJob.jobId, adapterReceiptId: sourceReceipt.receiptId }),
+      { code: "RECOVERY_REQUIRED" },
+    );
+    assert.equal(state.getStandingGrantCanary().status, "ambiguous");
+    await assert.rejects(
+      () => control.runStandingGrantCollectCanary({ actor: "user:a1234", idempotencyKey: "supported-canary-after-recovery-required", parentGrantId: grant.grantId, sourceJobId: sourceJob.jobId, adapterReceiptId: sourceReceipt.receiptId }),
+      { code: "CANARY_ALREADY_COMPLETED" },
+    );
     control.createEffectCommitProtocol = originalCreateEffectCommitProtocol;
   } finally {
     await control?.stop();

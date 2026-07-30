@@ -689,12 +689,15 @@ export class ControlPlane {
         restore: async () => ({ ok: true }),
       });
       const effect = await ecp.commit({ tuple: run.tuple, mission: submission.mission, action: "collect", target: sealed.targetFingerprint, idempotencyKey: `${idempotencyKey}:effect`, observationReceiptId: receipt.receiptId });
-      terminalStatus = effect.status === "verified" ? "completed" : effect.status === "ambiguous" ? "ambiguous" : "failed";
+      const explicitlyNoEffect = ["blocked", "not_sent", "cancelled"].includes(effect.status)
+        || (effect.status === "failed" && effect.noExternalEffect === true);
+      retainCanaryMarker = !explicitlyNoEffect;
+      terminalStatus = effect.status === "verified" ? "completed" : retainCanaryMarker ? "ambiguous" : "failed";
       outcome = effect.status;
-      retainCanaryMarker = effect.status === "verified" || effect.status === "ambiguous";
       return { status: terminalStatus, missionId: submission.mission.missionId, deviceRunId: run.deviceRunId, jobId: collectJob?.jobId || null, runId: collectJob?.runId || null, effectStatus: effect.status, restoration: collectJob?.result?.restoration || null };
     } catch (error) {
-      terminalStatus = error?.ambiguous ? "ambiguous" : "blocked";
+      retainCanaryMarker = Boolean(collectCreated && error?.notSent !== true);
+      terminalStatus = retainCanaryMarker ? "ambiguous" : "blocked";
       outcome = error?.code || "CANARY_FAILED";
       throw error;
     } finally {
@@ -706,7 +709,7 @@ export class ControlPlane {
         try { this.missions.revokeMission(submission.mission.missionId, { actorId: actor, reason: `canary_terminal:${outcome}` }); } catch {}
       }
       const collectJobState = collectCreated ? this.state.getJob(collectCreated.job.jobId) : null;
-      if (!retainCanaryMarker && ["queued", "waiting_approval"].includes(collectJobState?.status)) {
+      if (["queued", "waiting_approval"].includes(collectJobState?.status)) {
         try { this.state.cancelJob(collectJobState.jobId); } catch {}
       }
       if (retainCanaryMarker) {
