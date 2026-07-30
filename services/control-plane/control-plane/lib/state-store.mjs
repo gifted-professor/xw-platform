@@ -410,6 +410,20 @@ export class StateStore {
         updated_at INTEGER NOT NULL,
         UNIQUE(discovery_run_id, kind, idempotency_key)
       );
+      CREATE TABLE IF NOT EXISTS discovery_observation_lineage (
+        snapshot_hash TEXT PRIMARY KEY,
+        discovery_run_id TEXT NOT NULL REFERENCES discovery_runs(discovery_run_id),
+        session_id TEXT NOT NULL,
+        controller_agent TEXT NOT NULL,
+        controller_epoch INTEGER NOT NULL,
+        source_job_id TEXT NOT NULL,
+        source_run_id TEXT NOT NULL,
+        evidence_id TEXT NOT NULL REFERENCES evidence(evidence_id),
+        evidence_hash TEXT NOT NULL,
+        recorder TEXT NOT NULL,
+        record_hash TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
     `);
     this.#ensureColumn(
       "devices",
@@ -419,6 +433,12 @@ export class StateStore {
     this.#ensureColumn("jobs", "placement_request_json", "TEXT NOT NULL DEFAULT '{}'");
     this.#ensureColumn("jobs", "placement_decision_json", "TEXT");
     this.#ensureColumn("sessions", "scope_capability_id", "TEXT");
+    this.#ensureColumn("discovery_observation_lineage", "source_hash", "TEXT");
+    this.#ensureColumn("discovery_observation_lineage", "content_hash", "TEXT");
+    this.#ensureColumn("discovery_observation_lineage", "anchor_json", "TEXT");
+    this.#ensureColumn("discovery_observation_lineage", "relation_kind", "TEXT");
+    this.#ensureColumn("discovery_observation_lineage", "relation_evidence_id", "TEXT");
+    this.#ensureColumn("discovery_observation_lineage", "relation_evidence_hash", "TEXT");
     this.#ensureColumn("sessions", "placement_decision_json", "TEXT");
     this.#ensureColumn("leases", "owner_device_run_id", "TEXT");
     this.#ensureColumn("leases", "owner_discovery_run_id", "TEXT");
@@ -1380,6 +1400,11 @@ export class StateStore {
     }));
   }
 
+  getEvidenceRecord(evidenceId) {
+    const row = this.db.prepare("SELECT * FROM evidence WHERE evidence_id=?").get(evidenceId);
+    return row ? { evidenceId: row.evidence_id, jobId: row.job_id, runId: row.run_id, kind: row.kind, sha256: row.sha256, bytes: row.bytes } : null;
+  }
+
   #publicDelegationGrant(row) {
     if (!row) return null;
     return {
@@ -2229,11 +2254,181 @@ export class StateStore {
     return this.#publicDiscoveryRun(this.db.prepare("SELECT * FROM discovery_runs WHERE discovery_run_id=?").get(discoveryRunId));
   }
 
+  getDiscoveryRunForSession(sessionId) {
+    return this.#publicDiscoveryRun(this.db.prepare("SELECT * FROM discovery_runs WHERE session_id=?").get(sessionId));
+  }
+
+  listDiscoveryEvents(discoveryRunId) {
+    return this.db.prepare("SELECT * FROM discovery_events WHERE discovery_run_id=? ORDER BY event_id").all(discoveryRunId)
+      .map((row) => ({ type: row.type, payload: parseJson(row.payload_json, {}), createdAt: iso(row.created_at) }));
+  }
+
+  ingestDiscoveryObservation(input) {
+    const allowedFields = new Set([
+      "discoveryRunId", "tuple", "gates", "evidenceId", "evidenceHash", "sourceJobId", "sourceRunId", "recorder",
+      "sourceHash", "contentHash", "snapshotHash", "app", "accountFingerprint", "pageFingerprint",
+      "observedTargetFingerprint", "identityEvidenceHash", "anchor", "relationKind", "relationEvidenceId",
+      "relationEvidenceHash", "observedAt",
+    ]);
+    if (!input || typeof input !== "object" || Object.keys(input).some((key) => !allowedFields.has(key))) {
+      throw new ControlPlaneError("DISCOVERY_INGEST_INPUT_INVALID", "Discovery ingestion accepts hash-only lineage fields", { status: 400 });
+    }
+    const now = this.now();
+    const result = this.transaction(() => {
+      const row = this.db.prepare("SELECT * FROM discovery_runs WHERE discovery_run_id=?").get(input.discoveryRunId);
+      if (!row) throw new ControlPlaneError("DISCOVERY_RUN_NOT_FOUND", "unknown DiscoveryRun", { status: 404 });
+      this.#assertDiscoveryRunOwnership(row, input.tuple, now);
+      this.#assertLiveDiscoveryAuthority(row, input.gates);
+      const evidence = this.getEvidenceRecord(input.evidenceId);
+      const reservation = this.db.prepare("SELECT * FROM discovery_reservations WHERE reservation_id=? AND discovery_run_id=? AND kind='primitive'")
+        .get(input.sourceJobId, row.discovery_run_id);
+      if (!evidence || evidence.sha256 !== input.evidenceHash || evidence.runId !== input.sourceRunId
+        || input.sourceRunId !== row.discovery_run_id || !reservation) {
+        throw new ControlPlaneError("DISCOVERY_EVIDENCE_INVALID", "Discovery observation evidence is not authoritative", { status: 409 });
+      }
+      const hashes = ["sourceHash", "contentHash", "snapshotHash", "identityEvidenceHash", "evidenceHash", "relationEvidenceHash"];
+      if (hashes.some((name) => typeof input[name] !== "string" || !/^[a-f0-9]{64}$/i.test(input[name]))) {
+        throw new ControlPlaneError("DISCOVERY_LINEAGE_INVALID", "Discovery observation needs complete hash-only lineage", { status: 409 });
+      }
+      if (input.relationEvidenceId !== input.evidenceId || input.relationEvidenceHash !== input.evidenceHash) {
+        throw new ControlPlaneError("DISCOVERY_RELATION_EVIDENCE_INVALID", "relation evidence must bind the observed evidence", { status: 409 });
+      }
+      const policy = parseJson(row.policy_json, {});
+      const scope = policy.targetScope || {};
+      const allowedPairs = {
+        searchQueryHash: new Set(["search_result"]),
+        seedIdentityFingerprint: new Set(["seed_profile_relation"]),
+        contentContextHash: new Set(["content_author", "content_mentioned_profile"]),
+        identityFingerprint: new Set(["explicit_target"]),
+      };
+      const allowedAnchor = scope.anchors?.some((anchor) => anchor.type === input.anchor?.type && anchor.hash === input.anchor?.hash);
+      if (!allowedAnchor || scope.maxHops !== 1 || !scope.relationKinds?.includes(input.relationKind)
+        || !allowedPairs[input.anchor?.type]?.has(input.relationKind)) {
+        throw new ControlPlaneError("DISCOVERY_ANCHOR_RELATION_INVALID", "observation is outside signed one-hop authority", { status: 409 });
+      }
+      const recordHash = fingerprint({ ...input, tuple: undefined });
+      const existing = this.db.prepare("SELECT record_hash FROM discovery_observation_lineage WHERE snapshot_hash=?").get(input.snapshotHash);
+      if (existing) {
+        if (existing.record_hash === recordHash) return { reused: true, snapshotHash: input.snapshotHash, evidenceHash: input.evidenceHash };
+        this.#insertDiscoveryEvent({ discoveryRunId: row.discovery_run_id, type: "discovery_observation.conflict", payload: { snapshotHash: fingerprint(input.snapshotHash) }, createdAt: now });
+        return { error: new ControlPlaneError("AUTHORITATIVE_OBSERVATION_CONFLICT", "Discovery observation conflicts with immutable lineage", { status: 409 }) };
+      }
+      if (row.candidate_count >= row.max_candidates) {
+        throw new ControlPlaneError("DISCOVERY_CANDIDATE_BUDGET_EXHAUSTED", "DiscoveryRun candidate quota exhausted", { status: 409 });
+      }
+      const candidateKey = `observation:${input.snapshotHash}`;
+      const candidatePayloadHash = fingerprint({ candidateHash: input.observedTargetFingerprint, anchor: input.anchor, relationKind: input.relationKind, relationEvidenceId: input.relationEvidenceId, relationEvidenceHash: input.relationEvidenceHash });
+      const candidate = this.db.prepare("SELECT * FROM discovery_reservations WHERE discovery_run_id=? AND kind='candidate' AND idempotency_key=?").get(row.discovery_run_id, candidateKey);
+      if (candidate && candidate.payload_hash !== candidatePayloadHash) {
+        throw new ControlPlaneError("DISCOVERY_IDEMPOTENCY_CONFLICT", "observation candidate replay changed", { status: 409 });
+      }
+      if (!candidate) {
+        this.db.prepare("INSERT INTO discovery_reservations (reservation_id, discovery_run_id, kind, idempotency_key, payload_hash, status, created_at, updated_at) VALUES (?, ?, 'candidate', ?, ?, 'intent_recorded', ?, ?)")
+          .run(newId("discovery_candidate"), row.discovery_run_id, candidateKey, candidatePayloadHash, now, now);
+        this.db.prepare("UPDATE discovery_runs SET candidate_count=candidate_count+1, updated_at=? WHERE discovery_run_id=? AND status='running'").run(now, row.discovery_run_id);
+      }
+      this.db.prepare("INSERT INTO authoritative_observations (snapshot_hash, app, account_fingerprint, page_fingerprint, observed_target_fingerprint, identity_evidence_hash, observed_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+        .run(input.snapshotHash, input.app, input.accountFingerprint, input.pageFingerprint, input.observedTargetFingerprint, input.identityEvidenceHash, Date.parse(input.observedAt), now);
+      this.db.prepare("INSERT INTO discovery_observation_lineage (snapshot_hash, discovery_run_id, session_id, controller_agent, controller_epoch, source_job_id, source_run_id, evidence_id, evidence_hash, recorder, record_hash, source_hash, content_hash, anchor_json, relation_kind, relation_evidence_id, relation_evidence_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        .run(input.snapshotHash, row.discovery_run_id, row.session_id, row.controller_agent, row.controller_epoch, input.sourceJobId, input.sourceRunId, input.evidenceId, input.evidenceHash, input.recorder, recordHash, input.sourceHash, input.contentHash, canonicalJson(input.anchor), input.relationKind, input.relationEvidenceId, input.relationEvidenceHash, now);
+      this.#insertDiscoveryEvent({ discoveryRunId: row.discovery_run_id, type: "discovery_observation.recorded", payload: { snapshotHash: fingerprint(input.snapshotHash) }, createdAt: now });
+      return { reused: false, snapshotHash: input.snapshotHash, evidenceHash: input.evidenceHash };
+    });
+    if (result?.error) throw result.error;
+    return result;
+  }
+
   listDiscoveryRuns({ status = null } = {}) {
     const rows = status
       ? this.db.prepare("SELECT * FROM discovery_runs WHERE status=? ORDER BY created_at").all(status)
       : this.db.prepare("SELECT * FROM discovery_runs ORDER BY created_at").all();
     return rows.map((row) => this.#publicDiscoveryRun(row));
+  }
+
+  reserveDiscoveryPrimitiveStorage({ discoveryRunId, tuple, token, gates = {}, primitive, idempotencyKey, payloadHash }) {
+    if (typeof primitive !== "string" || typeof idempotencyKey !== "string" || typeof payloadHash !== "string") {
+      throw new ControlPlaneError("DISCOVERY_INPUT_INVALID", "primitive idempotencyKey and payloadHash are required", { status: 400 });
+    }
+    const now = this.now();
+    const result = this.transaction(() => {
+      const row = this.db.prepare("SELECT * FROM discovery_runs WHERE discovery_run_id=?").get(discoveryRunId);
+      if (!row) throw new ControlPlaneError("DISCOVERY_RUN_NOT_FOUND", "unknown DiscoveryRun", { status: 404 });
+      try {
+        this.#assertDiscoveryRunOwnership(row, tuple, now);
+        this.#assertLiveDiscoveryAuthority(row, gates);
+        const session = this.db.prepare("SELECT token_hash FROM sessions WHERE session_id=?").get(row.session_id);
+        if (!session || session.token_hash !== sha256(token || "")) {
+          throw new ControlPlaneError("SESSION_TOKEN_INVALID", "DiscoveryRun session token is invalid", { status: 403 });
+        }
+        const policy = parseJson(row.policy_json, {});
+        if (!Array.isArray(policy.allowedPrimitives) || !policy.allowedPrimitives.includes(primitive)) {
+          throw new ControlPlaneError("DISCOVERY_PRIMITIVE_FORBIDDEN", "primitive is not signed DiscoveryPolicy authority", { status: 403 });
+        }
+        if (now >= row.deadline_at) {
+          throw new ControlPlaneError("DISCOVERY_DEADLINE_EXCEEDED", "DiscoveryRun deadline elapsed", { status: 409 });
+        }
+        if (row.primitive_count >= row.max_primitives) {
+          throw new ControlPlaneError("DISCOVERY_PRIMITIVE_BUDGET_EXHAUSTED", "DiscoveryRun primitive quota exhausted", { status: 409 });
+        }
+      } catch (error) {
+        return { error: this.#terminalizeDiscoveryFailure(row, error, now) };
+      }
+      const existing = this.db.prepare("SELECT * FROM discovery_reservations WHERE discovery_run_id=? AND kind='primitive' AND idempotency_key=?")
+        .get(discoveryRunId, idempotencyKey);
+      if (existing) {
+        if (existing.payload_hash !== payloadHash) {
+          throw new ControlPlaneError("DISCOVERY_IDEMPOTENCY_CONFLICT", "primitive idempotency key has different payload", { status: 409 });
+        }
+        return { reservationId: existing.reservation_id, reused: true };
+      }
+      const reservationId = newId("discovery_primitive");
+      this.db.prepare(`
+        INSERT INTO discovery_reservations (reservation_id, discovery_run_id, kind, idempotency_key, payload_hash, status, created_at, updated_at)
+        VALUES (?, ?, 'primitive', ?, ?, 'intent_recorded', ?, ?)
+      `).run(reservationId, discoveryRunId, idempotencyKey, payloadHash, now, now);
+      this.db.prepare("UPDATE discovery_runs SET primitive_count=primitive_count+1, updated_at=? WHERE discovery_run_id=? AND status='running'")
+        .run(now, discoveryRunId);
+      this.#insertDiscoveryEvent({ discoveryRunId, type: "discovery_primitive.intent_recorded", payload: { primitive, reservationId }, createdAt: now });
+      return { reservationId, reused: false };
+    });
+    if (result?.error) throw result.error;
+    return { ...result, discoveryRunId, primitive };
+  }
+
+  reserveDiscoveryCandidateStorage({ discoveryRunId, tuple, token, gates = {}, idempotencyKey, candidateHash, anchor, relationKind, relationEvidenceId, relationEvidenceHash }) {
+    const now = this.now();
+    const result = this.transaction(() => {
+      const row = this.db.prepare("SELECT * FROM discovery_runs WHERE discovery_run_id=?").get(discoveryRunId);
+      if (!row) throw new ControlPlaneError("DISCOVERY_RUN_NOT_FOUND", "unknown DiscoveryRun", { status: 404 });
+      try {
+        this.#assertDiscoveryRunOwnership(row, tuple, now); this.#assertLiveDiscoveryAuthority(row, gates);
+        const session = this.db.prepare("SELECT token_hash FROM sessions WHERE session_id=?").get(row.session_id);
+        if (!session || session.token_hash !== sha256(token || "")) throw new ControlPlaneError("SESSION_TOKEN_INVALID", "DiscoveryRun session token is invalid", { status: 403 });
+        const relationEvidence = this.getEvidenceRecord(relationEvidenceId);
+        if (!relationEvidence || relationEvidence.sha256 !== relationEvidenceHash || relationEvidence.runId !== row.discovery_run_id) {
+          throw new ControlPlaneError("DISCOVERY_RELATION_EVIDENCE_INVALID", "candidate relation evidence is not bound to this DiscoveryRun", { status: 409 });
+        }
+        const policy = parseJson(row.policy_json, {}); const scope = policy.targetScope || {};
+        const allowedPairs = {
+          searchQueryHash: new Set(["search_result"]),
+          seedIdentityFingerprint: new Set(["seed_profile_relation"]),
+          contentContextHash: new Set(["content_author", "content_mentioned_profile"]),
+          identityFingerprint: new Set(["explicit_target"]),
+        };
+        const allowed = Array.isArray(scope.anchors) && scope.anchors.some((item) => item.type === anchor?.type && item.hash === anchor?.hash)
+          && Array.isArray(scope.relationKinds) && scope.relationKinds.includes(relationKind) && scope.maxHops === 1;
+        if (!allowed || !allowedPairs[anchor?.type]?.has(relationKind)) throw new ControlPlaneError("DISCOVERY_ANCHOR_RELATION_INVALID", "candidate is outside signed one-hop authority", { status: 409 });
+        if (row.candidate_count >= row.max_candidates) throw new ControlPlaneError("DISCOVERY_CANDIDATE_BUDGET_EXHAUSTED", "DiscoveryRun candidate quota exhausted", { status: 409 });
+      } catch (error) { return { error: this.#terminalizeDiscoveryFailure(row, error, now) }; }
+      const payloadHash = fingerprint({ candidateHash, anchor, relationKind, relationEvidenceId, relationEvidenceHash });
+      const existing = this.db.prepare("SELECT * FROM discovery_reservations WHERE discovery_run_id=? AND kind='candidate' AND idempotency_key=?").get(discoveryRunId, idempotencyKey);
+      if (existing) { if (existing.payload_hash !== payloadHash) throw new ControlPlaneError("DISCOVERY_IDEMPOTENCY_CONFLICT", "candidate idempotency conflict", { status: 409 }); return { reused: true, reservationId: existing.reservation_id }; }
+      const reservationId = newId("discovery_candidate");
+      this.db.prepare("INSERT INTO discovery_reservations (reservation_id, discovery_run_id, kind, idempotency_key, payload_hash, status, created_at, updated_at) VALUES (?, ?, 'candidate', ?, ?, 'intent_recorded', ?, ?)").run(reservationId, discoveryRunId, idempotencyKey, payloadHash, now, now);
+      this.db.prepare("UPDATE discovery_runs SET candidate_count=candidate_count+1, updated_at=? WHERE discovery_run_id=?").run(now, discoveryRunId);
+      return { reused: false, reservationId };
+    });
+    if (result?.error) throw result.error; return result;
   }
 
   heartbeatDiscoveryRunStorage({ discoveryRunId, tuple, gates = {}, ttlMs = 60000 }) {

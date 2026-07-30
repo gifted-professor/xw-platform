@@ -6,11 +6,12 @@ import test from "node:test";
 
 import { CapabilityRegistry } from "../control-plane/lib/capability-registry.mjs";
 import { ControlPlane } from "../control-plane/lib/control-plane.mjs";
+import { EvidenceStore } from "../control-plane/lib/evidence-store.mjs";
 import { StateStore } from "../control-plane/lib/state-store.mjs";
 
 const AUTHORITY = "DESKTOP-3I1EVHE";
 
-function fixture({ adrAccepted = true, discoveryAdrAccepted = true, discoveryAdrPath = undefined } = {}) {
+function fixture({ adrAccepted = true, discoveryAdrAccepted = true, discoveryAdrPath = undefined, discoveryProducer = null } = {}) {
   const root = mkdtempSync(join(tmpdir(), "discovery-control-"));
   const state = new StateStore({ dbPath: join(root, "control.db") });
   state.upsertNode({ nodeId: AUTHORITY, authority: true });
@@ -20,15 +21,16 @@ function fixture({ adrAccepted = true, discoveryAdrAccepted = true, discoveryAdr
   });
   const grant = {
     grantId: "grant-discovery-control", issuanceNonce: "nonce-discovery-control", grantHash: "hash-grant-discovery-control", status: "active",
-    discoveryPolicy: { enabled: true, defaults: { durationMs: 600000, maxPrimitives: 80, maxCandidates: 10 }, maxima: { durationMs: 1800000, maxPrimitives: 300, maxCandidates: 50 }, maxParallelism: 1, targetScope: { anchors: [{ type: "identityFingerprint", hash: "a".repeat(64) }], relationKinds: ["explicit_target"], maxHops: 1 } },
+    discoveryPolicy: { enabled: true, allowedPrimitives: ["screenshot", "dump", "focus", "launch", "back", "home", "tap", "swipe", "input", "restore"], defaults: { durationMs: 600000, maxPrimitives: 80, maxCandidates: 10 }, maxima: { durationMs: 1800000, maxPrimitives: 300, maxCandidates: 50 }, maxParallelism: 1, targetScope: { anchors: [{ type: "identityFingerprint", hash: "a".repeat(64) }], relationKinds: ["explicit_target"], maxHops: 1 } },
     validity: { expiresAt: null },
   };
   state.issueDelegationGrant({ grant, grantHash: grant.grantHash, proofHash: "proof", issuerSubject: "user:a1234", issuerKeyId: "test", allowlistVersion: 1 });
+  const evidence = new EvidenceStore({ runsRoot: join(root, "runs"), state, minFreeBytes: 0, minExternalEffectFreeBytes: 0 });
   const control = new ControlPlane({
-    state, capabilities: new CapabilityRegistry([]), authorityNodeId: AUTHORITY, missionAutoApprovalEnabled: true, standingGrantEnabled: true, adrAccepted,
-    discoveryIssuerReady: true, discoveryAdrAccepted, discoveryAdrPath,
+    state, evidence, capabilities: new CapabilityRegistry([]), authorityNodeId: AUTHORITY, missionAutoApprovalEnabled: true, standingGrantEnabled: true, adrAccepted,
+    discoveryIssuerReady: true, discoveryAdrAccepted, discoveryAdrPath, discoveryProducer,
   });
-  return { root, state, grant, control };
+  return { root, state, grant, evidence, control };
 }
 
 test("governed DiscoveryRun open, heartbeat, and seal preserve the exact own tuple", () => {
@@ -111,4 +113,120 @@ test("DiscoverySession lazily rereads its dedicated ADR0010 path at each live bo
   } finally {
     f.state.close(); rmSync(f.root, { recursive: true, force: true }); rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("exclusive Discovery primitive requires its own fenced tuple and signed R0 allowlist", () => {
+  const f = fixture();
+  try {
+    const run = f.control.openDiscoveryRun({ grantId: f.grant.grantId, controllerAgent: "agent:runner" });
+    const now = new Date().toISOString();
+    const prepared = f.control.executeDiscoveryPrimitive({
+      discoveryRunId: run.discoveryRunId,
+      tuple: run.tuple,
+      token: run.token,
+      primitive: "screenshot",
+      idempotencyKey: "discovery-r0-1",
+      envelope: { declaredIntent: "screenshot", snapshot: { surface: "observation", createdAt: now, observedAt: now } },
+    });
+    assert.equal(prepared.discoveryRunId, run.discoveryRunId);
+    assert.equal(prepared.primitive, "screenshot");
+    assert.equal(f.state.getDiscoveryRun(run.discoveryRunId).primitiveCount, 1);
+  } finally { f.state.close(); rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test("Discovery primitive invokes only its fenced R0 producer once after durable intent", () => {
+  let producerCalls = 0;
+  let f;
+  f = fixture({ discoveryProducer: ({ discoveryRunId, reservationId }) => {
+    producerCalls += 1;
+    return f.evidence.writeDiscoveryJson({ discoveryRunId, sourceJobId: reservationId, kind: "snapshot", label: "fake-r0", value: { rawPath: "/private/path", token: "private", imageHash: "a".repeat(64) } });
+  } });
+  try {
+    const run = f.control.openDiscoveryRun({ grantId: f.grant.grantId, controllerAgent: "agent:runner" });
+    const input = { discoveryRunId: run.discoveryRunId, tuple: run.tuple, token: run.token, primitive: "screenshot", idempotencyKey: "fake-r0-1", envelope: { snapshot: { surface: "observation", createdAt: new Date().toISOString(), observedAt: new Date().toISOString() } } };
+    const first = f.control.executeDiscoveryPrimitive(input);
+    assert.equal(producerCalls, 1);
+    assert.match(first.evidenceId, /^evidence_/);
+    assert.equal(f.control.executeDiscoveryPrimitive(input).reused, true);
+    assert.equal(producerCalls, 1);
+    assert.throws(() => f.control.executeDiscoveryPrimitive({ ...input, envelope: { snapshot: { surface: "navigation", createdAt: new Date().toISOString(), observedAt: new Date().toISOString() } } }), { code: "DISCOVERY_IDEMPOTENCY_CONFLICT" });
+    assert.equal(producerCalls, 1);
+  } finally { f.state.close(); rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test("Discovery-owned sessions reject the generic job path and failed authority never calls the producer", async () => {
+  let producerCalls = 0;
+  const f = fixture({ discoveryProducer: () => { producerCalls += 1; return null; } });
+  try {
+    const run = f.control.openDiscoveryRun({ grantId: f.grant.grantId, controllerAgent: "agent:runner" });
+    await assert.rejects(
+      () => f.control.executeSessionAction(run.sessionId, run.token, { idempotencyKey: "forbidden-generic", capabilityId: "missing", params: {} }),
+      { code: "DISCOVERY_SESSION_EXCLUSIVE" },
+    );
+    f.control.standingGrantEnabled = false;
+    assert.throws(() => f.control.executeDiscoveryPrimitive({ discoveryRunId: run.discoveryRunId, tuple: run.tuple, token: run.token, primitive: "screenshot", idempotencyKey: "closed-gate", envelope: { snapshot: { surface: "observation", createdAt: new Date().toISOString(), observedAt: new Date().toISOString() } } }), { code: "DISCOVERY_GATE_CLOSED" });
+    assert.equal(producerCalls, 0);
+    assert.equal(f.state.getDiscoveryRun(run.discoveryRunId).status, "aborted");
+    assert.equal(f.state.listLeases().length, 0);
+  } finally { f.state.close(); rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test("Discovery primitive blocks observed effect, unknown, and risk-control surfaces before reservation", () => {
+  for (const surface of ["social-effect", "payment", "publish", "delete", "unknown", "risk-control", "login", "captcha"]) {
+    const f = fixture();
+    try {
+      const run = f.control.openDiscoveryRun({ grantId: f.grant.grantId, controllerAgent: "agent:runner" });
+      const now = new Date().toISOString();
+      assert.throws(() => f.control.executeDiscoveryPrimitive({ discoveryRunId: run.discoveryRunId, tuple: run.tuple, token: run.token, primitive: "screenshot", idempotencyKey: `blocked-${surface}`, envelope: { declaredIntent: "screenshot", snapshot: { surface, createdAt: now, observedAt: now } } }), { code: "DISCOVERY_SURFACE_BLOCKED" });
+      assert.equal(f.state.getDiscoveryRun(run.discoveryRunId).primitiveCount, 0);
+    } finally { f.state.close(); rmSync(f.root, { recursive: true, force: true }); }
+  }
+});
+
+test("Discovery candidate reservation requires a signed one-hop anchor and is idempotent", () => {
+  const f = fixture();
+  try {
+    const run = f.control.openDiscoveryRun({ grantId: f.grant.grantId, controllerAgent: "agent:runner" });
+    const primitive = f.control.executeDiscoveryPrimitive({ discoveryRunId: run.discoveryRunId, tuple: run.tuple, token: run.token, primitive: "screenshot", idempotencyKey: "candidate-evidence", envelope: { snapshot: { surface: "observation", createdAt: new Date().toISOString(), observedAt: new Date().toISOString() } } });
+    const evidence = f.evidence.writeDiscoveryJson({ discoveryRunId: run.discoveryRunId, sourceJobId: primitive.reservationId, kind: "relation", label: "candidate", value: { relation: "explicit_target" } });
+    const input = { discoveryRunId: run.discoveryRunId, tuple: run.tuple, token: run.token, gates: { missionAutoApprovalEnabled: true, standingGrantEnabled: true, adr0008Accepted: true, adr0010Accepted: true, issuerReady: true }, idempotencyKey: "candidate-1", candidateHash: "b".repeat(64), anchor: { type: "identityFingerprint", hash: "a".repeat(64) }, relationKind: "explicit_target", relationEvidenceId: evidence.evidenceId, relationEvidenceHash: evidence.sha256 };
+    const result = f.state.reserveDiscoveryCandidateStorage(input);
+    assert.equal(result.reused, false);
+    assert.equal(f.state.getDiscoveryRun(run.discoveryRunId).candidateCount, 1);
+    assert.equal(f.state.reserveDiscoveryCandidateStorage(input).reused, true);
+    assert.throws(() => f.state.reserveDiscoveryCandidateStorage({ ...input, idempotencyKey: "candidate-3", relationEvidenceHash: "0".repeat(64) }), { code: "DISCOVERY_RELATION_EVIDENCE_INVALID" });
+  } finally { f.state.close(); rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test("Discovery candidate rejects unsigned relation pairing before a second candidate charge", () => {
+  const f = fixture();
+  try {
+    const run = f.control.openDiscoveryRun({ grantId: f.grant.grantId, controllerAgent: "agent:runner" });
+    const primitive = f.control.executeDiscoveryPrimitive({ discoveryRunId: run.discoveryRunId, tuple: run.tuple, token: run.token, primitive: "screenshot", idempotencyKey: "invalid-pair-evidence", envelope: { snapshot: { surface: "observation", createdAt: new Date().toISOString(), observedAt: new Date().toISOString() } } });
+    const evidence = f.evidence.writeDiscoveryJson({ discoveryRunId: run.discoveryRunId, sourceJobId: primitive.reservationId, kind: "relation", label: "invalid-pair", value: { relation: "search_result" } });
+    assert.throws(() => f.state.reserveDiscoveryCandidateStorage({ discoveryRunId: run.discoveryRunId, tuple: run.tuple, token: run.token, gates: { missionAutoApprovalEnabled: true, standingGrantEnabled: true, adr0008Accepted: true, adr0010Accepted: true, issuerReady: true }, idempotencyKey: "invalid-pair", candidateHash: "b".repeat(64), anchor: { type: "identityFingerprint", hash: "a".repeat(64) }, relationKind: "search_result", relationEvidenceId: evidence.evidenceId, relationEvidenceHash: evidence.sha256 }), { code: "DISCOVERY_ANCHOR_RELATION_INVALID" });
+    assert.equal(f.state.getDiscoveryRun(run.discoveryRunId).candidateCount, 0);
+  } finally { f.state.close(); rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test("internal Discovery ingest is immutable, lineage-bound, and conflict-audited", () => {
+  const f = fixture();
+  let closed = false;
+  try {
+    const run = f.control.openDiscoveryRun({ grantId: f.grant.grantId, controllerAgent: "agent:runner" });
+    const intent = f.control.executeDiscoveryPrimitive({ discoveryRunId: run.discoveryRunId, tuple: run.tuple, token: run.token, primitive: "screenshot", idempotencyKey: "producer-intent", envelope: { snapshot: { surface: "observation", createdAt: new Date().toISOString(), observedAt: new Date().toISOString() } } });
+    const evidence = f.evidence.writeDiscoveryJson({ discoveryRunId: run.discoveryRunId, sourceJobId: intent.reservationId, kind: "snapshot", label: "producer", value: { screenshotHash: "d".repeat(64) } });
+    const input = { discoveryRunId: run.discoveryRunId, tuple: run.tuple, evidenceId: evidence.evidenceId, evidenceHash: evidence.sha256, sourceJobId: intent.reservationId, sourceRunId: run.discoveryRunId, recorder: "agent:runner", sourceHash: "f".repeat(64), contentHash: "1".repeat(64), snapshotHash: "e".repeat(64), app: "xhs", accountFingerprint: "account-hash", pageFingerprint: "page-hash", observedTargetFingerprint: "target-hash", identityEvidenceHash: "2".repeat(64), anchor: { type: "identityFingerprint", hash: "a".repeat(64) }, relationKind: "explicit_target", relationEvidenceId: evidence.evidenceId, relationEvidenceHash: evidence.sha256, observedAt: new Date().toISOString() };
+    const first = f.control.ingestDiscoveryObservation(input);
+    assert.equal(first.reused, false);
+    assert.equal(f.control.ingestDiscoveryObservation(input).reused, true);
+    assert.throws(() => f.control.ingestDiscoveryObservation({ ...input, pageFingerprint: "changed" }), { code: "AUTHORITATIVE_OBSERVATION_CONFLICT" });
+    assert.equal(f.state.listDiscoveryEvents(run.discoveryRunId).filter((event) => event.type === "discovery_observation.conflict").length, 1);
+    assert.throws(() => f.control.ingestDiscoveryObservation({ ...input, rawPath: "/private/screenshot.png" }), { code: "DISCOVERY_INGEST_INPUT_INVALID" });
+    f.state.close();
+    closed = true;
+    const reopened = new StateStore({ dbPath: join(f.root, "control.db") });
+    assert.equal(reopened.listDiscoveryEvents(run.discoveryRunId).filter((event) => event.type === "discovery_observation.conflict").length, 1);
+    reopened.close();
+  } finally { if (!closed) f.state.close(); rmSync(f.root, { recursive: true, force: true }); }
 });

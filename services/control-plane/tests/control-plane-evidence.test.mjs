@@ -67,3 +67,12 @@ test("runtime evidence uses real hashes and removes credentials and runtime IDs"
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("EvidenceStore resolves an exact evidence id and hash without exposing its path", () => {
+  const root = mkdtempSync(join(tempBase, "discovery-evidence-"));
+  const state = new StateStore({ dbPath: join(root, "control.db") });
+  try {
+    const evidence = new EvidenceStore({ runsRoot: join(root, "runs"), state, minFreeBytes: 0, minExternalEffectFreeBytes: 0 });
+    assert.throws(() => evidence.findByIdAndHash("evidence-missing", "a".repeat(64)), { code: "EVIDENCE_NOT_FOUND" });
+  } finally { state.close(); rmSync(root, { recursive: true, force: true }); }
+});

@@ -1,4 +1,5 @@
 import { ControlPlaneError } from "./errors.mjs";
+import { fingerprint } from "./canonical.mjs";
 
 // DiscoverySessionRuntime is deliberately lifecycle-only. It owns no primitive, job,
 // observation, or Mission-compile path; those stay deferred to later Tasks.
@@ -36,6 +37,24 @@ export class DiscoverySessionRuntime {
 
   abortDiscoveryRun({ discoveryRunId, tuple, reason }) {
     return this.state.abortDiscoveryRunStorage({ discoveryRunId, tuple, reason, gates: this.gates() });
+  }
+
+  executeDiscoveryPrimitive({ discoveryRunId, tuple, token, primitive, idempotencyKey, envelope }) {
+    const run = this.state.getDiscoveryRun(discoveryRunId);
+    if (!run || run.status !== "running") throw new ControlPlaneError("DISCOVERY_RUN_NOT_ACTIVE", "DiscoveryRun is not running", { status: 409 });
+    return this.state.reserveDiscoveryPrimitiveStorage({
+      discoveryRunId,
+      tuple,
+      token,
+      primitive,
+      idempotencyKey,
+      payloadHash: fingerprint({ primitive, envelope }),
+      gates: this.gates(),
+    });
+  }
+
+  ingestDiscoveryObservation(input) {
+    return this.state.ingestDiscoveryObservation({ ...input, gates: this.gates() });
   }
 
   getDiscoveryRun(discoveryRunId) {

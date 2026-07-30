@@ -137,6 +137,7 @@ export class ControlPlane {
     missionAutoApprovalEnabled = process.env.MISSION_AUTO_APPROVAL_ENABLED === "1",
     standingGrantEnabled = process.env.STANDING_GRANT_ENABLED === "1",
     discoveryIssuerReady = false,
+    discoveryProducer = null,
     adrAccepted = null,
     adrPath = DEFAULT_ADR_0008_PATH,
     discoveryAdrAccepted = null,
@@ -169,6 +170,7 @@ export class ControlPlane {
       leaseHeartbeatMs,
     });
     this.firewall = new EffectFirewall();
+    this.discoveryProducer = typeof discoveryProducer === "function" ? discoveryProducer : null;
     this.effectLedger = new EffectLedger({ state });
     this.acquireTransportLock = typeof acquireTransportLock === "function"
       ? acquireTransportLock
@@ -255,6 +257,37 @@ export class ControlPlane {
 
   getDiscoveryRun(discoveryRunId) {
     return this.discoverySessions.getDiscoveryRun(discoveryRunId);
+  }
+
+  executeDiscoveryPrimitive(input) {
+    const verdict = this.firewall.classifyDiscovery(input?.envelope);
+    if (verdict.decision !== "auto") {
+      throw new ControlPlaneError(verdict.code, "Discovery primitive blocked by observed surface", { status: 409, details: { reason: verdict.reason } });
+    }
+    const reservation = this.discoverySessions.executeDiscoveryPrimitive(input);
+    // Reservation is committed before this isolated R0 producer is invoked. A replay never
+    // reaches the producer again, so a crash leaves a durable intent rather than a duplicate.
+    if (reservation.reused || !this.discoveryProducer) return reservation;
+    const evidence = this.discoveryProducer({
+      discoveryRunId: reservation.discoveryRunId,
+      reservationId: reservation.reservationId,
+      primitive: reservation.primitive,
+      tuple: input.tuple,
+    });
+    if (evidence && typeof evidence.then === "function") {
+      throw new ControlPlaneError("DISCOVERY_PRODUCER_ASYNC_UNSUPPORTED", "Discovery producer must not outlive its fenced call", { status: 500 });
+    }
+    return evidence && typeof evidence === "object" ? { ...reservation, ...evidence } : reservation;
+  }
+
+  // Deliberately internal-only: no router or devicectl endpoint calls this path. The
+  // evidence index is consulted here, before StateStore accepts any purported lineage.
+  ingestDiscoveryObservation(input) {
+    if (!this.evidence || typeof this.evidence.findByIdAndHash !== "function") {
+      throw new ControlPlaneError("DISCOVERY_EVIDENCE_UNAVAILABLE", "Discovery observation ingestion needs the evidence index", { status: 503 });
+    }
+    this.evidence.findByIdAndHash(input?.evidenceId, input?.evidenceHash);
+    return this.discoverySessions.ingestDiscoveryObservation(input);
   }
 
   markControlLost(deviceRunId, input) {
@@ -1271,6 +1304,9 @@ export class ControlPlane {
     params = {},
   }) {
     const session = this.state.validateSession(sessionId, token);
+    if (this.state.getDiscoveryRunForSession(sessionId)) {
+      throw new ControlPlaneError("DISCOVERY_SESSION_EXCLUSIVE", "Discovery-owned sessions only accept the fenced Discovery primitive path", { status: 403 });
+    }
     if (session.scopeCapabilityId && session.scopeCapabilityId !== capabilityId) {
       throw new ControlPlaneError(
         "SESSION_CAPABILITY_MISMATCH",

@@ -95,6 +95,13 @@ export class EvidenceStore {
     return JSON.parse(readFileSync(path, "utf8"));
   }
 
+  findByIdAndHash(evidenceId, sha256) {
+    const record = this.state.getEvidenceRecord(evidenceId);
+    if (!record) throw new ControlPlaneError("EVIDENCE_NOT_FOUND", "evidence record is absent", { status: 404 });
+    if (record.sha256 !== sha256) throw new ControlPlaneError("EVIDENCE_HASH_MISMATCH", "evidence hash does not match", { status: 409 });
+    return record;
+  }
+
   initializeRun({ job, device, gitCommit = process.env.CONTROL_PLANE_GIT_COMMIT || "unknown" }) {
     this.assertCapacity({ externalEffect: job.externalEffect });
     const directory = this.runDirectory(job.runId);
@@ -193,6 +200,30 @@ export class EvidenceStore {
     });
     this.#refreshManifest(job.runId);
     return record;
+  }
+
+  // Discovery has no generic Capability job: its immutable reservation is the only
+  // source-job authority. Keep its evidence in the private run tree and never return a path.
+  writeDiscoveryJson({ discoveryRunId, sourceJobId, kind, label, value }) {
+    if (typeof discoveryRunId !== "string" || typeof sourceJobId !== "string") {
+      throw new ControlPlaneError("DISCOVERY_EVIDENCE_INPUT_INVALID", "Discovery evidence requires its run and reservation", { status: 400 });
+    }
+    const safeLabel = String(label).replace(/[^A-Za-z0-9._-]+/g, "_");
+    const content = `${canonicalJson(redactRuntimeData(value))}\n`;
+    const hash = createHash("sha256").update(content).digest("hex");
+    const relativePath = join("evidence", `${safeLabel}-${hash.slice(0, 12)}.json`);
+    const directory = this.runDirectory(discoveryRunId);
+    mkdirSync(join(directory, "evidence"), { recursive: true });
+    writeFileSync(join(directory, relativePath), content, { mode: 0o600 });
+    const record = this.state.recordEvidence({
+      jobId: null,
+      runId: discoveryRunId,
+      kind,
+      path: relativePath,
+      sha256: hash,
+      bytes: Buffer.byteLength(content),
+    });
+    return this.findByIdAndHash(record.evidenceId, record.sha256);
   }
 
   #refreshManifest(runId) {

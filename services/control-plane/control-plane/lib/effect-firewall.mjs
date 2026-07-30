@@ -123,6 +123,19 @@ export class EffectFirewall {
     const code = mapEffectCode(surface, effect.decision);
     return { code, decision: effect.decision, surface, reason: effect.reason, risk, ...(action ? { effectAction: action } : {}) };
   }
+
+  // Pre-Mission Discovery is a no-effect R0 producer. It never inherits Mission ECP/PHC
+  // decisions: only a fresh observed navigation/observation surface may reach the adapter.
+  classifyDiscovery(input) {
+    const surface = input?.snapshot?.surface;
+    if (!REVERSIBLE_SURFACES.has(surface)) {
+      return { code: "DISCOVERY_SURFACE_BLOCKED", decision: "blocked", surface, reason: "DISCOVERY_R0_ONLY" };
+    }
+    const verdict = this.classify(input, { scope: {}, policy: {}, validity: {}, status: "active" });
+    return verdict.decision === "auto"
+      ? verdict
+      : { ...verdict, code: "DISCOVERY_SURFACE_BLOCKED", decision: "blocked" };
+  }
 }
 
 function mapEffectCode(surface, decision) {

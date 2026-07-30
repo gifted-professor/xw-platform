@@ -123,6 +123,22 @@ test("Effect Firewall classifies reversible, social, payment, and stop surfaces"
   assert.equal(firewall.classify({ declaredIntent: "tap", snapshot: freshSurface("social-effect", { effectAction: "follow" }), observedTargetFingerprint: "other" }, mission).code, "SCOPE_VIOLATION");
 });
 
+test("Discovery Firewall is strictly observed-surface R0 and never falls through to Mission decisions", () => {
+  const firewall = new EffectFirewall();
+  for (const surface of ["social-effect", "publish", "delete", "payment", "profile", "settings", "unknown", "risk-control", "login", "captcha"]) {
+    assert.equal(
+      firewall.classifyDiscovery({ declaredIntent: "screenshot", snapshot: freshSurface(surface) }).decision,
+      "blocked",
+      surface,
+    );
+  }
+  assert.equal(
+    firewall.classifyDiscovery({ declaredIntent: "screenshot", declaredTarget: "agent", observedTargetFingerprint: "parser", snapshot: freshSurface("observation") }).decision,
+    "blocked",
+  );
+  assert.equal(firewall.classifyDiscovery({ declaredIntent: "screenshot", snapshot: freshSurface("observation") }).decision, "auto");
+});
+
 test("Explorer reversible primitives validate the tuple, take the transport lock, and record a primitive event", async () => {
   let lockAcquired = 0;
   const release = () => { lockAcquired -= 1; };
