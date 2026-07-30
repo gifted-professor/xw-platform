@@ -504,7 +504,12 @@ export class FastOperator {
   // launcher primitive. Deep XHS pages use the existing bounded Back recovery;
   // desktop/stopped-app states use Android's package launcher and verify focus.
   async ensureXhsFeed() {
-    const initial = await this.currentFocus();
+    let initial;
+    try {
+      initial = await this.currentFocus();
+    } catch (error) {
+      return operatorNotSent("xhsFocusUnavailable", "XHS_FOCUS_FAILED", error, this.serial);
+    }
     if (initial.package === "com.xingin.xhs" && (initial.activity || "").includes("IndexActivity")) {
       return { ok: true, activity: initial.activity, launched: false };
     }
@@ -514,10 +519,22 @@ export class FastOperator {
         return { ok: true, activity: back.activity, launched: false, back };
       }
     }
-    await this.session.exec("monkey -p com.xingin.xhs -c android.intent.category.LAUNCHER 1", 12000);
+    try {
+      await this.session.exec("monkey -p com.xingin.xhs -c android.intent.category.LAUNCHER 1", 12000);
+    } catch (error) {
+      return operatorNotSent("xhsLaunchFailed", "XHS_LAUNCH_FAILED", error, this.serial);
+    }
     for (let attempt = 0; attempt < 6; attempt += 1) {
       if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 500));
-      const focus = await this.currentFocus();
+      let focus;
+      try {
+        focus = await this.currentFocus();
+      } catch (error) {
+        if (attempt === 5) {
+          return operatorNotSent("xhsFocusAfterLaunchFailed", "XHS_FOCUS_FAILED", error, this.serial);
+        }
+        continue;
+      }
       if (focus.package === "com.xingin.xhs" && (focus.activity || "").includes("IndexActivity")) {
         return { ok: true, activity: focus.activity, launched: true };
       }
@@ -1481,6 +1498,31 @@ function arg(name, fallback) {
   return i >= 0 ? process.argv[i + 1] : fallback;
 }
 
+function safeOperatorMessage(value, runtimeId = "") {
+  let message = String(value || "operator request failed")
+    .replace(/[\r\n\t]+/g, " ");
+  if (runtimeId) message = message.split(String(runtimeId)).join("[runtime]");
+  message = message
+    .replace(/\bBearer\s+[^\s,;]+/gi, "Bearer [redacted]")
+    .replace(/\b(token|secret|password|authorization)\s*[:=]\s*[^\s,;]+/gi, "$1=[redacted]");
+  return message.slice(0, 240);
+}
+
+function safeOperatorCode(value, fallback = "OPERATOR_ERROR") {
+  const code = String(value || fallback).toUpperCase();
+  return /^[A-Z][A-Z0-9_]{0,63}$/.test(code) ? code : fallback;
+}
+
+function operatorNotSent(step, errorCode, error, runtimeId) {
+  return {
+    ok: false,
+    notSent: true,
+    step,
+    errorCode,
+    message: safeOperatorMessage(error?.message, runtimeId),
+  };
+}
+
 async function demoScroll(N) {
   const bypassReason = String(process.env.XHS_BYPASS_REASON || "").trim();
   if (process.env.XHS_ALLOW_BYPASS !== "1" || !bypassReason) {
@@ -1588,6 +1630,7 @@ export function serve(port, options = {}) {
   // touch the device as a side effect of metrics/error reporting.
   let opP = null;
   const authorize = options.authorize ?? authorizeServeRequest;
+  const errorLogger = options.errorLogger ?? ((entry) => console.error(JSON.stringify({ ...entry, at: new Date().toISOString() })));
   const operatorFactory = options.operatorFactory
     ?? (() => applyCommentFlags(new FastOperator({ adbPath: adb, serial }).start()));
   const getOp = () => {
@@ -1740,8 +1783,21 @@ export function serve(port, options = {}) {
     } catch (e) {
       let metrics = {};
       try { metrics = op?.metricsSummary?.() || {}; } catch {}
+      const step = typeof e?.step === "string" && e.step ? e.step : String(q?.action || "request").slice(0, 80);
+      const diagnostic = {
+        event: "fast-operator.request-error",
+        action: String(q?.action || "unknown").slice(0, 80),
+        step,
+        errorCode: safeOperatorCode(e?.code),
+        message: safeOperatorMessage(e?.message, serial),
+      };
+      try { errorLogger(diagnostic); } catch {}
       res.writeHead(e?.status || 500, { "content-type": "application/json" });
-      res.end(JSON.stringify({ ok: false, error: { code: e?.code || "OPERATOR_ERROR", message: e.message }, metrics }));
+      res.end(JSON.stringify({
+        ok: false,
+        error: { code: diagnostic.errorCode, step: diagnostic.step, message: diagnostic.message },
+        metrics,
+      }));
     }
   });
   server.listen(port, "127.0.0.1", () => console.log(JSON.stringify({ phase: "serving", port, serial })));

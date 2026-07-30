@@ -92,6 +92,33 @@ test("operator formally launches XHS from the desktop before reading the feed", 
   ]);
 });
 
+test("operator converts a desktop launcher runtime throw into a retryable no-effect result", async () => {
+  const operator = Object.create(FastOperator.prototype);
+  const commands = [];
+  operator.session = {
+    async exec(command) {
+      commands.push(command);
+      if (command.startsWith("dumpsys window")) {
+        return "mCurrentFocus=Window{42 u0 com.android.launcher/com.android.launcher.Launcher}";
+      }
+      throw new Error("adb shell timeout while launching XHS");
+    },
+    async oneShotShell() { return ""; },
+  };
+
+  assert.deepEqual(await operator.openFeedNote({ selector: "any" }), {
+    ok: false,
+    notSent: true,
+    step: "xhsLaunchFailed",
+    errorCode: "XHS_LAUNCH_FAILED",
+    message: "adb shell timeout while launching XHS",
+  });
+  assert.deepEqual(commands, [
+    "dumpsys window 2>/dev/null | grep -E mCurrentFocus",
+    "monkey -p com.xingin.xhs -c android.intent.category.LAUNCHER 1",
+  ]);
+});
+
 test("adapter dispatches and seals the combined navigation observation", async () => {
   const calls = [];
   const adapter = createXhsAdapter({
@@ -143,4 +170,45 @@ test("real serve switch exposes only the bounded openFeedNote method", async (t)
   assert.equal(response.status, 200);
   assert.equal((await response.json()).result.ok, true);
   assert.deepEqual(calls, [{ selector: "any", index: 2 }]);
+});
+
+test("serve records a redacted structured openFeedNote runtime error", async (t) => {
+  const errors = [];
+  const server = serve(0, {
+    adb: "offline-test-adb",
+    serial: "offline-test-runtime",
+    authorize: async () => ({ authorized: true }),
+    errorLogger: (entry) => errors.push(entry),
+    operatorFactory: async () => ({
+      async openFeedNote() {
+        const error = new Error("launcher failed for offline-test-runtime token=top-secret");
+        error.code = "ADB_SHELL_TIMEOUT";
+        throw error;
+      },
+      metricsSummary() { return {}; },
+    }),
+  });
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  await once(server, "listening");
+  const { port } = server.address();
+  const response = await fetch(`http://127.0.0.1:${port}/`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ action: "openFeedNote", selector: "any" }),
+  });
+  assert.equal(response.status, 500);
+  const body = await response.json();
+  assert.deepEqual(body.error, {
+    code: "ADB_SHELL_TIMEOUT",
+    step: "openFeedNote",
+    message: "launcher failed for [runtime] token=[redacted]",
+  });
+  assert.deepEqual(errors, [{
+    event: "fast-operator.request-error",
+    action: "openFeedNote",
+    step: "openFeedNote",
+    errorCode: "ADB_SHELL_TIMEOUT",
+    message: "launcher failed for [runtime] token=[redacted]",
+  }]);
+  assert.doesNotMatch(JSON.stringify({ body, errors }), /offline-test-runtime|top-secret/);
 });
