@@ -66,6 +66,24 @@ test("note-detail producer derives the target only from the resumed activity int
   assert.equal("noteId" in first, false, "raw note identity must not leave the device parser");
 });
 
+test("note-detail producer normalizes a short focused activity before matching Hist #0", async () => {
+  const operator = Object.create(FastOperator.prototype);
+  operator.currentFocus = async () => ({
+    package: "com.xingin.xhs",
+    activity: ".note.NoteDetailActivity",
+  });
+  operator.session = {
+    exec: async () => `
+      * Hist #0: ActivityRecord{top com.xingin.xhs/.note.NoteDetailActivity}
+        Intent { act=android.intent.action.VIEW dat=xhsdiscover://item/64f0123456789abcdef01234 }
+    `,
+  };
+  const result = await operator.observeOpenNoteDetail();
+  assert.equal(result.ok, true);
+  assert.match(result.pageFingerprint, /^[a-f0-9]{64}$/);
+  assert.match(result.targetFingerprint, /^[a-f0-9]{64}$/);
+});
+
 test("note-detail producer fails closed when the top activity has no stable note locator", async () => {
   const operator = Object.create(FastOperator.prototype);
   const diagnostics = [];
@@ -126,7 +144,7 @@ test("note-detail producer ignores a stable locator retained only by an older hi
   const operator = Object.create(FastOperator.prototype);
   operator.currentFocus = async () => ({
     package: "com.xingin.xhs",
-    activity: "com.xingin.xhs.note.NoteDetailActivity",
+    activity: ".note.NoteDetailActivity",
   });
   operator.session = {
     exec: async () => `
@@ -153,6 +171,24 @@ test("note-detail producer ignores a stable locator retained only by an older hi
       generic24Count: 0,
     },
   });
+});
+
+test("note-detail producer never matches a different terminal detail activity", async () => {
+  const operator = Object.create(FastOperator.prototype);
+  operator.currentFocus = async () => ({
+    package: "com.xingin.xhs",
+    activity: ".note.NoteDetailActivity",
+  });
+  operator.session = {
+    exec: async () => `
+      * Hist #0: ActivityRecord{top com.xingin.xhs/.note.DetailFeedActivity}
+        Intent { act=android.intent.action.VIEW dat=xhsdiscover://item/64f0123456789abcdef01234 }
+    `,
+  };
+  const result = await operator.observeOpenNoteDetail();
+  assert.equal(result.ok, false);
+  assert.equal(result.step, "stableNoteLocatorUnavailable");
+  assert.equal(result.locatorShape.currentBlockFound, false);
 });
 
 test("XHS adapter exposes only a sealed note-detail receipt from a succeeded source job", () => {

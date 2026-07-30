@@ -331,7 +331,10 @@ export class FastOperator {
       if (!parsed) return null;
       return parsed[1].startsWith(".") ? `com.xingin.xhs${parsed[1]}` : parsed[1];
     };
-    const isCurrentActivity = (line) => normalizedActivity(line) === focus.activity;
+    const normalizedFocusActivity = String(focus.activity || "").startsWith(".")
+      ? `${focus.package}${focus.activity}`
+      : focus.activity;
+    const isCurrentActivity = (line) => normalizedActivity(line) === normalizedFocusActivity;
     let start = lines.findIndex((line) => /\bHist #0:/.test(line) && isCurrentActivity(line));
     if (start < 0) start = lines.findIndex((line) => /^\s*ACTIVITY\s/.test(line) && isCurrentActivity(line));
     const allowedActivity = /NoteDetailActivity$/.test(focus.activity || "")
