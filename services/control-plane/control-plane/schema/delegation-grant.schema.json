@@ -3,13 +3,102 @@
   "title": "Standing Grant v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "grantId", "issuanceNonce", "issuer", "app", "accountFingerprint", "controllers", "maxParallelism", "authorization", "targets", "budget", "validity", "redaction"],
+  "required": ["schemaVersion", "grantId", "issuanceNonce", "issuer", "app", "accountFingerprint", "controllers", "maxParallelism", "authorization", "targets", "budget", "discoveryPolicy", "validity", "redaction"],
   "properties": {
     "schemaVersion": { "const": 1 },
     "grantId": { "type": "string", "minLength": 1 },
     "issuanceNonce": { "type": "string", "minLength": 1 },
     "issuer": { "type": "object", "additionalProperties": false, "required": ["subject", "keyId"], "properties": { "subject": { "const": "user:a1234" }, "keyId": { "type": "string", "minLength": 1 } } },
     "maxParallelism": { "const": 1 },
+    "discoveryPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "allowedPrimitives", "defaults", "maxima", "maxParallelism", "targetScope", "identityPolicy", "clocks", "retention", "accessPolicy"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "allowedPrimitives": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "enum": ["screenshot", "dump", "focus", "launch", "back", "home", "tap", "swipe", "input", "restore"] }
+        },
+        "defaults": { "$ref": "#/$defs/discoveryLimits" },
+        "maxima": { "$ref": "#/$defs/discoveryLimits" },
+        "maxParallelism": { "const": 1 },
+        "targetScope": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["anchors", "relationKinds", "maxHops"],
+          "properties": {
+            "anchors": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["type", "hash"],
+                "properties": {
+                  "type": { "enum": ["searchQueryHash", "seedIdentityFingerprint", "contentContextHash", "identityFingerprint"] },
+                  "hash": { "type": "string", "pattern": "^[0-9a-fA-F]{64}$" }
+                }
+              }
+            },
+            "relationKinds": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "enum": ["search_result", "seed_profile_relation", "content_author", "content_mentioned_profile", "explicit_target"] } },
+            "maxHops": { "const": 1 }
+          }
+        },
+        "identityPolicy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["stableUserId", "fallback", "onAmbiguity"],
+          "properties": {
+            "stableUserId": { "const": "preferred" },
+            "fallback": { "const": "exact_nickname_avatar_profile_fingerprint" },
+            "onAmbiguity": { "const": "stop" }
+          }
+        },
+        "clocks": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["snapshotFreshnessMs", "observationCompileWindowMs"],
+          "properties": {
+            "snapshotFreshnessMs": { "const": 5000 },
+            "observationCompileWindowMs": { "const": 60000 }
+          }
+        },
+        "retention": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["rawScreenshotDays", "redactedHashAuditDays"],
+          "properties": {
+            "rawScreenshotDays": { "const": 7 },
+            "redactedHashAuditDays": { "const": 90 }
+          }
+        },
+        "accessPolicy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ownerSubjectHash", "reviewerAllowlistVersion"],
+          "properties": {
+            "ownerSubjectHash": { "type": "string", "pattern": "^[0-9a-fA-F]{64}$" },
+            "reviewerAllowlistVersion": { "type": "integer", "minimum": 1 }
+          }
+        }
+      }
+    },
     "validity": { "type": "object", "additionalProperties": false, "required": ["expiresAt"], "properties": { "expiresAt": { "type": ["string", "null"] } } }
+  },
+  "$defs": {
+    "discoveryLimits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["durationMs", "maxPrimitives", "maxCandidates"],
+      "properties": {
+        "durationMs": { "type": "integer", "minimum": 1, "maximum": 1800000 },
+        "maxPrimitives": { "type": "integer", "minimum": 1, "maximum": 300 },
+        "maxCandidates": { "type": "integer", "minimum": 1, "maximum": 50 }
+      }
+    }
   }
 }

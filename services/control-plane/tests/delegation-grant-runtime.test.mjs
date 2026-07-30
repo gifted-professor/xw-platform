@@ -10,7 +10,7 @@ import { DelegationGrantRuntime } from "../control-plane/lib/delegation-grant-ru
 import { TrustedHumanIssuer } from "../control-plane/lib/trusted-human-issuer.mjs";
 import { StateStore } from "../control-plane/lib/state-store.mjs";
 
-function draft() { return { schemaVersion: 1, grantId: "grant_test_001", issuanceNonce: "nonce_test_001", issuer: { subject: "user:a1234", keyId: "test-key" }, app: "xhs", accountFingerprint: "account-fingerprint", controllers: ["agent:runner"], maxParallelism: 1, authorization: { primitives: ["screenshot"], socialActions: ["collect"], missionOnlyActions: [], prohibitedActions: ["payment", "publish"] }, targets: { mode: "verified_discovery" }, budget: { maxima: { totalCount: 2, perTargetCount: 1, frequency: { count: 1, windowSeconds: 3600 } }, defaults: { totalCount: 1, perTargetCount: 1, frequency: { count: 1, windowSeconds: 3600 } } }, validity: { expiresAt: null }, redaction: { publicFields: ["alias"] } }; }
+function draft() { return { schemaVersion: 1, grantId: "grant_test_001", issuanceNonce: "nonce_test_001", issuer: { subject: "user:a1234", keyId: "test-key" }, app: "xhs", accountFingerprint: "account-fingerprint", controllers: ["agent:runner"], maxParallelism: 1, authorization: { primitives: ["screenshot"], socialActions: ["collect"], missionOnlyActions: [], prohibitedActions: ["payment", "publish"] }, targets: { mode: "verified_discovery" }, budget: { maxima: { totalCount: 2, perTargetCount: 1, frequency: { count: 1, windowSeconds: 3600 } }, defaults: { totalCount: 1, perTargetCount: 1, frequency: { count: 1, windowSeconds: 3600 } } }, discoveryPolicy: { enabled: true, allowedPrimitives: ["screenshot"], defaults: { durationMs: 600000, maxPrimitives: 80, maxCandidates: 10 }, maxima: { durationMs: 1800000, maxPrimitives: 300, maxCandidates: 50 }, maxParallelism: 1, targetScope: { anchors: [{ type: "searchQueryHash", hash: "a".repeat(64) }], relationKinds: ["search_result"], maxHops: 1 }, identityPolicy: { stableUserId: "preferred", fallback: "exact_nickname_avatar_profile_fingerprint", onAmbiguity: "stop" }, clocks: { snapshotFreshnessMs: 5000, observationCompileWindowMs: 60000 }, retention: { rawScreenshotDays: 7, redactedHashAuditDays: 90 }, accessPolicy: { ownerSubjectHash: "d".repeat(64), reviewerAllowlistVersion: 1 } }, validity: { expiresAt: null }, redaction: { publicFields: ["alias"] } }; }
 
 function signedProof({ grant, privateKey, keyId = "test-key", allowlistVersion = 1 }) {
   const grantHash = delegationGrantContentHash(grant);
@@ -31,6 +31,22 @@ test("verified issue is durable, idempotent, and rejects nonce replay", () => {
     const replay = { ...grant, grantId: "grant_test_002" };
     assert.throws(() => runtime.issue({ grant: replay, proof: signedProof({ grant: replay, privateKey }) }), { code: "ISSUANCE_NONCE_REPLAY" });
     assert.equal(state.getDelegationGrant(grant.grantId).status, "active");
+  } finally { state.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test("DiscoveryPolicy is proof-bound and policy widening writes no grant rows", () => {
+  const root = mkdtempSync(join(tmpdir(), "grant-runtime-"));
+  const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+  const state = new StateStore({ dbPath: join(root, "control.db") });
+  try {
+    const grant = draft();
+    const runtime = new DelegationGrantRuntime({ state, issuer: new TrustedHumanIssuer({ allowlist: { version: 1, keys: [{ keyId: "test-key", subject: "user:a1234", publicKey: publicKey.export({ type: "spki", format: "pem" }), status: "active" }] } }) });
+    const proof = signedProof({ grant, privateKey });
+    const widened = { ...grant, discoveryPolicy: { ...grant.discoveryPolicy, maxima: { ...grant.discoveryPolicy.maxima, maxPrimitives: 301 } } };
+    assert.throws(() => runtime.issue({ grant: widened, proof }), { code: "GRANT_POLICY_INVALID" });
+    assert.equal(state.listDelegationGrants().length, 0);
+    runtime.issue({ grant, proof });
+    assert.equal(state.getDelegationGrant(grant.grantId).grantHash, delegationGrantContentHash(grant));
   } finally { state.close(); rmSync(root, { recursive: true, force: true }); }
 });
 
