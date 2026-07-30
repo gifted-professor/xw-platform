@@ -1573,7 +1573,7 @@ export class StateStore {
     return this.db.prepare("SELECT * FROM delegation_grants ORDER BY created_at").all().map((row) => this.#publicDelegationGrant(row));
   }
 
-  revokeDelegationGrant(grantId, { reason = "issuer_revoked", revocationNonce = null, proofHash = null } = {}) {
+  revokeDelegationGrant(grantId, { reason = "issuer_revoked", actor = null } = {}) {
     const now = this.now();
     return this.transaction(() => {
       const row = this.db.prepare("SELECT * FROM delegation_grants WHERE grant_id=?").get(grantId);
@@ -1581,7 +1581,7 @@ export class StateStore {
       if (row.status === "revoked") return this.#publicDelegationGrant(row);
       this.db.prepare("UPDATE delegation_grants SET status='revoked', updated_at=?, revoked_at=?, revoked_reason=? WHERE grant_id=?")
         .run(now, now, reason, grantId);
-      this.#insertDelegationGrantEvent({ grantId, type: "delegation_grant.revoked", payload: { reason, revocationNonce, proofHash }, createdAt: now });
+      this.#insertDelegationGrantEvent({ grantId, type: "delegation_grant.revoked", payload: { reason, actor }, createdAt: now });
       // Revocation is a durable fence, not merely a future-create denial.  A child Mission
       // cannot retain an owned tuple or a retryable effect once its parent is no longer live.
       const children = this.db.prepare("SELECT * FROM missions WHERE parent_grant_id=? AND status='active'").all(grantId);
@@ -1640,7 +1640,7 @@ export class StateStore {
       const byKey = this.db.prepare("SELECT * FROM standing_grant_canaries WHERE idempotency_key=?").get(idempotencyKey);
       if (byKey) return { reused: true, marker: { ...byKey } };
       const existing = this.db.prepare("SELECT * FROM standing_grant_canaries LIMIT 1").get();
-      if (existing) throw new ControlPlaneError("CANARY_ALREADY_RESERVED", "the one-time Standing Grant collect canary has already been reserved", { status: 409 });
+      if (existing) throw new ControlPlaneError("CANARY_ALREADY_COMPLETED", "the canary-only first collect has already been attempted", { status: 409 });
       const marker = "standing_grant.first_collect";
       this.db.prepare("INSERT INTO standing_grant_canaries (marker,idempotency_key,grant_id,source_job_id,status,created_at,updated_at) VALUES (?,?,?,?,\'reserved\',?,?)")
         .run(marker, idempotencyKey, grantId, sourceJobId, now, now);
@@ -1676,6 +1676,20 @@ export class StateStore {
 
   getStandingGrantCanary() {
     return this.db.prepare("SELECT * FROM standing_grant_canaries WHERE marker=\'standing_grant.first_collect\'").get() || null;
+  }
+
+  clearStandingGrantCanary({ actor, reason } = {}) {
+    if (typeof actor !== "string" || actor.trim() === "" || typeof reason !== "string" || reason.trim() === "") {
+      throw new ControlPlaneError("CANARY_CLEAR_INVALID", "canary clear actor and reason are required", { status: 400 });
+    }
+    return this.transaction(() => {
+      const row = this.db.prepare("SELECT * FROM standing_grant_canaries WHERE marker='standing_grant.first_collect'").get();
+      if (!row) return { cleared: false };
+      if (!row.finished_at) throw new ControlPlaneError("CANARY_CLEAR_INVALID", "an in-flight canary marker cannot be cleared", { status: 409 });
+      this.db.prepare("DELETE FROM standing_grant_canaries WHERE marker='standing_grant.first_collect'").run();
+      this.appendEvent({ type: "standing_grant.canary.cleared", payload: { actor: actor.trim(), reason: reason.trim(), previousStatus: row.status } });
+      return { cleared: true };
+    });
   }
 
   // There is deliberately no public router/API writer for this table. The control-plane's

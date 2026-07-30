@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { canonicalGrantIssueSigningBytes, canonicalGrantRevokeSigningBytes, delegationGrantContentHash, grantRevokeSigningPayload } from "../control-plane/lib/delegation-grant-policy.mjs";
+import { canonicalGrantIssueSigningBytes, delegationGrantContentHash } from "../control-plane/lib/delegation-grant-policy.mjs";
 import { DelegationGrantRuntime } from "../control-plane/lib/delegation-grant-runtime.mjs";
 import { TrustedHumanIssuer } from "../control-plane/lib/trusted-human-issuer.mjs";
 import { StateStore } from "../control-plane/lib/state-store.mjs";
@@ -18,10 +18,6 @@ function signedProof({ grant, privateKey, keyId = "test-key", allowlistVersion =
   return { keyId, allowlistVersion, signature: sign(null, Buffer.from(canonicalGrantIssueSigningBytes(payload)), privateKey).toString("base64") };
 }
 
-function signedRevokeProof({ grant, privateKey, revocationNonce, reason, keyId = "test-key", allowlistVersion = 1 }) {
-  const payload = grantRevokeSigningPayload({ subject: "user:a1234", grantId: grant.grantId, grantHash: delegationGrantContentHash(grant), revocationNonce, allowlistVersion, reason });
-  return { keyId, allowlistVersion, signature: sign(null, Buffer.from(canonicalGrantRevokeSigningBytes(payload)), privateKey).toString("base64") };
-}
 
 test("verified issue is durable, idempotent, and rejects nonce replay", () => {
   const root = mkdtempSync(join(tmpdir(), "grant-runtime-"));
@@ -100,7 +96,7 @@ test("proof failures write no rows, revoked grants remain revoked, and key recon
   } finally { try { state.close(); } catch {} rmSync(root, { recursive: true, force: true }); }
 });
 
-test("formal revocation requires an offline signature and audits its nonce and proof hash", () => {
+test("formal revocation uses the existing trusted runtime and audits actor and reason without a second signing protocol", () => {
   const root = mkdtempSync(join(tmpdir(), "grant-runtime-revoke-"));
   const { privateKey, publicKey } = generateKeyPairSync("ed25519");
   const state = new StateStore({ dbPath: join(root, "control.db") });
@@ -108,15 +104,11 @@ test("formal revocation requires an offline signature and audits its nonce and p
     const grant = draft();
     const runtime = new DelegationGrantRuntime({ state, issuer: new TrustedHumanIssuer({ allowlist: { version: 1, keys: [{ keyId: "test-key", subject: "user:a1234", publicKey: publicKey.export({ type: "spki", format: "pem" }), status: "active" }] } }) });
     runtime.issue({ grant, proof: signedProof({ grant, privateKey }) });
-    const ceremony = runtime.prepareRevoke(grant.grantId, { revocationNonce: "revoke-once-001", reason: "canary_complete", allowlistVersion: 1 });
-    assert.equal(Buffer.from(ceremony.signingBytesBase64, "base64").toString("utf8"), canonicalGrantRevokeSigningBytes(grantRevokeSigningPayload({ subject: "user:a1234", grantId: grant.grantId, grantHash: delegationGrantContentHash(grant), revocationNonce: "revoke-once-001", allowlistVersion: 1, reason: "canary_complete" })));
-    const input = { revocationNonce: "revoke-once-001", reason: "canary_complete", proof: signedRevokeProof({ grant, privateKey, revocationNonce: "revoke-once-001", reason: "canary_complete" }) };
-    assert.throws(() => runtime.revoke(grant.grantId, { ...input, proof: { ...input.proof, signature: "forged" } }), { code: "GRANT_PROOF_INVALID" });
-    assert.equal(state.getDelegationGrant(grant.grantId).status, "active");
-    assert.equal(runtime.revoke(grant.grantId, input).status, "revoked");
+    assert.throws(() => runtime.revoke(grant.grantId, { actor: "", reason: "canary_complete" }), { code: "GRANT_REVOKE_INVALID" });
+    assert.equal(runtime.revoke(grant.grantId, { actor: "reviewer:test", reason: "canary_complete" }).status, "revoked");
     const event = state.listDelegationGrantEvents(grant.grantId).at(-1);
     assert.equal(event.type, "delegation_grant.revoked");
-    assert.equal(event.payload.revocationNonce, "revoke-once-001");
-    assert.match(event.payload.proofHash, /^[a-f0-9]{64}$/);
+    assert.equal(event.payload.actor, "reviewer:test");
+    assert.equal(event.payload.reason, "canary_complete");
   } finally { state.close(); rmSync(root, { recursive: true, force: true }); }
 });

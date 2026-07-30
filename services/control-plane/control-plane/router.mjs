@@ -106,12 +106,13 @@ function publicGrantView(grant) {
 }
 
 export class ControlRouter {
-  constructor({ control, state, capabilities, evidence, delegationGrants = null, nodeId = "DESKTOP-3I1EVHE" }) {
+  constructor({ control, state, capabilities, evidence, delegationGrants = null, canaryEvidenceAuthorizer = null, nodeId = "DESKTOP-3I1EVHE" }) {
     this.control = control;
     this.state = state;
     this.capabilities = capabilities;
     this.evidence = evidence;
     this.delegationGrants = delegationGrants;
+    this.canaryEvidenceAuthorizer = canaryEvidenceAuthorizer;
     this.nodeId = nodeId;
   }
 
@@ -153,9 +154,6 @@ export class ControlRouter {
       const result = this.delegationGrants.issue(requireBody(body));
       return { status: result.reused ? 200 : 201, body: { grant: publicGrantView(result.grant), reused: result.reused } };
     }
-    if (method === "POST" && path === "/control/v1/grants/prepare-explicit-target") {
-      return { status: 200, body: this.control.prepareExplicitTargetGrant(requireBody(body)) };
-    }
     if (method === "GET" && path === "/control/v1/grants") {
       const grants = this.delegationGrants ? this.delegationGrants.list() : this.state.listDelegationGrants();
       return { status: 200, body: { grants: grants.map(publicGrantView) } };
@@ -172,12 +170,6 @@ export class ControlRouter {
       if (!this.delegationGrants) throw new ControlPlaneError("STANDING_GRANT_ISSUER_UNAVAILABLE", "signed Standing Grant revocation is unavailable", { status: 503 });
       return { status: 200, body: { grant: publicGrantView(this.delegationGrants.revoke(decodeURIComponent(match[1]), requireBody(body))) } };
     }
-    match = path.match(/^\/control\/v1\/grants\/([^/]+)\/prepare-revoke$/);
-    if (method === "POST" && match) {
-      if (!this.delegationGrants) throw new ControlPlaneError("STANDING_GRANT_ISSUER_UNAVAILABLE", "signed Standing Grant revocation is unavailable", { status: 503 });
-      return { status: 200, body: this.delegationGrants.prepareRevoke(decodeURIComponent(match[1]), requireBody(body)) };
-    }
-
     if (method === "POST" && path === "/control/v1/leases/authorize") {
       const input = requireBody(body);
       const lease = this.state.authorizeLease({
@@ -216,6 +208,11 @@ export class ControlRouter {
     match = path.match(/^\/control\/v1\/runs\/([^/]+)\/evidence$/);
     if (method === "GET" && match) {
       const runId = decodeURIComponent(match[1]);
+      const marker = this.state.getStandingGrantCanary?.();
+      const canaryJob = marker?.collect_job_id ? this.state.getJob?.(marker.collect_job_id) : null;
+      if (canaryJob?.runId === runId && (!this.canaryEvidenceAuthorizer || !this.canaryEvidenceAuthorizer({ runId, headers }))) {
+        throw new ControlPlaneError("EVIDENCE_ACCESS_DENIED", "canary evidence requires server-authenticated owner or reviewer access", { status: 403 });
+      }
       return {
         status: 200,
         body: { manifest: this.evidence.getManifest(runId), evidence: this.state.listEvidence(runId) },

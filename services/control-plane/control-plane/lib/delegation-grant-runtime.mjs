@@ -1,9 +1,7 @@
 import {
   canonicalGrantIssueSigningBytes,
-  canonicalGrantRevokeSigningBytes,
   delegationGrantContentHash,
   grantIssueSigningPayload,
-  grantRevokeSigningPayload,
   validateDelegationGrantDraft,
 } from "./delegation-grant-policy.mjs";
 import { ControlPlaneError } from "./errors.mjs";
@@ -52,31 +50,13 @@ export class DelegationGrantRuntime {
     return grant;
   }
 
-  prepareRevoke(grantId, { revocationNonce, reason, allowlistVersion } = {}) {
+  revoke(grantId, { actor, reason } = {}) {
     const record = this.state.getDelegationGrantRecord(grantId);
     if (!record) throw new ControlPlaneError("GRANT_NOT_FOUND", `unknown delegation grant ${grantId}`, { status: 404 });
-    if (record.status !== "active") throw new ControlPlaneError("GRANT_REVOKED", "revoked delegation grants cannot start another ceremony", { status: 409 });
-    if (allowlistVersion !== this.issuer.allowlistVersion) throw new ControlPlaneError("GRANT_PROOF_INVALID", "revocation allowlist version is not current", { status: 403 });
-    const payload = grantRevokeSigningPayload({ subject: record.issuer.subject, grantId: record.grantId, grantHash: record.grantHash, revocationNonce, allowlistVersion, reason });
-    return { grantId: record.grantId, grantHash: record.grantHash, revocationNonce: payload.revocationNonce, reason: payload.reason, allowlistVersion, signingBytesBase64: Buffer.from(canonicalGrantRevokeSigningBytes(payload), "utf8").toString("base64") };
-  }
-
-  revoke(grantId, { revocationNonce, reason, proof } = {}) {
-    const record = this.state.getDelegationGrantRecord(grantId);
-    if (!record) throw new ControlPlaneError("GRANT_NOT_FOUND", `unknown delegation grant ${grantId}`, { status: 404 });
-    if (!proof || proof.keyId !== record.issuer.keyId || !Number.isInteger(proof.allowlistVersion)) {
-      throw new ControlPlaneError("GRANT_PROOF_INVALID", "signed issuer revocation proof is required", { status: 403 });
+    if (typeof actor !== "string" || actor.trim() === "" || typeof reason !== "string" || reason.trim() === "") {
+      throw new ControlPlaneError("GRANT_REVOKE_INVALID", "revocation actor and reason are required", { status: 400 });
     }
-    const payload = grantRevokeSigningPayload({
-      subject: record.issuer.subject,
-      grantId: record.grantId,
-      grantHash: record.grantHash,
-      revocationNonce,
-      allowlistVersion: proof.allowlistVersion,
-      reason,
-    });
-    const receipt = this.issuer.verifyRevoke({ payload, bytes: canonicalGrantRevokeSigningBytes(payload), proof });
-    return this.state.revokeDelegationGrant(grantId, { reason, revocationNonce, proofHash: receipt.proofHash });
+    return this.state.revokeDelegationGrant(grantId, { actor: actor.trim(), reason: reason.trim() });
   }
 
   reconcileIssuerKeys() {

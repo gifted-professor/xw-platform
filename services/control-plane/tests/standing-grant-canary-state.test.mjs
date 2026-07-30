@@ -7,7 +7,7 @@ import { join } from "node:path";
 
 import { StateStore } from "../control-plane/lib/state-store.mjs";
 
-test("one-time collect canary marker survives restart and blocks every retry after ambiguity", () => {
+test("one-time collect canary marker survives restart, blocks retry, and requires an audited clear", () => {
   const root = mkdtempSync(join(tmpdir(), "standing-grant-canary-"));
   const dbPath = join(root, "control.db");
   let state = new StateStore({ dbPath });
@@ -21,8 +21,12 @@ test("one-time collect canary marker survives restart and blocks every retry aft
     state.close();
     state = new StateStore({ dbPath });
     assert.equal(state.getStandingGrantCanary().status, "ambiguous");
-    assert.throws(() => state.reserveStandingGrantCanary({ idempotencyKey: "canary-2", grantId: "grant-1", sourceJobId: "observe-2" }), { code: "CANARY_ALREADY_RESERVED" });
+    assert.throws(() => state.reserveStandingGrantCanary({ idempotencyKey: "canary-2", grantId: "grant-1", sourceJobId: "observe-2" }), { code: "CANARY_ALREADY_COMPLETED" });
     assert.equal(state.reserveStandingGrantCanary({ idempotencyKey: "canary-1", grantId: "grant-1", sourceJobId: "observe-1" }).reused, true);
+    assert.equal(state.clearStandingGrantCanary({ actor: "reviewer:test", reason: "reviewed_ambiguous_outcome" }).cleared, true);
+    assert.equal(state.getStandingGrantCanary(), null);
+    assert.equal(state.reserveStandingGrantCanary({ idempotencyKey: "canary-2", grantId: "grant-1", sourceJobId: "observe-2" }).reused, false);
+    assert.equal(state.db.prepare("SELECT COUNT(*) AS count FROM events WHERE type='standing_grant.canary.cleared'").get().count, 1);
   } finally {
     try { state.close(); } catch {}
     rmSync(root, { recursive: true, force: true });

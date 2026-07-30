@@ -135,11 +135,9 @@ function help() {
   lab action --session ID --token TOKEN --action NAME --idempotency-key KEY [--data JSON]
   evidence show --run ID
   grant install --envelope JSON
-  grant prepare --job ID --receipt ID --draft JSON --allowlist-version N
   grant list
   grant show --grant ID
-  grant prepare-revoke --grant ID --revocation-nonce NONCE --reason TEXT --allowlist-version N
-  grant revoke --grant ID --envelope JSON
+  grant revoke --grant ID --actor ID --reason TEXT
   mission submit --actor ID --idempotency-key KEY --policy JSON [--controller ID | placement selectors]
   mission collect-canary --actor ID --idempotency-key KEY --grant ID --job ID --receipt ID [--controller ID]
   mission show --mission ID
@@ -275,29 +273,12 @@ export async function main(argv = process.argv.slice(2)) {
     result = await requestJson(baseUrl, "GET", `/control/v1/runs/${encodeURIComponent(requireOption(argv, "--run"))}/evidence`);
   } else if (group === "grant" && action === "install") {
     result = await requestJson(baseUrl, "POST", "/control/v1/grants", parseJsonOption(argv, "--envelope", null));
-  } else if (group === "grant" && action === "prepare") {
-    const allowlistVersion = Number(requireOption(argv, "--allowlist-version"));
-    if (!Number.isInteger(allowlistVersion) || allowlistVersion < 1) throw new ControlPlaneError("CLI_OPTION_INVALID", "--allowlist-version must be a positive integer");
-    result = await requestJson(baseUrl, "POST", "/control/v1/grants/prepare-explicit-target", {
-      sourceJobId: requireOption(argv, "--job"),
-      adapterReceiptId: requireOption(argv, "--receipt"),
-      draft: parseJsonOption(argv, "--draft", null),
-      allowlistVersion,
-    });
   } else if (group === "grant" && action === "list") {
     result = await requestJson(baseUrl, "GET", "/control/v1/grants");
   } else if (group === "grant" && action === "show") {
     result = await requestJson(baseUrl, "GET", `/control/v1/grants/${encodeURIComponent(requireOption(argv, "--grant"))}`);
-  } else if (group === "grant" && action === "prepare-revoke") {
-    const allowlistVersion = Number(requireOption(argv, "--allowlist-version"));
-    if (!Number.isInteger(allowlistVersion) || allowlistVersion < 1) throw new ControlPlaneError("CLI_OPTION_INVALID", "--allowlist-version must be a positive integer");
-    result = await requestJson(baseUrl, "POST", `/control/v1/grants/${encodeURIComponent(requireOption(argv, "--grant"))}/prepare-revoke`, {
-      revocationNonce: requireOption(argv, "--revocation-nonce"),
-      reason: requireOption(argv, "--reason"),
-      allowlistVersion,
-    });
   } else if (group === "grant" && action === "revoke") {
-    result = await requestJson(baseUrl, "POST", `/control/v1/grants/${encodeURIComponent(requireOption(argv, "--grant"))}/revoke`, parseJsonOption(argv, "--envelope", null));
+    result = await requestJson(baseUrl, "POST", `/control/v1/grants/${encodeURIComponent(requireOption(argv, "--grant"))}/revoke`, { actor: requireOption(argv, "--actor"), reason: requireOption(argv, "--reason") });
   } else if (group === "mission" && action === "submit") {
     result = await requestJson(baseUrl, "POST", "/control/v1/missions/submit", {
       actor: requireOption(argv, "--actor"),
