@@ -63,12 +63,13 @@ function setup({
     minFreeBytes: 0,
     minExternalEffectFreeBytes: 0,
   });
+  const adapterCalls = [];
   const control = new ControlPlane({
     state,
     capabilities: registry,
     adapters: new AdapterRegistry([{
       id: "stub",
-      async execute() { return {}; },
+      async execute(input) { adapterCalls.push(input); return {}; },
       async verify() { return { ok: true, mode: "state" }; },
       async restore() { return { ok: true }; },
     }]),
@@ -90,6 +91,7 @@ function setup({
     state,
     registry,
     control,
+    adapterCalls,
     async close() {
       await control.stop();
       state.close();
@@ -198,8 +200,10 @@ test("explicit-target child allocation requires all four independent Standing Gr
       assert.equal(result.status, gates.running ? "running" : "blocked");
       assert.equal(f.state.listDeviceRuns({ missionId: result.mission.missionId }).length, gates.running ? 1 : 0);
       assert.equal(f.state.listLeases().length, gates.running ? 1 : 0);
+      assert.equal(f.state.db.prepare("SELECT COUNT(*) AS count FROM sessions").get().count, gates.running ? 1 : 0);
       assert.equal(f.state.db.prepare("SELECT COUNT(*) AS count FROM jobs").get().count, 0);
       assert.equal(f.state.listMissionEffects(result.mission.missionId).length, 0);
+      assert.equal(f.adapterCalls.length, 0);
     } finally { f.close(); }
   }
 });
@@ -264,6 +268,7 @@ test("an explicit Grant target list remains authoritative over a submitted Disco
       policy: {
         ...socialPolicy,
         account: grant.accountFingerprint,
+        declaredTarget: { kind: "fingerprint", values: ["client-declared-target"] },
         discoveryPolicy: { targetScope: { anchors: [{ type: "identityFingerprint", hash: "c".repeat(64) }], relationKinds: ["search_result"] } },
       },
     });
@@ -272,6 +277,11 @@ test("an explicit Grant target list remains authoritative over a submitted Disco
     assert.equal(result.mission.parentGrantId, grant.grantId);
     assert.equal(result.mission.parentGrantHash, `hash-${grant.grantId}`);
     assert.equal(result.mission.parallelism, 1);
+    assert.equal(Object.hasOwn(result.mission, "declaredTarget"), false);
+    assert.equal(Object.hasOwn(result.mission, "discoveryPolicy"), false);
+    const storedPolicy = JSON.parse(f.state.db.prepare("SELECT policy_json FROM missions WHERE mission_id=?").get(result.mission.missionId).policy_json);
+    assert.equal(Object.hasOwn(storedPolicy, "declaredTarget"), false);
+    assert.equal(Object.hasOwn(storedPolicy, "discoveryPolicy"), false);
   } finally { f.close(); }
 });
 
