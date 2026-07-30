@@ -1634,7 +1634,14 @@ export function serve(port, options = {}) {
   const operatorFactory = options.operatorFactory
     ?? (() => applyCommentFlags(new FastOperator({ adbPath: adb, serial }).start()));
   const getOp = () => {
-    if (!opP) opP = Promise.resolve(operatorFactory());
+    if (!opP) {
+      opP = Promise.resolve()
+        .then(() => operatorFactory())
+        .catch((error) => {
+          opP = null;
+          throw error;
+        });
+    }
     return opP;
   };
   const server = createServer(async (req, res) => {

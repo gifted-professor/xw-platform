@@ -54,6 +54,8 @@ if (-not (Test-Path -LiteralPath $operator)) { throw "FastOperator missing: $ope
 $env:XHS_ALLOW_BYPASS = "0"
 Remove-Item Env:XHS_BYPASS_REASON -ErrorAction SilentlyContinue
 $env:XHS_OPERATOR_CONTROL_URL = "http://127.0.0.1:17920"
+$env:ANDROID_ADB_SERVER_PORT = "5038"
+Remove-Item Env:ADB_SERVER_SOCKET -ErrorAction SilentlyContinue
 $env:NODE_NO_WARNINGS = "1"
 
 $stdout = Join-Path $stateRoot "serve-${alias}.stdout.log"

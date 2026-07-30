@@ -172,6 +172,73 @@ test("real serve switch exposes only the bounded openFeedNote method", async (t)
   assert.deepEqual(calls, [{ selector: "any", index: 2 }]);
 });
 
+test("serve retries lazy operator initialization after a failed factory", async (t) => {
+  let factoryCalls = 0;
+  const server = serve(0, {
+    adb: "offline-test-adb",
+    serial: "offline-test-runtime",
+    authorize: async () => ({ authorized: true }),
+    errorLogger: () => {},
+    operatorFactory: async () => {
+      factoryCalls += 1;
+      if (factoryCalls === 1) throw new Error("transient warm-up failure");
+      return {
+        async openFeedNote() { return { ok: true, targetFingerprint: "b".repeat(64) }; },
+        metricsSummary() { return {}; },
+      };
+    },
+  });
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  await once(server, "listening");
+  const { port } = server.address();
+  const request = () => fetch(`http://127.0.0.1:${port}/`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ action: "openFeedNote", selector: "any" }),
+  });
+
+  assert.equal((await request()).status, 500);
+  const recovered = await request();
+  assert.equal(recovered.status, 200);
+  assert.equal((await recovered.json()).result.ok, true);
+  assert.equal(factoryCalls, 2);
+});
+
+test("serve shares one in-flight lazy operator initialization across concurrent requests", async (t) => {
+  let factoryCalls = 0;
+  let releaseFactory;
+  const factoryGate = new Promise((resolve) => { releaseFactory = resolve; });
+  const server = serve(0, {
+    adb: "offline-test-adb",
+    serial: "offline-test-runtime",
+    authorize: async () => ({ authorized: true }),
+    operatorFactory: async () => {
+      factoryCalls += 1;
+      await factoryGate;
+      return {
+        async openFeedNote() { return { ok: true, targetFingerprint: "b".repeat(64) }; },
+        metricsSummary() { return {}; },
+      };
+    },
+  });
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  await once(server, "listening");
+  const { port } = server.address();
+  const request = () => fetch(`http://127.0.0.1:${port}/`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ action: "openFeedNote", selector: "any" }),
+  });
+
+  const first = request();
+  const second = request();
+  await new Promise((resolve) => setImmediate(resolve));
+  releaseFactory();
+  const responses = await Promise.all([first, second]);
+  assert.deepEqual(responses.map((response) => response.status), [200, 200]);
+  assert.equal(factoryCalls, 1);
+});
+
 test("serve records a redacted structured openFeedNote runtime error", async (t) => {
   const errors = [];
   const server = serve(0, {

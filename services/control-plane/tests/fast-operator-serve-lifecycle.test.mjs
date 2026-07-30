@@ -54,6 +54,13 @@ test("lifecycle metadata stays secret-free and Start or Status never probes a de
   assert.match(worker, /XHS_ALLOW_BYPASS[^\n]+"0"/);
 });
 
+test("worker pins the authoritative Xiaowei ADB server without exposing runtime data", () => {
+  assert.match(worker, /ANDROID_ADB_SERVER_PORT\s*=\s*"5038"/);
+  assert.match(worker, /Remove-Item Env:ADB_SERVER_SOCKET/);
+  const environmentBlock = worker.match(/\$env:XHS_ALLOW_BYPASS[\s\S]*?\$arguments\s*=/)?.[0] ?? "";
+  assert.doesNotMatch(environmentBlock, /Write-(?:Output|Host)|echo|runtimeId|serial/);
+});
+
 test("worker records a secret-free lifecycle event after the Node process exits", () => {
   assert.match(worker, /\$nodeExitCode\s*=\s*\$LASTEXITCODE/);
   assert.match(worker, /timestamp\s*=\s*\(Get-Date\)/);
