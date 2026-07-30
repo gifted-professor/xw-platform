@@ -53,13 +53,14 @@ const grant = {
     retention: { rawScreenshotDays: 7, redactedHashAuditDays: 90 },
     accessPolicy: { ownerSubjectHash: "d".repeat(64), reviewerAllowlistVersion: 1 },
   },
-  validity: { expiresAt: null },
+  validity: { notBefore: null, expiresAt: null },
   redaction: { publicFields: ["alias", "fingerprint", "counts", "states", "evidenceHash"] },
 };
 
 test("normalizes an immutable permanent Standing Grant and its signing payload", () => {
   const normalized = validateDelegationGrantDraft(grant);
   assert.equal(normalized.validity.expiresAt, null);
+  assert.equal(normalized.validity.notBefore, null);
   assert.equal(normalized.maxParallelism, 1);
   assert.deepEqual(normalized.discoveryPolicy.targetScope.anchors.map(({ type }) => type), ["identityFingerprint", "searchQueryHash", "seedIdentityFingerprint"]);
   assert.deepEqual(normalized.discoveryPolicy.targetScope.relationKinds, ["explicit_target", "search_result", "seed_profile_relation"]);
@@ -122,6 +123,9 @@ test("rejects prohibited widening, bad parallelism, and invalid budget defaults"
 test("finite parent time bounds and discovery target modes are explicit", () => {
   assert.throws(() => validateDelegationGrantDraft({
     ...grant, validity: { expiresAt: "not-a-date" },
+  }), { code: "GRANT_POLICY_INVALID" });
+  assert.throws(() => validateDelegationGrantDraft({
+    ...grant, validity: { notBefore: "2099-01-02T00:00:00Z", expiresAt: "2099-01-01T00:00:00Z" },
   }), { code: "GRANT_POLICY_INVALID" });
   assert.throws(() => validateDelegationGrantDraft({
     ...grant, targets: { mode: "verified_discovery", values: ["target-hash"] },

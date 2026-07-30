@@ -455,6 +455,10 @@ export class StateStore {
         server_received_at INTEGER NOT NULL,
         evidence_id TEXT NOT NULL REFERENCES evidence(evidence_id),
         evidence_hash TEXT NOT NULL,
+        source_job_id TEXT,
+        source_run_id TEXT,
+        source_adapter_id TEXT,
+        source_capability_id TEXT,
         status TEXT NOT NULL,
         used_at INTEGER,
         created_at INTEGER NOT NULL
@@ -483,8 +487,12 @@ export class StateStore {
     this.#ensureColumn("leases", "owner_discovery_run_id", "TEXT");
     this.#ensureColumn("missions", "parent_grant_id", "TEXT");
     this.#ensureColumn("missions", "parent_grant_hash", "TEXT");
+    this.#ensureColumn("explicit_observation_receipts", "source_job_id", "TEXT");
+    this.#ensureColumn("explicit_observation_receipts", "source_run_id", "TEXT");
+    this.#ensureColumn("explicit_observation_receipts", "source_adapter_id", "TEXT");
+    this.#ensureColumn("explicit_observation_receipts", "source_capability_id", "TEXT");
     this.db.exec("CREATE INDEX IF NOT EXISTS missions_parent_grant_idx ON missions(parent_grant_id, status)");
-    this.db.exec("PRAGMA user_version = 9;");
+    this.db.exec("PRAGMA user_version = 10;");
   }
 
   #ensureColumn(table, column, definition) {
@@ -1678,7 +1686,7 @@ export class StateStore {
     if (!Number.isFinite(observedAt) || now < observedAt || now - observedAt > 5000) {
       return { status: "rejected_stale" };
     }
-    const required = ["grantId", "grantHash", "missionId", "deviceRunId", "leaseId", "sessionId", "app", "accountFingerprint", "pageFingerprint", "targetFingerprint", "evidenceId", "evidenceHash"];
+    const required = ["grantId", "grantHash", "missionId", "deviceRunId", "leaseId", "sessionId", "app", "accountFingerprint", "pageFingerprint", "targetFingerprint", "evidenceId", "evidenceHash", "sourceJobId", "sourceRunId", "sourceAdapterId", "sourceCapabilityId"];
     if (required.some((key) => typeof input?.[key] !== "string" || input[key] === "") || !Number.isInteger(input?.controllerEpoch)) {
       throw new ControlPlaneError("EXPLICIT_RECEIPT_INVALID", "explicit receipt fields are incomplete", { status: 400 });
     }
@@ -1689,23 +1697,36 @@ export class StateStore {
       const session = this.db.prepare("SELECT * FROM sessions WHERE session_id=?").get(input.sessionId);
       const lease = this.db.prepare("SELECT * FROM leases WHERE lease_id=?").get(input.leaseId);
       const evidence = this.db.prepare("SELECT * FROM evidence WHERE evidence_id=?").get(input.evidenceId);
+      const sourceJob = this.db.prepare("SELECT * FROM jobs WHERE job_id=?").get(input.sourceJobId);
+      const sourceCapability = parseJson(sourceJob?.capability_json, {});
+      const grantValidity = parseJson(grant?.grant_json, {}).validity || {};
+      const missionValidity = parseJson(mission?.policy_json, {}).validity || {};
+      const parentNotBefore = Date.parse(grantValidity.notBefore);
+      const parentExpiry = Date.parse(grantValidity.expiresAt);
+      const childNotBefore = Date.parse(missionValidity.notBefore);
+      const childExpiry = Date.parse(missionValidity.expiresAt);
       if (!grant || grant.status !== "active" || grant.grant_hash !== input.grantHash || !mission
-        || mission.parent_grant_id !== input.grantId || mission.parent_grant_hash !== input.grantHash
+        || mission.status !== "active" || mission.parent_grant_id !== input.grantId || mission.parent_grant_hash !== input.grantHash
         || !run || run.mission_id !== input.missionId || run.session_id !== input.sessionId || run.lease_id !== input.leaseId
         || run.controller_epoch !== input.controllerEpoch || !session || session.lease_id !== input.leaseId
-        || !lease || evidence?.sha256 !== input.evidenceHash) {
+        || !lease || lease.owner_device_run_id !== input.deviceRunId || evidence?.sha256 !== input.evidenceHash
+        || !sourceJob || sourceJob.status !== "succeeded" || sourceJob.run_id !== input.sourceRunId || sourceJob.device_id !== run.device_id || sourceJob.session_id !== input.sessionId
+        || sourceJob.capability_id !== input.sourceCapabilityId || sourceCapability.implementation?.adapter !== input.sourceAdapterId
+        || evidence.job_id !== input.sourceJobId || evidence.run_id !== input.sourceRunId
+        || (Number.isFinite(parentNotBefore) && now < parentNotBefore) || (Number.isFinite(parentExpiry) && now >= parentExpiry)
+        || (Number.isFinite(childNotBefore) && now < childNotBefore) || (Number.isFinite(childExpiry) && now >= childExpiry)) {
         throw new ControlPlaneError("EXPLICIT_RECEIPT_BINDING_MISMATCH", "receipt is not bound to a live control-plane tuple", { status: 409 });
       }
       const policy = parseJson(mission.policy_json, {});
       if (policy.app !== input.app || policy.account !== input.accountFingerprint || !policy.scope?.targets?.values?.includes(input.targetFingerprint)) {
         throw new ControlPlaneError("EXPLICIT_RECEIPT_SCOPE_MISMATCH", "receipt is outside Mission authority", { status: 409 });
       }
-      const receiptHash = fingerprint({ grantId: input.grantId, grantHash: input.grantHash, missionId: input.missionId, deviceRunId: input.deviceRunId, leaseId: input.leaseId, sessionId: input.sessionId, controllerEpoch: input.controllerEpoch, app: input.app, accountFingerprint: input.accountFingerprint, pageFingerprint: input.pageFingerprint, targetFingerprint: input.targetFingerprint, observedAt, evidenceId: input.evidenceId, evidenceHash: input.evidenceHash });
+      const receiptHash = fingerprint({ grantId: input.grantId, grantHash: input.grantHash, missionId: input.missionId, deviceRunId: input.deviceRunId, leaseId: input.leaseId, sessionId: input.sessionId, controllerEpoch: input.controllerEpoch, app: input.app, accountFingerprint: input.accountFingerprint, pageFingerprint: input.pageFingerprint, targetFingerprint: input.targetFingerprint, observedAt, evidenceId: input.evidenceId, evidenceHash: input.evidenceHash, sourceJobId: input.sourceJobId, sourceRunId: input.sourceRunId, sourceAdapterId: input.sourceAdapterId, sourceCapabilityId: input.sourceCapabilityId });
       const existing = this.db.prepare("SELECT * FROM explicit_observation_receipts WHERE receipt_hash=?").get(receiptHash);
       if (existing) return { receiptId: existing.receipt_id, receiptHash, status: existing.status, reused: true };
       const receiptId = newId("explicit_receipt");
-      this.db.prepare(`INSERT INTO explicit_observation_receipts (receipt_id, receipt_hash, grant_id, grant_hash, mission_id, device_run_id, lease_id, session_id, controller_epoch, app, account_fingerprint, page_fingerprint, target_fingerprint, observed_at, server_received_at, evidence_id, evidence_hash, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'recorded', ?)`)
-        .run(receiptId, receiptHash, input.grantId, input.grantHash, input.missionId, input.deviceRunId, input.leaseId, input.sessionId, input.controllerEpoch, input.app, input.accountFingerprint, input.pageFingerprint, input.targetFingerprint, observedAt, now, input.evidenceId, input.evidenceHash, now);
+      this.db.prepare(`INSERT INTO explicit_observation_receipts (receipt_id, receipt_hash, grant_id, grant_hash, mission_id, device_run_id, lease_id, session_id, controller_epoch, app, account_fingerprint, page_fingerprint, target_fingerprint, observed_at, server_received_at, evidence_id, evidence_hash, source_job_id, source_run_id, source_adapter_id, source_capability_id, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'recorded', ?)`)
+        .run(receiptId, receiptHash, input.grantId, input.grantHash, input.missionId, input.deviceRunId, input.leaseId, input.sessionId, input.controllerEpoch, input.app, input.accountFingerprint, input.pageFingerprint, input.targetFingerprint, observedAt, now, input.evidenceId, input.evidenceHash, input.sourceJobId, input.sourceRunId, input.sourceAdapterId, input.sourceCapabilityId, now);
       return { receiptId, receiptHash, status: "recorded", reused: false };
     });
   }
@@ -1714,8 +1735,8 @@ export class StateStore {
     const now = this.now();
     return this.transaction(() => {
       const row = this.db.prepare("SELECT * FROM explicit_observation_receipts WHERE receipt_id=?").get(receiptId);
-      const grant = row && this.db.prepare("SELECT status, grant_hash FROM delegation_grants WHERE grant_id=?").get(row.grant_id);
-      const mission = row && this.db.prepare("SELECT parent_grant_id, parent_grant_hash, status FROM missions WHERE mission_id=?").get(row.mission_id);
+      const grant = row && this.db.prepare("SELECT status, grant_hash, grant_json FROM delegation_grants WHERE grant_id=?").get(row.grant_id);
+      const mission = row && this.db.prepare("SELECT parent_grant_id, parent_grant_hash, status, policy_json FROM missions WHERE mission_id=?").get(row.mission_id);
       const run = row && this.db.prepare("SELECT mission_id, session_id, lease_id, controller_epoch, phase FROM device_runs WHERE device_run_id=?").get(row.device_run_id);
       const session = row && this.db.prepare("SELECT lease_id FROM sessions WHERE session_id=?").get(row.session_id);
       const lease = row && this.db.prepare("SELECT owner_device_run_id FROM leases WHERE lease_id=?").get(row.lease_id);
@@ -1726,7 +1747,11 @@ export class StateStore {
       if (!grant || grant.status !== "active" || grant.grant_hash !== row.grant_hash
         || !mission || mission.status !== "active" || mission.parent_grant_id !== row.grant_id || mission.parent_grant_hash !== row.grant_hash
         || !run || run.mission_id !== row.mission_id || run.session_id !== row.session_id || run.lease_id !== row.lease_id || run.controller_epoch !== row.controller_epoch || run.phase !== "running"
-        || !session || session.lease_id !== row.lease_id || !lease || lease.owner_device_run_id !== row.device_run_id) {
+        || !session || session.lease_id !== row.lease_id || !lease || lease.owner_device_run_id !== row.device_run_id
+        || (Number.isFinite(Date.parse(parseJson(grant.grant_json, {}).validity?.notBefore)) && now < Date.parse(parseJson(grant.grant_json, {}).validity.notBefore))
+        || (Number.isFinite(Date.parse(parseJson(grant.grant_json, {}).validity?.expiresAt)) && now >= Date.parse(parseJson(grant.grant_json, {}).validity.expiresAt))
+        || (Number.isFinite(Date.parse(parseJson(mission.policy_json, {}).validity?.notBefore)) && now < Date.parse(parseJson(mission.policy_json, {}).validity.notBefore))
+        || (Number.isFinite(Date.parse(parseJson(mission.policy_json, {}).validity?.expiresAt)) && now >= Date.parse(parseJson(mission.policy_json, {}).validity.expiresAt))) {
         throw new ControlPlaneError("EXPLICIT_RECEIPT_INVALID", "receipt lost live parent or control tuple authority", { status: 409 });
       }
       this.db.prepare("UPDATE explicit_observation_receipts SET status='consumed', used_at=? WHERE receipt_id=? AND status='recorded'").run(now, receiptId);
@@ -1743,6 +1768,7 @@ export class StateStore {
       pageFingerprint: row.page_fingerprint, targetFingerprint: row.target_fingerprint,
       observedAt: iso(row.observed_at), serverReceivedAt: iso(row.server_received_at),
       evidenceId: row.evidence_id, evidenceHash: row.evidence_hash, status: row.status,
+      sourceJobId: row.source_job_id, sourceRunId: row.source_run_id, sourceAdapterId: row.source_adapter_id, sourceCapabilityId: row.source_capability_id,
     } : null;
   }
 
@@ -2126,6 +2152,20 @@ export class StateStore {
     });
   }
 
+  startPreparedMissionEffect(effectId) {
+    const now = this.now();
+    return this.transaction(() => {
+      const row = this.db.prepare("SELECT * FROM mission_effects WHERE effect_id=?").get(effectId);
+      if (!row) throw new ControlPlaneError("EFFECT_NOT_FOUND", `unknown effect ${effectId}`, { status: 404 });
+      if (row.status !== "not_sent" || row.reservation_released) {
+        throw new ControlPlaneError("EFFECT_START_INVALID", "effect cannot start from its current state", { status: 409 });
+      }
+      this.db.prepare("UPDATE mission_effects SET status='started', updated_at=?, finished_at=NULL WHERE effect_id=?").run(now, effectId);
+      this.#insertMissionEvent({ missionId: row.mission_id, type: "effect.started", payload: { effectId }, createdAt: now });
+      return this.#publicMissionEffect(this.db.prepare("SELECT * FROM mission_effects WHERE effect_id=?").get(effectId));
+    });
+  }
+
   retryNotSentMissionEffect(effectId) {
     const now = this.now();
     return this.transaction(() => {
@@ -2134,12 +2174,10 @@ export class StateStore {
       if (row.status !== "not_sent" || row.reservation_released) {
         throw new ControlPlaneError("EFFECT_RETRY_UNSAFE", "only a reserved not_sent effect may retry", { status: 409 });
       }
-      this.db.prepare(`
-        UPDATE mission_effects SET status='started', updated_at=?, finished_at=NULL WHERE effect_id=?
-      `).run(now, effectId);
+      this.db.prepare("UPDATE mission_effects SET updated_at=?, finished_at=NULL WHERE effect_id=?").run(now, effectId);
       this.#insertMissionEvent({
         missionId: row.mission_id,
-        type: "effect.retry_started",
+        type: "effect.retry_reserved",
         payload: { effectId },
         createdAt: now,
       });

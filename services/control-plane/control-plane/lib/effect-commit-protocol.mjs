@@ -112,6 +112,7 @@ export class EffectCommitProtocol {
         return blocked(receiptCode);
       }
       if (policy.decision === "phc") this.ledger.startAuthorizedEffect(effect.effectId);
+      else this.ledger.startEffectForExecution(effect.effectId);
       const execution = await this.execute({ ...input, effectId: effect.effectId, target: current.targetFingerprint });
       const verification = await this.verify({ ...input, effectId: effect.effectId, execution, afterState: rechecked.beforeState });
       if (verification?.ok === true) {
@@ -181,6 +182,7 @@ export class EffectCommitProtocol {
         outcome = this.ledger.recordOutcome(effectId, { status: "cancelled" });
         return blocked(receiptCode);
       }
+      this.ledger.startEffectForExecution(effectId);
       const execution = await this.execute({ ...input, action, effectId, target: current.targetFingerprint });
       const verification = await this.verify({ ...input, action, effectId, execution, afterState: current.beforeState });
       outcome = this.ledger.recordOutcome(effectId, {

@@ -156,12 +156,56 @@ test("parent Grant revocation after prepare fences the adapter before an effect 
       ...prepared,
       tuple: run.tuple, mission, action: "follow", target: "target-a", idempotencyKey: "effect-after-parent-revoke",
     });
-    assert.deepEqual(result, { status: "blocked", code: "PARENT_GRANT_INACTIVE" });
+    assert.deepEqual(result, { status: "blocked", code: "MISSION_REVOKED" });
     assert.equal(executeCount, 0);
   } finally {
     fixture.state.close();
     rmSync(fixture.root, { recursive: true, force: true });
   }
+});
+
+test("a parent or child expiry after prepare fences the adapter and retains its receipt", async () => {
+  let now = Date.now();
+  const root = mkdtempSync(join(tmpdir(), "effect-commit-expiry-"));
+  const state = new StateStore({ dbPath: join(root, "control.db"), now: () => now });
+  const missions = new MissionRuntime({ state, now: () => now });
+  const runs = new DeviceRunRuntime({ state, missions, authorityNodeId: AUTHORITY });
+  let executeCount = 0;
+  try {
+    state.upsertNode({ nodeId: AUTHORITY, authority: true });
+    state.upsertDevice({ alias: "01", physicalLabel: "rack-01", nodeId: AUTHORITY, runtimeId: "private-01", routingProfile: { enabled: true, tags: ["slot:01"], capabilityIds: [] } });
+    const grant = parentGrant("grant-expiry");
+    grant.validity.expiresAt = new Date(now + 1000).toISOString();
+    state.issueDelegationGrant({ grant, grantHash: "grant-expiry-hash", proofHash: "proof", issuerSubject: "user:a1234", issuerKeyId: "test", allowlistVersion: 1 });
+    const { mission } = missions.createMission({ ...parentMissionInput("parent-expiry"), validity: { expiresAt: new Date(now + 2000).toISOString() } }, { parentGrantId: grant.grantId, parentGrantHash: "grant-expiry-hash" });
+    const run = runs.openDeviceRun({ missionId: mission.missionId, controllerAgent: "agent:runner" });
+    const observationReceiptId = "receipt-never-minted";
+    const ecp = new EffectCommitProtocol({ state, ledger: new EffectLedger({ state }), deviceRuns: runs, missions, evidence: { findByIdAndHash() {} }, recheck: async () => correctState(), execute: async () => { executeCount += 1; return {}; }, verify: async () => ({ ok: true }), restore: async () => ({ ok: true }) });
+    const prepared = await ecp.prepare({ tuple: run.tuple, mission, action: "follow", target: "target-a", idempotencyKey: "effect-expiry", observationReceiptId });
+    assert.equal(prepared.status, "prepared");
+    now += 1001;
+    const result = await ecp.executePrepared({ ...prepared, tuple: run.tuple, mission, action: "follow", target: "target-a", idempotencyKey: "effect-expiry", observationReceiptId });
+    assert.deepEqual(result, { status: "blocked", code: "PARENT_GRANT_EXPIRED" });
+    assert.equal(executeCount, 0);
+  } finally { state.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test("prepare reserves a not_sent effect; revoke before send cancels and releases it", async () => {
+  const fixture = setup();
+  try {
+    fixture.state.releaseSession(fixture.run.sessionId, fixture.run.token);
+    const grant = parentGrant("grant-prepared-revoke");
+    fixture.state.issueDelegationGrant({ grant, grantHash: "grant-prepared-revoke-hash", proofHash: "proof", issuerSubject: "user:a1234", issuerKeyId: "test", allowlistVersion: 1 });
+    const { mission } = new MissionRuntime({ state: fixture.state }).createMission(parentMissionInput("prepared-revoke"), { parentGrantId: grant.grantId, parentGrantHash: "grant-prepared-revoke-hash" });
+    const run = fixture.runs.openDeviceRun({ missionId: mission.missionId, controllerAgent: "agent:runner" });
+    const ecp = new EffectCommitProtocol({ state: fixture.state, ledger: new EffectLedger({ state: fixture.state }), deviceRuns: fixture.runs, missions: new MissionRuntime({ state: fixture.state }), recheck: async () => correctState(), execute: async () => ({}), verify: async () => ({ ok: true }), restore: async () => ({ ok: true }) });
+    const prepared = await ecp.prepare({ tuple: run.tuple, mission, action: "follow", target: "target-a", idempotencyKey: "prepared-before-revoke" });
+    assert.equal(prepared.effect.status, "not_sent");
+    fixture.state.revokeDelegationGrant(grant.grantId, { reason: "before-send" });
+    const effect = fixture.state.listMissionEffects(mission.missionId).find((row) => row.effectId === prepared.effect.effectId);
+    assert.deepEqual({ status: effect.status, released: effect.reservationReleased, retryBlocked: effect.retryBlocked }, { status: "cancelled", released: true, retryBlocked: true });
+    assert.equal(fixture.state.getDeviceRun(run.deviceRunId).phase, "cancelled");
+  } finally { fixture.state.close(); rmSync(fixture.root, { recursive: true, force: true }); }
 });
 
 test("revoking a parent Grant atomically cancels unstarted work and retains ambiguous audit state", () => {
@@ -185,7 +229,7 @@ test("revoking a parent Grant atomically cancels unstarted work and retains ambi
   }
 });
 
-test("a parent Mission effect consumes one fresh, integrity-checked receipt before the adapter", async () => {
+test("a parent Mission effect fails closed when no server-owned receipt exists", async () => {
   const fixture = setup();
   let executeCount = 0;
   try {
@@ -194,17 +238,14 @@ test("a parent Mission effect consumes one fresh, integrity-checked receipt befo
     fixture.state.issueDelegationGrant({ grant, grantHash: "grant-receipt-effect-hash", proofHash: "proof", issuerSubject: "user:a1234", issuerKeyId: "test", allowlistVersion: 1 });
     const { mission } = new MissionRuntime({ state: fixture.state }).createMission(parentMissionInput("parent-receipt-effect"), { parentGrantId: grant.grantId, parentGrantHash: "grant-receipt-effect-hash" });
     const run = fixture.runs.openDeviceRun({ missionId: mission.missionId, controllerAgent: "agent:runner" });
-    const evidence = fixture.state.recordEvidence({ jobId: null, runId: run.deviceRunId, kind: "parser-observation", path: "private.json", sha256: "b".repeat(64), bytes: 1 });
-    const receipt = fixture.state.recordExplicitObservationReceipt({ grantId: grant.grantId, grantHash: "grant-receipt-effect-hash", missionId: mission.missionId, deviceRunId: run.deviceRunId, leaseId: run.leaseId, sessionId: run.sessionId, controllerEpoch: run.controllerEpoch, app: "xhs", accountFingerprint: "local-alias", pageFingerprint: "profile-v1", targetFingerprint: "target-a", observedAt: new Date().toISOString(), evidenceId: evidence.evidenceId, evidenceHash: evidence.sha256 });
     const ecp = new EffectCommitProtocol({
       state: fixture.state, ledger: new EffectLedger({ state: fixture.state }), deviceRuns: fixture.runs, missions: new MissionRuntime({ state: fixture.state }),
       evidence: { findByIdAndHash() { throw Object.assign(new Error("tampered"), { code: "EVIDENCE_HASH_MISMATCH" }); } },
       recheck: async () => correctState(), execute: async () => { executeCount += 1; return {}; }, verify: async () => ({ ok: true }), restore: async () => ({ ok: true }),
     });
-    const result = await ecp.commit({ tuple: run.tuple, mission, action: "follow", target: "target-a", idempotencyKey: "receipt-effect", observationReceiptId: receipt.receiptId });
-    assert.deepEqual(result, { status: "blocked", code: "EVIDENCE_HASH_MISMATCH" });
+    const result = await ecp.commit({ tuple: run.tuple, mission, action: "follow", target: "target-a", idempotencyKey: "receipt-effect", observationReceiptId: "forged" });
+    assert.deepEqual(result, { status: "blocked", code: "EXPLICIT_RECEIPT_EVIDENCE_UNAVAILABLE" });
     assert.equal(executeCount, 0);
-    assert.equal(fixture.state.getExplicitObservationReceipt(receipt.receiptId).status, "recorded");
   } finally { fixture.state.close(); rmSync(fixture.root, { recursive: true, force: true }); }
 });
 

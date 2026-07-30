@@ -49,7 +49,7 @@
         "accessPolicy": { "type": "object", "additionalProperties": false, "required": ["ownerSubjectHash", "reviewerAllowlistVersion"], "properties": { "ownerSubjectHash": { "$ref": "#/$defs/hash" }, "reviewerAllowlistVersion": { "type": "integer", "minimum": 1 } } }
       }
     },
-    "validity": { "type": "object", "additionalProperties": false, "required": ["expiresAt"], "properties": { "expiresAt": { "type": ["string", "null"] } } },
+    "validity": { "type": "object", "additionalProperties": false, "required": ["expiresAt"], "properties": { "notBefore": { "type": ["string", "null"] }, "expiresAt": { "type": ["string", "null"] } } },
     "redaction": { "type": "object", "additionalProperties": false, "required": ["publicFields"], "properties": { "publicFields": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "enum": ["alias", "fingerprint", "counts", "states", "evidenceHash"] } } } }
   },
   "$defs": {

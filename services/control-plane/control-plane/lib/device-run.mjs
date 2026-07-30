@@ -104,11 +104,10 @@ export class DeviceRunRuntime {
         status: 409, details: { expected: run.controllerEpoch, got: tuple.controllerEpoch },
       });
     }
-    // the mission may have been revoked or expired between open and this command
-    const mission = this.state.getMission(tuple.missionId);
-    if (!mission || mission.status === "revoked") {
-      throw new ControlPlaneError("MISSION_REVOKED", "mission is no longer active", { status: 409 });
-    }
+    // The mission and parent Grant may have expired or been revoked between open and this
+    // command.  Reuse MissionRuntime's durable live-authority check rather than the stale
+    // public row, so every tuple boundary carries the same validity semantics as ECP.
+    const mission = this.missions.requireActiveMission(tuple.missionId);
     if (!mission.controllers.includes(tuple.controllerAgent)) {
       throw new ControlPlaneError("CONTROLLER_NOT_AUTHORIZED", "controller is no longer authorized", { status: 403 });
     }

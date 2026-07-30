@@ -168,10 +168,20 @@ export class MissionRuntime {
   verifyParentGrant(mission, { action = null, target = null } = {}) {
     const current = mission?.missionId ? this.state.getMissionForRuntime(mission.missionId) : mission;
     if (!current?.parentGrantId) return { ok: true };
+    const now = this.now();
+    if (current.status !== "active") return { ok: false, code: current.status === "revoked" ? "MISSION_REVOKED" : "MISSION_INACTIVE" };
+    const childNotBefore = Date.parse(current.validity?.notBefore);
+    const childExpiry = Date.parse(current.validity?.expiresAt);
+    if (Number.isFinite(childNotBefore) && now < childNotBefore) return { ok: false, code: "MISSION_NOT_YET_VALID" };
+    if (Number.isFinite(childExpiry) && now >= childExpiry) return { ok: false, code: "MISSION_EXPIRED" };
     const record = this.state.getDelegationGrantRecord(current.parentGrantId);
     if (!record || record.status !== "active") return { ok: false, code: "PARENT_GRANT_INACTIVE" };
     if (record.grantHash !== current.parentGrantHash) return { ok: false, code: "PARENT_GRANT_HASH_DRIFT" };
     const parent = record.grant;
+    const parentNotBefore = Date.parse(parent.validity?.notBefore);
+    const parentExpiry = Date.parse(parent.validity?.expiresAt);
+    if (Number.isFinite(parentNotBefore) && now < parentNotBefore) return { ok: false, code: "PARENT_GRANT_NOT_YET_VALID" };
+    if (Number.isFinite(parentExpiry) && now >= parentExpiry) return { ok: false, code: "PARENT_GRANT_EXPIRED" };
     if (parent.app !== current.app || parent.accountFingerprint !== current.account
       || !Array.isArray(current.controllers) || current.controllers.some((controller) => !parent.controllers.includes(controller))) {
       return { ok: false, code: "PARENT_GRANT_SUBSET_INVALID" };

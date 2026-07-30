@@ -432,15 +432,28 @@ export class ControlPlane {
 
   // Internal-only parser boundary.  Client hints are discarded; only a known parser can supply
   // the observed surface and the ControlPlane supplies every authority tuple field itself.
-  recordExplicitObservationReceipt({ tuple, parserReceipt }) {
+  recordExplicitObservationReceipt({ tuple, sourceJobId, adapterReceiptId }) {
     const run = this.assertControlTuple(tuple);
     const mission = this.missions.requireActiveMission(run.missionId);
-    if (!mission.parentGrantId || !["xhs.explicit_observation_parser"].includes(parserReceipt?.producer)) {
-      throw new ControlPlaneError("EXPLICIT_RECEIPT_PRODUCER_INVALID", "explicit receipt requires the allowlisted parser", { status: 409 });
+    if (!mission.parentGrantId || typeof sourceJobId !== "string" || typeof adapterReceiptId !== "string") {
+      throw new ControlPlaneError("EXPLICIT_RECEIPT_PROVENANCE_REQUIRED", "explicit receipt requires an opaque adapter receipt and source job", { status: 409 });
     }
+    const sourceJob = this.state.getJob(sourceJobId);
+    const adapterId = sourceJob?.capability?.implementation?.adapter;
+    let adapter = null;
+    try { adapter = typeof adapterId === "string" ? this.adapters.require(adapterId) : null; } catch { adapter = null; }
+    if (!sourceJob || sourceJob.status !== "succeeded" || sourceJob.sessionId !== run.sessionId || sourceJob.deviceId !== run.deviceId
+      || typeof adapter?.getExplicitObservationReceipt !== "function") {
+      throw new ControlPlaneError("EXPLICIT_RECEIPT_PROVENANCE_INVALID", "no allowlisted adapter-produced receipt is available", { status: 409 });
+    }
+    const parserReceipt = adapter.getExplicitObservationReceipt({ job: sourceJob, receiptId: adapterReceiptId });
     const fields = ["pageFingerprint", "targetFingerprint", "observedAt", "evidenceId", "evidenceHash"];
-    if (fields.some((key) => typeof parserReceipt?.[key] !== "string" || parserReceipt[key] === "")) {
-      throw new ControlPlaneError("EXPLICIT_RECEIPT_INVALID", "parser receipt is incomplete", { status: 400 });
+    if (fields.some((key) => typeof parserReceipt?.[key] !== "string" || parserReceipt[key] === "")) throw new ControlPlaneError("EXPLICIT_RECEIPT_INVALID", "adapter receipt is incomplete", { status: 409 });
+    try {
+      if (typeof this.evidence?.findByIdAndHash !== "function") throw new Error("evidence lookup unavailable");
+      this.evidence.findByIdAndHash(parserReceipt.evidenceId, parserReceipt.evidenceHash);
+    } catch {
+      throw new ControlPlaneError("EXPLICIT_RECEIPT_EVIDENCE_UNAVAILABLE", "receipt evidence cannot be read and hash-verified", { status: 409 });
     }
     return this.state.recordExplicitObservationReceipt({
       grantId: mission.parentGrantId, grantHash: mission.parentGrantHash, missionId: mission.missionId,
@@ -448,6 +461,7 @@ export class ControlPlane {
       controllerEpoch: run.controllerEpoch, app: mission.app, accountFingerprint: mission.account,
       pageFingerprint: parserReceipt.pageFingerprint, targetFingerprint: parserReceipt.targetFingerprint,
       observedAt: parserReceipt.observedAt, evidenceId: parserReceipt.evidenceId, evidenceHash: parserReceipt.evidenceHash,
+      sourceJobId: sourceJob.jobId, sourceRunId: sourceJob.runId, sourceAdapterId: adapterId, sourceCapabilityId: sourceJob.capabilityId,
     });
   }
 

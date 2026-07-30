@@ -140,12 +140,17 @@ export function validateDelegationGrantDraft(input) {
   else if (targets.mode === "explicit_fingerprints" && Object.keys(targets).every((key) => ["mode", "values"].includes(key))) normalizedTargets = { mode: "explicit_fingerprints", values: values(targets.values, "targets.values") };
   else error("targets must be one explicit mode");
   const validity = object(draft.validity, "validity");
-  keys(validity, "validity", ["expiresAt"]);
+  if (Object.keys(validity).some((key) => !["notBefore", "expiresAt"].includes(key)) || !Object.hasOwn(validity, "expiresAt")) {
+    error("validity has unknown or missing fields");
+  }
+  const notBefore = validity.notBefore == null ? null : text(validity.notBefore, "validity.notBefore");
   const expiresAt = validity.expiresAt == null ? null : text(validity.expiresAt, "validity.expiresAt");
+  if (notBefore !== null && !Number.isFinite(Date.parse(notBefore))) error("validity.notBefore must be ISO 8601 or null");
   if (expiresAt !== null && !Number.isFinite(Date.parse(expiresAt))) error("validity.expiresAt must be ISO 8601 or null");
+  if (notBefore !== null && expiresAt !== null && Date.parse(notBefore) >= Date.parse(expiresAt)) error("validity.notBefore must be before validity.expiresAt");
   const redaction = object(draft.redaction, "redaction");
   keys(redaction, "redaction", ["publicFields"]);
-  return deepFreeze({ schemaVersion: 1, grantId: text(draft.grantId, "grantId"), issuanceNonce: text(draft.issuanceNonce, "issuanceNonce"), issuer: { subject: "user:a1234", keyId: text(issuer.keyId, "issuer.keyId") }, app: text(draft.app, "app"), accountFingerprint: text(draft.accountFingerprint, "accountFingerprint"), controllers: values(draft.controllers, "controllers"), maxParallelism: 1, authorization: { primitives: values(authorization.primitives, "authorization.primitives", PRIMITIVES), socialActions: values(authorization.socialActions, "authorization.socialActions", SOCIAL), missionOnlyActions: optionalValues(authorization.missionOnlyActions, "authorization.missionOnlyActions", MISSION_ONLY), prohibitedActions }, targets: normalizedTargets, budget: budget(draft.budget), discoveryPolicy: discoveryPolicy(draft.discoveryPolicy), validity: { expiresAt }, redaction: { publicFields: values(redaction.publicFields, "redaction.publicFields", PUBLIC_FIELDS) } });
+  return deepFreeze({ schemaVersion: 1, grantId: text(draft.grantId, "grantId"), issuanceNonce: text(draft.issuanceNonce, "issuanceNonce"), issuer: { subject: "user:a1234", keyId: text(issuer.keyId, "issuer.keyId") }, app: text(draft.app, "app"), accountFingerprint: text(draft.accountFingerprint, "accountFingerprint"), controllers: values(draft.controllers, "controllers"), maxParallelism: 1, authorization: { primitives: values(authorization.primitives, "authorization.primitives", PRIMITIVES), socialActions: values(authorization.socialActions, "authorization.socialActions", SOCIAL), missionOnlyActions: optionalValues(authorization.missionOnlyActions, "authorization.missionOnlyActions", MISSION_ONLY), prohibitedActions }, targets: normalizedTargets, budget: budget(draft.budget), discoveryPolicy: discoveryPolicy(draft.discoveryPolicy), validity: { ...(Object.hasOwn(validity, "notBefore") ? { notBefore } : {}), expiresAt }, redaction: { publicFields: values(redaction.publicFields, "redaction.publicFields", PUBLIC_FIELDS) } });
 }
 
 export function delegationGrantContentHash(grant) { return fingerprint(validateDelegationGrantDraft(grant)); }

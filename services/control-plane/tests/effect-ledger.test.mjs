@@ -49,7 +49,7 @@ function setup(path) {
   return { state, mission, run };
 }
 
-test("beginEffect atomically persists effect_started and reserves total/per-target/frequency budget", () => {
+test("beginEffect atomically reserves not_sent work; only the send boundary persists effect_started", () => {
   const root = mkdtempSync(join(tmpdir(), "effect-ledger-"));
   const { state, mission, run } = setup(join(root, "control.db"));
   try {
@@ -62,9 +62,10 @@ test("beginEffect atomically persists effect_started and reserves total/per-targ
       intent: { surface: "social-effect" },
       idempotencyKey: "follow-target-a",
     });
-    assert.equal(first.status, "started");
+    assert.equal(first.status, "not_sent");
     assert.equal(first.reservation.total, 1);
-    assert.equal(state.listMissionEffects(mission.missionId)[0].status, "started");
+    assert.equal(state.listMissionEffects(mission.missionId)[0].status, "not_sent");
+    assert.equal(ledger.startEffectForExecution(first.effectId).status, "started");
     assert.throws(() => ledger.beginEffect({
       mission,
       deviceRunId: run.deviceRunId,
@@ -127,6 +128,7 @@ test("restart recovery makes started reserved effects terminal ambiguous without
       mission: fixture.mission, deviceRunId: fixture.run.deviceRunId, action: "follow", target: "target-a",
       intent: { surface: "social-effect" }, idempotencyKey: "restart-target-a",
     });
+    new EffectLedger({ state }).startEffectForExecution(started.effectId);
     state.close();
     state = new StateStore({ dbPath: path });
     const recovered = state.listMissionEffects(fixture.mission.missionId).find((effect) => effect.effectId === started.effectId);

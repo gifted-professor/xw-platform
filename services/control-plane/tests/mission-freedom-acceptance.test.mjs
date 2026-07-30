@@ -153,9 +153,11 @@ test("ledger acceptance covers budget reservation, retained notSent retry, aband
     ledger.recordOutcome(notSent.effectId, { status: "not_sent" });
     assert.equal(ledger.abandonNotSent(notSent.effectId).reservationReleased, true);
     const ambiguous = ledger.beginEffect({ mission, deviceRunId: run.deviceRunId, action: "follow", target: "target-a", intent: { surface: "social-effect" }, idempotencyKey: "acceptance-ambiguous" });
+    ledger.startEffectForExecution(ambiguous.effectId);
     ledger.recordOutcome(ambiguous.effectId, { status: "ambiguous" });
     assert.throws(() => ledger.beginEffect({ mission, deviceRunId: run.deviceRunId, action: "follow", target: "target-a", intent: { surface: "social-effect" }, idempotencyKey: "acceptance-ambiguous-retry" }), { code: "AMBIGUOUS_NO_RETRY" });
     const started = ledger.beginEffect({ mission, deviceRunId: run.deviceRunId, action: "follow", target: "target-b", intent: { surface: "social-effect" }, idempotencyKey: "acceptance-restart" });
+    ledger.startEffectForExecution(started.effectId);
     assert.throws(() => ledger.beginEffect({ mission, deviceRunId: run.deviceRunId, action: "follow", target: "target-c", intent: { surface: "social-effect" }, idempotencyKey: "acceptance-budget-exhausted" }), { code: "BUDGET_EXCEEDED" });
     state.close();
     state = new StateStore({ dbPath });

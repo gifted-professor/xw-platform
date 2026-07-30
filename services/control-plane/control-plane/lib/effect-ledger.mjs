@@ -27,7 +27,9 @@ export class EffectLedger {
       targetHash,
       intent,
       idempotencyKey,
-      status: policy.decision === "phc" ? "pending_authorization" : "started",
+      // Reserving budget is not proof that a send began.  Only ECP marks `started` at the
+      // final synchronous boundary immediately before calling an effect adapter.
+      status: policy.decision === "phc" ? "pending_authorization" : "not_sent",
     });
     return { ...result.effect, reused: result.reused };
   }
@@ -47,6 +49,10 @@ export class EffectLedger {
 
   startAuthorizedEffect(effectId) {
     return this.state.startAuthorizedMissionEffect(effectId);
+  }
+
+  startEffectForExecution(effectId) {
+    return this.state.startPreparedMissionEffect(effectId);
   }
 
   retryNotSent(effectId, recheck) {
