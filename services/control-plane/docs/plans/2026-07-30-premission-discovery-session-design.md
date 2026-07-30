@@ -6,6 +6,8 @@ DiscoverySession solves the bootstrap cycle identified by the Standing Grant rev
 
 This design does not enable either feature flag, authorize a live effect, add a public observation API, implement multi-device scheduling, or make delete/profile/settings supported Grant actions. ADR 0010 remains Proposed; nothing here claims implementation or rollout authority.
 
+**Phase1 scope annotation (2026-07-30)**: Standing Grant Phase1 is converged to explicit_target-only. DiscoveryRun lifecycle (Task 2) is implemented but never opened for explicit_target Missions — explicit_target skips DiscoveryRun entirely. The R0 producer (Task 3) is deferred; producer map stays `{}`. Discovery firewall, sealed observation lineage, and verified_discovery Mission compile are not in Phase1 scope. See `docs/plans/2026-07-30-standing-grant-phase1-explicit-target-only.md` for the authoritative Phase1 plan.
+
 ## Signed DiscoveryPolicy (Grant authority, not constants)
 
 Discovery limits are **signed parent Grant authority**. They must live inside Standing Grant v1 `discoveryPolicy`, participate in schema validation, normalizer exact-key checks, canonical signed bytes, content hash, and issuer proofs. Caller-supplied duration/candidate/seed values and unsigned runtime constants are not authority.
