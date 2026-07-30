@@ -2,177 +2,303 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Add a fenced, no-effect pre-Mission DiscoverySession that produces auditable authoritative observations for finite Standing Grant Missions.
+**Goal:** Add a fenced, no-effect pre-Mission DiscoverySession that produces auditable authoritative observations for finite Standing Grant Missions, with Discovery limits carried as **signed Grant DiscoveryPolicy**.
 
-**Architecture:** Reuse existing StateStore, placement, session/lease, job, evidence, Effect Firewall, and ECP components. A DiscoveryRun owns its own fenced tuple and produces immutable private observations; Mission compilation later resolves those rows into fingerprint targets and gets a fresh Mission lease.
+**Architecture:** Reuse existing StateStore, placement, session/lease, job, evidence, Effect Firewall, and ECP components. DiscoveryPolicy is Grant authority (schema + normalizer + canonical hash). A DiscoveryRun is opened by one atomic factory, owns its fenced session/lease/epoch, produces immutable private observations via an exclusive firewall-gated R0 path, seals and releases before Mission compile, and never transfers its tuple. Mission compilation resolves sealed rows into fingerprint targets under named clocks and gets a fresh Mission lease.
 
 **Tech Stack:** Node.js ESM, `node:sqlite` StateStore transactions, existing ControlPlane/DeviceRun/EvidenceStore, Node test runner.
 
+**Status boundary:** ADR 0010 remains Proposed. Both feature flags stay false. This plan does not authorize enablement, deployment, real Grant issuance, or canary.
+
+**Baseline repaired by this plan (current code):**
+
+- Grant exact keys / hash: `control-plane/lib/delegation-grant-policy.mjs:45-76`
+- Grant schema required set: `control-plane/schema/delegation-grant.schema.json:5-13`
+- Session factory own-txn: `control-plane/lib/state-store.mjs:1130-1236` (must not nest)
+- Generic session action without Firewall: `control-plane/lib/control-plane.mjs:1219-1262`
+- Firewall snapshot age 5s: `control-plane/lib/effect-firewall.mjs:3,74-90`
+- Mission verified-discovery 5min constant: `control-plane/lib/mission-policy.mjs:8` + `mission-runtime.mjs:124-143`
+- Authoritative observation rows (pre-lineage): `control-plane/lib/state-store.mjs:356-367,1483-1516`
+- Schema user_version: `control-plane/lib/state-store.mjs:382` (`PRAGMA user_version = 7`)
+- Router session routes (no discovery lifecycle yet): `control-plane/router.mjs:247-273`
+
 ---
 
-### Task 1: Add additive DiscoveryRun and authoritative-observation storage
+### Task 1: Signed DiscoveryPolicy on Standing Grant v1
 
 **Files:**
-- Modify: `control-plane/lib/state-store.mjs`
-- Modify: `tests/control-plane-placement.test.mjs`
-- Create: `tests/discovery-session-state.test.mjs`
+
+- Modify: `control-plane/schema/delegation-grant.schema.json`
+- Modify: `control-plane/lib/delegation-grant-policy.mjs`
+- Modify: `tests/delegation-grant-policy.test.mjs`
+- Modify: `tests/delegation-grant-runtime.test.mjs`
+- Modify fixtures under `tests/fixtures/` that embed Grant drafts (update every draft used by grant tests)
 
 **Step 1: Write the failing test**
 
-Add a v7 fixture migration test and tests for an immutable `discovery_runs` row plus `authoritative_observations` row. Require duplicate byte-identical insert reuse, same identity with changed tuple/source/content hash to throw `AUTHORITATIVE_OBSERVATION_CONFLICT`, append-only recorded/conflict audit events, and reopen persistence. Assert public views omit tuple, recorder, evidence path, raw account, and identity text.
+Extend `tests/delegation-grant-policy.test.mjs` and runtime tests so that:
+
+1. A valid Grant draft **requires** `discoveryPolicy` with exact keys:
+   `enabled`, `allowedPrimitives`, `defaults`, `maxima`, `maxParallelism`, `targetScope`, `identityPolicy`, `clocks`, `retention`, `accessRoles`.
+2. Canonical defaults/maxima match: defaults durationMs=600000, maxPrimitives=80, maxCandidates=10; maxima 1800000/300/50; defaults ≤ maxima; `maxParallelism === 1`.
+3. `allowedPrimitives` accepts only the R0/R1 set (screenshot, dump, focus, launch, back, home, tap, swipe, input, restore — navigation/search expressed as existing primitive names already in `PRIMITIVES` plus any additive focus if introduced consistently). Reject social/payment/publish/delete/profile/settings inside DiscoveryPolicy.
+4. `clocks.snapshotFreshnessMs === 5000` and `clocks.observationCompileWindowMs === 60000`.
+5. `retention.rawScreenshotDays === 7`, `retention.redactedHashAuditDays === 90`.
+6. Unknown top-level Grant field or unknown DiscoveryPolicy field ⇒ `GRANT_POLICY_INVALID`.
+7. Widening maxima beyond schema maxima, defaults > maxima, or `enabled` non-boolean ⇒ fail closed.
+8. `delegationGrantContentHash` / `canonicalGrantIssueSigningBytes` change when DiscoveryPolicy changes; exact-byte replay still idempotent; subset/child Mission path still uses separate effect `budget`.
+9. Runtime issue path: old Grant bytes without DiscoveryPolicy cannot issue for Discovery-capable verified_discovery targets once validator requires the field; malformed issuer still writes no rows.
 
 **Step 2: Run test to verify it fails**
 
-Run: `node --test tests/discovery-session-state.test.mjs tests/control-plane-placement.test.mjs`
+Run: `node --test tests/delegation-grant-policy.test.mjs tests/delegation-grant-runtime.test.mjs`
 
-Expected: FAIL because DiscoveryRun tables, immutable lineage, and migration are absent.
+Expected: FAIL because schema/normalizer have no `discoveryPolicy` and fixtures lack the field.
 
 **Step 3: Write minimal implementation**
 
-Add v8 additive tables/indexes for `discovery_runs`, immutable observation lineage, and append-only discovery events. Store only IDs/hashes/timestamps: grant/hash, DiscoveryRun/session/lease/controller/epoch/job/run, recorder ID, evidence ID/SHA-256, source/content/snapshot hashes, page/target/identity fingerprints. Add transactional create/get/list and insert-only event helpers; no public writer.
+1. Add `discoveryPolicy` to `delegation-grant.schema.json` required + properties (`additionalProperties: false` everywhere).
+2. Extend `validateDelegationGrantDraft` exact key list and add `discoveryPolicy(...)` normalizer that freezes the canonical object; reject unknown keys; keep child effect `budget()` separate.
+3. Ensure `delegationGrantContentHash` / signing payload hash the normalized Grant including DiscoveryPolicy.
+4. Update all Grant fixtures/drafts used by policy/runtime tests.
+5. Do **not** allocate DiscoveryRun/session/lease in this task.
 
 **Step 4: Run test to verify it passes**
 
-Run: `node --test tests/discovery-session-state.test.mjs tests/control-plane-placement.test.mjs`
+Run: `node --test tests/delegation-grant-policy.test.mjs tests/delegation-grant-runtime.test.mjs`
 
-Expected: PASS; legacy rows and idempotency survive v7→v8.
+Expected: PASS; signature/hash/replay/rotation behavior preserved; DiscoveryPolicy is part of signed bytes.
 
 **Step 5: Commit**
 
-`git commit -m "feat(control-plane): persist fenced discovery observations"`
+`git commit -m "feat(control-plane): sign standing grant discovery policy"`
 
-### Task 2: Create and fence the no-effect DiscoveryRun lifecycle
+---
+
+### Task 2: Atomic DiscoveryRun lifecycle, fencing, and governed entrypoints
 
 **Files:**
+
+- Modify: `control-plane/lib/state-store.mjs` (v7→v8 additive tables; `openDiscoveryRunStorage`; state machine; seal/abort/release)
 - Create: `control-plane/lib/discovery-session.mjs`
+- Modify: `control-plane/lib/control-plane.mjs` (governed open/action/seal/abort/status/heartbeat wiring)
+- Modify: `control-plane/router.mjs` only if lifecycle commands are exposed; observation writer routes stay 404/403
+- Create: `tests/discovery-session-state.test.mjs`
+- Create: `tests/discovery-session.test.mjs`
+- Modify: `tests/control-plane-placement.test.mjs` if migration fixture shared
+
+**Step 1: Write the failing test**
+
+1. Migration v7→v8 creates `discovery_runs` + discovery events; legacy rows survive.
+2. `openDiscoveryRunStorage` in **one** `BEGIN IMMEDIATE` creates `{DiscoveryRun, Session, Lease, controllerEpoch}` together; crash between inserts (simulated by failing after N statements / injected fault) leaves zero live allocation.
+3. Pre-checks fail closed with zero rows: missing/inactive Grant, grantHash drift, DiscoveryPolicy.enabled=false, either feature flag false, ADR gate closed, malformed issuer, non-ready/busy device.
+4. State machine: `running → sealing → sealed | aborted | recovery_required`. Seal releases session/lease and persists released tuple hashes + `releaseAt`. After seal, validateSession/lease fails; sealed record still readable.
+5. Heartbeat only while `running`/`sealing`; stale epoch / wrong controller / revocation mid-run ⇒ abort or recovery_required + restore + release.
+6. Governed commands accepted; public observation POST/PATCH/DELETE and generic non-discovery writer paths return 404/403.
+7. Reopen StateStore: sealed/aborted durable; cannot resurrect released lease.
+
+**Step 2: Run test to verify it fails**
+
+Run: `node --test tests/discovery-session-state.test.mjs tests/discovery-session.test.mjs tests/control-plane-placement.test.mjs`
+
+Expected: FAIL because DiscoveryRun factory/tables/lifecycle API are absent.
+
+**Step 3: Write minimal implementation**
+
+1. Additive v8 schema: `discovery_runs` (id, grantId, grantHash, sessionId, leaseId, controllerAgent, controllerEpoch, status, deviceId, policyHash anchors, sealed/release timestamps, released tuple hashes JSON), append-only `discovery_events`.
+2. Implement `openDiscoveryRunStorage` as a single transaction that inlines placement+lease+session+run inserts (**do not** call `createSession()` nested).
+3. Implement seal/abort/status/heartbeat with fencing; on stop paths call existing restore then release.
+4. Wire ControlPlane governed methods; keep flags default false.
+5. No observation ingest and no Mission compile in this task beyond status surfaces needed for tests.
+
+**Step 4: Run test to verify it passes**
+
+Run: `node --test tests/discovery-session-state.test.mjs tests/discovery-session.test.mjs tests/control-plane-placement.test.mjs`
+
+Expected: PASS; dual-flag/ADR/issuer closed paths allocate nothing; seal leaves durable sealed row without live lease.
+
+**Step 5: Commit**
+
+`git commit -m "feat(control-plane): atomic discovery run lifecycle"`
+
+---
+
+### Task 3: Exclusive R0 producer, Effect Firewall, evidence-bound observations
+
+**Files:**
+
+- Modify: `control-plane/lib/discovery-session.mjs`
 - Modify: `control-plane/lib/control-plane.mjs`
 - Modify: `control-plane/lib/effect-firewall.mjs`
-- Modify: `tests/discovery-session.test.mjs`
-
-**Step 1: Write the failing test**
-
-Prove a verified Grant can atomically create one canonical ready/free DiscoveryRun with its own session/lease/tuple. Assert stale epoch, wrong session, controller, Grant hash, or control loss rejects before a producer call; closing any Grant/flag/ADR gate creates zero run/session/lease/job/heartbeat/observation/adapter call.
-
-**Step 2: Run test to verify it fails**
-
-Run: `node --test tests/discovery-session.test.mjs`
-
-Expected: FAIL because no DiscoveryRun lifecycle/fencing API exists.
-
-**Step 3: Write minimal implementation**
-
-Use existing atomic placement and lease/session machinery; do not add a scheduler. Generate the DiscoveryRun tuple before observation, persist it, and auto-heartbeat only while active. On stop, Grant/flag/ADR failure, or control loss, invoke existing restore then release the independent lease. Extend Firewall with a DiscoverySession profile that allows only R0/R1 primitives and blocks every effect surface.
-
-**Step 4: Run test to verify it passes**
-
-Run: `node --test tests/discovery-session.test.mjs tests/mission-explorer-firewall.test.mjs`
-
-Expected: PASS; no social/payment/publish/delete/profile/settings adapter path exists.
-
-**Step 5: Commit**
-
-`git commit -m "feat(control-plane): fence standing grant discovery sessions"`
-
-### Task 3: Bind controlled R0/R1 evidence to append-only observations
-
-**Files:**
-- Modify: `control-plane/lib/control-plane.mjs`
-- Modify: `control-plane/lib/evidence-store.mjs`
-- Modify: `control-plane/lib/state-store.mjs`
+- Modify: `control-plane/lib/state-store.mjs` (lineage columns / insert-only observation API)
+- Modify: `control-plane/lib/evidence-store.mjs` (lookup helpers if needed)
 - Modify: `tests/discovery-session.test.mjs`
 - Modify: `tests/control-plane-evidence.test.mjs`
+- Modify: `tests/mission-explorer-firewall.test.mjs`
 
 **Step 1: Write the failing test**
 
-Use a fake R0 producer that records an evidence artifact through EvidenceStore. Prove ingest verifies the complete DiscoveryRun tuple, evidence ID/SHA-256 existence, recorder identity, and source/content hash before append. Assert forged client record, stale epoch, wrong evidence hash/session/controller, raw paths/text/tokens, and update/delete attempts all fail closed.
+1. `executeDiscoveryPrimitive` / discovery action path requires live DiscoveryRun `running`, valid token+epoch, primitive ∈ signed DiscoveryPolicy.allowedPrimitives, and Firewall allow on **observed** surface before `createJob`.
+2. Generic `executeSessionAction` on a Discovery-owned session with a non-discovery capability is rejected (no bypass onto `control-plane.mjs` generic path).
+3. Firewall DiscoverySession profile blocks: follow, like, collect, comment, DM, delete, profile, settings, payment, publish, unknown, risk-control, login, captcha, identity mismatch — not merely “adapter absent”.
+4. Fake R0 producer records evidence via EvidenceStore; internal ingest verifies full lineage (grant/hash, discoveryRunId, sessionId, epoch, sourceJobId/sourceRunId, evidence ID+SHA-256 existence, recorder, source/content hashes) then appends immutable observation + event in one txn; returns redacted receipt.
+5. Byte-identical duplicate reuses; same key different hash/tuple ⇒ `AUTHORITATIVE_OBSERVATION_CONFLICT`.
+6. Conflict/rejection audit: commit audit event in a transaction that **succeeds before** throwing, so reopen still shows the conflict event even though observation insert did not land.
+7. Forged client record, stale epoch, wrong evidence hash/session/controller, raw paths/text/tokens, update/delete attempts fail closed.
+8. Public projection omits tuple, recorder, evidence path, raw account, identity text.
 
 **Step 2: Run test to verify it fails**
 
-Run: `node --test tests/discovery-session.test.mjs tests/control-plane-evidence.test.mjs`
+Run: `node --test tests/discovery-session.test.mjs tests/control-plane-evidence.test.mjs tests/mission-explorer-firewall.test.mjs`
 
-Expected: FAIL because observation ingest is not lineage-bound.
+Expected: FAIL because exclusive discovery action path, Discovery Firewall profile, and lineage-bound ingest are absent.
 
 **Step 3: Write minimal implementation**
 
-Expose an internal ControlPlane method only to the fenced DiscoveryRun producer; do not add router/devicectl transport. Require evidence index lookup and matching SHA-256, append the immutable observation plus event in one transaction, and return a redacted receipt.
+1. Extend Effect Firewall with DiscoverySession profile driven by signed allowlist + observed surface classification; keep `SNAPSHOT_MAX_AGE_MS=5000` for live action snapshots.
+2. Implement exclusive discovery action boundary; refuse generic session action for Discovery sessions.
+3. Internal-only ingest method (no router/devicectl transport): EvidenceStore index lookup + SHA-256 match; append observation+event; separate committed audit on conflict.
+4. Bind every R0 job to discoveryRunId/sessionId/controllerEpoch; observation stores sourceJobId/sourceRunId.
+5. No Mission compile yet.
 
 **Step 4: Run test to verify it passes**
 
-Run: `node --test tests/discovery-session.test.mjs tests/control-plane-evidence.test.mjs`
+Run: `node --test tests/discovery-session.test.mjs tests/control-plane-evidence.test.mjs tests/mission-explorer-firewall.test.mjs`
 
-Expected: PASS; a StateStore reopen verifies the same lineage and audit history.
+Expected: PASS; no social/payment/publish/delete/profile/settings adapter path; reopen shows lineage + conflict audits.
 
 **Step 5: Commit**
 
-`git commit -m "feat(control-plane): audit discovery observation lineage"`
+`git commit -m "feat(control-plane): fence discovery primitives and observations"`
 
-### Task 4: Compile observations into fresh finite Missions and recheck ECP
+---
+
+### Task 4: Sealed observation → Mission/ECP, named clocks, explicit-target parity
 
 **Files:**
+
+- Modify: `control-plane/lib/mission-policy.mjs` (stop using 5min constant for Discovery-verified path; adopt named clocks)
 - Modify: `control-plane/lib/mission-runtime.mjs`
 - Modify: `control-plane/lib/effect-commit-protocol.mjs`
-- Modify: `control-plane/lib/state-store.mjs`
+- Modify: `control-plane/lib/state-store.mjs` / `discovery-session.mjs` as needed for sealed compile API
 - Modify: `tests/control-plane-mission.test.mjs`
 - Modify: `tests/effect-commit-protocol.test.mjs`
+- Modify: `tests/mission-runtime.test.mjs` (if present coverage needs expansion)
+- Modify: `tests/discovery-session.test.mjs` (seal→compile window)
 
 **Step 1: Write the failing test**
 
-Prove only a <=60-second immutable observation from an active DiscoveryRun compiles a finite child Mission, and it becomes the stable fingerprint target. Test stale/missing, grant/hash drift, evidence/source/tuple/content hash drift, wrong app/account/page/identity, and StateStore reopen. Assert a new Mission DeviceRun gets a separate placement/lease; ECP prepare/execute/retry re-resolve observation and stop before adapter execution.
+Named clocks (injectable `now`):
+
+| Clock | Bound | Persist |
+| --- | --- | --- |
+| `snapshotFreshnessMs=5000` | `deviceSnapshotAt → sealedAt` | both timestamps on sealed observation/run |
+| `observationCompileWindowMs=60000` | `sealedAt → compileNow` | compile reads sealedAt |
+| effect re-observation ≤5000 ms | current adapter observation at each ECP prepare/execute/retry | fresh receipt id/hash, not Discovery screenshot |
+
+Tests must prove:
+
+1. Only a **sealed** observation (lease already released) within both clocks compiles a finite child Mission into stable fingerprint target. Active-run-only compile is rejected.
+2. Stale/missing sealed row, grant/hash drift, evidence/source/tuple/content hash drift, wrong app/account/page/identity, reopen mismatch ⇒ no Mission allocation.
+3. Compiled Mission gets **new** placement/lease/DeviceRun; Discovery tuple not transferred.
+4. ECP prepare/execute/retry re-resolve sealed lineage and require fresh effect observation receipt bound to account/page/identity/target; failure stops before adapter execution.
+5. Discovery-capable ECP construction requires MissionRuntime; direct `EffectCommitProtocol({ missions: null })` (see `effect-commit-protocol.mjs:19-38`) fails closed for discovery paths (regression).
+6. Explicit-target fallback: same Grant/account/budget/ECP/audit binding; identity re-observation rule applied; first canary **collect-only**; not an observation bypass (`mission-runtime.mjs:74-80` membership check alone is insufficient—add parity tests).
+7. Must not accidentally accept the old five-minute Mission `SNAPSHOT_MAX_AGE_MS` for Discovery-verified compile.
 
 **Step 2: Run test to verify it fails**
 
-Run: `node --test tests/control-plane-mission.test.mjs tests/effect-commit-protocol.test.mjs`
+Run: `node --test tests/control-plane-mission.test.mjs tests/effect-commit-protocol.test.mjs tests/discovery-session.test.mjs`
 
-Expected: FAIL because current observation rows lack DiscoveryRun lineage.
+Expected: FAIL because compile still expects live/non-lineage rows and 5min freshness.
 
 **Step 3: Write minimal implementation**
 
-Resolve only the private immutable record; never reuse caller hashes. Enforce five-second capture freshness and 60-second compile window, then persist only hash anchors with the compiled target. At Mission DeviceRun/ECP boundaries recheck active Grant, lineage, evidence/hash, and fresh current observation.
+1. Define exported named clock constants for Discovery (do not repurpose mission-policy 5min recovery constant for this path).
+2. Compile API resolves private sealed record only; persist hash anchors with compiled target.
+3. Mission DeviceRun/ECP boundaries recheck active Grant, sealed lineage, evidence/hash, and fresh current observation receipt.
+4. Require MissionRuntime for discovery-capable ECP; add constructor guard/regression.
+5. Explicit-target path shares Grant subset/identity/budget/ECP/audit checks; canary collect-only gate.
 
 **Step 4: Run test to verify it passes**
 
-Run: `node --test tests/control-plane-mission.test.mjs tests/effect-commit-protocol.test.mjs`
+Run: `node --test tests/control-plane-mission.test.mjs tests/effect-commit-protocol.test.mjs tests/discovery-session.test.mjs`
 
-Expected: PASS; failed checks create no new allocation/effect/adapter call.
+Expected: PASS; failed checks create no new allocation/effect/adapter call; explicit canary collect-only holds.
 
 **Step 5: Commit**
 
-`git commit -m "feat(control-plane): compile discovery observations into missions"`
+`git commit -m "feat(control-plane): compile sealed discovery observations"`
 
-### Task 5: Add retention, redaction, and gate-matrix regression coverage
+---
+
+### Task 5: Retention sweeper, redaction/ACL, gate matrix, acceptance docs
 
 **Files:**
+
 - Modify: `control-plane/lib/evidence-store.mjs`
 - Modify: `control-plane/lib/state-store.mjs`
-- Modify: `control-plane/bootstrap.mjs`
+- Modify: `control-plane/bootstrap.mjs` (startup/scheduled sweeper registration)
+- Modify: `control-plane/lib/discovery-session.mjs` or small `discovery-retention.mjs` if needed
 - Modify: `tests/control-plane-server.test.mjs`
 - Modify: `tests/discovery-session.test.mjs`
-- Create: `docs/agent-entry-discovery-session.md`
+- Create: `docs/agent-entry-discovery-session.md` (internal boundary only; no secrets)
 
 **Step 1: Write the failing test**
 
-Cover seven-day restricted raw artifact retention, 90-day redacted lineage retention, public redaction, and flag/ADR/issuer matrix. Each closed gate and missing/malformed issuer path must leave zero DiscoveryRun/session/lease/job/heartbeat/observation/Mission/effect/approval/adapter call. Legacy non-Mission R2 remains manual.
+Retention/ACL:
+
+1. Sweeper trigger: invoked from bootstrap/startup path and as an explicit callable with injectable clock (no hidden Windows-only config dependency in unit tests).
+2. Raw screenshot files older than 7d purged; evidence ID + SHA-256 rows retained; public projection never includes raw path after purge.
+3. Redacted hashes/lineage/audit older than 90d purged per policy; newer retained.
+4. Failure mid-sweep is retryable and idempotent; partial purge still leaves consistent hash/ID rows; audit receipt recorded per run.
+5. ACL: only `user` + independent reviewer roles pass restricted access gate; public/observer projections redact account/identity text, paths, serials, tokens, raw screenshots, full tuples.
+
+Gate matrix (each closed path ⇒ **zero** DiscoveryRun/session/lease/job/heartbeat/observation/Mission/effect/approval/adapter call):
+
+- Mission flag false
+- Standing Grant flag false
+- ADR 0010 not accepted / gate closed
+- malformed / missing issuer allowlist
+- DiscoveryPolicy.enabled=false
+- revoked Grant / grantHash drift
+
+Also: legacy non-Mission R2 remains manual; multi-device/draft/delete/profile/settings still absent (assert no code path enabled). Flags default false at end of suite.
 
 **Step 2: Run test to verify it fails**
 
 Run: `node --test tests/discovery-session.test.mjs tests/control-plane-server.test.mjs`
 
-Expected: FAIL because retention and complete gate accounting are absent.
+Expected: FAIL because sweeper/ACL/complete gate accounting are absent.
 
 **Step 3: Write minimal implementation**
 
-Add a bounded retention sweeper that removes only expired restricted raw artifacts while retaining redacted hashes/audit. Keep default flags false; flag-on validates issuer config before startup. Document approved internal boundary, forbidden public endpoints, and the zero-allocation gate check without showing real identities, evidence, or secrets.
+1. Bounded retention sweeper with injectable clock, audit receipts, idempotent raw purge, preserved hash/ID.
+2. Local ACL enforcement point for restricted evidence; public redaction helpers.
+3. Startup registration in bootstrap without enabling flags.
+4. Document approved internal boundary, forbidden public endpoints, zero-allocation gate check in `docs/agent-entry-discovery-session.md` without real identities/evidence/secrets.
+5. Keep default flags false; flag-on still requires later ADR acceptance + independent review (out of this plan’s enablement scope).
 
 **Step 4: Run test to verify it passes**
 
 Run: `node --test tests/discovery-session.test.mjs tests/control-plane-server.test.mjs && npm test && npm run check && git diff --check`
 
-Expected: PASS; no feature is enabled and all public projections remain redacted.
+Expected: PASS; no feature enabled; public projections redacted; full gate matrix holds.
 
 **Step 5: Commit**
 
-`git commit -m "test(control-plane): cover discovery session retention and gates"`
+`git commit -m "test(control-plane): cover discovery retention and gates"`
+
+---
 
 ## Deferred explicitly
 
-Do not implement multi-device DiscoverySession scheduling, two-stage draft Mission workflow, default strategy C, or actual delete/profile/settings capability paths in this plan. Any live canary requires ADR acceptance, both flags explicitly enabled in a later task, independent review, and the existing restoration/evidence/zero-cleanup gates.
+Do not implement in this plan:
+
+- multi-device DiscoverySession scheduling
+- two-stage draft Mission workflow
+- autonomous “strategy C” as default (explicit targets remain the documented initial collect-only fallback)
+- actual delete/profile/settings capability paths
+- enabling either feature flag, issuing a real Grant, deployment, or live canary
+
+Any live canary requires ADR 0010 acceptance, both flags explicitly enabled in a **later** reviewed task, independent review, and existing restoration/evidence/zero-cleanup gates.

@@ -27,3 +27,12 @@ Verified-discovery children additionally depend on proposed ADR 0010. Until its
 pre-Mission DiscoverySession lineage is implemented and independently reviewed, a
 client-supplied snapshot/evidence hash is never authority and explicit targets remain the
 only governed fallback.
+
+When ADR 0010 Discovery is in scope, Standing Grant v1 must carry a signed
+`discoveryPolicy` object inside the same strict schema, normalizer, canonical
+signed bytes, and content hash as the rest of the Grant. Discovery defaults,
+maxima, R0/R1 allowlists, one-hop scope, identity rule, named clocks, and
+retention are Grant authority—not caller input or unsigned runtime constants.
+Child effect budgets remain the separate `budget` object. Grants that omit or
+widen DiscoveryPolicy are rejected for Discovery open. This dependency does not
+implement ADR 0010, enable flags, or authorize Discovery allocation by itself.
