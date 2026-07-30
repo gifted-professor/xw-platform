@@ -47,7 +47,7 @@ function openInput(fixture, overrides = {}) {
     grantHash: fixture.grant.grantHash,
     controllerAgent: "agent:runner",
     authorityNodeId: AUTHORITY,
-    gates: { missionAutoApprovalEnabled: true, standingGrantEnabled: true, adrAccepted: true, issuerReady: true },
+    gates: { missionAutoApprovalEnabled: true, standingGrantEnabled: true, adr0008Accepted: true, adr0010Accepted: true, issuerReady: true },
     ...overrides,
   };
 }
@@ -74,10 +74,11 @@ test("v7 migrates additively to v8 discovery storage and open is one fenced allo
 
 test("closed gate, disabled policy, grant drift, and a second open leave zero new allocation", () => {
   for (const mutation of [
-    { gates: { missionAutoApprovalEnabled: false, standingGrantEnabled: true, adrAccepted: true, issuerReady: true } },
-    { gates: { missionAutoApprovalEnabled: true, standingGrantEnabled: false, adrAccepted: true, issuerReady: true } },
-    { gates: { missionAutoApprovalEnabled: true, standingGrantEnabled: true, adrAccepted: false, issuerReady: true } },
-    { gates: { missionAutoApprovalEnabled: true, standingGrantEnabled: true, adrAccepted: true, issuerReady: false } },
+    { gates: { missionAutoApprovalEnabled: false, standingGrantEnabled: true, adr0008Accepted: true, adr0010Accepted: true, issuerReady: true } },
+    { gates: { missionAutoApprovalEnabled: true, standingGrantEnabled: false, adr0008Accepted: true, adr0010Accepted: true, issuerReady: true } },
+    { gates: { missionAutoApprovalEnabled: true, standingGrantEnabled: true, adr0008Accepted: false, adr0010Accepted: true, issuerReady: true } },
+    { gates: { missionAutoApprovalEnabled: true, standingGrantEnabled: true, adr0008Accepted: true, adr0010Accepted: false, issuerReady: true } },
+    { gates: { missionAutoApprovalEnabled: true, standingGrantEnabled: true, adr0008Accepted: true, adr0010Accepted: true, issuerReady: false } },
     { grantHash: "drifted" },
   ]) {
     const f = setup();
@@ -235,4 +236,37 @@ test("terminal CAS emits one release event and late boundaries cannot resurrect 
     assert.equal(f.state.getDiscoveryRun(run.discoveryRunId).status, "sealed");
     assert.equal(f.state.db.prepare("SELECT COUNT(*) AS count FROM discovery_events WHERE discovery_run_id=? AND type IN ('discovery_run.sealed', 'discovery_run.aborted', 'discovery_run.recovery_required')").get(run.discoveryRunId).count, 1);
   } finally { f.state.close(); rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test("every live authority loss records exactly one typed durable terminal event at every boundary", () => {
+  const cases = [
+    ["revoke", (f) => f.state.revokeDelegationGrant(f.grant.grantId), "GRANT_NOT_ACTIVE"],
+    ["gate", (_f, input) => { input.gates.adr0010Accepted = false; }, "DISCOVERY_GATE_CLOSED"],
+    ["ready", (f, _input, run) => f.state.db.prepare("UPDATE devices SET online=0 WHERE device_id=?").run(run.deviceId), "DISCOVERY_READINESS_LOST"],
+    ["policy", (f) => f.state.db.prepare("UPDATE delegation_grants SET grant_json=? WHERE grant_id=?").run(JSON.stringify({ ...f.grant, discoveryPolicy: { ...f.grant.discoveryPolicy, enabled: false } }), f.grant.grantId), "DISCOVERY_POLICY_DISABLED"],
+    ["hash", (f) => f.state.db.prepare("UPDATE delegation_grants SET grant_hash='live-drift' WHERE grant_id=?").run(f.grant.grantId), "GRANT_HASH_DRIFT"],
+    ["foreignLease", (f, _input, run) => f.state.db.prepare("UPDATE leases SET owner_discovery_run_id='foreign-run' WHERE lease_id=?").run(run.leaseId), "DISCOVERY_CONTROL_LOST"],
+    ["missingLease", (f, _input, run) => f.state.db.prepare("DELETE FROM leases WHERE lease_id=?").run(run.leaseId), "DISCOVERY_CONTROL_LOST"],
+    ["expiredLease", (f, _input, run) => f.state.db.prepare("UPDATE leases SET expires_at=0 WHERE lease_id=?").run(run.leaseId), "DISCOVERY_CONTROL_LOST"],
+    ["sessionless", (f, _input, run) => f.state.db.prepare("DELETE FROM sessions WHERE session_id=?").run(run.sessionId), "DISCOVERY_CONTROL_LOST"],
+    ["epochMismatch", (_f, input) => { input.tuple.controllerEpoch = 0; }, "DISCOVERY_TUPLE_MISMATCH"],
+  ];
+  const methods = ["heartbeatDiscoveryRunStorage", "sealDiscoveryRunStorage", "abortDiscoveryRunStorage"];
+  for (const method of methods) {
+    for (const [_name, mutate, code] of cases) {
+      const f = setup();
+      try {
+        const run = f.state.openDiscoveryRunStorage(openInput(f));
+        const input = { discoveryRunId: run.discoveryRunId, tuple: { ...run.tuple }, gates: { ...openInput(f).gates } };
+        mutate(f, input, run);
+        assert.throws(() => f.state[method](input), { code });
+        const events = f.state.db.prepare(`
+          SELECT type, payload_json FROM discovery_events
+          WHERE discovery_run_id=? AND type IN ('discovery_run.aborted', 'discovery_run.recovery_required')
+        `).all(run.discoveryRunId);
+        assert.equal(events.length, 1);
+        assert.equal(JSON.parse(events[0].payload_json).reason, code);
+      } finally { f.state.close(); rmSync(f.root, { recursive: true, force: true }); }
+    }
+  }
 });

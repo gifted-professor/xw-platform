@@ -10,7 +10,7 @@ import { StateStore } from "../control-plane/lib/state-store.mjs";
 
 const AUTHORITY = "DESKTOP-3I1EVHE";
 
-function fixture({ discoveryAdrAccepted = true, discoveryAdrPath = undefined } = {}) {
+function fixture({ adrAccepted = true, discoveryAdrAccepted = true, discoveryAdrPath = undefined } = {}) {
   const root = mkdtempSync(join(tmpdir(), "discovery-control-"));
   const state = new StateStore({ dbPath: join(root, "control.db") });
   state.upsertNode({ nodeId: AUTHORITY, authority: true });
@@ -25,7 +25,7 @@ function fixture({ discoveryAdrAccepted = true, discoveryAdrPath = undefined } =
   };
   state.issueDelegationGrant({ grant, grantHash: grant.grantHash, proofHash: "proof", issuerSubject: "user:a1234", issuerKeyId: "test", allowlistVersion: 1 });
   const control = new ControlPlane({
-    state, capabilities: new CapabilityRegistry([]), authorityNodeId: AUTHORITY, missionAutoApprovalEnabled: true, standingGrantEnabled: true, adrAccepted: true,
+    state, capabilities: new CapabilityRegistry([]), authorityNodeId: AUTHORITY, missionAutoApprovalEnabled: true, standingGrantEnabled: true, adrAccepted,
     discoveryIssuerReady: true, discoveryAdrAccepted, discoveryAdrPath,
   });
   return { root, state, grant, control };
@@ -61,6 +61,39 @@ test("DiscoverySession requires separately accepted ADR0010, not the Mission ADR
     }), { code: "DISCOVERY_GATE_CLOSED" });
     assert.equal(f.state.listDiscoveryRuns().length, 0);
   } finally { f.state.close(); rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test("DiscoverySession opens only when ADR0008 and ADR0010 are both accepted", () => {
+  for (const [adrAccepted, discoveryAdrAccepted, shouldOpen] of [
+    [false, false, false], [false, true, false], [true, false, false], [true, true, true],
+  ]) {
+    const f = fixture({ adrAccepted, discoveryAdrAccepted });
+    try {
+      if (shouldOpen) {
+        assert.equal(f.control.openDiscoveryRun({ grantId: f.grant.grantId, controllerAgent: "agent:runner" }).status, "running");
+      } else {
+        assert.throws(() => f.control.openDiscoveryRun({ grantId: f.grant.grantId, controllerAgent: "agent:runner" }), { code: "DISCOVERY_GATE_CLOSED" });
+      }
+      assert.equal(f.state.listDiscoveryRuns().length, shouldOpen ? 1 : 0);
+      assert.equal(f.state.listLeases().length, shouldOpen ? 1 : 0);
+      assert.equal(f.state.db.prepare("SELECT COUNT(*) AS count FROM discovery_events").get().count, shouldOpen ? 1 : 0);
+    } finally { f.state.close(); rmSync(f.root, { recursive: true, force: true }); }
+  }
+});
+
+test("flipping either accepted ADR while running commits one typed terminal event", () => {
+  for (const override of ["adrAcceptedOverride", "discoveryAdrAcceptedOverride"]) {
+    const f = fixture();
+    try {
+      const run = f.control.openDiscoveryRun({ grantId: f.grant.grantId, controllerAgent: "agent:runner" });
+      f.control[override] = false;
+      assert.throws(() => f.control.heartbeatDiscoveryRun({ discoveryRunId: run.discoveryRunId, tuple: run.tuple }), { code: "DISCOVERY_GATE_CLOSED" });
+      assert.equal(f.control.getDiscoveryRun(run.discoveryRunId).status, "aborted");
+      const events = f.state.db.prepare("SELECT payload_json FROM discovery_events WHERE discovery_run_id=? AND type='discovery_run.aborted'").all(run.discoveryRunId);
+      assert.equal(events.length, 1);
+      assert.equal(JSON.parse(events[0].payload_json).reason, "DISCOVERY_GATE_CLOSED");
+    } finally { f.state.close(); rmSync(f.root, { recursive: true, force: true }); }
+  }
 });
 
 test("DiscoverySession lazily rereads its dedicated ADR0010 path at each live boundary", () => {

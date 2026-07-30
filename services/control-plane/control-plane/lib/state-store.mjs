@@ -2103,7 +2103,8 @@ export class StateStore {
     if (fingerprint(policy) !== row.policy_hash) {
       throw new ControlPlaneError("DISCOVERY_POLICY_DRIFT", "DiscoveryPolicy changed after allocation", { status: 409 });
     }
-    if (!gates?.missionAutoApprovalEnabled || !gates?.standingGrantEnabled || !gates?.adrAccepted || !gates?.issuerReady) {
+    if (!gates?.missionAutoApprovalEnabled || !gates?.standingGrantEnabled
+      || !gates?.adr0008Accepted || !gates?.adr0010Accepted || !gates?.issuerReady) {
       throw new ControlPlaneError("DISCOVERY_GATE_CLOSED", "DiscoveryRun gate is closed", { status: 409 });
     }
   }
@@ -2177,7 +2178,8 @@ export class StateStore {
       const policy = grant.discoveryPolicy;
       if (!policy || policy.enabled !== true) throw new ControlPlaneError("DISCOVERY_POLICY_DISABLED", "DiscoveryPolicy is not enabled", { status: 409 });
       if (policy.maxParallelism !== 1) throw new ControlPlaneError("PARALLELISM_UNSUPPORTED", "DiscoveryPolicy parallelism must be one", { status: 409 });
-      if (!gates.missionAutoApprovalEnabled || !gates.standingGrantEnabled || !gates.adrAccepted || !gates.issuerReady) {
+      if (!gates.missionAutoApprovalEnabled || !gates.standingGrantEnabled
+        || !gates.adr0008Accepted || !gates.adr0010Accepted || !gates.issuerReady) {
         throw new ControlPlaneError("DISCOVERY_GATE_CLOSED", "DiscoveryRun gate is closed", { status: 409 });
       }
       const requestedNodeId = placementRequest.placement.nodeId || authorityNodeId;

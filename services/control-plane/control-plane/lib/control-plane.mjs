@@ -192,7 +192,8 @@ export class ControlPlane {
       gates: () => ({
         missionAutoApprovalEnabled: this.missionAutoApprovalEnabled,
         standingGrantEnabled: this.standingGrantEnabled,
-        adrAccepted: this.isAdr0010Accepted(),
+        adr0008Accepted: this.isAdr0008Accepted(),
+        adr0010Accepted: this.isAdr0010Accepted(),
         issuerReady: this.discoveryIssuerReady,
       }),
     });
