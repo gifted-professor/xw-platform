@@ -349,6 +349,13 @@ test("v1 SQLite state migrates additively and preserves legacy idempotency", () 
       token_hash TEXT NOT NULL, canary INTEGER NOT NULL,
       created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
     );
+    CREATE TABLE missions (
+      mission_id TEXT PRIMARY KEY, idempotency_key TEXT NOT NULL UNIQUE,
+      issuer_actor_id TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1,
+      mission_hash TEXT NOT NULL, content_hash TEXT NOT NULL, policy_json TEXT NOT NULL,
+      status TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL, revoked_at INTEGER, revoked_reason TEXT
+    );
     PRAGMA user_version = 1;
   `);
   raw.prepare(`
@@ -387,6 +394,8 @@ test("v1 SQLite state migrates additively and preserves legacy idempotency", () 
     assert.ok(state.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='discovery_runs'").get());
     assert.ok(state.db.prepare("PRAGMA table_info(jobs)").all().some((column) => column.name === "placement_decision_json"));
     assert.ok(state.db.prepare("PRAGMA table_info(sessions)").all().some((column) => column.name === "scope_capability_id"));
+    assert.ok(state.db.prepare("PRAGMA table_info(missions)").all().some((column) => column.name === "parent_grant_id"));
+    assert.ok(state.db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='missions_parent_grant_idx'").get());
     assert.equal(state.requireJob("job_legacy").status, "succeeded");
     state.upsertNode({ nodeId: authorityNodeId, authority: true });
     state.upsertDevice({

@@ -264,7 +264,6 @@ export class StateStore {
         revoked_reason TEXT
       );
       CREATE INDEX IF NOT EXISTS missions_status_idx ON missions(status, expires_at);
-      CREATE INDEX IF NOT EXISTS missions_parent_grant_idx ON missions(parent_grant_id, status);
       CREATE TABLE IF NOT EXISTS mission_events (
         event_id INTEGER PRIMARY KEY AUTOINCREMENT,
         mission_id TEXT NOT NULL REFERENCES missions(mission_id),
