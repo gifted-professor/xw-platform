@@ -430,12 +430,34 @@ export class ControlPlane {
     return this.state.recordAuthoritativeObservation(observation);
   }
 
+  // Internal-only parser boundary.  Client hints are discarded; only a known parser can supply
+  // the observed surface and the ControlPlane supplies every authority tuple field itself.
+  recordExplicitObservationReceipt({ tuple, parserReceipt }) {
+    const run = this.assertControlTuple(tuple);
+    const mission = this.missions.requireActiveMission(run.missionId);
+    if (!mission.parentGrantId || !["xhs.explicit_observation_parser"].includes(parserReceipt?.producer)) {
+      throw new ControlPlaneError("EXPLICIT_RECEIPT_PRODUCER_INVALID", "explicit receipt requires the allowlisted parser", { status: 409 });
+    }
+    const fields = ["pageFingerprint", "targetFingerprint", "observedAt", "evidenceId", "evidenceHash"];
+    if (fields.some((key) => typeof parserReceipt?.[key] !== "string" || parserReceipt[key] === "")) {
+      throw new ControlPlaneError("EXPLICIT_RECEIPT_INVALID", "parser receipt is incomplete", { status: 400 });
+    }
+    return this.state.recordExplicitObservationReceipt({
+      grantId: mission.parentGrantId, grantHash: mission.parentGrantHash, missionId: mission.missionId,
+      deviceRunId: run.deviceRunId, leaseId: run.leaseId, sessionId: run.sessionId,
+      controllerEpoch: run.controllerEpoch, app: mission.app, accountFingerprint: mission.account,
+      pageFingerprint: parserReceipt.pageFingerprint, targetFingerprint: parserReceipt.targetFingerprint,
+      observedAt: parserReceipt.observedAt, evidenceId: parserReceipt.evidenceId, evidenceHash: parserReceipt.evidenceHash,
+    });
+  }
+
   createEffectCommitProtocol(handlers) {
     return new EffectCommitProtocol({
       state: this.state,
       ledger: this.effectLedger,
       deviceRuns: this.deviceRuns,
       missions: this.missions,
+      evidence: this.evidence,
       ...handlers,
     });
   }

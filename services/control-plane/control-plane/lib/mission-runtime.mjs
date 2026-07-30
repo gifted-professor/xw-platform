@@ -162,6 +162,40 @@ export class MissionRuntime {
     }
   }
 
+  // Parent Grants are live authority, not creation-time metadata.  Every effect boundary
+  // re-reads the durable parent record so revocation or immutable-hash drift cannot be
+  // bypassed by retaining an old Mission object in memory.
+  verifyParentGrant(mission, { action = null, target = null } = {}) {
+    const current = mission?.missionId ? this.state.getMissionForRuntime(mission.missionId) : mission;
+    if (!current?.parentGrantId) return { ok: true };
+    const record = this.state.getDelegationGrantRecord(current.parentGrantId);
+    if (!record || record.status !== "active") return { ok: false, code: "PARENT_GRANT_INACTIVE" };
+    if (record.grantHash !== current.parentGrantHash) return { ok: false, code: "PARENT_GRANT_HASH_DRIFT" };
+    const parent = record.grant;
+    if (parent.app !== current.app || parent.accountFingerprint !== current.account
+      || !Array.isArray(current.controllers) || current.controllers.some((controller) => !parent.controllers.includes(controller))) {
+      return { ok: false, code: "PARENT_GRANT_SUBSET_INVALID" };
+    }
+    const actions = current.scope?.actions || [];
+    const allowed = new Set([...(parent.authorization?.primitives || []), ...(parent.authorization?.socialActions || []), ...(parent.authorization?.missionOnlyActions || [])]);
+    if (actions.some((item) => !allowed.has(item) || parent.authorization?.prohibitedActions?.includes(item))
+      || (action && (!allowed.has(action) || parent.authorization?.prohibitedActions?.includes(action)))) {
+      return { ok: false, code: "PARENT_GRANT_SUBSET_INVALID" };
+    }
+    if (parent.targets?.mode === "explicit_fingerprints") {
+      const targets = current.scope?.targets?.values || [];
+      if (targets.some((item) => !parent.targets.values.includes(item)) || (target && !parent.targets.values.includes(target))) {
+        return { ok: false, code: "PARENT_GRANT_SUBSET_INVALID" };
+      }
+    }
+    const maxima = parent.budget?.maxima;
+    if (!maxima || current.scope.totalCount > maxima.totalCount || current.scope.perTargetCount > maxima.perTargetCount
+      || current.scope.frequency.count > maxima.frequency.count || current.scope.frequency.windowSeconds > maxima.frequency.windowSeconds) {
+      return { ok: false, code: "PARENT_GRANT_SUBSET_INVALID" };
+    }
+    return { ok: true, mission: current, parent };
+  }
+
   requireActiveMission(missionId) {
     const mission = this.state.getMissionForRuntime(missionId);
     if (!mission) throw new ControlPlaneError("MISSION_NOT_FOUND", `unknown mission ${missionId}`, { status: 404 });
@@ -176,6 +210,8 @@ export class MissionRuntime {
     if (!discovery.ok) {
       throw new ControlPlaneError(discovery.code, "Mission verified discovery is no longer authoritative", { status: 409 });
     }
+    const parent = this.verifyParentGrant(mission);
+    if (!parent.ok) throw new ControlPlaneError(parent.code, "Mission parent Grant is no longer authoritative", { status: 409 });
     return mission;
   }
 

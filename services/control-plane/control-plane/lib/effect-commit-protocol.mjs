@@ -16,8 +16,34 @@ function correctnessCode(mission, target, result) {
   return null;
 }
 
+function consumeExplicitReceipt(state, evidence, input) {
+  if (!input.mission?.parentGrantId) return null;
+  if (typeof input.observationReceiptId !== "string" || input.observationReceiptId === "") {
+    return "EXPLICIT_RECEIPT_REQUIRED";
+  }
+  const run = state.getDeviceRun(input.tuple.deviceRunId);
+  try {
+    const receipt = state.getExplicitObservationReceipt(input.observationReceiptId);
+    if (!receipt || !evidence || typeof evidence.findByIdAndHash !== "function") return "EXPLICIT_RECEIPT_EVIDENCE_UNAVAILABLE";
+    evidence.findByIdAndHash(receipt.evidenceId, receipt.evidenceHash);
+    state.consumeExplicitObservationReceipt({
+      receiptId: input.observationReceiptId,
+      missionId: input.mission.missionId,
+      deviceRunId: input.tuple.deviceRunId,
+      leaseId: run?.leaseId,
+      sessionId: input.tuple.sessionId,
+      controllerEpoch: input.tuple.controllerEpoch,
+      action: input.action,
+      targetFingerprint: targetFingerprint(input.target),
+    });
+    return null;
+  } catch (error) {
+    return error?.code || "EXPLICIT_RECEIPT_INVALID";
+  }
+}
+
 export class EffectCommitProtocol {
-  constructor({ state, ledger, deviceRuns, missions = null, recheck, execute, verify, restore, recordEvidence = null } = {}) {
+  constructor({ state, ledger, deviceRuns, missions = null, evidence = null, recheck, execute, verify, restore, recordEvidence = null } = {}) {
     if (!state || !ledger || !deviceRuns) throw new TypeError("ECP requires state, ledger, and deviceRuns");
     if (typeof recheck !== "function" || typeof execute !== "function" || typeof verify !== "function" || typeof restore !== "function") {
       throw new TypeError("ECP requires recheck, execute, verify, and restore handlers");
@@ -26,6 +52,7 @@ export class EffectCommitProtocol {
     this.ledger = ledger;
     this.deviceRuns = deviceRuns;
     this.missions = missions;
+    this.evidence = evidence;
     this.recheck = recheck;
     this.execute = execute;
     this.verify = verify;
@@ -34,6 +61,8 @@ export class EffectCommitProtocol {
   }
 
   async prepare(input) {
+    const parent = this.missions?.verifyParentGrant(input.mission, { action: input.action, target: input.target });
+    if (parent && !parent.ok) return blocked(parent.code);
     const discovery = this.missions?.verifyAuthoritativeDiscovery(input.mission);
     if (discovery && !discovery.ok) return blocked(discovery.code);
     const policy = evaluateMissionEffect(input.mission, { action: input.action, target: input.target });
@@ -57,6 +86,11 @@ export class EffectCommitProtocol {
     const { effect, rechecked, policy, ...input } = prepared;
     let outcome = null;
     try {
+      const parent = this.missions?.verifyParentGrant(input.mission, { action: input.action, target: input.target });
+      if (parent && !parent.ok) {
+        outcome = this.ledger.recordOutcome(effect.effectId, { status: "cancelled" });
+        return blocked(parent.code);
+      }
       const discovery = this.missions?.verifyAuthoritativeDiscovery(input.mission);
       if (discovery && !discovery.ok) {
         outcome = this.ledger.recordOutcome(effect.effectId, { status: "cancelled" });
@@ -68,6 +102,14 @@ export class EffectCommitProtocol {
       if (code) {
         outcome = this.ledger.recordOutcome(effect.effectId, { status: "cancelled" });
         return blocked(code);
+      }
+      // This is the last synchronous boundary before the adapter.  It consumes the receipt in
+      // a short SQLite transaction that rechecks the live parent and exact tuple; no adapter
+      // await can run while the StateStore holds BEGIN IMMEDIATE.
+      const receiptCode = consumeExplicitReceipt(this.state, this.evidence, input);
+      if (receiptCode) {
+        outcome = this.ledger.recordOutcome(effect.effectId, { status: "cancelled" });
+        return blocked(receiptCode);
       }
       if (policy.decision === "phc") this.ledger.startAuthorizedEffect(effect.effectId);
       const execution = await this.execute({ ...input, effectId: effect.effectId, target: current.targetFingerprint });
@@ -101,6 +143,8 @@ export class EffectCommitProtocol {
   async retryNotSentInPlace(input) {
     const { effectId, tuple, mission, target } = input || {};
     this.deviceRuns.assertControlTuple(tuple);
+    const parent = this.missions?.verifyParentGrant(mission, { action: input?.action, target });
+    if (parent && !parent.ok) return blocked(parent.code);
     const discovery = this.missions?.verifyAuthoritativeDiscovery(mission);
     if (discovery && !discovery.ok) return blocked(discovery.code);
     const effect = this.state.listMissionEffects(mission?.missionId)
@@ -120,8 +164,25 @@ export class EffectCommitProtocol {
     const retried = this.ledger.retryNotSent(effectId, { rechecked: true });
     let outcome = null;
     try {
-      const execution = await this.execute({ ...input, action, effectId, target: rechecked.targetFingerprint });
-      const verification = await this.verify({ ...input, action, effectId, execution, afterState: rechecked.beforeState });
+      const liveParent = this.missions?.verifyParentGrant(mission, { action, target });
+      if (liveParent && !liveParent.ok) {
+        outcome = this.ledger.recordOutcome(effectId, { status: "cancelled" });
+        return blocked(liveParent.code);
+      }
+      this.deviceRuns.assertControlTuple(tuple);
+      const current = await this.recheck(input);
+      const currentCode = correctnessCode(mission, target, current);
+      if (currentCode) {
+        outcome = this.ledger.recordOutcome(effectId, { status: "cancelled" });
+        return blocked(currentCode);
+      }
+      const receiptCode = consumeExplicitReceipt(this.state, this.evidence, input);
+      if (receiptCode) {
+        outcome = this.ledger.recordOutcome(effectId, { status: "cancelled" });
+        return blocked(receiptCode);
+      }
+      const execution = await this.execute({ ...input, action, effectId, target: current.targetFingerprint });
+      const verification = await this.verify({ ...input, action, effectId, execution, afterState: current.beforeState });
       outcome = this.ledger.recordOutcome(effectId, {
         status: verification?.ok === true ? "verified" : "ambiguous",
         evidenceRefs: verification?.evidenceRefs || [],

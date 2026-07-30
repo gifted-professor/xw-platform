@@ -42,7 +42,7 @@ index d6ed92f..c42f09e 100644
 @@ -53,6 +53,24 @@ test("XHS adapter uses a per-device loopback serve and fail-closed verifier", as
    }), { ok: false, ambiguous: true, mode: "custom" });
  });
- 
+
 +test("default production R0 XHS capabilities emit a controlled Discovery receipt", async () => {
 +  const adapter = createXhsAdapter({
 +    fetchImpl: async (_url, options) => {
