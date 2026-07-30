@@ -16,7 +16,7 @@ function correctnessCode(mission, target, result) {
   return null;
 }
 
-function consumeExplicitReceipt(state, evidence, input) {
+function verifyExplicitReceiptEvidence(state, evidence, input) {
   if (!input.mission?.parentGrantId) return null;
   if (typeof input.observationReceiptId !== "string" || input.observationReceiptId === "") {
     return "EXPLICIT_RECEIPT_REQUIRED";
@@ -26,17 +26,7 @@ function consumeExplicitReceipt(state, evidence, input) {
     const receipt = state.getExplicitObservationReceipt(input.observationReceiptId);
     if (!receipt || !evidence || typeof evidence.findByIdAndHash !== "function") return "EXPLICIT_RECEIPT_EVIDENCE_UNAVAILABLE";
     evidence.findByIdAndHash(receipt.evidenceId, receipt.evidenceHash);
-    state.consumeExplicitObservationReceipt({
-      receiptId: input.observationReceiptId,
-      missionId: input.mission.missionId,
-      deviceRunId: input.tuple.deviceRunId,
-      leaseId: run?.leaseId,
-      sessionId: input.tuple.sessionId,
-      controllerEpoch: input.tuple.controllerEpoch,
-      action: input.action,
-      targetFingerprint: targetFingerprint(input.target),
-    });
-    return null;
+    return { receiptId: receipt.receiptId, leaseId: run?.leaseId };
   } catch (error) {
     return error?.code || "EXPLICIT_RECEIPT_INVALID";
   }
@@ -106,13 +96,20 @@ export class EffectCommitProtocol {
       // This is the last synchronous boundary before the adapter.  It consumes the receipt in
       // a short SQLite transaction that rechecks the live parent and exact tuple; no adapter
       // await can run while the StateStore holds BEGIN IMMEDIATE.
-      const receiptCode = consumeExplicitReceipt(this.state, this.evidence, input);
-      if (receiptCode) {
+      const receipt = verifyExplicitReceiptEvidence(this.state, this.evidence, input);
+      if (typeof receipt === "string") {
         outcome = this.ledger.recordOutcome(effect.effectId, { status: "cancelled" });
-        return blocked(receiptCode);
+        return blocked(receipt);
       }
-      if (policy.decision === "phc") this.ledger.startAuthorizedEffect(effect.effectId);
-      else this.ledger.startEffectForExecution(effect.effectId);
+      try {
+        if (input.mission?.parentGrantId && policy.decision !== "phc") {
+          this.ledger.beginEffectSend({ effectId: effect.effectId, receiptId: receipt?.receiptId || null, missionId: input.mission.missionId, deviceRunId: input.tuple.deviceRunId, leaseId: receipt?.leaseId, sessionId: input.tuple.sessionId, controllerEpoch: input.tuple.controllerEpoch, targetFingerprint: targetFingerprint(input.target) });
+        } else if (policy.decision === "phc") this.ledger.startAuthorizedEffect(effect.effectId);
+        else this.ledger.startEffectForExecution(effect.effectId);
+      } catch (error) {
+        if (/^(?:PARENT_GRANT|MISSION_)/.test(error?.code || "")) return blocked(error.code);
+        throw error;
+      }
       const execution = await this.execute({ ...input, effectId: effect.effectId, target: current.targetFingerprint });
       const verification = await this.verify({ ...input, effectId: effect.effectId, execution, afterState: rechecked.beforeState });
       if (verification?.ok === true) {
@@ -177,12 +174,18 @@ export class EffectCommitProtocol {
         outcome = this.ledger.recordOutcome(effectId, { status: "cancelled" });
         return blocked(currentCode);
       }
-      const receiptCode = consumeExplicitReceipt(this.state, this.evidence, input);
-      if (receiptCode) {
+      const receipt = verifyExplicitReceiptEvidence(this.state, this.evidence, input);
+      if (typeof receipt === "string") {
         outcome = this.ledger.recordOutcome(effectId, { status: "cancelled" });
-        return blocked(receiptCode);
+        return blocked(receipt);
       }
-      this.ledger.startEffectForExecution(effectId);
+      try {
+        if (mission?.parentGrantId) this.ledger.beginEffectSend({ effectId, receiptId: receipt?.receiptId || null, missionId: mission.missionId, deviceRunId: tuple.deviceRunId, leaseId: receipt?.leaseId, sessionId: tuple.sessionId, controllerEpoch: tuple.controllerEpoch, targetFingerprint: targetFingerprint(target) });
+        else this.ledger.startEffectForExecution(effectId);
+      } catch (error) {
+        if (/^(?:PARENT_GRANT|MISSION_)/.test(error?.code || "")) return blocked(error.code);
+        throw error;
+      }
       const execution = await this.execute({ ...input, action, effectId, target: current.targetFingerprint });
       const verification = await this.verify({ ...input, action, effectId, execution, afterState: current.beforeState });
       outcome = this.ledger.recordOutcome(effectId, {

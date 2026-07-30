@@ -2166,6 +2166,72 @@ export class StateStore {
     });
   }
 
+  // This is the final synchronous boundary before an external effect: no await, callback, or
+  // file I/O may intervene between the durable authority/receipt re-read and effect_started.
+  beginMissionEffectSend({ effectId, receiptId = null, missionId, deviceRunId, leaseId, sessionId, controllerEpoch, targetFingerprint }) {
+    let authorityError = null;
+    const result = this.transaction(() => {
+      const now = this.now();
+      const effect = this.db.prepare("SELECT * FROM mission_effects WHERE effect_id=?").get(effectId);
+      if (!effect || effect.mission_id !== missionId || effect.device_run_id !== deviceRunId || effect.status !== "not_sent" || effect.reservation_released) {
+        throw new ControlPlaneError("EFFECT_START_INVALID", "effect is not a live not_sent reservation for this run", { status: 409 });
+      }
+      const receipt = receiptId ? this.db.prepare("SELECT * FROM explicit_observation_receipts WHERE receipt_id=?").get(receiptId) : null;
+      const mission = this.db.prepare("SELECT * FROM missions WHERE mission_id=?").get(missionId);
+      const grant = mission && this.db.prepare("SELECT * FROM delegation_grants WHERE grant_id=?").get(mission.parent_grant_id);
+      const run = this.db.prepare("SELECT * FROM device_runs WHERE device_run_id=?").get(deviceRunId);
+      const session = this.db.prepare("SELECT * FROM sessions WHERE session_id=?").get(sessionId);
+      const lease = this.db.prepare("SELECT * FROM leases WHERE lease_id=?").get(leaseId);
+      const grantValidity = parseJson(grant?.grant_json, {}).validity || {};
+      const missionValidity = parseJson(mission?.policy_json, {}).validity || {};
+      let authorityCode = null;
+      if (!grant || grant.status !== "active") authorityCode = "PARENT_GRANT_INACTIVE";
+      else if (!mission || mission.status !== "active") authorityCode = mission?.status === "revoked" ? "MISSION_REVOKED" : "MISSION_INACTIVE";
+      else if (grant.grant_hash !== mission.parent_grant_hash) authorityCode = "PARENT_GRANT_HASH_DRIFT";
+      else if (Number.isFinite(Date.parse(grantValidity.notBefore)) && now < Date.parse(grantValidity.notBefore)) authorityCode = "PARENT_GRANT_NOT_YET_VALID";
+      else if (Number.isFinite(Date.parse(grantValidity.expiresAt)) && now >= Date.parse(grantValidity.expiresAt)) authorityCode = "PARENT_GRANT_EXPIRED";
+      else if (Number.isFinite(Date.parse(missionValidity.notBefore)) && now < Date.parse(missionValidity.notBefore)) authorityCode = "MISSION_NOT_YET_VALID";
+      else if (Number.isFinite(Date.parse(missionValidity.expiresAt)) && now >= Date.parse(missionValidity.expiresAt)) authorityCode = "MISSION_EXPIRED";
+      if (authorityCode) {
+        this.db.prepare("UPDATE mission_effects SET status='cancelled', reservation_released=1, retry_blocked=1, updated_at=?, finished_at=? WHERE effect_id=? AND status='not_sent'")
+          .run(now, now, effectId);
+        this.#insertMissionEvent({ missionId, type: "effect.cancelled", payload: { effectId, reason: authorityCode }, createdAt: now });
+        if (run && run.session_id === sessionId && run.lease_id === leaseId && run.controller_epoch === controllerEpoch) {
+          this.db.prepare("UPDATE device_runs SET phase='cancelled', outcome=?, updated_at=?, finished_at=? WHERE device_run_id=? AND phase NOT IN ('succeeded','failed','ambiguous','blocked','cancelled','paused_control_lost')")
+            .run(authorityCode, now, now, deviceRunId);
+          this.db.prepare("DELETE FROM sessions WHERE session_id=? AND lease_id=? AND device_id=?").run(sessionId, leaseId, run.device_id);
+          this.db.prepare("DELETE FROM leases WHERE lease_id=? AND device_id=? AND owner_device_run_id=?").run(leaseId, run.device_id, deviceRunId);
+          this.#insertMissionEvent({ missionId, type: "device_run.cancelled", payload: { deviceRunId, outcome: authorityCode, released: true }, createdAt: now });
+        }
+        authorityError = authorityCode;
+        return null;
+      }
+      if (!run || run.mission_id !== missionId || run.session_id !== sessionId || run.lease_id !== leaseId || run.controller_epoch !== controllerEpoch || run.phase !== "running"
+        || !session || session.lease_id !== leaseId || !lease || lease.owner_device_run_id !== deviceRunId) {
+        throw new ControlPlaneError("EXPLICIT_RECEIPT_INVALID", "effect control tuple is no longer owned", { status: 409 });
+      }
+      if (receipt) {
+        const evidence = this.db.prepare("SELECT * FROM evidence WHERE evidence_id=?").get(receipt.evidence_id);
+        const sourceJob = this.db.prepare("SELECT * FROM jobs WHERE job_id=?").get(receipt.source_job_id);
+        const sourceCapability = parseJson(sourceJob?.capability_json, {});
+        if (receipt.status !== "recorded" || now - receipt.server_received_at > 5000 || receipt.mission_id !== missionId || receipt.device_run_id !== deviceRunId
+          || receipt.lease_id !== leaseId || receipt.session_id !== sessionId || receipt.controller_epoch !== controllerEpoch || receipt.target_fingerprint !== targetFingerprint
+          || receipt.grant_id !== grant.grant_id || receipt.grant_hash !== grant.grant_hash || evidence?.sha256 !== receipt.evidence_hash
+          || !sourceJob || sourceJob.status !== "succeeded" || sourceJob.run_id !== receipt.source_run_id || sourceJob.session_id !== sessionId
+          || sourceJob.device_id !== run.device_id || sourceJob.capability_id !== receipt.source_capability_id || sourceCapability.implementation?.adapter !== receipt.source_adapter_id
+          || evidence.job_id !== sourceJob.job_id || evidence.run_id !== sourceJob.run_id) {
+          throw new ControlPlaneError("EXPLICIT_RECEIPT_INVALID", "receipt lost its durable provenance or tuple binding", { status: 409 });
+        }
+        this.db.prepare("UPDATE explicit_observation_receipts SET status='consumed', used_at=? WHERE receipt_id=? AND status='recorded'").run(now, receiptId);
+      }
+      this.db.prepare("UPDATE mission_effects SET status='started', updated_at=?, finished_at=NULL WHERE effect_id=? AND status='not_sent'").run(now, effectId);
+      this.#insertMissionEvent({ missionId, type: "effect.started", payload: { effectId, ...(receiptId ? { receiptId } : {}) }, createdAt: now });
+      return this.#publicMissionEffect(this.db.prepare("SELECT * FROM mission_effects WHERE effect_id=?").get(effectId));
+    });
+    if (authorityError) throw new ControlPlaneError(authorityError, "live Mission authority was lost before send", { status: 409 });
+    return result;
+  }
+
   retryNotSentMissionEffect(effectId) {
     const now = this.now();
     return this.transaction(() => {

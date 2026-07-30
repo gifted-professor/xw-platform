@@ -55,6 +55,10 @@ export class EffectLedger {
     return this.state.startPreparedMissionEffect(effectId);
   }
 
+  beginEffectSend(input) {
+    return this.state.beginMissionEffectSend(input);
+  }
+
   retryNotSent(effectId, recheck) {
     if (!recheck?.rechecked) {
       throw new ControlPlaneError("EFFECT_RECHECK_REQUIRED", "not_sent retry requires a fresh full recheck", { status: 409 });

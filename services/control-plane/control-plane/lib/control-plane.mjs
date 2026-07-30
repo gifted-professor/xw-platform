@@ -145,6 +145,7 @@ export class ControlPlane {
     standingGrantAdrPath = DEFAULT_ADR_0009_PATH,
     discoveryAdrAccepted = null,
     discoveryAdrPath = DEFAULT_ADR_0010_PATH,
+    receiptAuthorityAllowlist = [],
     effectIntentSchema = EFFECT_INTENT_SCHEMA,
   }) {
     this.state = state;
@@ -192,6 +193,9 @@ export class ControlPlane {
     this.discoveryAdrAcceptedOverride = discoveryAdrAccepted;
     this.discoveryAdrPath = discoveryAdrPath;
     this.effectIntentSchema = effectIntentSchema;
+    this.receiptAuthorityAllowlist = new Set((Array.isArray(receiptAuthorityAllowlist) ? receiptAuthorityAllowlist : [])
+      .filter((item) => item && typeof item.capabilityId === "string" && typeof item.adapterId === "string")
+      .map((item) => `${item.capabilityId}:${item.adapterId}`));
     this.discoverySessions = new DiscoverySessionRuntime({
       state,
       authorityNodeId,
@@ -445,6 +449,9 @@ export class ControlPlane {
     if (!sourceJob || sourceJob.status !== "succeeded" || sourceJob.sessionId !== run.sessionId || sourceJob.deviceId !== run.deviceId
       || typeof adapter?.getExplicitObservationReceipt !== "function") {
       throw new ControlPlaneError("EXPLICIT_RECEIPT_PROVENANCE_INVALID", "no allowlisted adapter-produced receipt is available", { status: 409 });
+    }
+    if (!this.receiptAuthorityAllowlist.has(`${sourceJob.capabilityId}:${adapterId}`)) {
+      throw new ControlPlaneError("EXPLICIT_RECEIPT_PRODUCER_NOT_ALLOWED", "receipt source is not explicitly authorized", { status: 409 });
     }
     const parserReceipt = adapter.getExplicitObservationReceipt({ job: sourceJob, receiptId: adapterReceiptId });
     const fields = ["pageFingerprint", "targetFingerprint", "observedAt", "evidenceId", "evidenceHash"];
