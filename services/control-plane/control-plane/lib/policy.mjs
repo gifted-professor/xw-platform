@@ -28,6 +28,9 @@ export function evaluateCapabilityPolicy(capability, { canary = false, invocatio
   }
   const externalEffect = EXTERNAL_RISK.has(capability.risk)
     || ["external_effect", "ambiguous_on_timeout"].includes(capability.idempotency);
+  if (STANDING_GRANT_MISSION_ONLY.has(capability.id) && invocation === "mission_effect") {
+    return { approvalRequired: false, externalEffect: true };
+  }
   const approvalRequired = externalEffect || mode === "approval_required";
   return { approvalRequired, externalEffect };
 }

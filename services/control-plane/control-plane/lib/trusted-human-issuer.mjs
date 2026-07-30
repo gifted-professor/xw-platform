@@ -51,6 +51,10 @@ export class TrustedHumanIssuer {
     return Boolean(key && key.status === "active" && key.subject === subject);
   }
 
+  get allowlistVersion() {
+    return this.allowlist.version;
+  }
+
   verifyIssue({ payload, bytes, proof }) {
     if (!proof || typeof proof !== "object" || typeof proof.keyId !== "string" || !Number.isInteger(proof.allowlistVersion) || typeof proof.signature !== "string") {
       invalidProof("signed issuer proof is required");
@@ -64,5 +68,9 @@ export class TrustedHumanIssuer {
     try { valid = verify(null, Buffer.from(bytes), createPublicKey(key.publicKey), Buffer.from(proof.signature, "base64")); } catch { valid = false; }
     if (!valid) invalidProof("issuer signature verification failed");
     return Object.freeze({ subject: key.subject, keyId: key.keyId, allowlistVersion: this.allowlist.version, proofHash: sha256(proof.signature) });
+  }
+
+  verifyRevoke({ payload, bytes, proof }) {
+    return this.verifyIssue({ payload, bytes, proof });
   }
 }

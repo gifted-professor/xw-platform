@@ -18,6 +18,7 @@ test("standing-grant collect is schema-bound and cannot enter the ordinary job l
   const registry = CapabilityRegistry.load(fileURLToPath(new URL("../apps", import.meta.url)));
   const collect = registry.require("xhs.collect.standing_grant");
   assert.throws(() => evaluateCapabilityPolicy(collect), { code: "STANDING_GRANT_MISSION_REQUIRED" });
+  assert.deepEqual(evaluateCapabilityPolicy(collect, { invocation: "mission_effect" }), { approvalRequired: false, externalEffect: true });
   assert.throws(() => registry.validateParams(collect.id, { observationReceiptId: "receipt" }), { code: "PARAMS_SCHEMA_INVALID" });
   assert.doesNotThrow(() => registry.validateParams(collect.id, {
     observationReceiptId: "receipt", targetFingerprint: "target",

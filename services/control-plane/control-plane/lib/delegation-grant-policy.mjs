@@ -159,3 +159,18 @@ export function grantIssueSigningPayload({ subject, grantId, issuanceNonce, allo
   return Object.freeze({ kind: "delegation_grant.issue.v1", subject, grantId: text(grantId, "grantId"), issuanceNonce: text(issuanceNonce, "issuanceNonce"), allowlistVersion, grantHash: text(grantHash, "grantHash"), grant: validateDelegationGrantDraft(grant) });
 }
 export function canonicalGrantIssueSigningBytes(input) { return canonicalJson(grantIssueSigningPayload(input)); }
+
+export function grantRevokeSigningPayload({ subject, grantId, grantHash, revocationNonce, allowlistVersion, reason }) {
+  if (subject !== "user:a1234" || !Number.isInteger(allowlistVersion) || allowlistVersion < 1) error("invalid revocation signing payload");
+  return Object.freeze({
+    kind: "delegation_grant.revoke.v1",
+    subject,
+    grantId: text(grantId, "grantId"),
+    grantHash: text(grantHash, "grantHash"),
+    revocationNonce: text(revocationNonce, "revocationNonce"),
+    allowlistVersion,
+    reason: text(reason, "reason"),
+  });
+}
+
+export function canonicalGrantRevokeSigningBytes(input) { return canonicalJson(grantRevokeSigningPayload(input)); }

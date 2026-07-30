@@ -15,6 +15,7 @@ import { EffectFirewall } from "./effect-firewall.mjs";
 import { EffectLedger } from "./effect-ledger.mjs";
 import { EffectCommitProtocol } from "./effect-commit-protocol.mjs";
 import { ProtectedHumanCommit } from "./protected-human-commit.mjs";
+import { canonicalGrantIssueSigningBytes, delegationGrantContentHash, grantIssueSigningPayload, validateDelegationGrantDraft } from "./delegation-grant-policy.mjs";
 import { acquireTransportLock as defaultAcquireTransportLock } from "./xiaowei-transport.mjs";
 
 const moduleDir = dirname(fileURLToPath(import.meta.url));
@@ -472,6 +473,65 @@ export class ControlPlane {
     });
   }
 
+  prepareExplicitTargetGrant({ sourceJobId, adapterReceiptId, draft, allowlistVersion }) {
+    if (!draft || typeof draft !== "object" || Array.isArray(draft) || draft.targets !== undefined) {
+      throw new ControlPlaneError("GRANT_CEREMONY_INVALID", "grant draft must omit server-derived targets", { status: 400 });
+    }
+    if (!Number.isInteger(allowlistVersion) || allowlistVersion < 1 || draft.discoveryPolicy?.enabled !== false) {
+      throw new ControlPlaneError("GRANT_CEREMONY_INVALID", "explicit-target ceremony requires an allowlist version and discoveryPolicy.enabled=false", { status: 400 });
+    }
+    if (!Array.isArray(draft.authorization?.socialActions) || draft.authorization.socialActions.length !== 1 || draft.authorization.socialActions[0] !== "collect") {
+      throw new ControlPlaneError("GRANT_CEREMONY_INVALID", "first canary Grant must authorize collect only", { status: 400 });
+    }
+    const sourceJob = this.state.getJob(sourceJobId);
+    if (!sourceJob || sourceJob.status !== "succeeded" || sourceJob.capabilityId !== "xhs.observe.note_detail") {
+      throw new ControlPlaneError("EXPLICIT_RECEIPT_PROVENANCE_INVALID", "a succeeded xhs.observe.note_detail job is required", { status: 409 });
+    }
+    const adapterId = sourceJob.capability?.implementation?.adapter;
+    let adapter = null;
+    try { adapter = this.adapters.require(adapterId); } catch { adapter = null; }
+    if (!adapter || !this.receiptAuthorityAllowlist.has(`${sourceJob.capabilityId}:${adapterId}`)
+      || typeof adapter.getExplicitObservationReceipt !== "function") {
+      throw new ControlPlaneError("EXPLICIT_RECEIPT_PRODUCER_NOT_ALLOWED", "receipt producer is not allowlisted", { status: 409 });
+    }
+    const receipt = adapter.getExplicitObservationReceipt({ job: sourceJob, receiptId: adapterReceiptId });
+    if (!receipt || !Number.isFinite(Date.parse(receipt.observedAt)) || Date.now() - Date.parse(receipt.observedAt) > 300000) {
+      throw new ControlPlaneError("EXPLICIT_RECEIPT_INVALID", "note-detail receipt is missing or stale", { status: 409 });
+    }
+    try { this.evidence.findByIdAndHash(receipt.evidenceId, receipt.evidenceHash); } catch {
+      throw new ControlPlaneError("EXPLICIT_RECEIPT_EVIDENCE_UNAVAILABLE", "receipt evidence cannot be hash-verified", { status: 409 });
+    }
+    const grant = validateDelegationGrantDraft({
+      ...draft,
+      authorization: { ...draft.authorization, primitives: ["screenshot"], socialActions: ["collect"], missionOnlyActions: [] },
+      targets: { mode: "explicit_fingerprints", values: [receipt.targetFingerprint] },
+      budget: {
+        maxima: { totalCount: 1, perTargetCount: 1, frequency: { count: 1, windowSeconds: 3600 } },
+        defaults: { totalCount: 1, perTargetCount: 1, frequency: { count: 1, windowSeconds: 3600 } },
+      },
+      discoveryPolicy: {
+        ...draft.discoveryPolicy,
+        targetScope: { anchors: [{ type: "identityFingerprint", hash: receipt.targetFingerprint }], relationKinds: ["explicit_target"], maxHops: 1 },
+      },
+    });
+    const grantHash = delegationGrantContentHash(grant);
+    const payload = grantIssueSigningPayload({
+      subject: grant.issuer.subject,
+      grantId: grant.grantId,
+      issuanceNonce: grant.issuanceNonce,
+      allowlistVersion,
+      grantHash,
+      grant,
+    });
+    return {
+      grant,
+      grantHash,
+      allowlistVersion,
+      source: { sourceJobId, sourceRunId: sourceJob.runId, evidenceId: receipt.evidenceId, evidenceHash: receipt.evidenceHash },
+      signingBytesBase64: Buffer.from(canonicalGrantIssueSigningBytes(payload), "utf8").toString("base64"),
+    };
+  }
+
   createEffectCommitProtocol(handlers) {
     return new EffectCommitProtocol({
       state: this.state,
@@ -605,6 +665,110 @@ export class ControlPlane {
       payload: { actorId: actor.trim(), deviceRunId: run.deviceRunId, controllerAgent: controller },
     });
     return { status: "running", mission, reused, run, approvalRequired: false };
+  }
+
+  async runStandingGrantCollectCanary({ actor, idempotencyKey, parentGrantId, sourceJobId, adapterReceiptId, controllerAgent = "agent:runner" }) {
+    const sourceJob = this.state.getJob(sourceJobId);
+    const parent = this.state.getDelegationGrantRecord(parentGrantId);
+    if (!sourceJob || sourceJob.status !== "succeeded" || sourceJob.capabilityId !== "xhs.observe.note_detail" || !parent || parent.status !== "active") {
+      throw new ControlPlaneError("CANARY_PREREQUISITE_INVALID", "active signed Grant and succeeded note-detail observation are required", { status: 409 });
+    }
+    const sourceAdapter = this.adapters.require(sourceJob.capability.implementation.adapter);
+    const sourceReceipt = sourceAdapter.getExplicitObservationReceipt?.({ job: sourceJob, receiptId: adapterReceiptId });
+    if (!sourceReceipt || !parent.grant.targets?.values?.includes(sourceReceipt.targetFingerprint)
+      || parent.grant.authorization?.socialActions?.length !== 1 || parent.grant.authorization.socialActions[0] !== "collect") {
+      throw new ControlPlaneError("CANARY_TARGET_NOT_SIGNED", "note-detail target is not the signed collect-only Grant target", { status: 409 });
+    }
+    this.evidence.findByIdAndHash(sourceReceipt.evidenceId, sourceReceipt.evidenceHash);
+    const reservation = this.state.reserveStandingGrantCanary({ idempotencyKey, grantId: parentGrantId, sourceJobId });
+    if (reservation.reused) {
+      return { reused: true, status: reservation.marker.status, outcome: reservation.marker.outcome };
+    }
+    const device = this.state.requireDevice(sourceJob.deviceId);
+    const parentExpiry = Date.parse(parent.grant.validity?.expiresAt);
+    const expiresAt = new Date(Number.isFinite(parentExpiry) ? Math.min(Date.now() + 10 * 60 * 1000, parentExpiry - 1) : Date.now() + 10 * 60 * 1000).toISOString();
+    const policy = {
+      app: parent.grant.app,
+      account: parent.grant.accountFingerprint,
+      parallelism: 1,
+      controllers: [controllerAgent],
+      scope: { actions: ["collect"], targets: { kind: "fingerprint", values: [sourceReceipt.targetFingerprint] }, totalCount: 1, perTargetCount: 1, frequency: { count: 1, windowSeconds: 3600 } },
+      validity: { expiresAt },
+      policy: { payment: "confirm", publish: "confirm", delete: "confirm" },
+    };
+    let submission;
+    let run;
+    let collectJob = null;
+    let collectCreated = null;
+    let terminalStatus = "failed";
+    let outcome = "CANARY_FAILED";
+    try {
+      submission = this.submitMission({ actor, idempotencyKey: `${idempotencyKey}:mission`, parentGrantId, controllerAgent, policy, placement: { physicalLabel: device.physicalLabel } });
+      if (submission.status !== "running") throw new ControlPlaneError(submission.reason || "CANARY_GATE_CLOSED", "Standing Grant canary gate is closed", { status: 409 });
+      run = submission.run;
+      this.state.bindStandingGrantCanary({ missionId: submission.mission.missionId, deviceRunId: run.deviceRunId });
+
+      const observeCapability = this.capabilities.validateParams("xhs.observe.note_detail", {});
+      const observeCreated = this.state.createJob({
+        idempotencyKey: `${idempotencyKey}:observe`, actorId: controllerAgent, authorityNodeId: this.authorityNodeId,
+        deviceId: run.deviceId, placement: {}, capability: observeCapability, params: {}, canary: true,
+        sessionId: run.sessionId, status: "queued", approvalRequired: false, externalEffect: false,
+      });
+      if (!observeCreated.reused) this.evidence.initializeRun({ job: observeCreated.job, device });
+      const observationJob = observeCreated.reused ? observeCreated.job : await this.#runJob(observeCreated.job, { lease: { leaseId: run.leaseId, token: run.token }, releaseLease: false });
+      if (observationJob.status !== "succeeded") throw new ControlPlaneError("CANARY_OBSERVATION_FAILED", "in-Mission note re-observation failed", { status: 409 });
+      const sealed = observationJob.result?.explicitObservationReceipt;
+      if (!sealed || sealed.targetFingerprint !== sourceReceipt.targetFingerprint) throw new ControlPlaneError("CANARY_TARGET_DRIFT", "note target changed before collect", { status: 409 });
+      const receipt = this.recordExplicitObservationReceipt({ tuple: run.tuple, sourceJobId: observationJob.jobId, adapterReceiptId: sealed.receiptId });
+      if (receipt.status !== "recorded") throw new ControlPlaneError("EXPLICIT_RECEIPT_INVALID", "fresh explicit receipt was not recorded", { status: 409 });
+
+      const params = { observationReceiptId: receipt.receiptId, targetFingerprint: sealed.targetFingerprint };
+      const collectCapability = this.capabilities.validateParams("xhs.collect.standing_grant", params);
+      evaluateCapabilityPolicy(collectCapability, { canary: true, invocation: "mission_effect" });
+      collectCreated = this.state.createJob({
+        idempotencyKey: `${idempotencyKey}:collect`, actorId: controllerAgent, authorityNodeId: this.authorityNodeId,
+        deviceId: run.deviceId, placement: {}, capability: collectCapability, params, canary: true,
+        sessionId: run.sessionId, status: "queued", approvalRequired: false, externalEffect: true,
+      });
+      if (!collectCreated.reused) this.evidence.initializeRun({ job: collectCreated.job, device });
+      this.state.bindStandingGrantCanary({ missionId: submission.mission.missionId, deviceRunId: run.deviceRunId, collectJobId: collectCreated.job.jobId });
+      const ecp = this.createEffectCommitProtocol({
+        recheck: async () => ({ readiness: { ready: true, source: "control-plane", fresh: true }, app: parent.grant.app, account: parent.grant.accountFingerprint, targetFingerprint: sealed.targetFingerprint, pageFingerprint: sealed.pageFingerprint, beforeState: "not_collected", control: true }),
+        execute: async () => {
+          collectJob = collectCreated.reused ? collectCreated.job : await this.#runJob(collectCreated.job, { lease: { leaseId: run.leaseId, token: run.token }, releaseLease: false });
+          if (collectJob.status !== "succeeded") {
+            const error = new ControlPlaneError(collectJob.errorCode || "CANARY_COLLECT_FAILED", "collect job did not succeed", { status: 409 });
+            error.ambiguous = ["ambiguous", "recovery_required"].includes(collectJob.status);
+            error.notSent = collectJob.status === "failed";
+            throw error;
+          }
+          return { jobId: collectJob.jobId, runId: collectJob.runId, result: collectJob.result };
+        },
+        verify: async () => ({ ok: collectJob?.status === "succeeded", evidenceRefs: collectJob ? [collectJob.runId] : [] }),
+        restore: async () => ({ ok: true }),
+      });
+      const effect = await ecp.commit({ tuple: run.tuple, mission: submission.mission, action: "collect", target: sealed.targetFingerprint, idempotencyKey: `${idempotencyKey}:effect`, observationReceiptId: receipt.receiptId });
+      terminalStatus = effect.status === "verified" ? "completed" : effect.status === "ambiguous" ? "ambiguous" : "failed";
+      outcome = effect.status;
+      return { status: terminalStatus, missionId: submission.mission.missionId, deviceRunId: run.deviceRunId, jobId: collectJob?.jobId || null, runId: collectJob?.runId || null, effectStatus: effect.status, restoration: collectJob?.result?.restoration || null };
+    } catch (error) {
+      terminalStatus = error?.ambiguous ? "ambiguous" : "blocked";
+      outcome = error?.code || "CANARY_FAILED";
+      throw error;
+    } finally {
+      if (run) {
+        this.deviceRuns.stopRunnerHeartbeat(run.deviceRunId);
+        try { this.state.finishDeviceRunStorage({ tuple: run.tuple, phase: terminalStatus === "completed" ? "succeeded" : terminalStatus === "ambiguous" ? "ambiguous" : "blocked", outcome }); } catch {}
+      }
+      if (submission?.mission?.missionId) {
+        try { this.missions.revokeMission(submission.mission.missionId, { actorId: actor, reason: `canary_terminal:${outcome}` }); } catch {}
+      }
+      if (!collectCreated) {
+        try { this.state.releaseStandingGrantCanaryReservation({ idempotencyKey }); } catch {}
+      } else {
+        try { this.state.finishStandingGrantCanary({ status: terminalStatus, outcome }); } catch {}
+      }
+    }
   }
 
   showMission(missionId) {

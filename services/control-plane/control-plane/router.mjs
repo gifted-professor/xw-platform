@@ -90,16 +90,33 @@ function publicMissionSubmission(result) {
   };
 }
 
+function publicGrantView(grant) {
+  if (!grant) return grant;
+  const {
+    grantId,
+    grantHash,
+    status,
+    createdAt,
+    updatedAt,
+    expiresAt,
+    revokedAt,
+    revokedReason,
+  } = grant;
+  return { grantId, grantHash, status, createdAt, updatedAt, expiresAt, revokedAt, revokedReason };
+}
+
 export class ControlRouter {
-  constructor({ control, state, capabilities, evidence, nodeId = "DESKTOP-3I1EVHE" }) {
+  constructor({ control, state, capabilities, evidence, delegationGrants = null, nodeId = "DESKTOP-3I1EVHE" }) {
     this.control = control;
     this.state = state;
     this.capabilities = capabilities;
     this.evidence = evidence;
+    this.delegationGrants = delegationGrants;
     this.nodeId = nodeId;
   }
 
   async handle({ method, path, query = new URLSearchParams(), body, headers = {} }) {
+    let match;
     if (method === "GET" && path === "/control/v1/health") {
       const freeBytes = this.evidence.freeBytes();
       return {
@@ -131,6 +148,36 @@ export class ControlRouter {
       return { status: 200, body: { leases: this.state.listLeases() } };
     }
 
+    if (method === "POST" && path === "/control/v1/grants") {
+      if (!this.delegationGrants) throw new ControlPlaneError("STANDING_GRANT_ISSUER_UNAVAILABLE", "signed Standing Grant installation is unavailable", { status: 503 });
+      const result = this.delegationGrants.issue(requireBody(body));
+      return { status: result.reused ? 200 : 201, body: { grant: publicGrantView(result.grant), reused: result.reused } };
+    }
+    if (method === "POST" && path === "/control/v1/grants/prepare-explicit-target") {
+      return { status: 200, body: this.control.prepareExplicitTargetGrant(requireBody(body)) };
+    }
+    if (method === "GET" && path === "/control/v1/grants") {
+      const grants = this.delegationGrants ? this.delegationGrants.list() : this.state.listDelegationGrants();
+      return { status: 200, body: { grants: grants.map(publicGrantView) } };
+    }
+    match = path.match(/^\/control\/v1\/grants\/([^/]+)$/);
+    if (method === "GET" && match) {
+      const grantId = decodeURIComponent(match[1]);
+      const grant = this.delegationGrants ? this.delegationGrants.show(grantId) : this.state.getDelegationGrant(grantId);
+      if (!grant) throw new ControlPlaneError("GRANT_NOT_FOUND", `unknown delegation grant ${grantId}`, { status: 404 });
+      return { status: 200, body: { grant: publicGrantView(grant) } };
+    }
+    match = path.match(/^\/control\/v1\/grants\/([^/]+)\/revoke$/);
+    if (method === "POST" && match) {
+      if (!this.delegationGrants) throw new ControlPlaneError("STANDING_GRANT_ISSUER_UNAVAILABLE", "signed Standing Grant revocation is unavailable", { status: 503 });
+      return { status: 200, body: { grant: publicGrantView(this.delegationGrants.revoke(decodeURIComponent(match[1]), requireBody(body))) } };
+    }
+    match = path.match(/^\/control\/v1\/grants\/([^/]+)\/prepare-revoke$/);
+    if (method === "POST" && match) {
+      if (!this.delegationGrants) throw new ControlPlaneError("STANDING_GRANT_ISSUER_UNAVAILABLE", "signed Standing Grant revocation is unavailable", { status: 503 });
+      return { status: 200, body: this.delegationGrants.prepareRevoke(decodeURIComponent(match[1]), requireBody(body)) };
+    }
+
     if (method === "POST" && path === "/control/v1/leases/authorize") {
       const input = requireBody(body);
       const lease = this.state.authorizeLease({
@@ -154,7 +201,7 @@ export class ControlRouter {
       };
     }
 
-    let match = path.match(/^\/control\/v1\/jobs\/([^/]+)$/);
+    match = path.match(/^\/control\/v1\/jobs\/([^/]+)$/);
     if (method === "GET" && match) {
       return { status: 200, body: { job: publicJob(this.state.requireJob(decodeURIComponent(match[1]))) } };
     }
@@ -285,6 +332,9 @@ export class ControlRouter {
       const input = requireBody(body);
       const result = this.control.submitMission(input);
       return { status: result.status === "blocked" ? 200 : 201, body: publicMissionSubmission(result) };
+    }
+    if (method === "POST" && path === "/control/v1/missions/collect-canary") {
+      return { status: 200, body: await this.control.runStandingGrantCollectCanary(requireBody(body)) };
     }
     if (method === "GET" && path === "/control/v1/missions") {
       return { status: 200, body: { missions: this.state.listMissions().map(publicMissionView) } };

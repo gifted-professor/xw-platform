@@ -222,6 +222,73 @@ test("governed offline chain runs observe job, seals receipt, then ECP collects 
   }
 });
 
+test("supported one-command canary re-observes, collects once, restores, and releases its lease", async () => {
+  const root = mkdtempSync(join(tmpdir(), "xhs-collect-supported-canary-"));
+  const state = new StateStore({ dbPath: join(root, "control.db") });
+  const requests = [];
+  const server = createServer(async (req, res) => {
+    let body = "";
+    for await (const chunk of req) body += chunk;
+    const input = JSON.parse(body);
+    requests.push(input.action);
+    const result = input.action === "observeOpenNoteDetail"
+      ? { ok: true, pageFingerprint: "c".repeat(64), targetFingerprint: "b".repeat(64), observedAt: new Date().toISOString() }
+      : input.action === "collectOnOpenNote"
+        ? { ok: true, collected: true, beforeState: "not_collected", afterState: "collected", countDelta: 1, collectProof: { tapped: [500, 2200] } }
+        : input.action === "undoCollectOnOpenNote"
+          ? { ok: true, restored: true, beforeState: "collected", afterState: "not_collected" }
+          : input.action === "backToFeed"
+            ? { ok: true, home: true }
+            : { ok: false, notSent: true, step: "unexpected-action" };
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify({ ok: true, result }));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  let control;
+  try {
+    const registry = new CapabilityRegistry(capabilities);
+    const adapter = createXhsAdapter();
+    const evidence = new EvidenceStore({ runsRoot: join(root, "runs"), state, minFreeBytes: 1, minExternalEffectFreeBytes: 1 });
+    state.upsertNode({ nodeId: "DESKTOP-3I1EVHE", status: "online", authority: true, dispatchMode: "local" });
+    const device = state.upsertDevice({
+      alias: "02", physicalLabel: "rack-02", nodeId: "DESKTOP-3I1EVHE", runtimeId: "private-02",
+      metadata: { xhsServePort: server.address().port },
+      routingProfile: { enabled: true, tags: ["slot:02"], capabilityIds: [observeNote.id, collect.id] },
+    });
+    const target = "b".repeat(64);
+    const grant = {
+      grantId: "grant-supported-canary", issuanceNonce: "nonce-supported-canary", app: "xhs", accountFingerprint: "account-a",
+      controllers: ["agent:runner"], authorization: { primitives: [], socialActions: ["collect"], missionOnlyActions: [], prohibitedActions: ["payment", "publish"] },
+      targets: { mode: "explicit_fingerprints", values: [target] },
+      budget: { maxima: { totalCount: 1, perTargetCount: 1, frequency: { count: 1, windowSeconds: 3600 } }, defaults: { totalCount: 1, perTargetCount: 1, frequency: { count: 1, windowSeconds: 3600 } } },
+      validity: { expiresAt: "2099-07-30T00:00:00.000Z" },
+    };
+    state.issueDelegationGrant({ grant, grantHash: "grant-supported-canary-hash", proofHash: "proof", issuerSubject: "user:a1234", issuerKeyId: "test", allowlistVersion: 1 });
+    control = new ControlPlane({
+      state, capabilities: registry, adapters: new AdapterRegistry([adapter]), evidence,
+      authorityNodeId: "DESKTOP-3I1EVHE", leaseHeartbeatMs: 5000, leaseTtlMs: 60000,
+      missionAutoApprovalEnabled: true, standingGrantEnabled: true, adrAccepted: true, standingGrantAdrAccepted: true,
+      receiptAuthorityAllowlist: [{ capabilityId: observeNote.id, adapterId: adapter.id }],
+    });
+    const submitted = control.submitJob({ actorId: "user:a1234", capabilityId: observeNote.id, idempotencyKey: "source-observe", deviceId: device.deviceId, params: {} });
+    const sourceJob = await control.waitForJob(submitted.job.jobId);
+    const sourceReceipt = sourceJob.result.explicitObservationReceipt;
+    const result = await control.runStandingGrantCollectCanary({ actor: "user:a1234", idempotencyKey: "supported-canary-1", parentGrantId: grant.grantId, sourceJobId: sourceJob.jobId, adapterReceiptId: sourceReceipt.receiptId });
+    assert.equal(result.status, "completed");
+    assert.equal(result.effectStatus, "verified");
+    assert.equal(result.restoration.ok, true);
+    assert.deepEqual(requests, ["observeOpenNoteDetail", "observeOpenNoteDetail", "collectOnOpenNote", "undoCollectOnOpenNote", "backToFeed"]);
+    assert.equal(state.listLeases().length, 0);
+    assert.equal(state.getStandingGrantCanary().status, "completed");
+    assert.equal(state.getMission(result.missionId).status, "revoked");
+  } finally {
+    await control?.stop();
+    await new Promise((resolve) => server.close(resolve));
+    state.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("collect adapter offline E2E sends once, verifies state change, and restores only this collect before feed", async () => {
   const requests = [];
   const server = createServer(async (req, res) => {

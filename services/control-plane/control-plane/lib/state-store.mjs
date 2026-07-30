@@ -308,6 +308,20 @@ export class StateStore {
         updated_at INTEGER NOT NULL,
         finished_at INTEGER
       );
+      CREATE TABLE IF NOT EXISTS standing_grant_canaries (
+        marker TEXT PRIMARY KEY,
+        idempotency_key TEXT NOT NULL UNIQUE,
+        grant_id TEXT NOT NULL,
+        source_job_id TEXT NOT NULL,
+        mission_id TEXT,
+        device_run_id TEXT,
+        collect_job_id TEXT,
+        status TEXT NOT NULL,
+        outcome TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        finished_at INTEGER
+      );
       CREATE INDEX IF NOT EXISTS mission_effects_budget_idx
         ON mission_effects(mission_id, action, target_hash, created_at);
       CREATE INDEX IF NOT EXISTS device_runs_mission_idx ON device_runs(mission_id, phase);
@@ -491,7 +505,7 @@ export class StateStore {
     this.#ensureColumn("explicit_observation_receipts", "source_adapter_id", "TEXT");
     this.#ensureColumn("explicit_observation_receipts", "source_capability_id", "TEXT");
     this.db.exec("CREATE INDEX IF NOT EXISTS missions_parent_grant_idx ON missions(parent_grant_id, status)");
-    this.db.exec("PRAGMA user_version = 10;");
+    this.db.exec("PRAGMA user_version = 11;");
   }
 
   #ensureColumn(table, column, definition) {
@@ -1559,7 +1573,7 @@ export class StateStore {
     return this.db.prepare("SELECT * FROM delegation_grants ORDER BY created_at").all().map((row) => this.#publicDelegationGrant(row));
   }
 
-  revokeDelegationGrant(grantId, { reason = "issuer_revoked" } = {}) {
+  revokeDelegationGrant(grantId, { reason = "issuer_revoked", revocationNonce = null, proofHash = null } = {}) {
     const now = this.now();
     return this.transaction(() => {
       const row = this.db.prepare("SELECT * FROM delegation_grants WHERE grant_id=?").get(grantId);
@@ -1567,7 +1581,7 @@ export class StateStore {
       if (row.status === "revoked") return this.#publicDelegationGrant(row);
       this.db.prepare("UPDATE delegation_grants SET status='revoked', updated_at=?, revoked_at=?, revoked_reason=? WHERE grant_id=?")
         .run(now, now, reason, grantId);
-      this.#insertDelegationGrantEvent({ grantId, type: "delegation_grant.revoked", payload: { reason }, createdAt: now });
+      this.#insertDelegationGrantEvent({ grantId, type: "delegation_grant.revoked", payload: { reason, revocationNonce, proofHash }, createdAt: now });
       // Revocation is a durable fence, not merely a future-create denial.  A child Mission
       // cannot retain an owned tuple or a retryable effect once its parent is no longer live.
       const children = this.db.prepare("SELECT * FROM missions WHERE parent_grant_id=? AND status='active'").all(grantId);
@@ -1618,6 +1632,50 @@ export class StateStore {
       type: row.type,
       payload: parseJson(row.payload_json, {}),
     }));
+  }
+
+  reserveStandingGrantCanary({ idempotencyKey, grantId, sourceJobId }) {
+    const now = this.now();
+    return this.transaction(() => {
+      const byKey = this.db.prepare("SELECT * FROM standing_grant_canaries WHERE idempotency_key=?").get(idempotencyKey);
+      if (byKey) return { reused: true, marker: { ...byKey } };
+      const existing = this.db.prepare("SELECT * FROM standing_grant_canaries LIMIT 1").get();
+      if (existing) throw new ControlPlaneError("CANARY_ALREADY_RESERVED", "the one-time Standing Grant collect canary has already been reserved", { status: 409 });
+      const marker = "standing_grant.first_collect";
+      this.db.prepare("INSERT INTO standing_grant_canaries (marker,idempotency_key,grant_id,source_job_id,status,created_at,updated_at) VALUES (?,?,?,?,\'reserved\',?,?)")
+        .run(marker, idempotencyKey, grantId, sourceJobId, now, now);
+      this.appendEvent({ type: "standing_grant.canary.reserved", payload: { marker, grantId, sourceJobId } });
+      return { reused: false, marker: { ...this.db.prepare("SELECT * FROM standing_grant_canaries WHERE marker=?").get(marker) } };
+    });
+  }
+
+  bindStandingGrantCanary({ missionId, deviceRunId, collectJobId = null }) {
+    const now = this.now();
+    const result = this.db.prepare("UPDATE standing_grant_canaries SET mission_id=COALESCE(?,mission_id),device_run_id=COALESCE(?,device_run_id),collect_job_id=COALESCE(?,collect_job_id),status=CASE WHEN ? IS NULL THEN status ELSE \'running\' END,updated_at=? WHERE marker=\'standing_grant.first_collect\'")
+      .run(missionId, deviceRunId, collectJobId, collectJobId, now);
+    if (result.changes !== 1) throw new ControlPlaneError("CANARY_MARKER_MISSING", "Standing Grant canary marker is missing", { status: 409 });
+    return this.db.prepare("SELECT * FROM standing_grant_canaries WHERE marker=\'standing_grant.first_collect\'").get();
+  }
+
+  releaseStandingGrantCanaryReservation({ idempotencyKey }) {
+    const result = this.db.prepare("DELETE FROM standing_grant_canaries WHERE marker='standing_grant.first_collect' AND idempotency_key=? AND status='reserved' AND collect_job_id IS NULL")
+      .run(idempotencyKey);
+    return { released: result.changes === 1 };
+  }
+
+  finishStandingGrantCanary({ status, outcome }) {
+    const allowed = new Set(["completed", "ambiguous", "failed", "blocked"]);
+    if (!allowed.has(status)) throw new ControlPlaneError("CANARY_STATUS_INVALID", "invalid Standing Grant canary terminal status", { status: 400 });
+    const now = this.now();
+    const result = this.db.prepare("UPDATE standing_grant_canaries SET status=?,outcome=?,updated_at=?,finished_at=? WHERE marker=\'standing_grant.first_collect\'")
+      .run(status, outcome || null, now, now);
+    if (result.changes !== 1) throw new ControlPlaneError("CANARY_MARKER_MISSING", "Standing Grant canary marker is missing", { status: 409 });
+    this.appendEvent({ type: `standing_grant.canary.${status}`, payload: { outcome: outcome || null } });
+    return this.db.prepare("SELECT * FROM standing_grant_canaries WHERE marker=\'standing_grant.first_collect\'").get();
+  }
+
+  getStandingGrantCanary() {
+    return this.db.prepare("SELECT * FROM standing_grant_canaries WHERE marker=\'standing_grant.first_collect\'").get() || null;
   }
 
   // There is deliberately no public router/API writer for this table. The control-plane's
@@ -3058,6 +3116,28 @@ export class StateStore {
         createdAt: now,
       });
       return this.#publicDeviceRun(this.db.prepare("SELECT * FROM device_runs WHERE device_run_id=?").get(deviceRunId));
+    });
+  }
+
+  finishDeviceRunStorage({ tuple, phase, outcome = null }) {
+    if (!["succeeded", "failed", "ambiguous", "blocked", "cancelled"].includes(phase)) {
+      throw new ControlPlaneError("DEVICE_RUN_PHASE_INVALID", "device run terminal phase is invalid", { status: 400 });
+    }
+    const now = this.now();
+    return this.transaction(() => {
+      const run = this.db.prepare("SELECT * FROM device_runs WHERE device_run_id=?").get(tuple?.deviceRunId);
+      const lease = run && this.db.prepare("SELECT * FROM leases WHERE lease_id=?").get(run.lease_id);
+      if (!run || run.mission_id !== tuple?.missionId || run.session_id !== tuple?.sessionId
+        || run.controller_agent !== tuple?.controllerAgent || run.controller_epoch !== tuple?.controllerEpoch
+        || !lease || lease.owner_device_run_id !== run.device_run_id) {
+        throw new ControlPlaneError("CONTROL_TUPLE_INCOMPLETE", "cannot finish a device run without its live owned tuple", { status: 409 });
+      }
+      this.db.prepare("UPDATE device_runs SET phase=?,outcome=?,updated_at=?,finished_at=? WHERE device_run_id=?")
+        .run(phase, outcome, now, now, run.device_run_id);
+      this.db.prepare("DELETE FROM sessions WHERE session_id=? AND lease_id=? AND device_id=?").run(run.session_id, run.lease_id, run.device_id);
+      this.db.prepare("DELETE FROM leases WHERE lease_id=? AND device_id=? AND owner_device_run_id=?").run(run.lease_id, run.device_id, run.device_run_id);
+      this.#insertMissionEvent({ missionId: run.mission_id, type: `device_run.${phase}`, payload: { deviceRunId: run.device_run_id, outcome, released: true }, createdAt: now });
+      return this.#publicDeviceRun(this.db.prepare("SELECT * FROM device_runs WHERE device_run_id=?").get(run.device_run_id));
     });
   }
 
