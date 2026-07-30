@@ -36,3 +36,12 @@ retention are Grant authority—not caller input or unsigned runtime constants.
 Child effect budgets remain the separate `budget` object. Grants that omit or
 widen DiscoveryPolicy are rejected for Discovery open. This dependency does not
 implement ADR 0010, enable flags, or authorize Discovery allocation by itself.
+
+DiscoveryPolicy limits are runtime authorization as well as signature material: an
+opened run must durably snapshot deadline, primitive/candidate maxima and counters,
+enforce them atomically before a job/adapter call, and preserve reservations across
+restart/abandon. Its one-hop scope is a strict signed anchor/relation schema, not a
+caller assertion; ingest, seal, compile, and ECP must all revalidate membership.
+Restricted review derives from authenticated principal plus trusted reviewer
+configuration, never a request role; 90-day redacted-purge leaves a minimal
+non-sensitive tombstone for audit continuity.
