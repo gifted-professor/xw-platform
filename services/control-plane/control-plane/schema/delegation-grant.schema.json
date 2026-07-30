@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Standing Grant v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "grantId", "issuanceNonce", "issuer", "app", "accountFingerprint", "controllers", "maxParallelism", "authorization", "targets", "budget", "validity", "redaction"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "grantId": { "type": "string", "minLength": 1 },
+    "issuanceNonce": { "type": "string", "minLength": 1 },
+    "issuer": { "type": "object", "additionalProperties": false, "required": ["subject", "keyId"], "properties": { "subject": { "const": "user:a1234" }, "keyId": { "type": "string", "minLength": 1 } } },
+    "maxParallelism": { "const": 1 },
+    "validity": { "type": "object", "additionalProperties": false, "required": ["expiresAt"], "properties": { "expiresAt": { "type": ["string", "null"] } } }
+  }
+}

@@ -36,18 +36,23 @@
           "uniqueItems": true
         },
         "targets": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "values"],
-          "properties": {
-            "kind": { "enum": ["fingerprint"] },
-            "values": {
-              "type": "array",
-              "items": { "type": "string", "minLength": 1 },
-              "minItems": 1,
-              "uniqueItems": true
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind", "values"],
+              "properties": {
+                "kind": { "const": "fingerprint" },
+                "values": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1, "uniqueItems": true }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind"],
+              "properties": { "kind": { "const": "verified_discovery" } }
             }
-          }
+          ]
         },
         "totalCount": { "type": "integer", "minimum": 1 },
         "perTargetCount": { "type": "integer", "minimum": 1 },

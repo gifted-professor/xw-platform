@@ -7,7 +7,7 @@ export const RELEASEABLE_ACTIONS = new Set(["publish", "delete"]);
 export const PROTECTED_ACTIONS = new Set(["payment", "publish", "delete"]);
 
 const ALLOWED_POLICY_KEYS = new Set(["publish", "delete", "payment"]);
-const TARGET_KINDS = new Set(["fingerprint"]);
+const TARGET_KINDS = new Set(["fingerprint", "verified_discovery"]);
 
 function isObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -115,7 +115,16 @@ export function validateMissionPolicy(input) {
   if (!TARGET_KINDS.has(targets.kind)) {
     throw new ControlPlaneError("MISSION_POLICY_INVALID", "scope.targets.kind must be fingerprint", { status: 400 });
   }
-  const targetValues = requireStringArray(targets.values, "scope.targets.values");
+  let normalizedTargets;
+  if (targets.kind === "verified_discovery") {
+    if (Object.keys(targets).some((key) => key !== "kind")) {
+      throw new ControlPlaneError("MISSION_POLICY_INVALID", "verified_discovery must not carry target values", { status: 400 });
+    }
+    normalizedTargets = { kind: "verified_discovery" };
+  } else {
+    const targetValues = requireStringArray(targets.values, "scope.targets.values");
+    normalizedTargets = { kind: "fingerprint", values: targetValues };
+  }
   const totalCount = requirePositiveInteger(scope.totalCount, "scope.totalCount");
   const perTargetCount = requirePositiveInteger(scope.perTargetCount, "scope.perTargetCount");
   const frequency = scope.frequency;
@@ -173,7 +182,7 @@ export function validateMissionPolicy(input) {
     controllers,
     scope: {
       actions,
-      targets: { kind: "fingerprint", values: targetValues },
+      targets: normalizedTargets,
       totalCount,
       perTargetCount,
       frequency: { count: freqCount, windowSeconds: freqWindow },
