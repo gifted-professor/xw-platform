@@ -258,10 +258,13 @@ export class StateStore {
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
         expires_at INTEGER NOT NULL,
+        parent_grant_id TEXT REFERENCES delegation_grants(grant_id),
+        parent_grant_hash TEXT,
         revoked_at INTEGER,
         revoked_reason TEXT
       );
       CREATE INDEX IF NOT EXISTS missions_status_idx ON missions(status, expires_at);
+      CREATE INDEX IF NOT EXISTS missions_parent_grant_idx ON missions(parent_grant_id, status);
       CREATE TABLE IF NOT EXISTS mission_events (
         event_id INTEGER PRIMARY KEY AUTOINCREMENT,
         mission_id TEXT NOT NULL REFERENCES missions(mission_id),
@@ -359,7 +362,10 @@ export class StateStore {
     this.#ensureColumn("sessions", "scope_capability_id", "TEXT");
     this.#ensureColumn("sessions", "placement_decision_json", "TEXT");
     this.#ensureColumn("leases", "owner_device_run_id", "TEXT");
-    this.db.exec("PRAGMA user_version = 5;");
+    this.#ensureColumn("missions", "parent_grant_id", "TEXT");
+    this.#ensureColumn("missions", "parent_grant_hash", "TEXT");
+    this.db.exec("CREATE INDEX IF NOT EXISTS missions_parent_grant_idx ON missions(parent_grant_id, status)");
+    this.db.exec("PRAGMA user_version = 6;");
   }
 
   #ensureColumn(table, column, definition) {
@@ -1456,6 +1462,8 @@ export class StateStore {
       expiresAt: iso(row.expires_at),
       revokedAt: row.revoked_at ? iso(row.revoked_at) : null,
       revokedReason: row.revoked_reason,
+      parentGrantId: row.parent_grant_id,
+      parentGrantHash: row.parent_grant_hash,
       schemaVersion: policy.schemaVersion,
       issuer: policy.issuer,
       app: policy.app,
@@ -1481,6 +1489,8 @@ export class StateStore {
     contentHash,
     policy,
     expiresAtMs,
+    parentGrantId = null,
+    parentGrantHash = null,
   }) {
     const now = this.now();
     return this.transaction(() => {
@@ -1501,8 +1511,8 @@ export class StateStore {
       this.db.prepare(`
         INSERT INTO missions (
           mission_id, idempotency_key, issuer_actor_id, version, mission_hash, content_hash,
-          policy_json, status, created_at, updated_at, expires_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
+          policy_json, status, created_at, updated_at, expires_at, parent_grant_id, parent_grant_hash
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?)
       `).run(
         missionId,
         idempotencyKey,
@@ -1514,11 +1524,13 @@ export class StateStore {
         now,
         now,
         expiresAtMs,
+        parentGrantId,
+        parentGrantHash,
       );
       this.#insertMissionEvent({
         missionId,
         type: "mission.created",
-        payload: { missionHash, contentHash, version },
+        payload: { missionHash, contentHash, version, parentGrantId, parentGrantHash },
         createdAt: now,
       });
       return {

@@ -5,6 +5,7 @@ export const MISSION_SCHEMA_VERSION = 1;
 export const SOCIAL_ACTIONS = new Set(["follow", "like", "collect", "comment", "dm"]);
 export const RELEASEABLE_ACTIONS = new Set(["publish", "delete"]);
 export const PROTECTED_ACTIONS = new Set(["payment", "publish", "delete"]);
+export const SNAPSHOT_MAX_AGE_MS = 5 * 60 * 1000;
 
 const ALLOWED_POLICY_KEYS = new Set(["publish", "delete", "payment"]);
 const TARGET_KINDS = new Set(["fingerprint", "verified_discovery"]);
@@ -81,6 +82,16 @@ export function validateMissionPolicy(input) {
   const idempotencyKey = requireString(input.idempotencyKey, "idempotencyKey");
   const app = requireString(input.app, "app");
   const account = requireString(input.account, "account");
+  let parentGrant = null;
+  if (input.parentGrant !== undefined) {
+    if (!isObject(input.parentGrant)) {
+      throw new ControlPlaneError("MISSION_POLICY_INVALID", "parentGrant must be an object", { status: 400 });
+    }
+    parentGrant = {
+      grantId: requireString(input.parentGrant.grantId, "parentGrant.grantId"),
+      grantHash: requireString(input.parentGrant.grantHash, "parentGrant.grantHash"),
+    };
+  }
 
   const parallelism = input.parallelism ?? 1;
   if (!Number.isInteger(parallelism) || parallelism !== 1) {
@@ -117,10 +128,23 @@ export function validateMissionPolicy(input) {
   }
   let normalizedTargets;
   if (targets.kind === "verified_discovery") {
-    if (Object.keys(targets).some((key) => key !== "kind")) {
+    if (Object.keys(targets).some((key) => !["kind", "provenance"].includes(key))) {
       throw new ControlPlaneError("MISSION_POLICY_INVALID", "verified_discovery must not carry target values", { status: 400 });
     }
-    normalizedTargets = { kind: "verified_discovery" };
+    let provenance;
+    if (targets.provenance !== undefined) {
+      if (!isObject(targets.provenance)) throw new ControlPlaneError("MISSION_POLICY_INVALID", "verified discovery provenance must be an object", { status: 400 });
+      const observedAt = requireIsoTimestamp(targets.provenance.observedAt, "scope.targets.provenance.observedAt");
+      provenance = {
+        snapshotHash: requireString(targets.provenance.snapshotHash, "scope.targets.provenance.snapshotHash"),
+        observedAt: observedAt.text,
+        accountFingerprint: requireString(targets.provenance.accountFingerprint, "scope.targets.provenance.accountFingerprint"),
+        pageFingerprint: requireString(targets.provenance.pageFingerprint, "scope.targets.provenance.pageFingerprint"),
+        observedTargetFingerprint: requireString(targets.provenance.observedTargetFingerprint, "scope.targets.provenance.observedTargetFingerprint"),
+        identityEvidenceHash: requireString(targets.provenance.identityEvidenceHash, "scope.targets.provenance.identityEvidenceHash"),
+      };
+    }
+    normalizedTargets = { kind: "verified_discovery", ...(provenance ? { provenance } : {}) };
   } else {
     const targetValues = requireStringArray(targets.values, "scope.targets.values");
     normalizedTargets = { kind: "fingerprint", values: targetValues };
@@ -178,6 +202,7 @@ export function validateMissionPolicy(input) {
     idempotencyKey,
     app,
     account,
+    ...(parentGrant ? { parentGrant } : {}),
     parallelism,
     controllers,
     scope: {

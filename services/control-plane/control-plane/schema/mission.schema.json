@@ -17,6 +17,15 @@
     "idempotencyKey": { "type": "string", "minLength": 1 },
     "app": { "type": "string", "minLength": 1 },
     "account": { "type": "string", "minLength": 1 },
+    "parentGrant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["grantId", "grantHash"],
+      "properties": {
+        "grantId": { "type": "string", "minLength": 1 },
+        "grantHash": { "type": "string", "minLength": 1 }
+      }
+    },
     "parallelism": { "type": "integer", "const": 1 },
     "controllers": {
       "type": "array",
@@ -50,7 +59,22 @@
               "type": "object",
               "additionalProperties": false,
               "required": ["kind"],
-              "properties": { "kind": { "const": "verified_discovery" } }
+              "properties": {
+                "kind": { "const": "verified_discovery" },
+                "provenance": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["snapshotHash", "observedAt", "accountFingerprint", "pageFingerprint", "observedTargetFingerprint", "identityEvidenceHash"],
+                  "properties": {
+                    "snapshotHash": { "type": "string", "minLength": 1 },
+                    "observedAt": { "type": "string", "format": "date-time" },
+                    "accountFingerprint": { "type": "string", "minLength": 1 },
+                    "pageFingerprint": { "type": "string", "minLength": 1 },
+                    "observedTargetFingerprint": { "type": "string", "minLength": 1 },
+                    "identityEvidenceHash": { "type": "string", "minLength": 1 }
+                  }
+                }
+              }
             }
           ]
         },

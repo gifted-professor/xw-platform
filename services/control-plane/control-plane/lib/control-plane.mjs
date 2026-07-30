@@ -133,6 +133,7 @@ export class ControlPlane {
     missions = null,
     acquireTransportLock = null,
     missionAutoApprovalEnabled = process.env.MISSION_AUTO_APPROVAL_ENABLED === "1",
+    standingGrantEnabled = process.env.STANDING_GRANT_ENABLED === "1",
     adrAccepted = null,
     adrPath = DEFAULT_ADR_0008_PATH,
     effectIntentSchema = EFFECT_INTENT_SCHEMA,
@@ -172,6 +173,7 @@ export class ControlPlane {
     // flag is enabled. adrAccepted===null reads the ADR file lazily; an explicit boolean
     // override is for tests only and never mutates the ADR file.
     this.missionAutoApprovalEnabled = Boolean(missionAutoApprovalEnabled);
+    this.standingGrantEnabled = Boolean(standingGrantEnabled);
     this.adrAcceptedOverride = adrAccepted;
     this.adrPath = adrPath;
     this.effectIntentSchema = effectIntentSchema;
@@ -267,13 +269,20 @@ export class ControlPlane {
     return { ok: true };
   }
 
+  #standingGrantGate() {
+    if (!this.standingGrantEnabled || !this.missionAutoApprovalEnabled || !this.isAdr0008Accepted()) {
+      return { ok: false, code: "STANDING_GRANT_NOT_ENABLED" };
+    }
+    return { ok: true };
+  }
+
   // The one authenticated command that creates/reuses the immutable Mission and runs it. It
   // never accepts a client-selected private runtime/device id (placement is server-side). With
   // the gate closed it persists only a blocked Mission/audit event and returns
   // ADR_0008_NOT_ACCEPTED before any run/lease/Session/effect row exists. With the gate open an
   // in-scope social Mission opens its atomic DeviceRun with no whole-Mission or per-job
   // approval; payment and unreleased publish/delete still route to the PHC at effect time.
-  submitMission({ actor, idempotencyKey, policy, controllerAgent, placement = {} }) {
+  submitMission({ actor, idempotencyKey, policy, parentGrantId = null, controllerAgent, placement = {} }) {
     if (typeof actor !== "string" || actor.trim() === "") {
       throw new ControlPlaneError("ACTOR_REQUIRED", "actor is required", { status: 400 });
     }
@@ -298,13 +307,19 @@ export class ControlPlane {
     const controllers = (Array.isArray(policy.controllers) && policy.controllers.length)
       ? policy.controllers
       : [controller];
-    const { mission, reused } = this.missions.createMission({
+    if (parentGrantId && policy.issuer !== undefined) {
+      throw new ControlPlaneError("CLIENT_ISSUER_FORBIDDEN", "a parent-grant Mission cannot select its issuer", { status: 400 });
+    }
+    const missionInput = {
       ...policy,
       issuer: { actorId: actor.trim() },
       idempotencyKey: idempotencyKey.trim(),
       controllers,
-    });
-    const gate = this.#missionAutoApprovalGate();
+    };
+    const { mission, reused } = parentGrantId
+      ? this.missions.createMissionFromGrant({ parentGrantId, input: missionInput })
+      : this.missions.createMission(missionInput);
+    const gate = parentGrantId ? this.#standingGrantGate() : this.#missionAutoApprovalGate();
     if (!gate.ok) {
       this.state.appendMissionEvent({
         missionId: mission.missionId,

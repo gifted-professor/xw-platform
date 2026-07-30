@@ -39,6 +39,7 @@ function r2Capability(id = "xhs.follow.r2") {
 
 function setup({
   missionAutoApprovalEnabled = false,
+  standingGrantEnabled = false,
   adrAccepted = null,
   capabilities = [r2Capability()],
   effectIntentSchema = undefined,
@@ -76,6 +77,7 @@ function setup({
     leaseTtlMs: 60000,
     leaseHeartbeatMs: 5000,
     missionAutoApprovalEnabled,
+    standingGrantEnabled,
     adrAccepted,
     effectIntentSchema,
     acquireTransportLock: () => Promise.resolve(() => {}),
@@ -107,6 +109,91 @@ const socialPolicy = {
   },
   validity: { expiresAt: "2099-07-29T16:00:00Z" },
 };
+
+function standingGrant() {
+  return {
+    schemaVersion: 1,
+    grantId: "grant_control_test_001",
+    issuanceNonce: "nonce_control_test_001",
+    issuer: { subject: "user:a1234", keyId: "test-key" },
+    app: "xhs",
+    accountFingerprint: "account-grant-test",
+    controllers: ["agent:runner"],
+    maxParallelism: 1,
+    authorization: {
+      primitives: ["screenshot"], socialActions: ["follow"], missionOnlyActions: ["delete"], prohibitedActions: ["payment", "publish"],
+    },
+    targets: { mode: "explicit_fingerprints", values: ["target-hash-aaa"] },
+    budget: {
+      maxima: { totalCount: 2, perTargetCount: 1, frequency: { count: 1, windowSeconds: 3600 } },
+      defaults: { totalCount: 1, perTargetCount: 1, frequency: { count: 1, windowSeconds: 3600 } },
+    },
+    validity: { expiresAt: null },
+    redaction: { publicFields: ["alias"] },
+  };
+}
+
+function persistStandingGrant(state, grant = standingGrant()) {
+  state.issueDelegationGrant({
+    grant,
+    grantHash: `hash-${grant.grantId}`,
+    proofHash: `proof-${grant.grantId}`,
+    issuerSubject: "user:a1234",
+    issuerKeyId: "test-key",
+    allowlistVersion: 1,
+  });
+  return grant;
+}
+
+test("a valid parent grant records a flag-off child Mission without allocating a run, lease, or effect", () => {
+  const f = setup({ missionAutoApprovalEnabled: true, adrAccepted: true });
+  try {
+    const grant = persistStandingGrant(f.state);
+    const result = f.control.submitMission({
+      actor: "agent:runner",
+      parentGrantId: grant.grantId,
+      idempotencyKey: "grant-child-flag-off",
+      policy: { ...socialPolicy, account: grant.accountFingerprint },
+    });
+    assert.equal(result.status, "blocked");
+    assert.equal(result.reason, "STANDING_GRANT_NOT_ENABLED");
+    assert.equal(f.state.listDeviceRuns({ missionId: result.mission.missionId }).length, 0);
+    assert.equal(f.state.listLeases().length, 0);
+    assert.equal(f.state.listMissionEffects(result.mission.missionId).length, 0);
+  } finally {
+    f.close();
+  }
+});
+
+test("a grant child is subset-compiled from immutable parent scope and only runs with both flags", () => {
+  const f = setup({ missionAutoApprovalEnabled: true, standingGrantEnabled: true, adrAccepted: true });
+  try {
+    const grant = persistStandingGrant(f.state);
+    const policy = { ...socialPolicy, account: grant.accountFingerprint };
+    const result = f.control.submitMission({ actor: "agent:runner", parentGrantId: grant.grantId, idempotencyKey: "grant-child-on", policy });
+    assert.equal(result.status, "running");
+    assert.equal(result.mission.parentGrantId, grant.grantId);
+    assert.equal(result.mission.issuer.actorId, "user:a1234");
+    assert.equal(result.mission.scope.totalCount, grant.budget.defaults.totalCount);
+    assert.equal(f.state.listDeviceRuns({ missionId: result.mission.missionId }).length, 1);
+
+    const cases = [
+      { policy: { ...policy, account: "other-account" } },
+      { policy: { ...policy, controllers: ["agent:not-allowed"] } },
+      { policy: { ...policy, scope: { ...policy.scope, totalCount: 3 } } },
+      { policy: { ...policy, scope: { ...policy.scope, actions: ["payment"] } } },
+      { policy: { ...policy, scope: { ...policy.scope, targets: { kind: "fingerprint", values: ["other-target"] } } } },
+    ];
+    for (const [index, item] of cases.entries()) {
+      assert.throws(() => f.control.submitMission({ actor: "agent:runner", parentGrantId: grant.grantId, idempotencyKey: `grant-child-invalid-${index}`, policy: item.policy }), { code: "GRANT_SUBSET_INVALID" });
+    }
+    assert.throws(() => f.control.submitMission({ actor: "agent:runner", parentGrantId: grant.grantId, idempotencyKey: "grant-child-client-issuer", policy: { ...policy, issuer: { actorId: "human:spoof" } } }), { code: "CLIENT_ISSUER_FORBIDDEN" });
+    f.state.revokeDelegationGrant(grant.grantId, { reason: "test" });
+    assert.throws(() => f.control.submitMission({ actor: "agent:runner", parentGrantId: grant.grantId, idempotencyKey: "grant-child-revoked", policy }), { code: "PARENT_GRANT_INACTIVE" });
+  } finally {
+    f.close();
+  }
+});
 
 function freshSnapshot(surface, extra = {}) {
   const ts = new Date().toISOString();
