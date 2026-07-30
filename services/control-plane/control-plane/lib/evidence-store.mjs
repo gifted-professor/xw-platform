@@ -96,10 +96,26 @@ export class EvidenceStore {
   }
 
   findByIdAndHash(evidenceId, sha256) {
-    const record = this.state.getEvidenceRecord(evidenceId);
+    const record = this.state.getEvidenceRecordInternal?.(evidenceId) || this.state.getEvidenceRecord(evidenceId);
     if (!record) throw new ControlPlaneError("EVIDENCE_NOT_FOUND", "evidence record is absent", { status: 404 });
     if (record.sha256 !== sha256) throw new ControlPlaneError("EVIDENCE_HASH_MISMATCH", "evidence hash does not match", { status: 409 });
-    return record;
+    if (typeof record.path !== "string" || record.path === "" || record.path.includes("\\")) {
+      throw new ControlPlaneError("EVIDENCE_PATH_INVALID", "evidence path is not a permitted relative path", { status: 409 });
+    }
+    const absolutePath = resolve(this.runDirectory(record.runId), record.path);
+    const allowedRoot = `${this.runDirectory(record.runId)}${process.platform === "win32" ? "\\" : "/"}`;
+    if (!absolutePath.startsWith(allowedRoot)) {
+      throw new ControlPlaneError("EVIDENCE_PATH_INVALID", "evidence path escapes its run directory", { status: 409 });
+    }
+    if (!existsSync(absolutePath) || !statSync(absolutePath).isFile()) {
+      throw new ControlPlaneError("EVIDENCE_FILE_MISSING", "evidence file is absent", { status: 409 });
+    }
+    const actualHash = createHash("sha256").update(readFileSync(absolutePath)).digest("hex");
+    if (actualHash !== record.sha256) {
+      throw new ControlPlaneError("EVIDENCE_HASH_MISMATCH", "evidence file no longer matches its durable hash", { status: 409 });
+    }
+    // Path is private storage metadata; callers receive an allowlisted evidence descriptor.
+    return { evidenceId: record.evidenceId, jobId: record.jobId, runId: record.runId, kind: record.kind, sha256: record.sha256, bytes: record.bytes };
   }
 
   initializeRun({ job, device, gitCommit = process.env.CONTROL_PLANE_GIT_COMMIT || "unknown" }) {

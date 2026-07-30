@@ -259,23 +259,39 @@ export class ControlPlane {
     return this.discoverySessions.getDiscoveryRun(discoveryRunId);
   }
 
+  // Bootstrap opts into this explicit production wiring. Unit callers that do not install it
+  // fail closed rather than treating a bare reservation as a completed Discovery action.
+  installDiscoveryProducer({ capabilityForPrimitive = {} } = {}) {
+    // The bootstrap owns this map.  It is deliberately not accepted from a client envelope;
+    // an unmapped primitive fails closed instead of inventing an adapter action.
+    this.discoveryCapabilityForPrimitive = Object.freeze({ ...capabilityForPrimitive });
+    this.discoveryProducer = (input) => this.#dispatchDiscoveryR0(input);
+  }
+
   executeDiscoveryPrimitive(input) {
-    const verdict = this.firewall.classifyDiscovery(input?.envelope);
-    if (verdict.decision !== "auto") {
-      throw new ControlPlaneError(verdict.code, "Discovery primitive blocked by observed surface", { status: 409, details: { reason: verdict.reason } });
+    // Client envelope is declared intent only.  The final firewall decision is made from the
+    // producer/parser receipt in #recordDiscoveryReceipt, immediately after the read-only R0
+    // operation and before that receipt can be ingested as authority.
+    // A reservation is an externally visible durable allocation.  Do not create one unless
+    // the authority-owned producer is actually wired: callers must never be able to turn a
+    // missing production dispatcher into a misleading successful R0 reservation.
+    if (!this.discoveryProducer) {
+      throw new ControlPlaneError("DISCOVERY_PRODUCER_UNAVAILABLE", "Discovery R0 producer is not installed", { status: 503 });
     }
     const reservation = this.discoverySessions.executeDiscoveryPrimitive(input);
     // Reservation is committed before this isolated R0 producer is invoked. A replay never
     // reaches the producer again, so a crash leaves a durable intent rather than a duplicate.
-    if (reservation.reused || !this.discoveryProducer) return reservation;
+    if (reservation.reused) return reservation;
     const evidence = this.discoveryProducer({
       discoveryRunId: reservation.discoveryRunId,
       reservationId: reservation.reservationId,
       primitive: reservation.primitive,
       tuple: input.tuple,
+      token: input.token,
+      envelope: input.envelope,
     });
     if (evidence && typeof evidence.then === "function") {
-      throw new ControlPlaneError("DISCOVERY_PRODUCER_ASYNC_UNSUPPORTED", "Discovery producer must not outlive its fenced call", { status: 500 });
+      return evidence.then((value) => value && typeof value === "object" ? { ...reservation, ...value } : reservation);
     }
     return evidence && typeof evidence === "object" ? { ...reservation, ...evidence } : reservation;
   }
@@ -286,8 +302,103 @@ export class ControlPlane {
     if (!this.evidence || typeof this.evidence.findByIdAndHash !== "function") {
       throw new ControlPlaneError("DISCOVERY_EVIDENCE_UNAVAILABLE", "Discovery observation ingestion needs the evidence index", { status: 503 });
     }
-    this.evidence.findByIdAndHash(input?.evidenceId, input?.evidenceHash);
-    return this.discoverySessions.ingestDiscoveryObservation(input);
+    if (typeof input?.receiptId !== "string" || input.receiptId === "") {
+      throw new ControlPlaneError("DISCOVERY_INGEST_INPUT_INVALID", "Discovery ingest accepts only an opaque producer receipt", { status: 400 });
+    }
+    try {
+      const receipt = this.state.getDiscoveryProducerReceipt?.(input.receiptId);
+      if (!receipt || receipt.discoveryRunId !== input?.discoveryRunId) {
+        throw new ControlPlaneError("DISCOVERY_RECEIPT_INVALID", "Discovery ingest requires a control-plane producer receipt", { status: 409 });
+      }
+      this.evidence.findByIdAndHash(receipt.evidenceId, receipt.evidenceHash);
+      return this.discoverySessions.ingestDiscoveryObservation(input);
+    } catch (error) {
+      // Ingest is an internal producer boundary.  A bad/tampered receipt cannot leave an
+      // active authority run behind; the StateStore CAS protects foreign leases on a stale
+      // tuple and commits the terminal typed event before this error is surfaced.
+      try { this.discoverySessions.abortDiscoveryRun({ discoveryRunId: input.discoveryRunId, tuple: input.tuple, reason: error.code || "DISCOVERY_INGEST_FAILED" }); } catch {}
+      throw error;
+    }
+  }
+
+  async #dispatchDiscoveryR0({ discoveryRunId, reservationId, primitive, tuple, token }) {
+    const run = this.discoverySessions.getDiscoveryRun(discoveryRunId);
+    const capabilityId = this.discoveryCapabilityForPrimitive?.[primitive];
+    if (typeof capabilityId !== "string") {
+      throw new ControlPlaneError("DISCOVERY_PRIMITIVE_UNAVAILABLE", "no control-plane-owned R0 producer is installed for this primitive", { status: 503 });
+    }
+    const session = this.state.validateSession(run.sessionId, token);
+    const capability = this.capabilities.validateParams(capabilityId, {});
+    const policy = evaluateCapabilityPolicy(capability, { canary: session.canary, invocation: "session" });
+    if (capability.risk !== "R0" || policy.approvalRequired || capability.idempotency !== "read_only") {
+      throw new ControlPlaneError("DISCOVERY_PRODUCER_POLICY_INVALID", "Discovery producer must be an automatic read-only R0 capability", { status: 409 });
+    }
+    if (this.activeJobs.has(session.deviceId)) {
+      throw new ControlPlaneError("DEVICE_BUSY", "Discovery device already has an action in progress", { status: 423 });
+    }
+    this.evidence.assertCapacity({ externalEffect: false });
+    const created = this.state.createJob({
+      idempotencyKey: `discovery:${reservationId}`,
+      actorId: session.actorId,
+      authorityNodeId: this.authorityNodeId,
+      deviceId: session.deviceId,
+      placement: {}, capability, params: {}, canary: session.canary, sessionId: session.sessionId,
+      status: "queued", approvalRequired: false, externalEffect: false,
+    });
+    if (created.reused) {
+      if (created.job.sessionId !== session.sessionId) throw new ControlPlaneError("DISCOVERY_JOB_BINDING_CONFLICT", "Discovery reservation belongs to another session", { status: 409 });
+      const prior = this.state.getDiscoveryProducerReceiptForReservation?.(reservationId);
+      if (!prior) throw new ControlPlaneError("DISCOVERY_RECEIPT_UNAVAILABLE", "durable Discovery job has no completed producer receipt", { status: 409 });
+      return prior;
+    }
+    this.state.bindDiscoveryReservationJob({ discoveryRunId, reservationId, tuple, job: created.job, gates: this.discoverySessions.gates() });
+    const device = this.state.requireDevice(session.deviceId);
+    this.evidence.initializeRun({ job: created.job, device });
+    let receipt = null;
+    const promise = this.#runJob(created.job, {
+      lease: { leaseId: session.leaseId, token }, releaseLease: false,
+      onVerified: async ({ job, execution, verification }) => {
+        receipt = await this.#recordDiscoveryReceipt({ discoveryRunId, reservationId, tuple, job, execution, verification });
+      },
+    }).finally(() => {
+      if (this.activeJobs.get(session.deviceId) === promise) this.activeJobs.delete(session.deviceId);
+    });
+    this.activeJobs.set(session.deviceId, promise);
+    const job = await promise;
+    if (job.status !== "succeeded" || !receipt) {
+      throw new ControlPlaneError("DISCOVERY_PRODUCER_FAILED", "Discovery R0 producer did not yield a verified observed receipt", { status: 409, details: { jobId: job.jobId, status: job.status } });
+    }
+    return receipt;
+  }
+
+  async #recordDiscoveryReceipt({ discoveryRunId, reservationId, tuple, job, execution, verification }) {
+    const observed = execution?.output?.discoveryReceipt;
+    if (!observed || typeof observed !== "object") {
+      throw new ControlPlaneError("DISCOVERY_RECEIPT_INVALID", "R0 producer must emit a parser-observed receipt", { status: 409 });
+    }
+    const snapshot = observed.snapshot;
+    const observedVerdict = this.firewall.classifyDiscovery({
+      declaredIntent: null,
+      observedTargetFingerprint: observed.observedTargetFingerprint,
+      snapshot,
+    });
+    if (observedVerdict.decision !== "auto") {
+      throw new ControlPlaneError("DISCOVERY_SURFACE_BLOCKED", "parser-observed surface is not reversible R0", { status: 409, details: { reason: observedVerdict.reason } });
+    }
+    const required = ["snapshotHash", "app", "accountFingerprint", "pageFingerprint", "observedTargetFingerprint", "identityEvidenceHash", "anchor", "relationKind", "observedAt"];
+    if (required.some((key) => observed[key] === undefined) || !observed.anchor?.type || !observed.anchor?.hash) {
+      throw new ControlPlaneError("DISCOVERY_RECEIPT_INVALID", "parser receipt lacks immutable observation lineage", { status: 409 });
+    }
+    const payload = {
+      snapshotHash: observed.snapshotHash, app: observed.app, accountFingerprint: observed.accountFingerprint,
+      pageFingerprint: observed.pageFingerprint, observedTargetFingerprint: observed.observedTargetFingerprint,
+      identityEvidenceHash: observed.identityEvidenceHash, anchor: observed.anchor, relationKind: observed.relationKind,
+      observedAt: observed.observedAt, snapshot, recorder: `adapter:${job.capabilityId}`,
+      sourceHash: fingerprint({ jobId: job.jobId, runId: job.runId, verification }),
+      contentHash: fingerprint(observed),
+    };
+    const evidence = this.evidence.writeJson({ job, kind: "discovery_receipt", label: `discovery-receipt-${reservationId}`, value: payload });
+    return this.state.recordDiscoveryProducerReceipt({ discoveryRunId, reservationId, tuple, job, evidence, receipt: payload, gates: this.discoverySessions.gates() });
   }
 
   markControlLost(deviceRunId, input) {
@@ -1426,7 +1537,7 @@ export class ControlPlane {
     }
   }
 
-  async #runJob(initialJob, { lease, releaseLease }) {
+  async #runJob(initialJob, { lease, releaseLease, onVerified = null }) {
     let job = this.state.requireJob(initialJob.jobId);
     let execution;
     let verification;
@@ -1481,6 +1592,7 @@ export class ControlPlane {
         error.ambiguous = Boolean(verification.ambiguous);
         throw error;
       }
+      if (onVerified) await onVerified({ job, execution, verification });
     } catch (error) {
       primaryError = asControlError(error);
       if (error?.sent) primaryError.sent = true;

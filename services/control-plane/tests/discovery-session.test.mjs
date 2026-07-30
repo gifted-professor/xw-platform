@@ -11,7 +11,7 @@ import { StateStore } from "../control-plane/lib/state-store.mjs";
 
 const AUTHORITY = "DESKTOP-3I1EVHE";
 
-function fixture({ adrAccepted = true, discoveryAdrAccepted = true, discoveryAdrPath = undefined, discoveryProducer = null } = {}) {
+function fixture({ adrAccepted = true, discoveryAdrAccepted = true, discoveryAdrPath = undefined, discoveryProducer = undefined } = {}) {
   const root = mkdtempSync(join(tmpdir(), "discovery-control-"));
   const state = new StateStore({ dbPath: join(root, "control.db") });
   state.upsertNode({ nodeId: AUTHORITY, authority: true });
@@ -28,7 +28,8 @@ function fixture({ adrAccepted = true, discoveryAdrAccepted = true, discoveryAdr
   const evidence = new EvidenceStore({ runsRoot: join(root, "runs"), state, minFreeBytes: 0, minExternalEffectFreeBytes: 0 });
   const control = new ControlPlane({
     state, evidence, capabilities: new CapabilityRegistry([]), authorityNodeId: AUTHORITY, missionAutoApprovalEnabled: true, standingGrantEnabled: true, adrAccepted,
-    discoveryIssuerReady: true, discoveryAdrAccepted, discoveryAdrPath, discoveryProducer,
+    discoveryIssuerReady: true, discoveryAdrAccepted, discoveryAdrPath,
+    discoveryProducer: discoveryProducer === undefined ? (() => null) : discoveryProducer,
   });
   return { root, state, grant, evidence, control };
 }
@@ -134,6 +135,22 @@ test("exclusive Discovery primitive requires its own fenced tuple and signed R0 
   } finally { f.state.close(); rmSync(f.root, { recursive: true, force: true }); }
 });
 
+test("Discovery primitive fails closed when production producer wiring is absent", () => {
+  const f = fixture({ discoveryProducer: null });
+  try {
+    const run = f.control.openDiscoveryRun({ grantId: f.grant.grantId, controllerAgent: "agent:runner" });
+    assert.throws(() => f.control.executeDiscoveryPrimitive({
+      discoveryRunId: run.discoveryRunId,
+      tuple: run.tuple,
+      token: run.token,
+      primitive: "screenshot",
+      idempotencyKey: "missing-producer",
+      envelope: { snapshot: { surface: "observation", createdAt: new Date().toISOString(), observedAt: new Date().toISOString() } },
+    }), { code: "DISCOVERY_PRODUCER_UNAVAILABLE" });
+    assert.equal(f.state.getDiscoveryRun(run.discoveryRunId).primitiveCount, 0);
+  } finally { f.state.close(); rmSync(f.root, { recursive: true, force: true }); }
+});
+
 test("Discovery primitive invokes only its fenced R0 producer once after durable intent", () => {
   let producerCalls = 0;
   let f;
@@ -154,6 +171,27 @@ test("Discovery primitive invokes only its fenced R0 producer once after durable
   } finally { f.state.close(); rmSync(f.root, { recursive: true, force: true }); }
 });
 
+test("authorized exact primitive and candidate retries reuse before exhausted quota checks", () => {
+  const f = fixture();
+  try {
+    const run = f.control.openDiscoveryRun({ grantId: f.grant.grantId, controllerAgent: "agent:runner" });
+    const now = new Date().toISOString();
+    const primitiveInput = { discoveryRunId: run.discoveryRunId, tuple: run.tuple, token: run.token, primitive: "screenshot", idempotencyKey: "quota-primitive", envelope: { snapshot: { surface: "observation", createdAt: now, observedAt: now } } };
+    const primitive = f.control.executeDiscoveryPrimitive(primitiveInput);
+    f.state.db.prepare("UPDATE discovery_runs SET max_primitives=primitive_count WHERE discovery_run_id=?").run(run.discoveryRunId);
+    assert.equal(f.control.executeDiscoveryPrimitive(primitiveInput).reservationId, primitive.reservationId);
+    assert.equal(f.state.getDiscoveryRun(run.discoveryRunId).status, "running");
+    assert.throws(() => f.control.executeDiscoveryPrimitive({ ...primitiveInput, envelope: { snapshot: { surface: "navigation", createdAt: now, observedAt: now } } }), { code: "DISCOVERY_IDEMPOTENCY_CONFLICT" });
+
+    const evidence = f.evidence.writeDiscoveryJson({ discoveryRunId: run.discoveryRunId, sourceJobId: primitive.reservationId, kind: "relation", label: "quota", value: { relation: "explicit_target" } });
+    const candidate = { discoveryRunId: run.discoveryRunId, tuple: run.tuple, token: run.token, gates: { missionAutoApprovalEnabled: true, standingGrantEnabled: true, adr0008Accepted: true, adr0010Accepted: true, issuerReady: true }, idempotencyKey: "quota-candidate", candidateHash: "b".repeat(64), anchor: { type: "identityFingerprint", hash: "a".repeat(64) }, relationKind: "explicit_target", relationEvidenceId: evidence.evidenceId, relationEvidenceHash: evidence.sha256 };
+    const first = f.state.reserveDiscoveryCandidateStorage(candidate);
+    f.state.db.prepare("UPDATE discovery_runs SET max_candidates=candidate_count WHERE discovery_run_id=?").run(run.discoveryRunId);
+    assert.equal(f.state.reserveDiscoveryCandidateStorage(candidate).reservationId, first.reservationId);
+    assert.equal(f.state.getDiscoveryRun(run.discoveryRunId).status, "running");
+  } finally { f.state.close(); rmSync(f.root, { recursive: true, force: true }); }
+});
+
 test("Discovery-owned sessions reject the generic job path and failed authority never calls the producer", async () => {
   let producerCalls = 0;
   const f = fixture({ discoveryProducer: () => { producerCalls += 1; return null; } });
@@ -171,14 +209,15 @@ test("Discovery-owned sessions reject the generic job path and failed authority 
   } finally { f.state.close(); rmSync(f.root, { recursive: true, force: true }); }
 });
 
-test("Discovery primitive blocks observed effect, unknown, and risk-control surfaces before reservation", () => {
+test("client-declared surface is not authoritative Discovery provenance", () => {
   for (const surface of ["social-effect", "payment", "publish", "delete", "unknown", "risk-control", "login", "captcha"]) {
     const f = fixture();
     try {
       const run = f.control.openDiscoveryRun({ grantId: f.grant.grantId, controllerAgent: "agent:runner" });
       const now = new Date().toISOString();
-      assert.throws(() => f.control.executeDiscoveryPrimitive({ discoveryRunId: run.discoveryRunId, tuple: run.tuple, token: run.token, primitive: "screenshot", idempotencyKey: `blocked-${surface}`, envelope: { declaredIntent: "screenshot", snapshot: { surface, createdAt: now, observedAt: now } } }), { code: "DISCOVERY_SURFACE_BLOCKED" });
-      assert.equal(f.state.getDiscoveryRun(run.discoveryRunId).primitiveCount, 0);
+      const reservation = f.control.executeDiscoveryPrimitive({ discoveryRunId: run.discoveryRunId, tuple: run.tuple, token: run.token, primitive: "screenshot", idempotencyKey: `declared-${surface}`, envelope: { declaredIntent: "screenshot", snapshot: { surface, createdAt: now, observedAt: now } } });
+      assert.match(reservation.reservationId, /^discovery_primitive_/);
+      assert.equal(f.state.getDiscoveryRun(run.discoveryRunId).primitiveCount, 1);
     } finally { f.state.close(); rmSync(f.root, { recursive: true, force: true }); }
   }
 });
@@ -209,24 +248,20 @@ test("Discovery candidate rejects unsigned relation pairing before a second cand
   } finally { f.state.close(); rmSync(f.root, { recursive: true, force: true }); }
 });
 
-test("internal Discovery ingest is immutable, lineage-bound, and conflict-audited", () => {
+test("Discovery ingest rejects client-supplied lineage and accepts only opaque producer receipts", () => {
   const f = fixture();
   let closed = false;
   try {
     const run = f.control.openDiscoveryRun({ grantId: f.grant.grantId, controllerAgent: "agent:runner" });
-    const intent = f.control.executeDiscoveryPrimitive({ discoveryRunId: run.discoveryRunId, tuple: run.tuple, token: run.token, primitive: "screenshot", idempotencyKey: "producer-intent", envelope: { snapshot: { surface: "observation", createdAt: new Date().toISOString(), observedAt: new Date().toISOString() } } });
-    const evidence = f.evidence.writeDiscoveryJson({ discoveryRunId: run.discoveryRunId, sourceJobId: intent.reservationId, kind: "snapshot", label: "producer", value: { screenshotHash: "d".repeat(64) } });
-    const input = { discoveryRunId: run.discoveryRunId, tuple: run.tuple, evidenceId: evidence.evidenceId, evidenceHash: evidence.sha256, sourceJobId: intent.reservationId, sourceRunId: run.discoveryRunId, recorder: "agent:runner", sourceHash: "f".repeat(64), contentHash: "1".repeat(64), snapshotHash: "e".repeat(64), app: "xhs", accountFingerprint: "account-hash", pageFingerprint: "page-hash", observedTargetFingerprint: "target-hash", identityEvidenceHash: "2".repeat(64), anchor: { type: "identityFingerprint", hash: "a".repeat(64) }, relationKind: "explicit_target", relationEvidenceId: evidence.evidenceId, relationEvidenceHash: evidence.sha256, observedAt: new Date().toISOString() };
-    const first = f.control.ingestDiscoveryObservation(input);
-    assert.equal(first.reused, false);
-    assert.equal(f.control.ingestDiscoveryObservation(input).reused, true);
-    assert.throws(() => f.control.ingestDiscoveryObservation({ ...input, pageFingerprint: "changed" }), { code: "AUTHORITATIVE_OBSERVATION_CONFLICT" });
-    assert.equal(f.state.listDiscoveryEvents(run.discoveryRunId).filter((event) => event.type === "discovery_observation.conflict").length, 1);
-    assert.throws(() => f.control.ingestDiscoveryObservation({ ...input, rawPath: "/private/screenshot.png" }), { code: "DISCOVERY_INGEST_INPUT_INVALID" });
+    assert.throws(() => f.control.ingestDiscoveryObservation({ discoveryRunId: run.discoveryRunId, tuple: run.tuple, snapshotHash: "e".repeat(64) }), { code: "DISCOVERY_INGEST_INPUT_INVALID" });
+    assert.throws(() => f.control.ingestDiscoveryObservation({ discoveryRunId: run.discoveryRunId, tuple: run.tuple, receiptId: "discovery_receipt_absent" }), { code: "DISCOVERY_RECEIPT_INVALID" });
+    assert.equal(f.state.getDiscoveryRun(run.discoveryRunId).status, "aborted");
+    assert.equal(f.state.listLeases().length, 0);
+    assert.equal(f.state.listDiscoveryEvents(run.discoveryRunId).filter((event) => event.type === "discovery_run.aborted").length, 1);
     f.state.close();
     closed = true;
     const reopened = new StateStore({ dbPath: join(f.root, "control.db") });
-    assert.equal(reopened.listDiscoveryEvents(run.discoveryRunId).filter((event) => event.type === "discovery_observation.conflict").length, 1);
+    assert.equal(reopened.listDiscoveryEvents(run.discoveryRunId).filter((event) => event.type === "discovery_observation.recorded").length, 0);
     reopened.close();
   } finally { if (!closed) f.state.close(); rmSync(f.root, { recursive: true, force: true }); }
 });

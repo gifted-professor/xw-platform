@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -74,5 +75,27 @@ test("EvidenceStore resolves an exact evidence id and hash without exposing its 
   try {
     const evidence = new EvidenceStore({ runsRoot: join(root, "runs"), state, minFreeBytes: 0, minExternalEffectFreeBytes: 0 });
     assert.throws(() => evidence.findByIdAndHash("evidence-missing", "a".repeat(64)), { code: "EVIDENCE_NOT_FOUND" });
+  } finally { state.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test("EvidenceStore fails closed on missing, escaped, or tampered private evidence files", () => {
+  const root = mkdtempSync(join(tempBase, "discovery-evidence-integrity-"));
+  const state = new StateStore({ dbPath: join(root, "control.db") });
+  try {
+    const evidence = new EvidenceStore({ runsRoot: join(root, "runs"), state, minFreeBytes: 0, minExternalEffectFreeBytes: 0 });
+    const runId = "run-private";
+    const relativePath = join("evidence", "receipt.json");
+    const absolutePath = join(root, "runs", runId, relativePath);
+    mkdirSync(join(root, "runs", runId, "evidence"), { recursive: true });
+    writeFileSync(absolutePath, "trusted\n");
+    const hash = createHash("sha256").update("trusted\n").digest("hex");
+    const record = state.recordEvidence({ jobId: null, runId, kind: "discovery_receipt", path: relativePath, sha256: hash, bytes: 8 });
+    assert.equal(evidence.findByIdAndHash(record.evidenceId, hash).evidenceId, record.evidenceId);
+    writeFileSync(absolutePath, "tampered\n");
+    assert.throws(() => evidence.findByIdAndHash(record.evidenceId, hash), { code: "EVIDENCE_HASH_MISMATCH" });
+    unlinkSync(absolutePath);
+    assert.throws(() => evidence.findByIdAndHash(record.evidenceId, hash), { code: "EVIDENCE_FILE_MISSING" });
+    const escaped = state.recordEvidence({ jobId: null, runId, kind: "discovery_receipt", path: "../outside.json", sha256: hash, bytes: 8 });
+    assert.throws(() => evidence.findByIdAndHash(escaped.evidenceId, hash), { code: "EVIDENCE_PATH_INVALID" });
   } finally { state.close(); rmSync(root, { recursive: true, force: true }); }
 });

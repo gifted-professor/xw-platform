@@ -4,7 +4,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { assertPinnedNodeVersion, loadStandingGrantIssuer } from "../control-plane/bootstrap.mjs";
+import { assertPinnedNodeVersion, createControlPlaneRuntime, loadStandingGrantIssuer } from "../control-plane/bootstrap.mjs";
 import { CapabilityRegistry } from "../control-plane/lib/capability-registry.mjs";
 import { AdapterRegistry, ControlPlane } from "../control-plane/lib/control-plane.mjs";
 import { EvidenceStore } from "../control-plane/lib/evidence-store.mjs";
@@ -35,6 +35,66 @@ const capability = {
   implementation: { adapter: "test", action: "observe" },
   evidence: [],
 };
+
+test("production bootstrap installs the control-plane-owned Discovery producer", () => {
+  const root = mkdtempSync(join(tempBase, "discovery-bootstrap-"));
+  const state = new StateStore({ dbPath: join(root, "control.db") });
+  try {
+    const runtime = createControlPlaneRuntime({
+      state,
+      capabilities: new CapabilityRegistry([capability]),
+      adapters: new AdapterRegistry([{ id: "test", async execute() { return {}; } }]),
+      evidence: new EvidenceStore({ runsRoot: join(root, "runs"), state, minFreeBytes: 0, minExternalEffectFreeBytes: 0 }),
+      deviceConfigPath: join(root, "missing-devices.json"),
+    });
+    assert.equal(typeof runtime.control.discoveryProducer, "function");
+  } finally { state.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test("bootstrap producer reuses the owned session job runner and records a trusted receipt", async () => {
+  const root = mkdtempSync(join(tempBase, "discovery-bootstrap-job-"));
+  const state = new StateStore({ dbPath: join(root, "control.db") });
+  let executeCalls = 0;
+  try {
+    const runtime = createControlPlaneRuntime({
+      state,
+      capabilities: new CapabilityRegistry([capability]),
+      adapters: new AdapterRegistry([{
+        id: "test",
+        async execute() {
+          executeCalls += 1;
+          const now = new Date().toISOString();
+          return { output: { discoveryReceipt: {
+            snapshot: { surface: "observation", createdAt: now, observedAt: now },
+            snapshotHash: "1".repeat(64), app: "test", accountFingerprint: "account",
+            pageFingerprint: "page", observedTargetFingerprint: "target", identityEvidenceHash: "2".repeat(64),
+            anchor: { type: "identityFingerprint", hash: "a".repeat(64) }, relationKind: "explicit_target", observedAt: now,
+          } } };
+        },
+        async verify() { return { ok: true, mode: "state" }; },
+      }]),
+      evidence: new EvidenceStore({ runsRoot: join(root, "runs"), state, minFreeBytes: 0, minExternalEffectFreeBytes: 0 }),
+      deviceConfigPath: join(root, "missing-devices.json"),
+      discoveryCapabilityForPrimitive: { screenshot: "test.observe" },
+    });
+    state.upsertDevice({ alias: "01", physicalLabel: "rack-01", nodeId: "DESKTOP-3I1EVHE", runtimeId: "private", routingProfile: { enabled: true, capabilityIds: ["test.observe"] } });
+    state.issueDelegationGrant({ grant: {
+      grantId: "grant-bootstrap", issuanceNonce: "nonce", grantHash: "grant-hash", status: "active",
+      discoveryPolicy: { enabled: true, allowedPrimitives: ["screenshot"], defaults: { durationMs: 60000, maxPrimitives: 1, maxCandidates: 1 }, maxima: { durationMs: 60000, maxPrimitives: 1, maxCandidates: 1 }, maxParallelism: 1, targetScope: { anchors: [{ type: "identityFingerprint", hash: "a".repeat(64) }], relationKinds: ["explicit_target"], maxHops: 1 } }, validity: { expiresAt: null },
+    }, grantHash: "grant-hash", proofHash: "proof", issuerSubject: "user:test", issuerKeyId: "test", allowlistVersion: 1 });
+    runtime.control.missionAutoApprovalEnabled = true;
+    runtime.control.standingGrantEnabled = true;
+    runtime.control.discoveryIssuerReady = true;
+    runtime.control.adrAcceptedOverride = true;
+    runtime.control.discoveryAdrAcceptedOverride = true;
+    const run = runtime.control.openDiscoveryRun({ grantId: "grant-bootstrap", controllerAgent: "agent:test" });
+    const result = await runtime.control.executeDiscoveryPrimitive({ discoveryRunId: run.discoveryRunId, tuple: run.tuple, token: run.token, primitive: "screenshot", idempotencyKey: "bootstrap-r0", envelope: { declaredIntent: "not-trusted", snapshot: { surface: "payment", createdAt: "2000-01-01T00:00:00.000Z", observedAt: "2000-01-01T00:00:00.000Z" } } });
+    assert.equal(executeCalls, 1);
+    assert.match(result.receiptId, /^discovery_receipt_/);
+    assert.equal(state.db.prepare("SELECT COUNT(*) AS count FROM jobs").get().count, 1);
+    assert.equal(state.listDiscoveryEvents(run.discoveryRunId).some((event) => event.type === "discovery_primitive.receipt_recorded"), true);
+  } finally { state.close(); rmSync(root, { recursive: true, force: true }); }
+});
 
 test("HTTP API is loopback-oriented, emits no CORS header, and redacts runtime IDs", async () => {
   const root = mkdtempSync(join(tempBase, "server-test-"));

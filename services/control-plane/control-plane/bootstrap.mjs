@@ -95,6 +95,7 @@ export function createControlPlaneRuntime({
   leaseHeartbeatMs,
   issuerKeysPath = process.env.STANDING_GRANT_ISSUER_KEYS_PATH,
   standingGrantEnabled = process.env.STANDING_GRANT_ENABLED === "1",
+  discoveryCapabilityForPrimitive = {},
 } = {}) {
   const defaults = defaultRuntimePaths();
   const resolvedDbPath = dbPath || process.env.CONTROL_PLANE_DB || defaults.dbPath;
@@ -141,6 +142,7 @@ export function createControlPlaneRuntime({
     leaseHeartbeatMs,
     standingGrantEnabled,
   });
+  control.installDiscoveryProducer({ capabilityForPrimitive: discoveryCapabilityForPrimitive });
   return {
     root,
     state: runtimeState,

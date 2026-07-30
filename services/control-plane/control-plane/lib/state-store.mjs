@@ -410,6 +410,19 @@ export class StateStore {
         updated_at INTEGER NOT NULL,
         UNIQUE(discovery_run_id, kind, idempotency_key)
       );
+      CREATE TABLE IF NOT EXISTS discovery_producer_receipts (
+        receipt_id TEXT PRIMARY KEY,
+        reservation_id TEXT NOT NULL UNIQUE REFERENCES discovery_reservations(reservation_id),
+        discovery_run_id TEXT NOT NULL REFERENCES discovery_runs(discovery_run_id),
+        session_id TEXT NOT NULL,
+        controller_epoch INTEGER NOT NULL,
+        source_job_id TEXT NOT NULL REFERENCES jobs(job_id),
+        source_run_id TEXT NOT NULL,
+        evidence_id TEXT NOT NULL REFERENCES evidence(evidence_id),
+        evidence_hash TEXT NOT NULL,
+        receipt_json TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS discovery_observation_lineage (
         snapshot_hash TEXT PRIMARY KEY,
         discovery_run_id TEXT NOT NULL REFERENCES discovery_runs(discovery_run_id),
@@ -439,6 +452,9 @@ export class StateStore {
     this.#ensureColumn("discovery_observation_lineage", "relation_kind", "TEXT");
     this.#ensureColumn("discovery_observation_lineage", "relation_evidence_id", "TEXT");
     this.#ensureColumn("discovery_observation_lineage", "relation_evidence_hash", "TEXT");
+    this.#ensureColumn("discovery_reservations", "source_job_id", "TEXT");
+    this.#ensureColumn("discovery_reservations", "source_run_id", "TEXT");
+    this.#ensureColumn("discovery_reservations", "receipt_id", "TEXT");
     this.#ensureColumn("sessions", "placement_decision_json", "TEXT");
     this.#ensureColumn("leases", "owner_device_run_id", "TEXT");
     this.#ensureColumn("leases", "owner_discovery_run_id", "TEXT");
@@ -1405,6 +1421,16 @@ export class StateStore {
     return row ? { evidenceId: row.evidence_id, jobId: row.job_id, runId: row.run_id, kind: row.kind, sha256: row.sha256, bytes: row.bytes } : null;
   }
 
+  // Storage-only lookup.  This intentionally is not used by any HTTP response: EvidenceStore
+  // needs the relative path to recompute content integrity before a receipt can become lineage.
+  getEvidenceRecordInternal(evidenceId) {
+    const row = this.db.prepare("SELECT * FROM evidence WHERE evidence_id=?").get(evidenceId);
+    return row ? {
+      evidenceId: row.evidence_id, jobId: row.job_id, runId: row.run_id, kind: row.kind,
+      path: row.path, sha256: row.sha256, bytes: row.bytes,
+    } : null;
+  }
+
   #publicDelegationGrant(row) {
     if (!row) return null;
     return {
@@ -2263,27 +2289,116 @@ export class StateStore {
       .map((row) => ({ type: row.type, payload: parseJson(row.payload_json, {}), createdAt: iso(row.created_at) }));
   }
 
-  ingestDiscoveryObservation(input) {
+  bindDiscoveryReservationJob({ discoveryRunId, reservationId, tuple, job, gates = {} }) {
+    const now = this.now();
+    const result = this.transaction(() => {
+      const row = this.db.prepare("SELECT * FROM discovery_runs WHERE discovery_run_id=?").get(discoveryRunId);
+      if (!row) throw new ControlPlaneError("DISCOVERY_RUN_NOT_FOUND", "unknown DiscoveryRun", { status: 404 });
+      try {
+        this.#assertDiscoveryRunOwnership(row, tuple, now);
+        this.#assertLiveDiscoveryAuthority(row, gates);
+        const reservation = this.db.prepare("SELECT * FROM discovery_reservations WHERE reservation_id=? AND discovery_run_id=? AND kind='primitive'").get(reservationId, discoveryRunId);
+        if (!reservation || job?.sessionId !== row.session_id || job?.deviceId !== row.device_id) {
+          throw new ControlPlaneError("DISCOVERY_JOB_BINDING_INVALID", "job is not bound to this Discovery reservation tuple", { status: 409 });
+        }
+        if (reservation.source_job_id && (reservation.source_job_id !== job.jobId || reservation.source_run_id !== job.runId)) {
+          throw new ControlPlaneError("DISCOVERY_JOB_BINDING_CONFLICT", "reservation is already bound to another source job", { status: 409 });
+        }
+        this.db.prepare("UPDATE discovery_reservations SET source_job_id=?, source_run_id=?, status='dispatched', updated_at=? WHERE reservation_id=?")
+          .run(job.jobId, job.runId, now, reservationId);
+        this.#insertDiscoveryEvent({ discoveryRunId, type: "discovery_primitive.dispatched", payload: { reservationId, jobId: job.jobId }, createdAt: now });
+        return true;
+      } catch (error) { return { error: this.#terminalizeDiscoveryFailure(row, error, now) }; }
+    });
+    if (result?.error) throw result.error;
+    return result;
+  }
+
+  recordDiscoveryProducerReceipt({ discoveryRunId, reservationId, tuple, job, evidence, receipt, gates = {} }) {
+    const now = this.now();
+    const result = this.transaction(() => {
+      const row = this.db.prepare("SELECT * FROM discovery_runs WHERE discovery_run_id=?").get(discoveryRunId);
+      if (!row) throw new ControlPlaneError("DISCOVERY_RUN_NOT_FOUND", "unknown DiscoveryRun", { status: 404 });
+      try {
+        this.#assertDiscoveryRunOwnership(row, tuple, now);
+        this.#assertLiveDiscoveryAuthority(row, gates);
+        const reservation = this.db.prepare("SELECT * FROM discovery_reservations WHERE reservation_id=? AND discovery_run_id=? AND kind='primitive'").get(reservationId, discoveryRunId);
+        const source = this.db.prepare("SELECT job_id, run_id, session_id, device_id FROM jobs WHERE job_id=?").get(job?.jobId);
+        const storedEvidence = this.getEvidenceRecord(evidence?.evidenceId);
+        if (!reservation || !source || !storedEvidence
+          || reservation.source_job_id !== job.jobId || reservation.source_run_id !== job.runId
+          || source.session_id !== row.session_id || source.device_id !== row.device_id
+          || storedEvidence.jobId !== job.jobId || storedEvidence.runId !== job.runId
+          || storedEvidence.sha256 !== evidence.sha256) {
+          throw new ControlPlaneError("DISCOVERY_RECEIPT_BINDING_INVALID", "producer receipt does not match the reserved source job", { status: 409 });
+        }
+        const existing = this.db.prepare("SELECT * FROM discovery_producer_receipts WHERE reservation_id=?").get(reservationId);
+        const receiptHash = fingerprint(receipt);
+        if (existing) {
+          if (existing.evidence_hash !== evidence.sha256 || fingerprint(parseJson(existing.receipt_json, {})) !== receiptHash) {
+            throw new ControlPlaneError("DISCOVERY_RECEIPT_CONFLICT", "producer attempted to replace immutable receipt", { status: 409 });
+          }
+          return { receiptId: existing.receipt_id, evidenceId: existing.evidence_id, evidenceHash: existing.evidence_hash, ...parseJson(existing.receipt_json, {}) };
+        }
+        const receiptId = newId("discovery_receipt");
+        this.db.prepare("INSERT INTO discovery_producer_receipts (receipt_id, reservation_id, discovery_run_id, session_id, controller_epoch, source_job_id, source_run_id, evidence_id, evidence_hash, receipt_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+          .run(receiptId, reservationId, discoveryRunId, row.session_id, row.controller_epoch, job.jobId, job.runId, evidence.evidenceId, evidence.sha256, canonicalJson(receipt), now);
+        this.db.prepare("UPDATE discovery_reservations SET receipt_id=?, status='completed', updated_at=? WHERE reservation_id=?").run(receiptId, now, reservationId);
+        this.#insertDiscoveryEvent({ discoveryRunId, type: "discovery_primitive.receipt_recorded", payload: { reservationId, receiptId, jobId: job.jobId }, createdAt: now });
+        return { receiptId, evidenceId: evidence.evidenceId, evidenceHash: evidence.sha256, ...receipt };
+      } catch (error) { return { error: this.#terminalizeDiscoveryFailure(row, error, now) }; }
+    });
+    if (result?.error) throw result.error;
+    return result;
+  }
+
+  getDiscoveryProducerReceiptForReservation(reservationId) {
+    const row = this.db.prepare("SELECT * FROM discovery_producer_receipts WHERE reservation_id=?").get(reservationId);
+    return row ? { receiptId: row.receipt_id, discoveryRunId: row.discovery_run_id, reservationId: row.reservation_id, sessionId: row.session_id, controllerEpoch: row.controller_epoch, sourceJobId: row.source_job_id, sourceRunId: row.source_run_id, evidenceId: row.evidence_id, evidenceHash: row.evidence_hash, ...parseJson(row.receipt_json, {}) } : null;
+  }
+
+  getDiscoveryProducerReceipt(receiptId) {
+    const row = this.db.prepare("SELECT * FROM discovery_producer_receipts WHERE receipt_id=?").get(receiptId);
+    return row ? { receiptId: row.receipt_id, discoveryRunId: row.discovery_run_id, reservationId: row.reservation_id, sessionId: row.session_id, controllerEpoch: row.controller_epoch, sourceJobId: row.source_job_id, sourceRunId: row.source_run_id, evidenceId: row.evidence_id, evidenceHash: row.evidence_hash, ...parseJson(row.receipt_json, {}) } : null;
+  }
+
+  ingestDiscoveryObservation(raw) {
     const allowedFields = new Set([
-      "discoveryRunId", "tuple", "gates", "evidenceId", "evidenceHash", "sourceJobId", "sourceRunId", "recorder",
-      "sourceHash", "contentHash", "snapshotHash", "app", "accountFingerprint", "pageFingerprint",
-      "observedTargetFingerprint", "identityEvidenceHash", "anchor", "relationKind", "relationEvidenceId",
-      "relationEvidenceHash", "observedAt",
+      "discoveryRunId", "tuple", "gates", "receiptId",
     ]);
-    if (!input || typeof input !== "object" || Object.keys(input).some((key) => !allowedFields.has(key))) {
-      throw new ControlPlaneError("DISCOVERY_INGEST_INPUT_INVALID", "Discovery ingestion accepts hash-only lineage fields", { status: 400 });
+    if (!raw || typeof raw !== "object" || Object.keys(raw).some((key) => !allowedFields.has(key))) {
+      throw new ControlPlaneError("DISCOVERY_INGEST_INPUT_INVALID", "Discovery ingestion accepts only an opaque producer receipt", { status: 400 });
     }
+    const receipt = this.getDiscoveryProducerReceipt(raw.receiptId);
+    if (!receipt || receipt.discoveryRunId !== raw.discoveryRunId) {
+      throw new ControlPlaneError("DISCOVERY_RECEIPT_INVALID", "Discovery receipt is absent or belongs to another run", { status: 409 });
+    }
+    const input = {
+      ...raw,
+      evidenceId: receipt.evidenceId, evidenceHash: receipt.evidenceHash,
+      reservationId: receipt.reservationId, sourceJobId: receipt.sourceJobId, sourceRunId: receipt.sourceRunId,
+      recorder: receipt.recorder, sourceHash: receipt.sourceHash, contentHash: receipt.contentHash,
+      snapshotHash: receipt.snapshotHash, app: receipt.app, accountFingerprint: receipt.accountFingerprint,
+      pageFingerprint: receipt.pageFingerprint, observedTargetFingerprint: receipt.observedTargetFingerprint,
+      identityEvidenceHash: receipt.identityEvidenceHash, anchor: receipt.anchor, relationKind: receipt.relationKind,
+      relationEvidenceId: receipt.evidenceId, relationEvidenceHash: receipt.evidenceHash, observedAt: receipt.observedAt,
+    };
     const now = this.now();
     const result = this.transaction(() => {
       const row = this.db.prepare("SELECT * FROM discovery_runs WHERE discovery_run_id=?").get(input.discoveryRunId);
       if (!row) throw new ControlPlaneError("DISCOVERY_RUN_NOT_FOUND", "unknown DiscoveryRun", { status: 404 });
-      this.#assertDiscoveryRunOwnership(row, input.tuple, now);
-      this.#assertLiveDiscoveryAuthority(row, input.gates);
+      try {
+        this.#assertDiscoveryRunOwnership(row, input.tuple, now);
+        this.#assertLiveDiscoveryAuthority(row, input.gates);
+      } catch (error) {
+        return { error: this.#terminalizeDiscoveryFailure(row, error, now) };
+      }
       const evidence = this.getEvidenceRecord(input.evidenceId);
       const reservation = this.db.prepare("SELECT * FROM discovery_reservations WHERE reservation_id=? AND discovery_run_id=? AND kind='primitive'")
-        .get(input.sourceJobId, row.discovery_run_id);
+        .get(input.reservationId, row.discovery_run_id);
       if (!evidence || evidence.sha256 !== input.evidenceHash || evidence.runId !== input.sourceRunId
-        || input.sourceRunId !== row.discovery_run_id || !reservation) {
+        || !reservation || reservation.receipt_id !== raw.receiptId
+        || reservation.source_job_id !== input.sourceJobId || reservation.source_run_id !== input.sourceRunId) {
         throw new ControlPlaneError("DISCOVERY_EVIDENCE_INVALID", "Discovery observation evidence is not authoritative", { status: 409 });
       }
       const hashes = ["sourceHash", "contentHash", "snapshotHash", "identityEvidenceHash", "evidenceHash", "relationEvidenceHash"];
@@ -2364,12 +2479,6 @@ export class StateStore {
         if (!Array.isArray(policy.allowedPrimitives) || !policy.allowedPrimitives.includes(primitive)) {
           throw new ControlPlaneError("DISCOVERY_PRIMITIVE_FORBIDDEN", "primitive is not signed DiscoveryPolicy authority", { status: 403 });
         }
-        if (now >= row.deadline_at) {
-          throw new ControlPlaneError("DISCOVERY_DEADLINE_EXCEEDED", "DiscoveryRun deadline elapsed", { status: 409 });
-        }
-        if (row.primitive_count >= row.max_primitives) {
-          throw new ControlPlaneError("DISCOVERY_PRIMITIVE_BUDGET_EXHAUSTED", "DiscoveryRun primitive quota exhausted", { status: 409 });
-        }
       } catch (error) {
         return { error: this.#terminalizeDiscoveryFailure(row, error, now) };
       }
@@ -2380,6 +2489,15 @@ export class StateStore {
           throw new ControlPlaneError("DISCOVERY_IDEMPOTENCY_CONFLICT", "primitive idempotency key has different payload", { status: 409 });
         }
         return { reservationId: existing.reservation_id, reused: true };
+      }
+      // A fully-authorized exact retry must never be charged or terminalized merely because
+      // a concurrent new request consumed the final quota. New work is checked only after the
+      // exact reservation lookup, while a changed replay still conflicts above.
+      if (now >= row.deadline_at) {
+        throw new ControlPlaneError("DISCOVERY_DEADLINE_EXCEEDED", "DiscoveryRun deadline elapsed", { status: 409 });
+      }
+      if (row.primitive_count >= row.max_primitives) {
+        throw new ControlPlaneError("DISCOVERY_PRIMITIVE_BUDGET_EXHAUSTED", "DiscoveryRun primitive quota exhausted", { status: 409 });
       }
       const reservationId = newId("discovery_primitive");
       this.db.prepare(`
@@ -2418,11 +2536,11 @@ export class StateStore {
         const allowed = Array.isArray(scope.anchors) && scope.anchors.some((item) => item.type === anchor?.type && item.hash === anchor?.hash)
           && Array.isArray(scope.relationKinds) && scope.relationKinds.includes(relationKind) && scope.maxHops === 1;
         if (!allowed || !allowedPairs[anchor?.type]?.has(relationKind)) throw new ControlPlaneError("DISCOVERY_ANCHOR_RELATION_INVALID", "candidate is outside signed one-hop authority", { status: 409 });
-        if (row.candidate_count >= row.max_candidates) throw new ControlPlaneError("DISCOVERY_CANDIDATE_BUDGET_EXHAUSTED", "DiscoveryRun candidate quota exhausted", { status: 409 });
       } catch (error) { return { error: this.#terminalizeDiscoveryFailure(row, error, now) }; }
       const payloadHash = fingerprint({ candidateHash, anchor, relationKind, relationEvidenceId, relationEvidenceHash });
       const existing = this.db.prepare("SELECT * FROM discovery_reservations WHERE discovery_run_id=? AND kind='candidate' AND idempotency_key=?").get(discoveryRunId, idempotencyKey);
       if (existing) { if (existing.payload_hash !== payloadHash) throw new ControlPlaneError("DISCOVERY_IDEMPOTENCY_CONFLICT", "candidate idempotency conflict", { status: 409 }); return { reused: true, reservationId: existing.reservation_id }; }
+      if (row.candidate_count >= row.max_candidates) throw new ControlPlaneError("DISCOVERY_CANDIDATE_BUDGET_EXHAUSTED", "DiscoveryRun candidate quota exhausted", { status: 409 });
       const reservationId = newId("discovery_candidate");
       this.db.prepare("INSERT INTO discovery_reservations (reservation_id, discovery_run_id, kind, idempotency_key, payload_hash, status, created_at, updated_at) VALUES (?, ?, 'candidate', ?, ?, 'intent_recorded', ?, ?)").run(reservationId, discoveryRunId, idempotencyKey, payloadHash, now, now);
       this.db.prepare("UPDATE discovery_runs SET candidate_count=candidate_count+1, updated_at=? WHERE discovery_run_id=?").run(now, discoveryRunId);
