@@ -208,8 +208,8 @@ test("explicit-target child allocation requires all four independent Standing Gr
   }
 });
 
-test("a proposed ADR0009 is read lazily and blocks an otherwise enabled Standing Grant", () => {
-  const f = setup({ missionAutoApprovalEnabled: true, standingGrantEnabled: true, adrAccepted: true, standingGrantAdrAccepted: null });
+test("an accepted ADR0009 is read lazily while the Standing Grant flag still fails closed", () => {
+  const f = setup({ missionAutoApprovalEnabled: true, standingGrantEnabled: false, adrAccepted: true, standingGrantAdrAccepted: null });
   try {
     const grant = persistStandingGrant(f.state, { ...standingGrant(), grantId: "grant-adr0009-proposed", issuanceNonce: "nonce-adr0009-proposed" });
     const result = f.control.submitMission({
