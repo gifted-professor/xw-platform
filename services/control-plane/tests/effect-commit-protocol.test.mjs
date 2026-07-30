@@ -187,6 +187,10 @@ test("a parent or child expiry after prepare fences the adapter and retains its 
     const result = await ecp.executePrepared({ ...prepared, tuple: run.tuple, mission, action: "follow", target: "target-a", idempotencyKey: "effect-expiry", observationReceiptId });
     assert.deepEqual(result, { status: "blocked", code: "PARENT_GRANT_EXPIRED" });
     assert.equal(executeCount, 0);
+    const effect = state.listMissionEffects(mission.missionId).find((row) => row.effectId === prepared.effect.effectId);
+    assert.deepEqual({ status: effect.status, released: effect.reservationReleased }, { status: "cancelled", released: true });
+    assert.equal(state.getDeviceRun(run.deviceRunId).phase, "cancelled");
+    assert.equal(state.listLeases().some((lease) => lease.leaseId === run.leaseId), false);
   } finally { state.close(); rmSync(root, { recursive: true, force: true }); }
 });
 

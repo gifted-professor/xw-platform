@@ -78,7 +78,7 @@ export class EffectCommitProtocol {
     try {
       const parent = this.missions?.verifyParentGrant(input.mission, { action: input.action, target: input.target });
       if (parent && !parent.ok) {
-        outcome = this.ledger.recordOutcome(effect.effectId, { status: "cancelled" });
+        outcome = this.state.terminalizeMissionEffectAuthorityLoss({ effectId: effect.effectId, missionId: input.mission.missionId, deviceRunId: input.tuple.deviceRunId, leaseId: this.state.getDeviceRun(input.tuple.deviceRunId)?.leaseId, sessionId: input.tuple.sessionId, controllerEpoch: input.tuple.controllerEpoch, code: parent.code });
         return blocked(parent.code);
       }
       const discovery = this.missions?.verifyAuthoritativeDiscovery(input.mission);
@@ -164,7 +164,7 @@ export class EffectCommitProtocol {
     try {
       const liveParent = this.missions?.verifyParentGrant(mission, { action, target });
       if (liveParent && !liveParent.ok) {
-        outcome = this.ledger.recordOutcome(effectId, { status: "cancelled" });
+        outcome = this.state.terminalizeMissionEffectAuthorityLoss({ effectId, missionId: mission.missionId, deviceRunId: tuple.deviceRunId, leaseId: this.state.getDeviceRun(tuple.deviceRunId)?.leaseId, sessionId: tuple.sessionId, controllerEpoch: tuple.controllerEpoch, code: liveParent.code });
         return blocked(liveParent.code);
       }
       this.deviceRuns.assertControlTuple(tuple);

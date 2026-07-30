@@ -2166,6 +2166,33 @@ export class StateStore {
     });
   }
 
+  // Used by pre-send ECP fencing as well as the final send boundary.  It can release only the
+  // tuple still owned by this DeviceRun; a foreign lease/session is never touched.
+  terminalizeMissionEffectAuthorityLoss({ effectId, missionId, deviceRunId, leaseId, sessionId, controllerEpoch, code }) {
+    const now = this.now();
+    return this.transaction(() => {
+      const effect = this.db.prepare("SELECT * FROM mission_effects WHERE effect_id=?").get(effectId);
+      const run = this.db.prepare("SELECT * FROM device_runs WHERE device_run_id=?").get(deviceRunId);
+      const lease = this.db.prepare("SELECT * FROM leases WHERE lease_id=?").get(leaseId);
+      if (!effect || effect.mission_id !== missionId || effect.device_run_id !== deviceRunId) {
+        throw new ControlPlaneError("EFFECT_BINDING_MISMATCH", "effect is not bound to this DeviceRun", { status: 409 });
+      }
+      this.db.prepare("UPDATE mission_effects SET status='cancelled', reservation_released=1, retry_blocked=1, updated_at=?, finished_at=? WHERE effect_id=? AND status IN ('not_sent','pending_authorization','waiting_authorization')")
+        .run(now, now, effectId);
+      this.#insertMissionEvent({ missionId, type: "effect.cancelled", payload: { effectId, reason: code }, createdAt: now });
+      const ownsTuple = run && run.mission_id === missionId && run.session_id === sessionId && run.lease_id === leaseId
+        && run.controller_epoch === controllerEpoch && lease?.owner_device_run_id === deviceRunId;
+      if (ownsTuple) {
+        this.db.prepare("UPDATE device_runs SET phase='cancelled', outcome=?, updated_at=?, finished_at=? WHERE device_run_id=? AND phase NOT IN ('succeeded','failed','ambiguous','blocked','cancelled','paused_control_lost')")
+          .run(code, now, now, deviceRunId);
+        this.db.prepare("DELETE FROM sessions WHERE session_id=? AND lease_id=? AND device_id=?").run(sessionId, leaseId, run.device_id);
+        this.db.prepare("DELETE FROM leases WHERE lease_id=? AND device_id=? AND owner_device_run_id=?").run(leaseId, run.device_id, deviceRunId);
+        this.#insertMissionEvent({ missionId, type: "device_run.cancelled", payload: { deviceRunId, outcome: code, released: true }, createdAt: now });
+      }
+      return this.#publicMissionEffect(this.db.prepare("SELECT * FROM mission_effects WHERE effect_id=?").get(effectId));
+    });
+  }
+
   // This is the final synchronous boundary before an external effect: no await, callback, or
   // file I/O may intervene between the durable authority/receipt re-read and effect_started.
   beginMissionEffectSend({ effectId, receiptId = null, missionId, deviceRunId, leaseId, sessionId, controllerEpoch, targetFingerprint }) {
