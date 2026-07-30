@@ -31,7 +31,7 @@ Payment, publish, follow/like/collect/comment/DM, delete, profile, and settings 
    `searchQueryHash`, `seedIdentityFingerprint`, `contentContextHash`, or
    explicit-target `identityFingerprint`; raw search/account/content text is forbidden.
  - `relationKinds`: closed `search_result | seed_profile_relation | content_author |
-   content_mentioned_profile` enum, with valid anchor-kind pairing in the schema.
+   content_mentioned_profile | explicit_target` enum, with valid anchor-kind pairing in the schema.
  - `maxHops`: exactly `1`.
  - `explicit_target` is the only relation kind allowed for explicit-target `identityFingerprint`; it has no automatic candidate expansion.
 
@@ -82,12 +82,17 @@ Minimum states: `running → sealing → sealed | aborted | recovery_required`.
   Grant/hash, both flags, ADR gate, canonical readiness, and issuer configuration. A
   concurrent revoke/gate closure fails closed: no next adapter call; restore/release and
   terminal abort/recovery are durable.
+- Canonical ready+free is only the open placement test. During a live run, primitive,
+  heartbeat, and seal require active lease/session/controllerEpoch/discoveryRunId
+  ownership by this DiscoveryRun; its own valid lease continues. Foreign, missing,
+  expired, or mismatched lease/epoch fails closed with no next adapter call and durable
+  restore/release/terminal abort.
 
 ### No-effect producer
 
 While `running`, the producer may collect only DiscoveryPolicy `allowedPrimitives`. Exclusive `executeDiscoveryPrimitive` (or equivalent discovery action boundary):
 
-1. Validates session token + controller epoch + Grant hash
+1. Validates session token + lease + controller epoch + discoveryRunId + Grant hash
 2. Checks primitive ∈ signed allowlist
 3. Classifies **fresh observed surface** via Effect Firewall DiscoverySession profile
 4. Blocks every social/protected/unknown/risk-control/login/captcha/identity-mismatch surface

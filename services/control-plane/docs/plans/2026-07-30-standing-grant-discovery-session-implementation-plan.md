@@ -94,9 +94,9 @@ Expected: PASS; signature/hash/replay/rotation behavior preserved; DiscoveryPoli
 
 1. Migration v7→v8 creates `discovery_runs` + discovery events; legacy rows survive.
 2. `openDiscoveryRunStorage` in **one** `BEGIN IMMEDIATE` creates `{DiscoveryRun, Session, Lease, controllerEpoch}` together; crash between inserts (simulated by failing after N statements / injected fault) leaves zero live allocation.
-3. Pre-checks fail closed with zero rows: missing/inactive Grant, grantHash drift, DiscoveryPolicy.enabled=false, either feature flag false, ADR gate closed, malformed issuer, non-ready/busy device.
+3. `openDiscoveryRunStorage` alone requires canonical ready+free placement and fails closed with zero rows for missing/inactive Grant, grantHash drift, DiscoveryPolicy.enabled=false, either feature flag false, ADR gate closed, malformed issuer, non-ready/busy device.
 4. State machine: `running → sealing → sealed | aborted | recovery_required`. Seal releases session/lease and persists released tuple hashes + `releaseAt`. After seal, validateSession/lease fails; sealed record still readable.
-5. Heartbeat only while `running`/`sealing`; stale epoch / wrong controller / revocation mid-run ⇒ abort or recovery_required + restore + release.
+5. While `running`/`sealing`, primitive, heartbeat, and seal recheck canonical readiness/freshness plus that active lease/session/controllerEpoch/discoveryRunId precisely belong to this DiscoveryRun. Its own valid lease is allowed; foreign/missing/expired lease, wrong epoch/run/session, ready loss, or revocation ⇒ zero adapter + abort or recovery_required + restore + release. A second lease remains `DEVICE_BUSY`.
 6. Governed commands accepted; public observation POST/PATCH/DELETE and generic non-discovery writer paths return 404/403.
 7. Reopen StateStore: sealed/aborted durable; cannot resurrect released lease.
 8. Open persists policy snapshot `openedAt`, `deadlineAt`, `maxPrimitives`, `maxCandidates`, `maxParallelism=1`, and zero counters. A concurrent second open under the same Grant/scope conflicts; it cannot create a second session/lease/run.
@@ -112,8 +112,8 @@ Expected: FAIL because DiscoveryRun factory/tables/lifecycle API are absent.
 **Step 3: Write minimal implementation**
 
 1. Additive v8 schema: `discovery_runs` (id, grantId, grantHash, sessionId, leaseId, controllerAgent, controllerEpoch, status, deviceId, policyHash/anchors, `openedAt`, `deadlineAt`, maxima, reservation counters, sealed/release timestamps, released tuple hashes JSON), unique active Grant/scope index, append-only `discovery_events`, and durable primitive/candidate reservation rows.
-2. Implement `openDiscoveryRunStorage` as a single `BEGIN IMMEDIATE` transaction that re-reads Grant/hash, flags, ADR, issuer and canonical ready/free placement, enforces parallelism=1, then inlines placement+lease+session+run inserts (**do not** call `createSession()` nested).
-3. Implement seal/abort/abandon/status/heartbeat with fenced terminal compare-and-set; revalidate Grant/hash, flags, ADR, issuer, and readiness at seal. On every stop path call existing restore then release; never refund durable reservations.
+2. Implement `openDiscoveryRunStorage` as a single `BEGIN IMMEDIATE` transaction that re-reads Grant/hash, flags, ADR, issuer and canonical ready/free placement, enforces parallelism=1, then inlines placement+lease+session+run inserts (**do not** call `createSession()` nested). Canonical free is not reused after this allocation.
+3. Implement primitive/heartbeat/seal ownership checks using canonical readiness/freshness plus exact active lease/session/controllerEpoch/discoveryRunId equality to the run. Implement seal/abort/abandon/status/heartbeat with fenced terminal compare-and-set; foreign/missing/expired/mismatched ownership fails closed. On every stop path call existing restore then release; never refund durable reservations.
 4. Wire ControlPlane governed methods; keep flags default false.
 5. No observation ingest and no Mission compile in this task beyond status surfaces needed for tests.
 
@@ -144,7 +144,7 @@ Expected: PASS; dual-flag/ADR/issuer closed paths allocate nothing; seal leaves 
 
 **Step 1: Write the failing test**
 
-1. `executeDiscoveryPrimitive` / discovery action path requires live DiscoveryRun `running`, valid token+epoch, primitive ∈ signed DiscoveryPolicy.allowedPrimitives, and Firewall allow on **observed** surface before `createJob`.
+1. `executeDiscoveryPrimitive` / discovery action path requires live DiscoveryRun `running`, valid token + active lease/session/controllerEpoch/discoveryRunId ownership, primitive ∈ signed DiscoveryPolicy.allowedPrimitives, canonical readiness/freshness, and Firewall allow on **observed** surface before `createJob`. Own lease is permitted; free placement is not re-required.
 2. Generic `executeSessionAction` on a Discovery-owned session with a non-discovery capability is rejected (no bypass onto `control-plane.mjs` generic path).
 3. Firewall DiscoverySession profile blocks: follow, like, collect, comment, DM, delete, profile, settings, payment, publish, unknown, risk-control, login, captcha, identity mismatch — not merely “adapter absent”.
 4. Fake R0 producer records evidence via EvidenceStore; internal ingest verifies full lineage (grant/hash, discoveryRunId, sessionId, epoch, sourceJobId/sourceRunId, evidence ID+SHA-256 existence, recorder, source/content hashes) then appends immutable observation + event in one txn; returns redacted receipt.
@@ -152,7 +152,7 @@ Expected: PASS; dual-flag/ADR/issuer closed paths allocate nothing; seal leaves 
 6. Conflict/rejection audit: commit audit event in a transaction that **succeeds before** throwing, so reopen still shows the conflict event even though observation insert did not land.
 7. Forged client record, stale epoch, wrong evidence hash/session/controller, raw paths/text/tokens, update/delete attempts fail closed.
 8. Public projection omits tuple, recorder, evidence path, raw account, identity text.
-9. Primitive reservation test: each request uses one `BEGIN IMMEDIATE` to re-read Grant/hash, dual flags, ADR, canonical ready/free placement, issuer config, and deadline; then atomically reserve/increment before `createJob`/adapter. At max primitives, deadline, revocation, gate/ready loss, or a concurrent duplicate, assert typed abort/conflict, restore/release where terminal, and **zero adapter calls**.
+9. Primitive reservation test: each request uses one `BEGIN IMMEDIATE` to re-read Grant/hash, dual flags, ADR, canonical readiness/freshness, issuer config, deadline, and active lease/session/controllerEpoch/discoveryRunId ownership; then atomically reserve/increment before `createJob`/adapter. Own lease succeeds; foreign/missing/expired lease, wrong epoch/run/session, revocation, gate/ready loss, max primitives, deadline, or a concurrent duplicate asserts typed abort/conflict, restore/release where terminal, and **zero adapter calls**.
 10. Idempotency/restart: identical `{discoveryRunId, primitive, normalizedArgsHash}` retry returns the original reservation without increment; changed replay conflicts; reopen and abandon preserve a durable post-intent reservation.
 11. Candidate ingest atomically checks signed anchor type/hash, allowed relation kind/pairing, `maxHops===1`, evidence relation ID/SHA-256, and candidate remaining quota. Test arbitrary seed, second hop, unknown relation, wrong app/account/page/identity, changed lineage, and candidate overage fail closed before observation/Mission/adapter allocation; exact duplicate is deduped without a second charge.
 
@@ -165,7 +165,7 @@ Expected: FAIL because exclusive discovery action path, Discovery Firewall profi
 **Step 3: Write minimal implementation**
 
 1. Extend Effect Firewall with DiscoverySession profile driven by signed allowlist + observed surface classification; keep `SNAPSHOT_MAX_AGE_MS=5000` for live action snapshots.
-2. Implement exclusive discovery action boundary. In its single `BEGIN IMMEDIATE`, revalidate live authority/ready state, lock run, deadline-check, idempotently reserve primitive quota, and persist job intent before calling `createJob`/adapter; refuse generic session action for Discovery sessions.
+2. Implement exclusive discovery action boundary. In its single `BEGIN IMMEDIATE`, revalidate live authority, canonical readiness/freshness, and exact active own lease/session/controllerEpoch/discoveryRunId; lock run, deadline-check, idempotently reserve primitive quota, and persist job intent before calling `createJob`/adapter. Foreign/missing/expired/mismatched lease/epoch aborts/restores/releases with zero adapter; refuse generic session action for Discovery sessions.
 3. Internal-only ingest method (no router/devicectl transport): EvidenceStore index lookup + SHA-256 match; validate signed anchor/relation/evidence membership and atomically reserve/dedupe candidate quota before append observation+event; commit separate audit on conflict.
 4. Bind every R0 job to discoveryRunId/sessionId/controllerEpoch; observation stores sourceJobId/sourceRunId plus anchor/relation provenance. Preserve reservation across crash/reopen/abandon and use terminal row CAS to reject seal/action races.
 5. No Mission compile yet.

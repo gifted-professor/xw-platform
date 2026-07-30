@@ -79,10 +79,13 @@ Old Grants without `discoveryPolicy`, or with widened/unknown fields, are reject
 5. Seal releases session/lease first. Compilation accepts only a **sealed** immutable lineage record inside the 60s compile window; it must not require an active run/session/lease.
 6. Mission compilation creates a **new** placement/lease/DeviceRun. Discovery tuple is never transferred.
 
- `action` and `seal` repeat that same Grant/flag/ADR/ready/issuer validation while
- holding the run transaction; a concurrent revoke or gate closure wins by aborting,
- restoring, and releasing before a new adapter call or seal. Seal may only commit a
- lineage whose final validation succeeded.
+ `canonical ready+free` is an **open-only placement predicate**. While the run is live,
+ every primitive, heartbeat, and seal rechecks canonical readiness/freshness plus that
+ the active lease/session/controllerEpoch/discoveryRunId precisely belong to this
+ DiscoveryRun. Its own valid lease is allowed to continue; foreign, missing, expired,
+ or mismatched lease/epoch fails closed, aborts, restores, releases, and makes zero
+ adapter call. A concurrent revoke or gate closure has the same result. Seal may only
+ commit a lineage whose final validation succeeded.
 
 ### No-effect producer and firewall
 
