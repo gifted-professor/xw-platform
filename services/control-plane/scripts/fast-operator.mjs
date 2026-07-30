@@ -478,6 +478,26 @@ export class FastOperator {
     return { opened, activity: act };
   }
 
+  // General R0 navigation: select one currently visible feed card, open it, then
+  // derive the same parser-owned receipt used by the governed note-detail path.
+  // No caller-provided title/author/target is trusted and no social control is touched.
+  async openFeedNote({ selector = "any", index } = {}) {
+    if (selector !== "any") return { ok: false, notSent: true, step: "unsupportedFeedSelector" };
+    const doc = await this.feedDump({ label: "open-feed-note" });
+    const cards = this.feedCards(doc);
+    if (!cards.length) return { ok: false, notSent: true, step: "noSelectableFeedCard" };
+    const selectedIndex = Number.isInteger(index) ? index : 0;
+    const card = cards[selectedIndex];
+    if (!card?.cover?.center) return { ok: false, notSent: true, step: "feedCardIndexUnavailable" };
+    const opened = await this.openCard(card);
+    if (!opened.opened) {
+      return { ok: false, notSent: true, step: "noteDidNotOpen", activity: opened.activity ?? null };
+    }
+    const receipt = await this.observeOpenNoteDetail();
+    if (receipt.ok !== true) return receipt;
+    return { ok: true, selectedIndex, activity: opened.activity, ...receipt };
+  }
+
   // 暂停视频笔记的自动播放：tap 屏幕中心切换播放/暂停。若 tap 偏到别的 activity（理论上不会），BACK 回 NoteDetail。
   async pauseIfVideoNote() {
     await this.tap(540, 960);
@@ -1567,6 +1587,7 @@ export function serve(port, options = {}) {
         case "tap": out = await op.tap(q.x, q.y); break;
         case "feedCards": { const d = await op.dump({ label: q.label }); out = { cards: op.feedCards(d), dumpMs: d._dumpMs }; break; }
         case "observeOpenNoteDetail": out = await op.observeOpenNoteDetail(); break;
+        case "openFeedNote": out = await op.openFeedNote({ selector: q.selector ?? "any", index: q.index }); break;
         case "openCard": { const d = await op.dump({ label: "open" }); const cards = op.feedCards(d); const c = cards[q.idx ?? 0]; out = await op.openCard(c); break; }
         case "backToFeed": out = await op.backToFeed(q.maxBack ?? 3); break;
         case "likeCard": { const d = await op.dump({ label: "like" }); const cards = op.feedCards(d); const c = cards[q.idx ?? 0]; out = { resolved: !!c?.likeButton, card: c, tapped: c?.likeButton ? await op.likeCard(c) : null }; break; }

@@ -70,7 +70,7 @@ export function createXhsAdapter({ fetchImpl = globalThis.fetch } = {}) {
       const output = execution.output;
       if (action === "metrics") return { ok: Boolean(output && typeof output === "object"), mode: "state" };
       if (action === "feedCards") return { ok: Array.isArray(output?.cards), mode: "state" };
-      if (action === "observeOpenNoteDetail") {
+      if (action === "observeOpenNoteDetail" || action === "openFeedNote") {
         return {
           ok: output?.ok === true
             && typeof output?.pageFingerprint === "string"
@@ -106,7 +106,7 @@ export function createXhsAdapter({ fetchImpl = globalThis.fetch } = {}) {
       return { ok: false, ambiguous: true, mode: "custom" };
     },
     buildExplicitObservationReceipt({ capability, execution }) {
-      if (capability?.implementation?.action !== "observeOpenNoteDetail") return null;
+      if (!["observeOpenNoteDetail", "openFeedNote"].includes(capability?.implementation?.action)) return null;
       const output = execution?.output;
       const observedAt = Date.parse(output?.observedAt);
       if (output?.ok !== true || typeof output?.pageFingerprint !== "string" || output.pageFingerprint === ""

@@ -151,7 +151,10 @@ export function createControlPlaneRuntime({
     adrPath,
     standingGrantAdrAccepted,
     standingGrantAdrPath,
-    receiptAuthorityAllowlist: [{ capabilityId: "xhs.observe.note_detail", adapterId: "xhs" }],
+    receiptAuthorityAllowlist: [
+      { capabilityId: "xhs.observe.note_detail", adapterId: "xhs" },
+      { capabilityId: "xhs.explore.open_feed_note", adapterId: "xhs" },
+    ],
   });
   control.installDiscoveryProducer({ capabilityForPrimitive: discoveryCapabilityForPrimitive });
   return {
