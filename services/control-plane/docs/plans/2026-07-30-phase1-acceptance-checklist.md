@@ -7,7 +7,7 @@ This checklist is offline acceptance for canary-only scaffolding. It does not ac
 | 5.1 first collect succeeds | `standing-grant-supported-path.test.mjs` exercises the single supported canary route; `xhs-collect-standing-grant.test.mjs` proves the successful adapter sequence. |
 | 5.2 second collect blocked | durable marker returns `CANARY_ALREADY_COMPLETED`. |
 | 5.3 cleared marker allows another | terminal marker clear is explicit, reasoned, and audited; a new reservation then succeeds. |
-| 5.4 ambiguity is not retried | ambiguous marker survives restart; terminal cleanup releases the owned tuple. |
+| 5.4 ambiguity is not retried | ambiguous marker survives restart; pre-effect/not-sent failures release it only after terminal cleanup. |
 | 5.5 unauthorized evidence denied | canary evidence denies by default, including a caller-provided `role`. |
 | 5.6 authorized reviewer allowed | only a server-owned authorizer can allow the evidence response. |
 | 5.7 post-canary lease count zero | integration assertion verifies no leases remain. |

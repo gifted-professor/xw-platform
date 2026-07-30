@@ -281,6 +281,28 @@ test("supported one-command canary re-observes, collects once, restores, and rel
     assert.equal(state.listLeases().length, 0);
     assert.equal(state.getStandingGrantCanary().status, "completed");
     assert.equal(state.getMission(result.missionId).status, "revoked");
+    await assert.rejects(
+      () => control.runStandingGrantCollectCanary({ actor: "user:a1234", idempotencyKey: "supported-canary-second", parentGrantId: grant.grantId, sourceJobId: sourceJob.jobId, adapterReceiptId: sourceReceipt.receiptId }),
+      { code: "CANARY_ALREADY_COMPLETED" },
+    );
+
+    state.clearStandingGrantCanary({ actor: "reviewer:test", reason: "exercise no-effect retry paths" });
+    const originalCreateEffectCommitProtocol = control.createEffectCommitProtocol.bind(control);
+    const assertZeroActiveCanaryState = () => {
+      assert.equal(state.getStandingGrantCanary(), null);
+      assert.equal(state.listLeases().length, 0);
+      assert.equal(state.db.prepare("SELECT COUNT(*) AS count FROM sessions").get().count, 0);
+      assert.equal(state.db.prepare("SELECT COUNT(*) AS count FROM jobs WHERE status IN ('queued','waiting_approval','running','recovery_required')").get().count, 0);
+    };
+    control.createEffectCommitProtocol = () => ({ commit: async () => ({ status: "blocked", code: "TARGET_MISMATCH" }) });
+    const blocked = await control.runStandingGrantCollectCanary({ actor: "user:a1234", idempotencyKey: "supported-canary-blocked", parentGrantId: grant.grantId, sourceJobId: sourceJob.jobId, adapterReceiptId: sourceReceipt.receiptId });
+    assert.equal(blocked.effectStatus, "blocked");
+    assertZeroActiveCanaryState();
+    control.createEffectCommitProtocol = () => ({ commit: async () => ({ status: "not_sent", error: { code: "NOT_SENT" } }) });
+    const notSent = await control.runStandingGrantCollectCanary({ actor: "user:a1234", idempotencyKey: "supported-canary-not-sent", parentGrantId: grant.grantId, sourceJobId: sourceJob.jobId, adapterReceiptId: sourceReceipt.receiptId });
+    assert.equal(notSent.effectStatus, "not_sent");
+    assertZeroActiveCanaryState();
+    control.createEffectCommitProtocol = originalCreateEffectCommitProtocol;
   } finally {
     await control?.stop();
     await new Promise((resolve) => server.close(resolve));

@@ -1663,6 +1663,17 @@ export class StateStore {
     return { released: result.changes === 1 };
   }
 
+  releaseStandingGrantCanaryNoEffect({ idempotencyKey, outcome }) {
+    const now = this.now();
+    return this.transaction(() => {
+      const row = this.db.prepare("SELECT * FROM standing_grant_canaries WHERE marker='standing_grant.first_collect' AND idempotency_key=?").get(idempotencyKey);
+      if (!row || ["completed", "ambiguous"].includes(row.status)) return { released: false };
+      this.db.prepare("DELETE FROM standing_grant_canaries WHERE marker='standing_grant.first_collect' AND idempotency_key=?").run(idempotencyKey);
+      this.appendEvent({ type: "standing_grant.canary.no_effect_released", payload: { outcome: outcome || null, previousStatus: row.status, releasedAt: now } });
+      return { released: true };
+    });
+  }
+
   finishStandingGrantCanary({ status, outcome }) {
     const allowed = new Set(["completed", "ambiguous", "failed", "blocked"]);
     if (!allowed.has(status)) throw new ControlPlaneError("CANARY_STATUS_INVALID", "invalid Standing Grant canary terminal status", { status: 400 });

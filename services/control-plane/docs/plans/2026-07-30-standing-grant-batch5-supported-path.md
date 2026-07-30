@@ -27,7 +27,7 @@ grant revoke --grant <grantId> --actor <actor> --reason <reason>
 ## Terminal and access behavior
 
 - Successful and ambiguous effects retain the marker; ambiguity is never retried automatically.
-- A pre-effect blocked attempt releases its reservation, so a gate failure does not consume the one-time canary.
+- A pre-effect blocker, `not_sent`, or explicit failed outcome proven to have no external effect cancels any queued collect job and releases the marker, so it may be retried after all owned resources are terminal.
 - Terminal cleanup stops heartbeat, terminalizes the DeviceRun, revokes the child Mission, and deletes the owned session and lease.
 - Canary evidence persists under normal Mission retention (no automatic purge) and is denied unless a server-owned authenticated owner/reviewer authorizer allows it. Request `role` is ignored.
 - Payment, publish, and delete are not authorized. The existing Grant schema remains compatible with future time/device/action/budget scopes and an explicit payment deny.

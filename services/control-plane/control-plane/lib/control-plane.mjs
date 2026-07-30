@@ -642,6 +642,7 @@ export class ControlPlane {
     let collectCreated = null;
     let terminalStatus = "failed";
     let outcome = "CANARY_FAILED";
+    let retainCanaryMarker = false;
     try {
       submission = this.submitMission({ actor, idempotencyKey: `${idempotencyKey}:mission`, parentGrantId, controllerAgent, policy, placement: { physicalLabel: device.physicalLabel } });
       if (submission.status !== "running") throw new ControlPlaneError(submission.reason || "CANARY_GATE_CLOSED", "Standing Grant canary gate is closed", { status: 409 });
@@ -677,7 +678,7 @@ export class ControlPlane {
         execute: async () => {
           collectJob = collectCreated.reused ? collectCreated.job : await this.#runJob(collectCreated.job, { lease: { leaseId: run.leaseId, token: run.token }, releaseLease: false });
           if (collectJob.status !== "succeeded") {
-            const error = new ControlPlaneError(collectJob.errorCode || "CANARY_COLLECT_FAILED", "collect job did not succeed", { status: 409 });
+            const error = new ControlPlaneError(collectJob.status === "failed" ? "NOT_SENT" : (collectJob.errorCode || "CANARY_COLLECT_FAILED"), "collect job did not succeed", { status: 409, details: { jobErrorCode: collectJob.errorCode || null } });
             error.ambiguous = ["ambiguous", "recovery_required"].includes(collectJob.status);
             error.notSent = collectJob.status === "failed";
             throw error;
@@ -690,6 +691,7 @@ export class ControlPlane {
       const effect = await ecp.commit({ tuple: run.tuple, mission: submission.mission, action: "collect", target: sealed.targetFingerprint, idempotencyKey: `${idempotencyKey}:effect`, observationReceiptId: receipt.receiptId });
       terminalStatus = effect.status === "verified" ? "completed" : effect.status === "ambiguous" ? "ambiguous" : "failed";
       outcome = effect.status;
+      retainCanaryMarker = effect.status === "verified" || effect.status === "ambiguous";
       return { status: terminalStatus, missionId: submission.mission.missionId, deviceRunId: run.deviceRunId, jobId: collectJob?.jobId || null, runId: collectJob?.runId || null, effectStatus: effect.status, restoration: collectJob?.result?.restoration || null };
     } catch (error) {
       terminalStatus = error?.ambiguous ? "ambiguous" : "blocked";
@@ -703,10 +705,16 @@ export class ControlPlane {
       if (submission?.mission?.missionId) {
         try { this.missions.revokeMission(submission.mission.missionId, { actorId: actor, reason: `canary_terminal:${outcome}` }); } catch {}
       }
-      if (!collectCreated) {
+      const collectJobState = collectCreated ? this.state.getJob(collectCreated.job.jobId) : null;
+      if (!retainCanaryMarker && ["queued", "waiting_approval"].includes(collectJobState?.status)) {
+        try { this.state.cancelJob(collectJobState.jobId); } catch {}
+      }
+      if (retainCanaryMarker) {
+        try { this.state.finishStandingGrantCanary({ status: terminalStatus, outcome }); } catch {}
+      } else if (!collectCreated) {
         try { this.state.releaseStandingGrantCanaryReservation({ idempotencyKey }); } catch {}
       } else {
-        try { this.state.finishStandingGrantCanary({ status: terminalStatus, outcome }); } catch {}
+        try { this.state.releaseStandingGrantCanaryNoEffect({ idempotencyKey, outcome }); } catch {}
       }
     }
   }
