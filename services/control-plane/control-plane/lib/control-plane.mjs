@@ -1690,6 +1690,22 @@ export class ControlPlane {
           }
           throw error;
         }
+        try {
+          this.state.appendEvent({
+            jobId: job.jobId,
+            runId: job.runId,
+            type: "job.lease.acquired",
+            payload: {
+              leaseId: lease.leaseId,
+              deviceId: job.deviceId,
+              jobId: job.jobId,
+              holderId: lease.holderId,
+              createdAt: new Date().toISOString(),
+              expiresAt: lease.expiresAt,
+              outcome: "acquired",
+            },
+          });
+        } catch {}
         const promise = this.#runJob(job, { lease, releaseLease: true })
           .finally(() => {
             this.activeJobs.delete(job.deviceId);
@@ -1864,7 +1880,24 @@ export class ControlPlane {
     } finally {
       clearInterval(heartbeat);
       if (releaseLease) {
-        try { this.state.releaseLease(lease.leaseId, lease.token); } catch {}
+        let outcome = "released";
+        try { this.state.releaseLease(lease.leaseId, lease.token); } catch { outcome = "release_failed"; }
+        try {
+          this.state.appendEvent({
+            jobId: job.jobId,
+            runId: job.runId,
+            type: "job.lease.released",
+            payload: {
+              leaseId: lease.leaseId,
+              deviceId: job.deviceId,
+              jobId: job.jobId,
+              holderId: lease.holderId,
+              createdAt: new Date().toISOString(),
+              expiresAt: lease.expiresAt,
+              outcome,
+            },
+          });
+        } catch {}
       }
     }
   }

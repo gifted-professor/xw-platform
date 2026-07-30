@@ -249,11 +249,12 @@ class Pacer {
 // ---------- fast-operator 主体 ----------
 
 export class FastOperator {
-  constructor({ adbPath, serial, pacer } = {}) {
+  constructor({ adbPath, serial, pacer, diagnosticLogger } = {}) {
     this.adbPath = adbPath;
     this.serial = serial;
     this.session = new AdbShellSession(adbPath, serial);
     this.pacer = pacer ?? new Pacer();
+    this.diagnosticLogger = diagnosticLogger ?? (() => {});
     this.metrics = { actions: 0, dumps: 0, scrolls: 0, taps: 0, totalDumpMs: 0, totalScrollMs: 0 };
     // Slice 2 评论自主配置（由 CLI flag 注入，见 serve()/demoScroll 末尾）
     this.xwWs = null;            // ws://127.0.0.1:22222/
@@ -302,7 +303,7 @@ export class FastOperator {
       return { ok: false, notSent: true, step: "notOnExactNoteDetail" };
     }
     const raw = await this.session.exec(
-      "dumpsys activity activities 2>/dev/null | grep -E 'mResumedActivity|ACTIVITY|Hist #[0-9]+:|Intent \\{|intent=\\{|dat=' | head -160",
+      "dumpsys activity activities 2>/dev/null | grep -E 'mResumedActivity|ACTIVITY|Hist #[0-9]+:|Intent \\{|intent=\\{|dat=|clip=|mReferrer=|extras=|note_?[Ii]d' | head -160",
       10000,
     ).catch(() => "");
     const lines = String(raw).split(/\r?\n/);
@@ -314,7 +315,37 @@ export class FastOperator {
     const isCurrentActivity = (line) => normalizedActivity(line) === focus.activity;
     let start = lines.findIndex((line) => /\bHist #0:/.test(line) && isCurrentActivity(line));
     if (start < 0) start = lines.findIndex((line) => /^\s*ACTIVITY\s/.test(line) && isCurrentActivity(line));
-    if (start < 0) return { ok: false, notSent: true, step: "stableNoteLocatorUnavailable" };
+    const allowedActivity = /NoteDetailActivity$/.test(focus.activity || "")
+      ? "NoteDetailActivity"
+      : "DetailFeedActivity";
+    const logLocatorShape = (currentActivityBlock, currentBlockFound) => {
+      const blockLines = currentBlockFound ? String(currentActivityBlock).split(/\r?\n/) : [];
+      const shapeFor = (pattern) => {
+        const matching = blockLines.filter((line) => pattern.test(line));
+        return {
+          present: matching.length > 0,
+          has24Hex: matching.some((line) => /\b[0-9a-f]{24}\b/i.test(line)),
+        };
+      };
+      const generic24Count = Math.min(99, (String(currentActivityBlock).match(/\b[0-9a-f]{24}\b/ig) || []).length);
+      const diagnostic = {
+        event: "fast-operator.locator-shape",
+        activity: allowedActivity,
+        currentBlockFound,
+        fields: {
+          dat: shapeFor(/\bdat\s*=/i),
+          clip: shapeFor(/\bclip(?:Data)?\s*=/i),
+          mReferrer: shapeFor(/\bmReferrer\s*=/i),
+          extrasNoteId: shapeFor(/\b(?:note_?id|noteIdStr)\s*=/i),
+        },
+        generic24Count,
+      };
+      try { this.diagnosticLogger?.(diagnostic); } catch {}
+    };
+    if (start < 0) {
+      logLocatorShape("", false);
+      return { ok: false, notSent: true, step: "stableNoteLocatorUnavailable" };
+    }
     let end = lines.length;
     for (let index = start + 1; index < lines.length; index += 1) {
       if (/\bHist #[0-9]+:/.test(lines[index]) || /^\s*ACTIVITY\s/.test(lines[index])) {
@@ -326,7 +357,10 @@ export class FastOperator {
     const match = currentActivityBlock.match(
       /(?:xhsdiscover:\/\/(?:item|discovery\/item)\/|https?:\/\/(?:www\.)?xiaohongshu\.com\/(?:explore|discovery\/item)\/)([0-9a-f]{24})(?=[/?&#}\s]|$)/i,
     );
-    if (!match) return { ok: false, notSent: true, step: "stableNoteLocatorUnavailable" };
+    if (!match) {
+      logLocatorShape(currentActivityBlock, true);
+      return { ok: false, notSent: true, step: "stableNoteLocatorUnavailable" };
+    }
     const locator = `xhs:note:${match[1].toLowerCase()}`;
     const digest = (value) => createHash("sha256").update(value).digest("hex");
     return {
@@ -1632,7 +1666,7 @@ export function serve(port, options = {}) {
   const authorize = options.authorize ?? authorizeServeRequest;
   const errorLogger = options.errorLogger ?? ((entry) => console.error(JSON.stringify({ ...entry, at: new Date().toISOString() })));
   const operatorFactory = options.operatorFactory
-    ?? (() => applyCommentFlags(new FastOperator({ adbPath: adb, serial }).start()));
+    ?? (() => applyCommentFlags(new FastOperator({ adbPath: adb, serial, diagnosticLogger: errorLogger }).start()));
   const getOp = () => {
     if (!opP) {
       opP = Promise.resolve()

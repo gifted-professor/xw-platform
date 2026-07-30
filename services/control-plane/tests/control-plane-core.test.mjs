@@ -260,6 +260,81 @@ test("adapter execution receives a device-bound lease credential without persist
   }
 });
 
+test("ordinary jobs persist secret-free lease acquired and released events", async () => {
+  let leaseToken;
+  const adapter = {
+    id: "test",
+    async execute({ leaseAuthorization }) {
+      leaseToken = leaseAuthorization.token;
+      return { vendorCode: 0, output: { ok: true } };
+    },
+    async verify() { return { ok: true, mode: "state" }; },
+    async restore() { return { ok: true }; },
+  };
+  const f = fixture({ capabilities: [manifest("test.lease-events")], adapter });
+  try {
+    const job = f.control.submitJob({
+      idempotencyKey: "lease-events",
+      actorId: "agent-a",
+      deviceId: f.devices[0].deviceId,
+      capabilityId: "test.lease-events",
+      params: {},
+    }).job;
+    assert.equal((await f.control.waitForJob(job.jobId)).status, "succeeded");
+    await until(() => f.state.listJobEvents(job.jobId)
+      .filter((event) => event.type.startsWith("job.lease.")).length === 2);
+    const leaseEvents = f.state.listJobEvents(job.jobId)
+      .filter((event) => event.type.startsWith("job.lease."));
+    assert.deepEqual(leaseEvents.map((event) => event.type), ["job.lease.acquired", "job.lease.released"]);
+    for (const event of leaseEvents) {
+      assert.deepEqual(Object.keys(event.payload).sort(), [
+        "createdAt", "deviceId", "expiresAt", "holderId", "jobId", "leaseId", "outcome",
+      ]);
+      assert.equal(event.payload.jobId, job.jobId);
+      assert.equal(event.payload.deviceId, f.devices[0].deviceId);
+      assert.match(event.payload.leaseId, /^lease_/);
+      assert.match(event.payload.createdAt, /^\d{4}-\d{2}-\d{2}T/);
+      assert.match(event.payload.expiresAt, /^\d{4}-\d{2}-\d{2}T/);
+    }
+    assert.equal(leaseEvents[0].payload.outcome, "acquired");
+    assert.equal(leaseEvents[1].payload.outcome, "released");
+    assert.equal(f.state.listLeases().length, 0);
+    assert.doesNotMatch(JSON.stringify(leaseEvents), new RegExp(leaseToken));
+    assert.doesNotMatch(JSON.stringify(leaseEvents), /token|hash|secret/i);
+  } finally {
+    await f.close();
+  }
+});
+
+test("lease release event logging failure never blocks lease release", async () => {
+  const adapter = {
+    id: "test",
+    async execute() { return { vendorCode: 0, output: { ok: true } }; },
+    async verify() { return { ok: true, mode: "state" }; },
+    async restore() { return { ok: true }; },
+  };
+  const f = fixture({ capabilities: [manifest("test.lease-release-log-failure")], adapter });
+  const appendEvent = f.state.appendEvent.bind(f.state);
+  f.state.appendEvent = (entry) => {
+    if (entry.type === "job.lease.released") throw new Error("simulated event sink failure");
+    return appendEvent(entry);
+  };
+  try {
+    const job = f.control.submitJob({
+      idempotencyKey: "lease-release-log-failure",
+      actorId: "agent-a",
+      deviceId: f.devices[0].deviceId,
+      capabilityId: "test.lease-release-log-failure",
+      params: {},
+    }).job;
+    assert.equal((await f.control.waitForJob(job.jobId)).status, "succeeded");
+    await until(() => f.state.listLeases().length === 0);
+    assert.equal(f.state.listLeases().length, 0);
+  } finally {
+    await f.close();
+  }
+});
+
 test("external effects wait for approval before entering the queue", async () => {
   let executions = 0;
   const adapter = {

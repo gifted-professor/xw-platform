@@ -68,13 +68,58 @@ test("note-detail producer derives the target only from the resumed activity int
 
 test("note-detail producer fails closed when the top activity has no stable note locator", async () => {
   const operator = Object.create(FastOperator.prototype);
+  const diagnostics = [];
+  operator.diagnosticLogger = (entry) => diagnostics.push(entry);
   operator.currentFocus = async () => ({
     package: "com.xingin.xhs",
     activity: "com.xingin.xhs.note.NoteDetailActivity",
   });
-  operator.session = { exec: async () => "ACTIVITY com.xingin.xhs/.note.NoteDetailActivity" };
+  operator.session = { exec: async () => `
+    ACTIVITY com.xingin.xhs/.note.NoteDetailActivity
+    Intent { clip=ClipData.Item { mReferrer=https://private.example/ } }
+    extras={noteId=64f0123456789abcdef01234 title=private-title token=private-token}
+  ` };
   const result = await operator.observeOpenNoteDetail();
   assert.deepEqual(result, { ok: false, notSent: true, step: "stableNoteLocatorUnavailable" });
+  assert.deepEqual(diagnostics, [{
+    event: "fast-operator.locator-shape",
+    activity: "NoteDetailActivity",
+    currentBlockFound: true,
+    fields: {
+      dat: { present: false, has24Hex: false },
+      clip: { present: true, has24Hex: false },
+      mReferrer: { present: true, has24Hex: false },
+      extrasNoteId: { present: true, has24Hex: true },
+    },
+    generic24Count: 1,
+  }]);
+  assert.doesNotMatch(JSON.stringify(diagnostics), /64f0123456789abcdef01234|private-title|private-token|private\.example/);
+});
+
+test("note-detail producer logs a secret-free shape when the current activity block is missing", async () => {
+  const operator = Object.create(FastOperator.prototype);
+  const diagnostics = [];
+  operator.diagnosticLogger = (entry) => diagnostics.push(entry);
+  operator.currentFocus = async () => ({
+    package: "com.xingin.xhs",
+    activity: "com.xingin.xhs.note.NoteDetailActivity",
+  });
+  operator.session = { exec: async () => "Hist #1: ActivityRecord{old com.other/.PrivateActivity token=private-token}" };
+  const result = await operator.observeOpenNoteDetail();
+  assert.deepEqual(result, { ok: false, notSent: true, step: "stableNoteLocatorUnavailable" });
+  assert.deepEqual(diagnostics, [{
+    event: "fast-operator.locator-shape",
+    activity: "NoteDetailActivity",
+    currentBlockFound: false,
+    fields: {
+      dat: { present: false, has24Hex: false },
+      clip: { present: false, has24Hex: false },
+      mReferrer: { present: false, has24Hex: false },
+      extrasNoteId: { present: false, has24Hex: false },
+    },
+    generic24Count: 0,
+  }]);
+  assert.doesNotMatch(JSON.stringify(diagnostics), /PrivateActivity|private-token|com\.other/);
 });
 
 test("note-detail producer ignores a stable locator retained only by an older history entry", async () => {
