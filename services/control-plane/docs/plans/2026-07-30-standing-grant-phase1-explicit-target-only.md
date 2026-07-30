@@ -4,6 +4,7 @@
 - Date: 2026-07-30
 - Supersedes: feed→profile producer design (019fb206) as a Phase1 dependency
 - Depends on: ADR 0009 (Proposed), ADR 0010 (Proposed, boundary only)
+- **Executable plan**: `docs/plans/2026-07-30-explicit-target-phase1-implementation-batches.md` (4 code tasks + 1 acceptance, absorbs review P0/P1/P2 from 019fb220)
 
 ## User Decision
 
