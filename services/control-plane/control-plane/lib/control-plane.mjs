@@ -21,6 +21,7 @@ const moduleDir = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(moduleDir, "..", "..");
 const EFFECT_INTENT_SCHEMA_PATH = join(moduleDir, "..", "schema", "effect-intent.schema.json");
 const DEFAULT_ADR_0008_PATH = join(REPO_ROOT, "docs", "adr", "0008-mission-driven-exploration-authorization.md");
+const DEFAULT_ADR_0009_PATH = join(REPO_ROOT, "docs", "adr", "0009-standing-grant-delegation.md");
 const DEFAULT_ADR_0010_PATH = join(REPO_ROOT, "docs", "adr", "0010-standing-grant-discovery-session.md");
 
 // Load the canonical effect-intent envelope schema once at module load so the runtime
@@ -140,6 +141,8 @@ export class ControlPlane {
     discoveryProducer = null,
     adrAccepted = null,
     adrPath = DEFAULT_ADR_0008_PATH,
+    standingGrantAdrAccepted = null,
+    standingGrantAdrPath = DEFAULT_ADR_0009_PATH,
     discoveryAdrAccepted = null,
     discoveryAdrPath = DEFAULT_ADR_0010_PATH,
     effectIntentSchema = EFFECT_INTENT_SCHEMA,
@@ -184,6 +187,8 @@ export class ControlPlane {
     this.discoveryIssuerReady = Boolean(discoveryIssuerReady);
     this.adrAcceptedOverride = adrAccepted;
     this.adrPath = adrPath;
+    this.standingGrantAdrAcceptedOverride = standingGrantAdrAccepted;
+    this.standingGrantAdrPath = standingGrantAdrPath;
     this.discoveryAdrAcceptedOverride = discoveryAdrAccepted;
     this.discoveryAdrPath = discoveryAdrPath;
     this.effectIntentSchema = effectIntentSchema;
@@ -277,6 +282,12 @@ export class ControlPlane {
     // missing production dispatcher into a misleading successful R0 reservation.
     if (!this.discoveryProducer) {
       throw new ControlPlaneError("DISCOVERY_PRODUCER_UNAVAILABLE", "Discovery R0 producer is not installed", { status: 503 });
+    }
+    // `installDiscoveryProducer()` marks bootstrap-owned dispatch.  Its empty default map is
+    // an explicit rollout denial, so reject before reserving any durable primitive or job.
+    if (this.discoveryCapabilityForPrimitive
+      && typeof this.discoveryCapabilityForPrimitive[input?.primitive] !== "string") {
+      throw new ControlPlaneError("DISCOVERY_PRIMITIVE_UNAVAILABLE", "no control-plane-owned R0 producer is installed for this primitive", { status: 503 });
     }
     const reservation = this.discoverySessions.executeDiscoveryPrimitive(input);
     // Reservation is committed before this isolated R0 producer is invoked. A replay never
@@ -454,6 +465,16 @@ export class ControlPlane {
     return readAdrStatusAccepted(this.adrPath);
   }
 
+  // Standing Grant delegation is independently governed by ADR 0009.  As with ADR 0008,
+  // an override exists only for isolated tests; production reads the status lazily and never
+  // changes the ADR document.
+  isAdr0009Accepted() {
+    if (this.standingGrantAdrAcceptedOverride !== null && this.standingGrantAdrAcceptedOverride !== undefined) {
+      return Boolean(this.standingGrantAdrAcceptedOverride);
+    }
+    return readAdrStatusAccepted(this.standingGrantAdrPath);
+  }
+
   // DiscoverySession has its own rollout decision. ADR 0008 authorizes the Mission
   // auto-approval lane only; it must never open pre-Mission discovery by implication.
   isAdr0010Accepted() {
@@ -476,7 +497,7 @@ export class ControlPlane {
   }
 
   #standingGrantGate() {
-    if (!this.standingGrantEnabled || !this.missionAutoApprovalEnabled || !this.isAdr0008Accepted()) {
+    if (!this.standingGrantEnabled || !this.missionAutoApprovalEnabled || !this.isAdr0008Accepted() || !this.isAdr0009Accepted()) {
       return { ok: false, code: "STANDING_GRANT_NOT_ENABLED" };
     }
     return { ok: true };

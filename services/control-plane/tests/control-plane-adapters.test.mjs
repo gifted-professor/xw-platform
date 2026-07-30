@@ -53,6 +53,23 @@ test("XHS adapter uses a per-device loopback serve and fail-closed verifier", as
   }), { ok: false, ambiguous: true, mode: "custom" });
 });
 
+test("generic XHS observation capabilities do not claim a Discovery receipt", async () => {
+  const adapter = createXhsAdapter({
+    fetchImpl: async (_url, options) => {
+      const action = JSON.parse(options.body).action;
+      return new Response(JSON.stringify({
+        ok: true,
+        result: action === "feedCards" ? { cards: [] } : { online: true },
+        metrics: {},
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    },
+  });
+  for (const capability of ["xhs.observe.metrics", "xhs.observe.feed"].map((id) => registry.require(id))) {
+    const execution = await adapter.execute({ capability, device: privateDevice, params: {}, leaseAuthorization });
+    assert.equal(execution.output?.discoveryReceipt, undefined, `${capability.id} must not claim Discovery authority`);
+  }
+});
+
 test("XHS adapter surfaces inner serve rejection instead of masking it as verification failure", async () => {
   const adapter = createXhsAdapter({
     fetchImpl: async () => new Response(JSON.stringify({

@@ -94,7 +94,12 @@ export function createControlPlaneRuntime({
   leaseTtlMs,
   leaseHeartbeatMs,
   issuerKeysPath = process.env.STANDING_GRANT_ISSUER_KEYS_PATH,
+  missionAutoApprovalEnabled = process.env.MISSION_AUTO_APPROVAL_ENABLED === "1",
   standingGrantEnabled = process.env.STANDING_GRANT_ENABLED === "1",
+  adrAccepted = null,
+  adrPath,
+  standingGrantAdrAccepted = null,
+  standingGrantAdrPath,
   discoveryCapabilityForPrimitive = {},
 } = {}) {
   const defaults = defaultRuntimePaths();
@@ -140,7 +145,12 @@ export function createControlPlaneRuntime({
     schedulerIntervalMs,
     leaseTtlMs,
     leaseHeartbeatMs,
+    missionAutoApprovalEnabled,
     standingGrantEnabled,
+    adrAccepted,
+    adrPath,
+    standingGrantAdrAccepted,
+    standingGrantAdrPath,
   });
   control.installDiscoveryProducer({ capabilityForPrimitive: discoveryCapabilityForPrimitive });
   return {

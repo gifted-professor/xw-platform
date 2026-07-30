@@ -151,6 +151,26 @@ test("Discovery primitive fails closed when production producer wiring is absent
   } finally { f.state.close(); rmSync(f.root, { recursive: true, force: true }); }
 });
 
+test("an empty bootstrap-owned producer map rejects before a Discovery reservation or job", () => {
+  const f = fixture({ discoveryProducer: null });
+  try {
+    // Bootstrap installs this default empty map while ADR0010 remains unavailable. It must not
+    // create durable primitive intent before discovering that no owned producer exists.
+    f.control.installDiscoveryProducer();
+    const run = f.control.openDiscoveryRun({ grantId: f.grant.grantId, controllerAgent: "agent:runner" });
+    assert.throws(
+      () => f.control.executeDiscoveryPrimitive({
+        discoveryRunId: run.discoveryRunId, tuple: run.tuple, token: run.token,
+        primitive: "screenshot", idempotencyKey: "empty-bootstrap-map",
+        envelope: { snapshot: { surface: "observation", createdAt: new Date().toISOString(), observedAt: new Date().toISOString() } },
+      }),
+      { code: "DISCOVERY_PRIMITIVE_UNAVAILABLE" },
+    );
+    assert.equal(f.state.getDiscoveryRun(run.discoveryRunId).primitiveCount, 0);
+    assert.equal(f.state.db.prepare("SELECT COUNT(*) AS count FROM jobs").get().count, 0);
+  } finally { f.state.close(); rmSync(f.root, { recursive: true, force: true }); }
+});
+
 test("Discovery primitive invokes only its fenced R0 producer once after durable intent", () => {
   let producerCalls = 0;
   let f;

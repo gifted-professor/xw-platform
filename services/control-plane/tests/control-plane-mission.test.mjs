@@ -41,6 +41,7 @@ function setup({
   missionAutoApprovalEnabled = false,
   standingGrantEnabled = false,
   adrAccepted = null,
+  standingGrantAdrAccepted = true,
   capabilities = [r2Capability()],
   effectIntentSchema = undefined,
 } = {}) {
@@ -79,6 +80,7 @@ function setup({
     missionAutoApprovalEnabled,
     standingGrantEnabled,
     adrAccepted,
+    standingGrantAdrAccepted,
     effectIntentSchema,
     acquireTransportLock: () => Promise.resolve(() => {}),
   });
@@ -177,6 +179,46 @@ test("a valid parent grant records a flag-off child Mission without allocating a
   }
 });
 
+test("explicit-target child allocation requires all four independent Standing Grant gates", () => {
+  const combinations = [
+    { missionAutoApprovalEnabled: false, standingGrantEnabled: true, adrAccepted: true, standingGrantAdrAccepted: true, running: false },
+    { missionAutoApprovalEnabled: true, standingGrantEnabled: false, adrAccepted: true, standingGrantAdrAccepted: true, running: false },
+    { missionAutoApprovalEnabled: true, standingGrantEnabled: true, adrAccepted: false, standingGrantAdrAccepted: true, running: false },
+    { missionAutoApprovalEnabled: true, standingGrantEnabled: true, adrAccepted: true, standingGrantAdrAccepted: false, running: false },
+    { missionAutoApprovalEnabled: true, standingGrantEnabled: true, adrAccepted: true, standingGrantAdrAccepted: true, running: true },
+  ];
+  for (const [index, gates] of combinations.entries()) {
+    const f = setup(gates);
+    try {
+      const grant = persistStandingGrant(f.state, { ...standingGrant(), grantId: `grant-explicit-four-gate-${index}`, issuanceNonce: `nonce-explicit-four-gate-${index}` });
+      const result = f.control.submitMission({
+        actor: "agent:runner", parentGrantId: grant.grantId, idempotencyKey: `explicit-four-gate-${index}`,
+        policy: { ...socialPolicy, account: grant.accountFingerprint },
+      });
+      assert.equal(result.status, gates.running ? "running" : "blocked");
+      assert.equal(f.state.listDeviceRuns({ missionId: result.mission.missionId }).length, gates.running ? 1 : 0);
+      assert.equal(f.state.listLeases().length, gates.running ? 1 : 0);
+      assert.equal(f.state.db.prepare("SELECT COUNT(*) AS count FROM jobs").get().count, 0);
+      assert.equal(f.state.listMissionEffects(result.mission.missionId).length, 0);
+    } finally { f.close(); }
+  }
+});
+
+test("a proposed ADR0009 is read lazily and blocks an otherwise enabled Standing Grant", () => {
+  const f = setup({ missionAutoApprovalEnabled: true, standingGrantEnabled: true, adrAccepted: true, standingGrantAdrAccepted: null });
+  try {
+    const grant = persistStandingGrant(f.state, { ...standingGrant(), grantId: "grant-adr0009-proposed", issuanceNonce: "nonce-adr0009-proposed" });
+    const result = f.control.submitMission({
+      actor: "agent:runner", parentGrantId: grant.grantId, idempotencyKey: "adr0009-proposed",
+      policy: { ...socialPolicy, account: grant.accountFingerprint },
+    });
+    assert.equal(result.status, "blocked");
+    assert.equal(result.reason, "STANDING_GRANT_NOT_ENABLED");
+    assert.equal(f.state.listDeviceRuns({ missionId: result.mission.missionId }).length, 0);
+    assert.equal(f.state.listLeases().length, 0);
+  } finally { f.close(); }
+});
+
 test("a grant child is subset-compiled from immutable parent scope and only runs with both flags", () => {
   const f = setup({ missionAutoApprovalEnabled: true, standingGrantEnabled: true, adrAccepted: true });
   try {
@@ -185,8 +227,10 @@ test("a grant child is subset-compiled from immutable parent scope and only runs
     const result = f.control.submitMission({ actor: "agent:runner", parentGrantId: grant.grantId, idempotencyKey: "grant-child-on", policy });
     assert.equal(result.status, "running");
     assert.equal(result.mission.parentGrantId, grant.grantId);
+    assert.equal(result.mission.parentGrantHash, `hash-${grant.grantId}`);
     assert.equal(result.mission.issuer.actorId, "user:a1234");
     assert.deepEqual(result.mission.scope.targets, { kind: "fingerprint", values: grant.targets.values });
+    assert.equal(result.mission.parallelism, 1);
     assert.equal(result.mission.scope.totalCount, grant.budget.defaults.totalCount);
     assert.equal(result.mission.scope.perTargetCount, grant.budget.defaults.perTargetCount);
     assert.deepEqual(result.mission.scope.frequency, grant.budget.defaults.frequency);
@@ -202,12 +246,33 @@ test("a grant child is subset-compiled from immutable parent scope and only runs
     for (const [index, item] of cases.entries()) {
       assert.throws(() => f.control.submitMission({ actor: "agent:runner", parentGrantId: grant.grantId, idempotencyKey: `grant-child-invalid-${index}`, policy: item.policy }), { code: "GRANT_SUBSET_INVALID" });
     }
+    assert.throws(() => f.control.submitMission({ actor: "agent:runner", parentGrantId: grant.grantId, idempotencyKey: "grant-child-parallel", policy: { ...policy, parallelism: 2 } }), { code: "PARALLELISM_UNSUPPORTED" });
     assert.throws(() => f.control.submitMission({ actor: "agent:runner", parentGrantId: grant.grantId, idempotencyKey: "grant-child-client-issuer", policy: { ...policy, issuer: { actorId: "human:spoof" } } }), { code: "CLIENT_ISSUER_FORBIDDEN" });
     f.state.revokeDelegationGrant(grant.grantId, { reason: "test" });
     assert.throws(() => f.control.submitMission({ actor: "agent:runner", parentGrantId: grant.grantId, idempotencyKey: "grant-child-revoked", policy }), { code: "PARENT_GRANT_INACTIVE" });
   } finally {
     f.close();
   }
+});
+
+test("an explicit Grant target list remains authoritative over a submitted DiscoveryPolicy targetScope", () => {
+  const f = setup({ missionAutoApprovalEnabled: true, standingGrantEnabled: true, adrAccepted: true, standingGrantAdrAccepted: true });
+  try {
+    const grant = persistStandingGrant(f.state, { ...standingGrant(), grantId: "grant-explicit-authority", issuanceNonce: "nonce-explicit-authority" });
+    const result = f.control.submitMission({
+      actor: "agent:runner", parentGrantId: grant.grantId, idempotencyKey: "explicit-authority",
+      policy: {
+        ...socialPolicy,
+        account: grant.accountFingerprint,
+        discoveryPolicy: { targetScope: { anchors: [{ type: "identityFingerprint", hash: "c".repeat(64) }], relationKinds: ["search_result"] } },
+      },
+    });
+    assert.equal(result.status, "running");
+    assert.deepEqual(result.mission.scope.targets, { kind: "fingerprint", values: grant.targets.values });
+    assert.equal(result.mission.parentGrantId, grant.grantId);
+    assert.equal(result.mission.parentGrantHash, `hash-${grant.grantId}`);
+    assert.equal(result.mission.parallelism, 1);
+  } finally { f.close(); }
 });
 
 test("verified discovery requires a control-plane-authored observation before Mission allocation and ECP rechecks it", async () => {
