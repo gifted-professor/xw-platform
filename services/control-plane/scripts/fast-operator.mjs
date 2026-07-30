@@ -622,6 +622,62 @@ export class FastOperator {
     return { tapped: [x, y], countBefore: bar.favorite.countValue, labelBefore: bar.favorite.label, wasNumeric: bar.favorite.isNumeric };
   }
 
+  // This is intentionally separate from the legacy diagnostic favorite tap. It refuses before
+  // touching the screen unless the control plane supplies a fresh, complete observation and the
+  // current detail surface resolves exactly one uncollected favorite target.
+  async collectOnOpenNote({ observation } = {}) {
+    const observedAt = Date.parse(observation?.observedAt || "");
+    const required = ["accountFingerprint", "pageFingerprint", "targetFingerprint"];
+    if (!Number.isFinite(observedAt) || Date.now() - observedAt > 5000 || observedAt - Date.now() > 1000
+      || required.some((field) => typeof observation?.[field] !== "string" || observation[field] === "")) {
+      return { ok: false, notSent: true, step: "staleOrInvalidObservation" };
+    }
+    const focus = await this.currentFocus();
+    if (focus.package !== "com.xingin.xhs" || !/(?:NoteDetailActivity|DetailFeedActivity)$/.test(focus.activity || "")) {
+      return { ok: false, notSent: true, step: "notOnExactNoteDetail", activity: focus.activity || null };
+    }
+    const before = this.detailEngagementBar(await this.dump({ label: "collect-before" }));
+    const favorite = before?.favorite;
+    if (!favorite?.icon?.center || before.groups?.length !== 3 || favorite.isNumeric || !favorite.label) {
+      return { ok: false, notSent: true, step: "favoriteStateAmbiguous" };
+    }
+    const tap = await this.favoriteDetail(before);
+    const after = this.detailEngagementBar(await this.dump({ label: "collect-after", settleMs: 700 }));
+    const afterFavorite = after?.favorite;
+    if (!afterFavorite?.icon?.center || after.groups?.length !== 3) {
+      return { ok: false, ambiguous: true, restoreRequired: true, step: "favoriteVerificationAmbiguous" };
+    }
+    const countDelta = Number.isFinite(favorite.countValue) && Number.isFinite(afterFavorite.countValue)
+      ? afterFavorite.countValue - favorite.countValue
+      : null;
+    if (afterFavorite.isNumeric !== true && countDelta !== 1) {
+      return { ok: false, ambiguous: true, restoreRequired: true, step: "favoriteNotVerified" };
+    }
+    return {
+      ok: true, collected: true, beforeState: "not_collected", afterState: "collected", countDelta,
+      collectProof: { tapped: tap.tapped, beforeLabel: favorite.label, afterLabel: afterFavorite.label },
+    };
+  }
+
+  async undoCollectOnOpenNote({ collectProof } = {}) {
+    if (!collectProof?.tapped) return { ok: false, notSent: true, step: "missingCollectProof" };
+    const focus = await this.currentFocus();
+    if (focus.package !== "com.xingin.xhs" || !/(?:NoteDetailActivity|DetailFeedActivity)$/.test(focus.activity || "")) {
+      return { ok: false, ambiguous: true, restoreRequired: true, step: "notOnExactNoteDetail", activity: focus.activity || null };
+    }
+    const before = this.detailEngagementBar(await this.dump({ label: "undo-collect-before" }));
+    const favorite = before?.favorite;
+    if (!favorite?.icon?.center || before.groups?.length !== 3 || favorite.isNumeric !== true) {
+      return { ok: false, ambiguous: true, restoreRequired: true, step: "undoStateAmbiguous" };
+    }
+    await this.favoriteDetail(before);
+    const after = this.detailEngagementBar(await this.dump({ label: "undo-collect-after", settleMs: 700 }));
+    if (after?.groups?.length !== 3 || !after.favorite?.icon?.center || after.favorite.isNumeric) {
+      return { ok: false, ambiguous: true, restoreRequired: true, step: "undoNotVerified" };
+    }
+    return { ok: true, restored: true, beforeState: "collected", afterState: "not_collected" };
+  }
+
   // ===== Slice 2：评论自主 =====
   // 详情页底部评论入口框（content-desc="评论框"/"说点什么"占位）。UTF-8 desc 稳定锚点；
   // 退路：底部条(y>2150)最左 clickable TextView——但须排除商品/带货入口，见下。
@@ -1475,6 +1531,16 @@ function serve(port) {
         case "detailBar": { const d = await op.dump({ label: "detailBar" }); out = { bar: op.detailEngagementBar(d), dumpMs: d._dumpMs }; break; }
         case "likeDetail": { const d = await op.dump({ label: "likeDetail" }); const bar = op.detailEngagementBar(d); out = { resolved: !!bar?.like?.icon?.center, bar, tapped: bar?.like?.icon?.center ? await op.likeDetail(bar) : null }; break; }
         case "favoriteDetail": { const d = await op.dump({ label: "favoriteDetail" }); const bar = op.detailEngagementBar(d); out = { resolved: !!bar?.favorite?.icon?.center, bar, tapped: bar?.favorite?.icon?.center ? await op.favoriteDetail(bar) : null }; break; }
+        case "collectOnOpenNote": {
+          if (typeof q.observationReceiptId !== "string" || q.observationReceiptId === ""
+            || q.targetFingerprint !== q.observation?.targetFingerprint) {
+            out = { ok: false, notSent: true, step: "receiptBindingInvalid" };
+            break;
+          }
+          out = await op.collectOnOpenNote({ observation: q.observation });
+          break;
+        }
+        case "undoCollectOnOpenNote": out = await op.undoCollectOnOpenNote({ collectProof: q.collectProof }); break;
         case "openProfile": { const d = await op.dump({ label: "openProfile" }); const cards = op.feedCards(d); const c = cards[q.idx ?? 0]; out = { resolved: !!c?.cover?.center, card: c, opened: c?.cover?.center ? await op.openProfile(c) : null }; break; }
         case "scrollProfile": out = await op.scrollProfile(q.n ?? 1, q.label); break;
         case "profileGrid": { const d = await op.dump({ label: "profileGrid" }); out = { covers: op.profileGridCovers(d), dumpMs: d._dumpMs }; break; }

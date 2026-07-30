@@ -22,10 +22,23 @@ function leaseHeaders(leaseAuthorization) {
   };
 }
 
+function assertCollectReceiptParams(params) {
+  const receiptId = params?.observationReceiptId;
+  const target = params?.targetFingerprint;
+  const observed = params?.observation;
+  if (typeof receiptId !== "string" || receiptId === "" || typeof target !== "string" || target === ""
+    || !observed || observed.targetFingerprint !== target) {
+    const error = new ControlPlaneError("COLLECT_RECEIPT_BINDING_INVALID", "collect requires an exact receipt-to-target binding", { status: 409 });
+    error.notSent = true;
+    throw error;
+  }
+}
+
 export function createXhsAdapter({ fetchImpl = globalThis.fetch } = {}) {
   return {
     id: "xhs",
     async execute({ capability, device, params, leaseAuthorization }) {
+      if (capability.implementation.action === "collectOnOpenNote") assertCollectReceiptParams(params);
       const response = await postJson(
         endpoint(device),
         { action: capability.implementation.action, ...params },
@@ -44,7 +57,8 @@ export function createXhsAdapter({ fetchImpl = globalThis.fetch } = {}) {
             log: Array.isArray(result.log) ? result.log.slice(-8) : undefined,
           },
         });
-        error.notSent = true; // 守卫都在点发送之前触发，确定未发出，不应标 ambiguous
+        error.notSent = result.notSent === true;
+        error.ambiguous = result.ambiguous === true || !error.notSent;
         throw error;
       }
       return {
@@ -73,11 +87,36 @@ export function createXhsAdapter({ fetchImpl = globalThis.fetch } = {}) {
           mode: "custom",
         };
       }
+      if (action === "collectOnOpenNote") {
+        return {
+          ok: output?.collected === true
+            && output?.beforeState === "not_collected"
+            && (output?.afterState === "collected" || output?.countDelta === 1),
+          ambiguous: true,
+          mode: "custom",
+        };
+      }
       return { ok: false, ambiguous: true, mode: "custom" };
     },
-    async restore({ capability, device, leaseAuthorization }) {
+    async restore({ capability, device, params, execution, leaseAuthorization }) {
       if (!capability.restoration.required) return { ok: true };
       const headers = leaseHeaders(leaseAuthorization);
+      if (capability.implementation.action === "collectOnOpenNote") {
+        const undo = await postJson(endpoint(device), {
+          action: "undoCollectOnOpenNote",
+          targetFingerprint: params?.targetFingerprint,
+          observationReceiptId: params?.observationReceiptId,
+          collectProof: execution?.output?.collectProof,
+        }, { timeoutMs: 30000, fetchImpl, headers });
+        const home = await postJson(endpoint(device), { action: "backToFeed", maxBack: 5 }, {
+          timeoutMs: 30000,
+          fetchImpl,
+          headers,
+        });
+        const undoOk = undo?.result?.ok === true && undo?.result?.restored === true;
+        const homeOk = home?.result?.home === true || home?.result?.restored === true || home?.result?.ok === true;
+        return { ok: undoOk && homeOk, undo: undo.result, home: home.result, restoreRequired: !undoOk };
+      }
       const restoreIme = await postJson(endpoint(device), { action: "restoreIme" }, {
         timeoutMs: 30000,
         fetchImpl,
