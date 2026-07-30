@@ -155,14 +155,35 @@ function safeAdapterMessage(value) {
     .slice(0, 240);
 }
 
-function safeAdapterError(result) {
+function safeLocatorShape(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  if (!["NoteDetailActivity", "DetailFeedActivity"].includes(value.activity)) return null;
+  const fieldNames = ["dat", "clip", "mReferrer", "extrasNoteId"];
+  const fields = Object.fromEntries(fieldNames.map((name) => [name, {
+    present: value.fields?.[name]?.present === true,
+    has24Hex: value.fields?.[name]?.has24Hex === true,
+  }]));
+  const generic24Count = Number.isSafeInteger(value.generic24Count)
+    ? Math.max(0, Math.min(99, value.generic24Count))
+    : 0;
+  return {
+    activity: value.activity,
+    currentBlockFound: value.currentBlockFound === true,
+    fields,
+    generic24Count,
+  };
+}
+
+export function safeAdapterError(result) {
   const error = result?.error;
   if (!error || typeof error !== "object" || Array.isArray(error)) return null;
   if (error.code == null && error.step == null && error.action == null && error.message == null) return null;
+  const locatorShape = safeLocatorShape(error.locatorShape);
   return {
     code: safeAdapterCode(error.code),
     step: safeAdapterStep(error.step ?? error.action),
     message: safeAdapterMessage(error.message),
+    ...(locatorShape ? { locatorShape } : {}),
   };
 }
 

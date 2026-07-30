@@ -108,9 +108,10 @@ async function httpPostJson(url, body, headers = {}) {
 // ---------- 持久 adb shell 会话 ----------
 
 class AdbShellSession {
-  constructor(adbPath, serial) {
+  constructor(adbPath, serial, diagnosticLogger = () => {}) {
     this.adbPath = adbPath;
     this.serial = serial;
+    this.diagnosticLogger = diagnosticLogger;
     this.proc = null;
     this.buf = "";
     this.waiters = [];
@@ -120,14 +121,32 @@ class AdbShellSession {
   async start() {
     this.buf = "";
     this.waiters = [];
-    this.proc = spawn(this.adbPath, ["-s", this.serial, "shell"], { stdio: ["pipe", "pipe", "pipe"] });
-    this.proc.stdout.setEncoding("utf8");
-    this.proc.stdout.on("data", (chunk) => {
+    const proc = spawn(this.adbPath, ["-s", this.serial, "shell"], { stdio: ["pipe", "pipe", "pipe"] });
+    this.proc = proc;
+    const failCurrent = (source, code) => {
+      if (this.proc !== proc) return;
+      try {
+        this.diagnosticLogger({
+          event: "fast-operator.transport-error",
+          source,
+          errorCode: code,
+        });
+      } catch {}
+      this._poison(source);
+    };
+    proc.on("error", () => failCurrent("process.error", "ADB_SHELL_PROCESS_ERROR"));
+    proc.on("exit", () => failCurrent("process.exit", "ADB_SHELL_EXITED"));
+    proc.on("close", () => failCurrent("process.close", "ADB_SHELL_CLOSED"));
+    proc.stdin.on("error", () => failCurrent("stdin.error", "ADB_SHELL_STDIN_ERROR"));
+    proc.stdout.on("error", () => failCurrent("stdout.error", "ADB_SHELL_STDOUT_ERROR"));
+    proc.stderr.on("error", () => failCurrent("stderr.error", "ADB_SHELL_STDERR_ERROR"));
+    proc.stdout.setEncoding("utf8");
+    proc.stdout.on("data", (chunk) => {
       this.buf += chunk;
       this.drain();
     });
-    this.proc.stderr.setEncoding("utf8");
-    this.proc.stderr.on("data", () => {});
+    proc.stderr.setEncoding("utf8");
+    proc.stderr.on("data", () => {});
     await this.exec("echo fastop-ready"); // warm up
     return this;
   }
@@ -252,9 +271,9 @@ export class FastOperator {
   constructor({ adbPath, serial, pacer, diagnosticLogger } = {}) {
     this.adbPath = adbPath;
     this.serial = serial;
-    this.session = new AdbShellSession(adbPath, serial);
-    this.pacer = pacer ?? new Pacer();
     this.diagnosticLogger = diagnosticLogger ?? (() => {});
+    this.session = new AdbShellSession(adbPath, serial, this.diagnosticLogger);
+    this.pacer = pacer ?? new Pacer();
     this.metrics = { actions: 0, dumps: 0, scrolls: 0, taps: 0, totalDumpMs: 0, totalScrollMs: 0 };
     // Slice 2 评论自主配置（由 CLI flag 注入，见 serve()/demoScroll 末尾）
     this.xwWs = null;            // ws://127.0.0.1:22222/
@@ -328,8 +347,7 @@ export class FastOperator {
         };
       };
       const generic24Count = Math.min(99, (String(currentActivityBlock).match(/\b[0-9a-f]{24}\b/ig) || []).length);
-      const diagnostic = {
-        event: "fast-operator.locator-shape",
+      const locatorShape = {
         activity: allowedActivity,
         currentBlockFound,
         fields: {
@@ -340,11 +358,12 @@ export class FastOperator {
         },
         generic24Count,
       };
-      try { this.diagnosticLogger?.(diagnostic); } catch {}
+      try { this.diagnosticLogger?.({ event: "fast-operator.locator-shape", ...locatorShape }); } catch {}
+      return locatorShape;
     };
     if (start < 0) {
-      logLocatorShape("", false);
-      return { ok: false, notSent: true, step: "stableNoteLocatorUnavailable" };
+      const locatorShape = logLocatorShape("", false);
+      return { ok: false, notSent: true, step: "stableNoteLocatorUnavailable", locatorShape };
     }
     let end = lines.length;
     for (let index = start + 1; index < lines.length; index += 1) {
@@ -358,8 +377,8 @@ export class FastOperator {
       /(?:xhsdiscover:\/\/(?:item|discovery\/item)\/|https?:\/\/(?:www\.)?xiaohongshu\.com\/(?:explore|discovery\/item)\/)([0-9a-f]{24})(?=[/?&#}\s]|$)/i,
     );
     if (!match) {
-      logLocatorShape(currentActivityBlock, true);
-      return { ok: false, notSent: true, step: "stableNoteLocatorUnavailable" };
+      const locatorShape = logLocatorShape(currentActivityBlock, true);
+      return { ok: false, notSent: true, step: "stableNoteLocatorUnavailable", locatorShape };
     }
     const locator = `xhs:note:${match[1].toLowerCase()}`;
     const digest = (value) => createHash("sha256").update(value).digest("hex");

@@ -71,10 +71,27 @@ test("generic XHS observation capabilities do not claim a Discovery receipt", as
 });
 
 test("XHS adapter surfaces inner serve rejection instead of masking it as verification failure", async () => {
+  const secret = "private-adapter-token";
   const adapter = createXhsAdapter({
     fetchImpl: async () => new Response(JSON.stringify({
       ok: true,
-      result: { ok: false, step: "notOnNote", activity: "IndexActivityV2", log: [["focus", {}]] },
+      result: {
+        ok: false,
+        notSent: true,
+        step: "stableNoteLocatorUnavailable",
+        locatorShape: {
+          activity: "NoteDetailActivity",
+          currentBlockFound: true,
+          fields: {
+            dat: { present: true, has24Hex: false, raw: `https://private.example/${secret}` },
+            clip: { present: false, has24Hex: false },
+            mReferrer: { present: false, has24Hex: false },
+            extrasNoteId: { present: false, has24Hex: false },
+          },
+          generic24Count: 0,
+          title: `private title ${secret}`,
+        },
+      },
       metrics: {},
     }), { status: 200, headers: { "content-type": "application/json" } }),
   });
@@ -83,7 +100,20 @@ test("XHS adapter surfaces inner serve rejection instead of masking it as verifi
     adapter.execute({ capability: send, device: privateDevice, params: { text: "probe" }, leaseAuthorization }),
     (error) => {
       assert.equal(error.code, "ADAPTER_ACTION_REJECTED");
-      assert.equal(error.details.step, "notOnNote");
+      assert.equal(error.notSent, true);
+      assert.equal(error.details.step, "stableNoteLocatorUnavailable");
+      assert.deepEqual(error.details.adapterError?.locatorShape, {
+        activity: "NoteDetailActivity",
+        currentBlockFound: true,
+        fields: {
+          dat: { present: true, has24Hex: false },
+          clip: { present: false, has24Hex: false },
+          mReferrer: { present: false, has24Hex: false },
+          extrasNoteId: { present: false, has24Hex: false },
+        },
+        generic24Count: 0,
+      });
+      assert.doesNotMatch(JSON.stringify(error.details), /private-adapter-token|private title|private\.example/);
       return true;
     },
   );

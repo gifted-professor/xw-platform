@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { once } from "node:events";
-import { readFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 import { createXhsAdapter } from "../apps/xhs/adapter.mjs";
 import { CapabilityRegistry } from "../control-plane/lib/capability-registry.mjs";
@@ -278,4 +281,102 @@ test("serve records a redacted structured openFeedNote runtime error", async (t)
     message: "launcher failed for [runtime] token=[redacted]",
   }]);
   assert.doesNotMatch(JSON.stringify({ body, errors }), /offline-test-runtime|top-secret/);
+});
+
+test("serve preserves a secret-free locator shape for a graceful stable-locator rejection", async (t) => {
+  const diagnostics = [];
+  const operator = Object.create(FastOperator.prototype);
+  operator.diagnosticLogger = (entry) => diagnostics.push(entry);
+  operator.ensureXhsFeed = async () => ({ ok: true, activity: "com.xingin.xhs.index.v2.IndexActivityV2" });
+  operator.feedDump = async () => ({ nodes: [] });
+  operator.feedCards = () => [{ cover: { center: [100, 200] } }];
+  operator.openCard = async () => ({ opened: true, activity: "com.xingin.xhs.note.NoteDetailActivity" });
+  operator.currentFocus = async () => ({ package: "com.xingin.xhs", activity: "com.xingin.xhs.note.NoteDetailActivity" });
+  operator.session = { exec: async () => "ACTIVITY com.xingin.xhs/.note.NoteDetailActivity Intent { act=android.intent.action.MAIN }" };
+  operator.metricsSummary = () => ({});
+  const server = serve(0, {
+    adb: "offline-test-adb",
+    serial: "offline-test-runtime",
+    authorize: async () => ({ authorized: true }),
+    errorLogger: (entry) => diagnostics.push(entry),
+    operatorFactory: async () => operator,
+  });
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  await once(server, "listening");
+  const response = await fetch(`http://127.0.0.1:${server.address().port}/`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ action: "openFeedNote", selector: "any" }),
+  });
+  assert.equal(response.status, 200);
+  const locatorShape = {
+    activity: "NoteDetailActivity",
+    currentBlockFound: true,
+    fields: {
+      dat: { present: false, has24Hex: false },
+      clip: { present: false, has24Hex: false },
+      mReferrer: { present: false, has24Hex: false },
+      extrasNoteId: { present: false, has24Hex: false },
+    },
+    generic24Count: 0,
+  };
+  assert.deepEqual((await response.json()).result, {
+    ok: false,
+    notSent: true,
+    step: "stableNoteLocatorUnavailable",
+    locatorShape,
+  });
+  assert.deepEqual(diagnostics, [{
+    event: "fast-operator.locator-shape",
+    ...locatorShape,
+  }]);
+});
+
+test("a closed persistent adb shell is poisoned immediately instead of hanging the next command", () => {
+  const root = mkdtempSync(join(tmpdir(), "fast-operator-child-close-"));
+  try {
+    const fakeAdb = join(root, "fake-adb.mjs");
+    const harness = join(root, "harness.mjs");
+    writeFileSync(fakeAdb, `#!/usr/bin/env node
+if (process.argv.length > 5) process.exit(0);
+process.stdin.setEncoding("utf8");
+let commandCount = 0;
+process.stdin.on("data", (chunk) => {
+  commandCount += 1;
+  const marker = String(chunk).match(/echo (__FO_END_[0-9]+__)/)?.[1];
+  if (commandCount === 1 && marker) process.stdout.write("fastop-ready\\n" + marker);
+  if (commandCount === 2) setTimeout(() => process.exit(0), 10);
+});
+`);
+    chmodSync(fakeAdb, 0o755);
+    writeFileSync(harness, `
+import { FastOperator } from ${JSON.stringify(new URL("../scripts/fast-operator.mjs", import.meta.url).href)};
+const op = new FastOperator({
+  adbPath: ${JSON.stringify(fakeAdb)},
+  serial: "test-runtime",
+  diagnosticLogger: (entry) => console.log(JSON.stringify(entry)),
+});
+await op.start();
+const startedAt = Date.now();
+let pendingError = null;
+try { await op.session.exec("pending-command", 30000); }
+catch (error) { pendingError = error.message; }
+await op.session.start();
+console.log(JSON.stringify({ survived: true, pendingError, elapsedMs: Date.now() - startedAt }));
+await op.close();
+`);
+    const child = spawnSync(process.execPath, [harness], { encoding: "utf8", timeout: 3000 });
+    assert.equal(child.signal, null, `child timed out: ${child.stderr}`);
+    assert.equal(child.status, 0, `child process crashed: ${child.stderr}`);
+    assert.match(child.stdout, /"survived":true/);
+    assert.match(child.stdout, /adb shell poisoned \(process\.exit\)/);
+    assert.match(child.stdout, /"event":"fast-operator\.transport-error"/);
+    assert.match(child.stdout, /"source":"process\.exit"/);
+    assert.match(child.stdout, /"errorCode":"ADB_SHELL_EXITED"/);
+    const elapsedMs = Number(child.stdout.match(/"elapsedMs":(\d+)/)?.[1]);
+    assert.ok(elapsedMs < 1000, `pending exec rejected too slowly: ${elapsedMs}ms`);
+    assert.doesNotMatch(child.stdout, /test-runtime|fake-adb|fast-operator-child-close/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

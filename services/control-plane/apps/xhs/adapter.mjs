@@ -1,4 +1,4 @@
-import { postJson } from "../../control-plane/lib/command-runner.mjs";
+import { postJson, safeAdapterError } from "../../control-plane/lib/command-runner.mjs";
 import { ControlPlaneError } from "../../control-plane/lib/errors.mjs";
 
 function endpoint(device) {
@@ -47,12 +47,23 @@ export function createXhsAdapter({ fetchImpl = globalThis.fetch } = {}) {
       // （notOnNote / editorLostAfterInput / commentBox / countUnavailable 等守卫，
       //  全部发生在点发送之前，未发出、非 ambiguous）。不透传会被误判成 VERIFICATION_FAILED。
       if (result && typeof result === "object" && result.ok === false) {
+        const adapterError = result.step === "stableNoteLocatorUnavailable"
+          ? safeAdapterError({
+            error: {
+              code: "STABLE_NOTE_LOCATOR_UNAVAILABLE",
+              step: result.step,
+              message: "stable note locator unavailable",
+              locatorShape: result.locatorShape,
+            },
+          })
+          : null;
         const error = new ControlPlaneError("ADAPTER_ACTION_REJECTED", `xhs action rejected: ${result.step || "unknown"}`, {
           status: 502,
           details: {
             step: result.step ?? null,
             activity: result.activity ?? result.focus ?? null,
             log: Array.isArray(result.log) ? result.log.slice(-8) : undefined,
+            ...(adapterError ? { adapterError } : {}),
           },
         });
         error.notSent = result.notSent === true;

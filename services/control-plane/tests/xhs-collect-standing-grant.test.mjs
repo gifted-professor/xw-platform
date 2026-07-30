@@ -80,9 +80,7 @@ test("note-detail producer fails closed when the top activity has no stable note
     extras={noteId=64f0123456789abcdef01234 title=private-title token=private-token}
   ` };
   const result = await operator.observeOpenNoteDetail();
-  assert.deepEqual(result, { ok: false, notSent: true, step: "stableNoteLocatorUnavailable" });
-  assert.deepEqual(diagnostics, [{
-    event: "fast-operator.locator-shape",
+  const locatorShape = {
     activity: "NoteDetailActivity",
     currentBlockFound: true,
     fields: {
@@ -92,7 +90,9 @@ test("note-detail producer fails closed when the top activity has no stable note
       extrasNoteId: { present: true, has24Hex: true },
     },
     generic24Count: 1,
-  }]);
+  };
+  assert.deepEqual(result, { ok: false, notSent: true, step: "stableNoteLocatorUnavailable", locatorShape });
+  assert.deepEqual(diagnostics, [{ event: "fast-operator.locator-shape", ...locatorShape }]);
   assert.doesNotMatch(JSON.stringify(diagnostics), /64f0123456789abcdef01234|private-title|private-token|private\.example/);
 });
 
@@ -106,9 +106,7 @@ test("note-detail producer logs a secret-free shape when the current activity bl
   });
   operator.session = { exec: async () => "Hist #1: ActivityRecord{old com.other/.PrivateActivity token=private-token}" };
   const result = await operator.observeOpenNoteDetail();
-  assert.deepEqual(result, { ok: false, notSent: true, step: "stableNoteLocatorUnavailable" });
-  assert.deepEqual(diagnostics, [{
-    event: "fast-operator.locator-shape",
+  const locatorShape = {
     activity: "NoteDetailActivity",
     currentBlockFound: false,
     fields: {
@@ -118,7 +116,9 @@ test("note-detail producer logs a secret-free shape when the current activity bl
       extrasNoteId: { present: false, has24Hex: false },
     },
     generic24Count: 0,
-  }]);
+  };
+  assert.deepEqual(result, { ok: false, notSent: true, step: "stableNoteLocatorUnavailable", locatorShape });
+  assert.deepEqual(diagnostics, [{ event: "fast-operator.locator-shape", ...locatorShape }]);
   assert.doesNotMatch(JSON.stringify(diagnostics), /PrivateActivity|private-token|com\.other/);
 });
 
@@ -137,7 +137,22 @@ test("note-detail producer ignores a stable locator retained only by an older hi
     `,
   };
   const result = await operator.observeOpenNoteDetail();
-  assert.deepEqual(result, { ok: false, notSent: true, step: "stableNoteLocatorUnavailable" });
+  assert.deepEqual(result, {
+    ok: false,
+    notSent: true,
+    step: "stableNoteLocatorUnavailable",
+    locatorShape: {
+      activity: "NoteDetailActivity",
+      currentBlockFound: true,
+      fields: {
+        dat: { present: false, has24Hex: false },
+        clip: { present: false, has24Hex: false },
+        mReferrer: { present: false, has24Hex: false },
+        extrasNoteId: { present: false, has24Hex: false },
+      },
+      generic24Count: 0,
+    },
+  });
 });
 
 test("XHS adapter exposes only a sealed note-detail receipt from a succeeded source job", () => {

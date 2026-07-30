@@ -122,3 +122,52 @@ test("HTTP adapter diagnostics normalize invalid code and bound action and messa
     },
   );
 });
+
+test("HTTP adapter rejection preserves only an allowlisted locator shape", async () => {
+  const secret = "private-locator-token";
+  await assert.rejects(
+    postJson("http://127.0.0.1:17897/action", { action: "openFeedNote" }, {
+      fetchImpl: async () => ({
+        ok: false,
+        status: 500,
+        async json() {
+          return {
+            ok: false,
+            error: {
+              code: "STABLE_NOTE_LOCATOR_UNAVAILABLE",
+              step: "stableNoteLocatorUnavailable",
+              message: `locator unavailable token=${secret}`,
+              locatorShape: {
+                activity: "NoteDetailActivity",
+                currentBlockFound: true,
+                fields: {
+                  dat: { present: true, has24Hex: false, raw: `https://private.example/${secret}` },
+                  clip: { present: false, has24Hex: false },
+                  mReferrer: { present: true, has24Hex: true },
+                  extrasNoteId: { present: false, has24Hex: false },
+                },
+                generic24Count: 1234,
+                raw: `private-title 64f0123456789abcdef01234 ${secret}`,
+              },
+            },
+          };
+        },
+      }),
+    }),
+    (error) => {
+      assert.deepEqual(error.details.adapterError.locatorShape, {
+        activity: "NoteDetailActivity",
+        currentBlockFound: true,
+        fields: {
+          dat: { present: true, has24Hex: false },
+          clip: { present: false, has24Hex: false },
+          mReferrer: { present: true, has24Hex: true },
+          extrasNoteId: { present: false, has24Hex: false },
+        },
+        generic24Count: 99,
+      });
+      assert.doesNotMatch(JSON.stringify(error.details), /private-locator-token|private-title|64f0123456789abcdef01234|private\.example/);
+      return true;
+    },
+  );
+});
