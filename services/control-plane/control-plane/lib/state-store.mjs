@@ -2083,6 +2083,39 @@ export class StateStore {
     return { session, lease };
   }
 
+  #assertLiveDiscoveryAuthority(row, gates) {
+    const grantRow = this.db.prepare("SELECT * FROM delegation_grants WHERE grant_id=?").get(row.grant_id);
+    if (!grantRow || grantRow.status !== "active") {
+      throw new ControlPlaneError("GRANT_NOT_ACTIVE", "DiscoveryRun Grant is no longer active", { status: 409 });
+    }
+    if (grantRow.grant_hash !== row.grant_hash) {
+      throw new ControlPlaneError("GRANT_HASH_DRIFT", "DiscoveryRun Grant hash drifted", { status: 409 });
+    }
+    let grant;
+    try { grant = parseJson(grantRow.grant_json, {}); } catch { throw new ControlPlaneError("GRANT_POLICY_INVALID", "DiscoveryRun Grant is malformed", { status: 409 }); }
+    const policy = grant.discoveryPolicy;
+    if (!policy || policy.enabled !== true) {
+      throw new ControlPlaneError("DISCOVERY_POLICY_DISABLED", "DiscoveryPolicy is not enabled", { status: 409 });
+    }
+    if (policy.maxParallelism !== 1) {
+      throw new ControlPlaneError("PARALLELISM_UNSUPPORTED", "DiscoveryPolicy parallelism must be one", { status: 409 });
+    }
+    if (fingerprint(policy) !== row.policy_hash) {
+      throw new ControlPlaneError("DISCOVERY_POLICY_DRIFT", "DiscoveryPolicy changed after allocation", { status: 409 });
+    }
+    if (!gates?.missionAutoApprovalEnabled || !gates?.standingGrantEnabled || !gates?.adrAccepted || !gates?.issuerReady) {
+      throw new ControlPlaneError("DISCOVERY_GATE_CLOSED", "DiscoveryRun gate is closed", { status: 409 });
+    }
+  }
+
+  #terminalizeDiscoveryFailure(row, error, now) {
+    const terminalStatus = ["DISCOVERY_CONTROL_LOST", "DISCOVERY_READINESS_LOST"].includes(error.code)
+      ? "recovery_required"
+      : "aborted";
+    this.#releaseDiscoveryRun(row, terminalStatus, now, error.code);
+    return error;
+  }
+
   #releaseDiscoveryRun(row, terminalStatus, now, reason = null) {
     const tupleHashes = {
       discoveryRunId: fingerprint(row.discovery_run_id),
@@ -2090,11 +2123,19 @@ export class StateStore {
       leaseId: fingerprint(row.lease_id),
       controllerEpoch: fingerprint(String(row.controller_epoch)),
     };
-    this.db.prepare("DELETE FROM leases WHERE lease_id=?").run(row.lease_id);
-    this.db.prepare(`
+    const transition = this.db.prepare(`
       UPDATE discovery_runs SET status=?, release_at=?, released_tuple_hashes_json=?, updated_at=?
       WHERE discovery_run_id=? AND status IN ('running', 'sealing')
     `).run(terminalStatus, now, canonicalJson(tupleHashes), now, row.discovery_run_id);
+    if (transition.changes === 0) {
+      return this.#publicDiscoveryRun(this.db.prepare("SELECT * FROM discovery_runs WHERE discovery_run_id=?").get(row.discovery_run_id));
+    }
+    // A terminal run may clean only the exact Session it created. The lease predicate
+    // prevents a stale run row from deleting a subsequently-owned foreign lease.
+    this.db.prepare("DELETE FROM sessions WHERE session_id=? AND lease_id=? AND device_id=?")
+      .run(row.session_id, row.lease_id, row.device_id);
+    this.db.prepare("DELETE FROM leases WHERE lease_id=? AND device_id=? AND owner_discovery_run_id=?")
+      .run(row.lease_id, row.device_id, row.discovery_run_id);
     this.#insertDiscoveryEvent({
       discoveryRunId: row.discovery_run_id,
       type: `discovery_run.${terminalStatus}`,
@@ -2125,6 +2166,12 @@ export class StateStore {
       const grantRow = this.db.prepare("SELECT * FROM delegation_grants WHERE grant_id=?").get(grantId);
       if (!grantRow || grantRow.status !== "active") throw new ControlPlaneError("GRANT_NOT_ACTIVE", "DiscoveryRun requires an active Grant", { status: 409 });
       if (grantRow.grant_hash !== grantHash) throw new ControlPlaneError("GRANT_HASH_DRIFT", "DiscoveryRun Grant hash drifted", { status: 409 });
+      const activeForGrant = this.db.prepare(
+        "SELECT discovery_run_id FROM discovery_runs WHERE grant_id=? AND status IN ('running', 'sealing')",
+      ).get(grantId);
+      if (activeForGrant) {
+        throw new ControlPlaneError("DISCOVERY_GRANT_ACTIVE", "Grant already owns an active DiscoveryRun", { status: 409 });
+      }
       let grant;
       try { grant = parseJson(grantRow.grant_json, {}); } catch { throw new ControlPlaneError("GRANT_POLICY_INVALID", "DiscoveryRun Grant is malformed", { status: 409 }); }
       const policy = grant.discoveryPolicy;
@@ -2163,12 +2210,14 @@ export class StateStore {
         INSERT INTO sessions (session_id, lease_id, actor_id, device_id, token_hash, canary, scope_capability_id, placement_decision_json, created_at, expires_at)
         VALUES (?, ?, ?, ?, ?, 0, NULL, ?, ?, ?)
       `).run(sessionId, leaseId, controllerAgent, selected.deviceId, sha256(token), canonicalJson({ mode: placementRequest.mode, decision: "dispatchable", selectedDeviceId: selected.deviceId, source: "discovery" }), now, now + ttlMs);
+      if (faultAfter === "afterSession") throw new ControlPlaneError("DISCOVERY_OPEN_FAULT", "injected DiscoveryRun open fault", { status: 500 });
       this.db.prepare(`
         INSERT INTO discovery_runs (
           discovery_run_id, grant_id, grant_hash, device_id, session_id, lease_id, controller_agent, controller_epoch, status,
           policy_hash, policy_json, opened_at, deadline_at, max_primitives, max_candidates, max_parallelism, created_at, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, 'running', ?, ?, ?, ?, ?, ?, 1, ?, ?)
       `).run(discoveryRunId, grantId, grantHash, selected.deviceId, sessionId, leaseId, controllerAgent, fingerprint(policy), canonicalJson(policy), now, deadlineAt, policy.defaults.maxPrimitives, policy.defaults.maxCandidates, now, now);
+      if (faultAfter === "afterRun") throw new ControlPlaneError("DISCOVERY_OPEN_FAULT", "injected DiscoveryRun open fault", { status: 500 });
       this.#insertDiscoveryEvent({ discoveryRunId, type: "discovery_run.opened", payload: { grantId, grantHash, deviceId: selected.deviceId, controllerEpoch: 1 }, createdAt: now });
       return this.#publicDiscoveryRun(this.db.prepare("SELECT * FROM discovery_runs WHERE discovery_run_id=?").get(discoveryRunId), token);
     });
@@ -2185,40 +2234,61 @@ export class StateStore {
     return rows.map((row) => this.#publicDiscoveryRun(row));
   }
 
-  heartbeatDiscoveryRunStorage({ discoveryRunId, tuple, ttlMs = 60000 }) {
+  heartbeatDiscoveryRunStorage({ discoveryRunId, tuple, gates = {}, ttlMs = 60000 }) {
     const now = this.now();
-    return this.transaction(() => {
+    const result = this.transaction(() => {
       const row = this.db.prepare("SELECT * FROM discovery_runs WHERE discovery_run_id=?").get(discoveryRunId);
       if (!row) throw new ControlPlaneError("DISCOVERY_RUN_NOT_FOUND", "unknown DiscoveryRun", { status: 404 });
-      this.#assertDiscoveryRunOwnership(row, tuple, now);
+      try {
+        this.#assertDiscoveryRunOwnership(row, tuple, now);
+        this.#assertLiveDiscoveryAuthority(row, gates);
+      } catch (error) {
+        return { error: this.#terminalizeDiscoveryFailure(row, error, now) };
+      }
       this.db.prepare("UPDATE leases SET heartbeat_at=?, expires_at=? WHERE lease_id=?").run(now, now + ttlMs, row.lease_id);
       this.db.prepare("UPDATE sessions SET expires_at=? WHERE session_id=?").run(now + ttlMs, row.session_id);
       this.db.prepare("UPDATE discovery_runs SET updated_at=? WHERE discovery_run_id=?").run(now, row.discovery_run_id);
       this.#insertDiscoveryEvent({ discoveryRunId, type: "discovery_run.heartbeat", payload: {}, createdAt: now });
       return this.#publicDiscoveryRun(this.db.prepare("SELECT * FROM discovery_runs WHERE discovery_run_id=?").get(discoveryRunId));
     });
+    if (result?.error) throw result.error;
+    return result;
   }
 
-  sealDiscoveryRunStorage({ discoveryRunId, tuple }) {
+  sealDiscoveryRunStorage({ discoveryRunId, tuple, gates = {} }) {
     const now = this.now();
-    return this.transaction(() => {
+    const result = this.transaction(() => {
       const row = this.db.prepare("SELECT * FROM discovery_runs WHERE discovery_run_id=?").get(discoveryRunId);
       if (!row) throw new ControlPlaneError("DISCOVERY_RUN_NOT_FOUND", "unknown DiscoveryRun", { status: 404 });
-      this.#assertDiscoveryRunOwnership(row, tuple, now);
+      try {
+        this.#assertDiscoveryRunOwnership(row, tuple, now);
+        this.#assertLiveDiscoveryAuthority(row, gates);
+      } catch (error) {
+        return { error: this.#terminalizeDiscoveryFailure(row, error, now) };
+      }
       this.db.prepare("UPDATE discovery_runs SET status='sealing', updated_at=? WHERE discovery_run_id=? AND status='running'").run(now, discoveryRunId);
       const sealing = this.db.prepare("SELECT * FROM discovery_runs WHERE discovery_run_id=?").get(discoveryRunId);
       return this.#releaseDiscoveryRun(sealing, "sealed", now);
     });
+    if (result?.error) throw result.error;
+    return result;
   }
 
-  abortDiscoveryRunStorage({ discoveryRunId, tuple, reason = "aborted" }) {
+  abortDiscoveryRunStorage({ discoveryRunId, tuple, reason = "aborted", gates = {} }) {
     const now = this.now();
-    return this.transaction(() => {
+    const result = this.transaction(() => {
       const row = this.db.prepare("SELECT * FROM discovery_runs WHERE discovery_run_id=?").get(discoveryRunId);
       if (!row) throw new ControlPlaneError("DISCOVERY_RUN_NOT_FOUND", "unknown DiscoveryRun", { status: 404 });
-      this.#assertDiscoveryRunOwnership(row, tuple, now);
+      try {
+        this.#assertDiscoveryRunOwnership(row, tuple, now);
+        this.#assertLiveDiscoveryAuthority(row, gates);
+      } catch (error) {
+        return { error: this.#terminalizeDiscoveryFailure(row, error, now) };
+      }
       return this.#releaseDiscoveryRun(row, "aborted", now, reason);
     });
+    if (result?.error) throw result.error;
+    return result;
   }
 
   // Atomic placement + lease + Session + device_run in one BEGIN IMMEDIATE transaction.

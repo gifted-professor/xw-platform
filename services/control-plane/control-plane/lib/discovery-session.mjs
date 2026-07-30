@@ -27,15 +27,15 @@ export class DiscoverySessionRuntime {
   }
 
   heartbeatDiscoveryRun({ discoveryRunId, tuple }) {
-    return this.state.heartbeatDiscoveryRunStorage({ discoveryRunId, tuple, ttlMs: this.leaseTtlMs });
+    return this.state.heartbeatDiscoveryRunStorage({ discoveryRunId, tuple, gates: this.gates(), ttlMs: this.leaseTtlMs });
   }
 
   sealDiscoveryRun({ discoveryRunId, tuple }) {
-    return this.state.sealDiscoveryRunStorage({ discoveryRunId, tuple });
+    return this.state.sealDiscoveryRunStorage({ discoveryRunId, tuple, gates: this.gates() });
   }
 
   abortDiscoveryRun({ discoveryRunId, tuple, reason }) {
-    return this.state.abortDiscoveryRunStorage({ discoveryRunId, tuple, reason });
+    return this.state.abortDiscoveryRunStorage({ discoveryRunId, tuple, reason, gates: this.gates() });
   }
 
   getDiscoveryRun(discoveryRunId) {

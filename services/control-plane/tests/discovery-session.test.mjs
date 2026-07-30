@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -10,7 +10,7 @@ import { StateStore } from "../control-plane/lib/state-store.mjs";
 
 const AUTHORITY = "DESKTOP-3I1EVHE";
 
-function fixture() {
+function fixture({ discoveryAdrAccepted = true, discoveryAdrPath = undefined } = {}) {
   const root = mkdtempSync(join(tmpdir(), "discovery-control-"));
   const state = new StateStore({ dbPath: join(root, "control.db") });
   state.upsertNode({ nodeId: AUTHORITY, authority: true });
@@ -26,7 +26,7 @@ function fixture() {
   state.issueDelegationGrant({ grant, grantHash: grant.grantHash, proofHash: "proof", issuerSubject: "user:a1234", issuerKeyId: "test", allowlistVersion: 1 });
   const control = new ControlPlane({
     state, capabilities: new CapabilityRegistry([]), authorityNodeId: AUTHORITY, missionAutoApprovalEnabled: true, standingGrantEnabled: true, adrAccepted: true,
-    discoveryIssuerReady: true,
+    discoveryIssuerReady: true, discoveryAdrAccepted, discoveryAdrPath,
   });
   return { root, state, grant, control };
 }
@@ -42,13 +42,40 @@ test("governed DiscoveryRun open, heartbeat, and seal preserve the exact own tup
   } finally { f.state.close(); rmSync(f.root, { recursive: true, force: true }); }
 });
 
-test("stale tuple and a second lease fail closed without creating another DiscoveryRun", () => {
+test("a stale tuple fail-closes and releases its prior allocation before any future open", () => {
   const f = fixture();
   try {
     const run = f.control.openDiscoveryRun({ grantId: f.grant.grantId, controllerAgent: "agent:runner" });
     assert.throws(() => f.control.heartbeatDiscoveryRun({ discoveryRunId: run.discoveryRunId, tuple: { ...run.tuple, controllerEpoch: 0 } }));
-    assert.throws(() => f.control.openDiscoveryRun({ grantId: f.grant.grantId, controllerAgent: "agent:runner" }), { code: "DEVICE_BUSY" });
+    assert.equal(f.control.getDiscoveryRun(run.discoveryRunId).status, "aborted");
     assert.equal(f.state.listDiscoveryRuns().length, 1);
-    assert.equal(f.state.listLeases().length, 1);
+    assert.equal(f.state.listLeases().length, 0);
   } finally { f.state.close(); rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test("DiscoverySession requires separately accepted ADR0010, not the Mission ADR0008 override", () => {
+  const f = fixture({ discoveryAdrAccepted: null });
+  try {
+    assert.throws(() => f.control.openDiscoveryRun({
+      grantId: f.grant.grantId, controllerAgent: "agent:runner",
+    }), { code: "DISCOVERY_GATE_CLOSED" });
+    assert.equal(f.state.listDiscoveryRuns().length, 0);
+  } finally { f.state.close(); rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test("DiscoverySession lazily rereads its dedicated ADR0010 path at each live boundary", () => {
+  const root = mkdtempSync(join(tmpdir(), "discovery-adr-"));
+  const adrPath = join(root, "0010.md");
+  writeFileSync(adrPath, "# ADR 0010\n\n- Status: Proposed\n");
+  const f = fixture({ discoveryAdrAccepted: null, discoveryAdrPath: adrPath });
+  try {
+    assert.throws(() => f.control.openDiscoveryRun({ grantId: f.grant.grantId, controllerAgent: "agent:runner" }), { code: "DISCOVERY_GATE_CLOSED" });
+    writeFileSync(adrPath, "# ADR 0010\n\n- Status: Accepted\n");
+    const run = f.control.openDiscoveryRun({ grantId: f.grant.grantId, controllerAgent: "agent:runner" });
+    writeFileSync(adrPath, "# ADR 0010\n\n- Status: Proposed\n");
+    assert.throws(() => f.control.heartbeatDiscoveryRun({ discoveryRunId: run.discoveryRunId, tuple: run.tuple }), { code: "DISCOVERY_GATE_CLOSED" });
+    assert.equal(f.control.getDiscoveryRun(run.discoveryRunId).status, "aborted");
+  } finally {
+    f.state.close(); rmSync(f.root, { recursive: true, force: true }); rmSync(root, { recursive: true, force: true });
+  }
 });

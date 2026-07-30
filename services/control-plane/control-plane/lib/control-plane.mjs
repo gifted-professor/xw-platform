@@ -21,6 +21,7 @@ const moduleDir = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(moduleDir, "..", "..");
 const EFFECT_INTENT_SCHEMA_PATH = join(moduleDir, "..", "schema", "effect-intent.schema.json");
 const DEFAULT_ADR_0008_PATH = join(REPO_ROOT, "docs", "adr", "0008-mission-driven-exploration-authorization.md");
+const DEFAULT_ADR_0010_PATH = join(REPO_ROOT, "docs", "adr", "0010-standing-grant-discovery-session.md");
 
 // Load the canonical effect-intent envelope schema once at module load so the runtime
 // validation is driven by the schema file (the source of truth), not a parallel copy.
@@ -39,11 +40,11 @@ try {
 // accepted ADR on disk, not a code change. A missing ADR (still Proposed / not yet written) is
 // treated as not accepted. Tests may inject adrAccepted to exercise the enabled branch without
 // touching the ADR file.
-function readAdr0008StatusAccepted(adrPath) {
+function readAdrStatusAccepted(adrPath) {
   try {
     if (!existsSync(adrPath)) return false;
     const text = readFileSync(adrPath, "utf8");
-    return /^\s*Status:\s*Accepted\b/im.test(text);
+    return /^\s*(?:[-*]\s*)?Status:\s*Accepted\b/im.test(text);
   } catch {
     return false;
   }
@@ -138,6 +139,8 @@ export class ControlPlane {
     discoveryIssuerReady = false,
     adrAccepted = null,
     adrPath = DEFAULT_ADR_0008_PATH,
+    discoveryAdrAccepted = null,
+    discoveryAdrPath = DEFAULT_ADR_0010_PATH,
     effectIntentSchema = EFFECT_INTENT_SCHEMA,
   }) {
     this.state = state;
@@ -179,6 +182,8 @@ export class ControlPlane {
     this.discoveryIssuerReady = Boolean(discoveryIssuerReady);
     this.adrAcceptedOverride = adrAccepted;
     this.adrPath = adrPath;
+    this.discoveryAdrAcceptedOverride = discoveryAdrAccepted;
+    this.discoveryAdrPath = discoveryAdrPath;
     this.effectIntentSchema = effectIntentSchema;
     this.discoverySessions = new DiscoverySessionRuntime({
       state,
@@ -187,7 +192,7 @@ export class ControlPlane {
       gates: () => ({
         missionAutoApprovalEnabled: this.missionAutoApprovalEnabled,
         standingGrantEnabled: this.standingGrantEnabled,
-        adrAccepted: this.isAdr0008Accepted(),
+        adrAccepted: this.isAdr0010Accepted(),
         issuerReady: this.discoveryIssuerReady,
       }),
     });
@@ -301,7 +306,16 @@ export class ControlPlane {
     if (this.adrAcceptedOverride !== null && this.adrAcceptedOverride !== undefined) {
       return Boolean(this.adrAcceptedOverride);
     }
-    return readAdr0008StatusAccepted(this.adrPath);
+    return readAdrStatusAccepted(this.adrPath);
+  }
+
+  // DiscoverySession has its own rollout decision. ADR 0008 authorizes the Mission
+  // auto-approval lane only; it must never open pre-Mission discovery by implication.
+  isAdr0010Accepted() {
+    if (this.discoveryAdrAcceptedOverride !== null && this.discoveryAdrAcceptedOverride !== undefined) {
+      return Boolean(this.discoveryAdrAcceptedOverride);
+    }
+    return readAdrStatusAccepted(this.discoveryAdrPath);
   }
 
   // The automatic-R2 Mission path requires BOTH the feature flag AND an accepted ADR 0008.
