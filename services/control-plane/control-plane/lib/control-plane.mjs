@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { ControlPlaneError, asControlError } from "./errors.mjs";
 import { fingerprint } from "./canonical.mjs";
 import { validateJsonSchema } from "./json-schema-validator.mjs";
+import { DiscoverySessionRuntime } from "./discovery-session.mjs";
 import { evaluateCapabilityPolicy } from "./policy.mjs";
 import { inspectTransportLock } from "./xiaowei-transport.mjs";
 import { normalizeRecoveryVisualAnalysis } from "./recovery-inspection.mjs";
@@ -134,6 +135,7 @@ export class ControlPlane {
     acquireTransportLock = null,
     missionAutoApprovalEnabled = process.env.MISSION_AUTO_APPROVAL_ENABLED === "1",
     standingGrantEnabled = process.env.STANDING_GRANT_ENABLED === "1",
+    discoveryIssuerReady = false,
     adrAccepted = null,
     adrPath = DEFAULT_ADR_0008_PATH,
     effectIntentSchema = EFFECT_INTENT_SCHEMA,
@@ -174,9 +176,21 @@ export class ControlPlane {
     // override is for tests only and never mutates the ADR file.
     this.missionAutoApprovalEnabled = Boolean(missionAutoApprovalEnabled);
     this.standingGrantEnabled = Boolean(standingGrantEnabled);
+    this.discoveryIssuerReady = Boolean(discoveryIssuerReady);
     this.adrAcceptedOverride = adrAccepted;
     this.adrPath = adrPath;
     this.effectIntentSchema = effectIntentSchema;
+    this.discoverySessions = new DiscoverySessionRuntime({
+      state,
+      authorityNodeId,
+      leaseTtlMs,
+      gates: () => ({
+        missionAutoApprovalEnabled: this.missionAutoApprovalEnabled,
+        standingGrantEnabled: this.standingGrantEnabled,
+        adrAccepted: this.isAdr0008Accepted(),
+        issuerReady: this.discoveryIssuerReady,
+      }),
+    });
     state.upsertNode({
       nodeId: authorityNodeId,
       status: "online",
@@ -215,6 +229,26 @@ export class ControlPlane {
 
   assertControlTuple(tuple) {
     return this.deviceRuns.assertControlTuple(tuple);
+  }
+
+  openDiscoveryRun(input) {
+    return this.discoverySessions.openDiscoveryRun(input);
+  }
+
+  heartbeatDiscoveryRun(input) {
+    return this.discoverySessions.heartbeatDiscoveryRun(input);
+  }
+
+  sealDiscoveryRun(input) {
+    return this.discoverySessions.sealDiscoveryRun(input);
+  }
+
+  abortDiscoveryRun(input) {
+    return this.discoverySessions.abortDiscoveryRun(input);
+  }
+
+  getDiscoveryRun(discoveryRunId) {
+    return this.discoverySessions.getDiscoveryRun(discoveryRunId);
   }
 
   markControlLost(deviceRunId, input) {
