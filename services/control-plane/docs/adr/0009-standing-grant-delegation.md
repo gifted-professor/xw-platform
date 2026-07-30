@@ -1,16 +1,18 @@
 # ADR 0009: Standing Grant delegation
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-07-30
+- Accepted: 2026-07-30
 
 ## Decision
 
 A Standing Grant is a durable, immutable parent authorization for bounded,
 single-device Missions, never a lease, actor label, recipe, or credential.
 Only an offline Ed25519 signature for `user:a1234`, verified against a
-Windows-administrator-installed versioned public-key allowlist, may issue or
-revoke it. The private key stays offline; no endpoint generates, signs, exports,
-rotates, or recovers keys.
+Windows-administrator-installed versioned public-key allowlist, may issue it.
+Revocation is an audited fail-closed administrative operation in the trusted
+runtime and introduces no second signing format. The private key stays offline;
+no endpoint generates, signs, exports, rotates, or recovers keys.
 
 Each grant binds immutable id, issuance nonce, hash, scope, budget, and status.
 Exact signed-byte replay is idempotent; a changed nonce replay conflicts; a
@@ -45,3 +47,17 @@ caller assertion; ingest, seal, compile, and ECP must all revalidate membership.
 Restricted review derives from authenticated principal plus trusted reviewer
 configuration, never a request role; 90-day redacted-purge leaves a minimal
 non-sensitive tombstone for audit continuity.
+
+## Acceptance record
+
+The user explicitly accepted this delegation boundary on 2026-07-30 for the
+reviewed first real collect canary. Acceptance does not enable either feature
+flag, issue a Grant, start a job/session, or authorize a device action; those
+remain separate reviewed operations.
+
+The Batch5 explicit-target path and durable one-time marker are canary-only
+acceptance scaffolding. They are not a general requirement for per-target human
+signatures, step-by-step approval, or restricted exploration. The long-term
+authorization model is a bounded scope Grant over time, device, actions, and
+budget: agents may operate with high autonomy across non-payment scenarios
+inside that scope, while payment remains denied. ADR 0010 remains Proposed.
