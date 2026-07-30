@@ -67,4 +67,16 @@ $arguments = @(
 
 Set-Location -LiteralPath $repoRoot
 & $nodeExe @arguments 1>> $stdout 2>> $stderr
-exit $LASTEXITCODE
+$nodeExitCode = $LASTEXITCODE
+$lifecycleRecord = [ordered]@{
+    timestamp = (Get-Date).ToUniversalTime().ToString("o")
+    alias = $alias
+    exitCode = $nodeExitCode
+    expectedCommit = $expectedCommit
+}
+try {
+    Add-Content -LiteralPath $stderr -Value ($lifecycleRecord | ConvertTo-Json -Compress)
+} catch {
+    # Lifecycle logging must never change the FastOperator exit result.
+}
+exit $nodeExitCode

@@ -131,6 +131,41 @@ export function runJsonCommand(command, args, {
   });
 }
 
+function safeAdapterCode(value) {
+  const code = String(value ?? "").trim().toUpperCase();
+  return /^[A-Z][A-Z0-9_]{0,63}$/.test(code) ? code : "OPERATOR_ERROR";
+}
+
+function safeAdapterStep(value) {
+  const step = String(value ?? "adapter")
+    .trim()
+    .replace(/[^A-Za-z0-9_.-]+/g, "_")
+    .slice(0, 80);
+  return step || "adapter";
+}
+
+function safeAdapterMessage(value) {
+  return String(value ?? "")
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/\b(serial|runtime(?:id)?|token|secret|password|authorization)\s*[:=]\s*(?:Bearer\s+)?[^\s,;]+/gi,
+      (_match, key) => `${key.toLowerCase()}=[redacted]`)
+    .replace(/\bBearer\s+[^\s,;]+/gi, "Bearer [redacted]")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 240);
+}
+
+function safeAdapterError(result) {
+  const error = result?.error;
+  if (!error || typeof error !== "object" || Array.isArray(error)) return null;
+  if (error.code == null && error.step == null && error.action == null && error.message == null) return null;
+  return {
+    code: safeAdapterCode(error.code),
+    step: safeAdapterStep(error.step ?? error.action),
+    message: safeAdapterMessage(error.message),
+  };
+}
+
 export async function postJson(url, body, {
   timeoutMs = 30000,
   fetchImpl = globalThis.fetch,
@@ -163,9 +198,13 @@ export async function postJson(url, body, {
     });
   }
   if (!response.ok || result?.ok === false) {
+    const adapterError = safeAdapterError(result);
     throw new ControlPlaneError("ADAPTER_REJECTED", "loopback adapter rejected the action", {
       status: 502,
-      details: { httpStatus: response.status },
+      details: {
+        httpStatus: response.status,
+        ...(adapterError ? { adapterError } : {}),
+      },
     });
   }
   return result;

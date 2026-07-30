@@ -53,3 +53,16 @@ test("lifecycle metadata stays secret-free and Start or Status never probes a de
   assert.doesNotMatch(lifecycle, /XHS_ALLOW_BYPASS\s*=\s*["']1["']/i);
   assert.match(worker, /XHS_ALLOW_BYPASS[^\n]+"0"/);
 });
+
+test("worker records a secret-free lifecycle event after the Node process exits", () => {
+  assert.match(worker, /\$nodeExitCode\s*=\s*\$LASTEXITCODE/);
+  assert.match(worker, /timestamp\s*=\s*\(Get-Date\)/);
+  assert.match(worker, /alias\s*=\s*\$alias/);
+  assert.match(worker, /exitCode\s*=\s*\$nodeExitCode/);
+  assert.match(worker, /expectedCommit\s*=\s*\$expectedCommit/);
+  assert.match(worker, /Add-Content\s+-LiteralPath\s+\$stderr/);
+  assert.match(worker, /exit\s+\$nodeExitCode/);
+
+  const record = worker.match(/\$lifecycleRecord\s*=\s*\[ordered\]@[\s\S]*?\n}/)?.[0] ?? "";
+  assert.doesNotMatch(record, /arguments|runtimeId|serial|token|authorization|deviceConfig|repoRoot|nodeExe/i);
+});
