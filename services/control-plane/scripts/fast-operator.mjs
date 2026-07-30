@@ -483,6 +483,8 @@ export class FastOperator {
   // No caller-provided title/author/target is trusted and no social control is touched.
   async openFeedNote({ selector = "any", index } = {}) {
     if (selector !== "any") return { ok: false, notSent: true, step: "unsupportedFeedSelector" };
+    const feed = await this.ensureXhsFeed();
+    if (feed.ok !== true) return feed;
     const doc = await this.feedDump({ label: "open-feed-note" });
     const cards = this.feedCards(doc);
     if (!cards.length) return { ok: false, notSent: true, step: "noSelectableFeedCard" };
@@ -496,6 +498,31 @@ export class FastOperator {
     const receipt = await this.observeOpenNoteDetail();
     if (receipt.ok !== true) return receipt;
     return { ok: true, selectedIndex, activity: opened.activity, ...receipt };
+  }
+
+  // Bring the governed session to the XHS feed without relying on a caller-side
+  // launcher primitive. Deep XHS pages use the existing bounded Back recovery;
+  // desktop/stopped-app states use Android's package launcher and verify focus.
+  async ensureXhsFeed() {
+    const initial = await this.currentFocus();
+    if (initial.package === "com.xingin.xhs" && (initial.activity || "").includes("IndexActivity")) {
+      return { ok: true, activity: initial.activity, launched: false };
+    }
+    if (initial.package === "com.xingin.xhs") {
+      const back = await this.backToFeed(5);
+      if ((back.activity || "").includes("IndexActivity")) {
+        return { ok: true, activity: back.activity, launched: false, back };
+      }
+    }
+    await this.session.exec("monkey -p com.xingin.xhs -c android.intent.category.LAUNCHER 1", 12000);
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 500));
+      const focus = await this.currentFocus();
+      if (focus.package === "com.xingin.xhs" && (focus.activity || "").includes("IndexActivity")) {
+        return { ok: true, activity: focus.activity, launched: true };
+      }
+    }
+    return { ok: false, notSent: true, step: "xhsFeedUnavailable" };
   }
 
   // 暂停视频笔记的自动播放：tap 屏幕中心切换播放/暂停。若 tap 偏到别的 activity（理论上不会），BACK 回 NoteDetail。

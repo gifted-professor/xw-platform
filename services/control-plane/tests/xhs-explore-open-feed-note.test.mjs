@@ -18,6 +18,7 @@ test("feed-note exploration is a general automatic R0 navigation capability", ()
   assert.equal(capability.implementation.action, "openFeedNote");
   assert.deepEqual(capability.inputSchema.properties.selector.enum, ["any"]);
   assert.equal(capability.inputSchema.properties.index.minimum, 0);
+  assert.equal(capability.preconditions.some((item) => /already on|on a feed page/i.test(item)), false);
   assert.deepEqual(evaluateCapabilityPolicy(capability, { invocation: "session" }), {
     approvalRequired: false,
     externalEffect: false,
@@ -32,6 +33,7 @@ test("operator opens the requested visible feed card and returns only a trusted 
     { cover: { center: [100, 200] }, authorName: "redacted-a" },
     { cover: { center: [300, 400] }, authorName: "redacted-b" },
   ];
+  operator.ensureXhsFeed = async () => ({ ok: true, activity: "com.xingin.xhs.index.v2.IndexActivityV2" });
   operator.feedDump = async () => ({ nodes: [] });
   operator.feedCards = () => cards;
   operator.openCard = async (card) => ({ opened: card === cards[1], activity: "com.xingin.xhs.note.NoteDetailActivity" });
@@ -54,6 +56,7 @@ test("operator opens the requested visible feed card and returns only a trusted 
 
 test("operator fails before navigation when no selectable card exists", async () => {
   const operator = Object.create(FastOperator.prototype);
+  operator.ensureXhsFeed = async () => ({ ok: true, activity: "com.xingin.xhs.index.v2.IndexActivityV2" });
   operator.feedDump = async () => ({ nodes: [] });
   operator.feedCards = () => [];
   assert.deepEqual(await operator.openFeedNote({ selector: "any" }), {
@@ -61,6 +64,32 @@ test("operator fails before navigation when no selectable card exists", async ()
     notSent: true,
     step: "noSelectableFeedCard",
   });
+});
+
+test("operator formally launches XHS from the desktop before reading the feed", async () => {
+  const operator = Object.create(FastOperator.prototype);
+  const trace = [];
+  const focuses = [
+    { package: "com.android.launcher", activity: "com.android.launcher.Launcher" },
+    { package: "com.xingin.xhs", activity: "com.xingin.xhs.index.v2.IndexActivityV2" },
+  ];
+  operator.currentFocus = async () => { trace.push("focus"); return focuses.shift(); };
+  operator.backToFeed = async () => { trace.push("backToFeed"); return { activity: "com.android.launcher.Launcher" }; };
+  operator.session = { exec: async (command) => { trace.push(command); return "Events injected: 1"; } };
+  operator.feedDump = async () => { trace.push("feedDump"); return { nodes: [] }; };
+  operator.feedCards = () => [{ cover: { center: [100, 200] } }];
+  operator.openCard = async () => { trace.push("openCard"); return { opened: true, activity: "com.xingin.xhs.note.NoteDetailActivity" }; };
+  operator.observeOpenNoteDetail = async () => ({ ok: true, pageFingerprint: "a".repeat(64), targetFingerprint: "b".repeat(64), observedAt: "2026-07-30T16:00:00.000Z" });
+
+  const result = await operator.openFeedNote({ selector: "any" });
+  assert.equal(result.ok, true);
+  assert.deepEqual(trace, [
+    "focus",
+    "monkey -p com.xingin.xhs -c android.intent.category.LAUNCHER 1",
+    "focus",
+    "feedDump",
+    "openCard",
+  ]);
 });
 
 test("adapter dispatches and seals the combined navigation observation", async () => {

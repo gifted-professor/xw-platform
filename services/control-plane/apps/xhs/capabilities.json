@@ -86,7 +86,7 @@
         "additionalProperties": false
       },
       "outputSchema": { "type": "object" },
-      "preconditions": ["XHS is on a feed page", "a formal control-plane session and visible lease are active"],
+      "preconditions": ["XHS is installed", "a formal control-plane session and visible lease are active"],
       "verification": { "mode": "state", "description": "a visible feed card opens and the device parser emits a stable note-detail receipt" },
       "restoration": { "required": false, "description": "navigation intentionally leaves the selected note open for a subsequent governed action" },
       "timeoutMs": 40000,
