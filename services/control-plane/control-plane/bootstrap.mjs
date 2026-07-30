@@ -12,7 +12,9 @@ import { CapabilityRegistry } from "./lib/capability-registry.mjs";
 import { AdapterRegistry, ControlPlane } from "./lib/control-plane.mjs";
 import { EvidenceStore } from "./lib/evidence-store.mjs";
 import { ControlPlaneError } from "./lib/errors.mjs";
+import { DelegationGrantRuntime } from "./lib/delegation-grant-runtime.mjs";
 import { StateStore } from "./lib/state-store.mjs";
+import { TrustedHumanIssuer } from "./lib/trusted-human-issuer.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -81,11 +83,17 @@ export function createControlPlaneRuntime({
   schedulerIntervalMs,
   leaseTtlMs,
   leaseHeartbeatMs,
+  issuerKeysPath = process.env.STANDING_GRANT_ISSUER_KEYS_PATH,
 } = {}) {
   const defaults = defaultRuntimePaths();
   const resolvedDbPath = dbPath || process.env.CONTROL_PLANE_DB || defaults.dbPath;
   const resolvedRunsRoot = runsRoot || process.env.CONTROL_PLANE_RUNS_ROOT || defaults.runsRoot;
   const runtimeState = state || new StateStore({ dbPath: resolvedDbPath });
+  // An allowlist is optional while both standing-grant gates remain off. If an operator
+  // explicitly supplies one, load and reconcile it before any scheduler can be started.
+  const trustedIssuer = issuerKeysPath ? TrustedHumanIssuer.fromFile(issuerKeysPath) : null;
+  const delegationGrants = trustedIssuer ? new DelegationGrantRuntime({ state: runtimeState, issuer: trustedIssuer }) : null;
+  delegationGrants?.reconcileIssuerKeys();
   const registry = capabilities || CapabilityRegistry.load(resolve(appsRoot));
   const config = loadDeviceConfig(deviceConfigPath);
   if (config) {
@@ -128,6 +136,7 @@ export function createControlPlaneRuntime({
     adapters: adapterRegistry,
     evidence: runtimeEvidence,
     control,
+    delegationGrants,
     dbPath: resolvedDbPath,
     runsRoot: resolvedRunsRoot,
     deviceConfigPath,

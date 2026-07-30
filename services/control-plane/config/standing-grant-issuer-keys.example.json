@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "keys": [
+    {
+      "keyId": "replace-with-admin-managed-key-id",
+      "subject": "user:a1234",
+      "publicKey": "PUBLIC_KEY_PEM_REPLACE_OFFLINE",
+      "status": "active"
+    }
+  ]
+}

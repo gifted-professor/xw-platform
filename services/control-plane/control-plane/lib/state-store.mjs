@@ -320,6 +320,34 @@ export class StateStore {
         updated_at INTEGER NOT NULL
       );
       CREATE INDEX IF NOT EXISTS protected_commits_mission_idx ON protected_commits(mission_id, status);
+      CREATE TABLE IF NOT EXISTS delegation_grants (
+        grant_id TEXT PRIMARY KEY,
+        issuance_nonce TEXT NOT NULL UNIQUE,
+        idempotency_key TEXT NOT NULL UNIQUE,
+        grant_hash TEXT NOT NULL,
+        grant_json TEXT NOT NULL,
+        issuer_subject TEXT NOT NULL,
+        issuer_key_id TEXT NOT NULL,
+        allowlist_version INTEGER NOT NULL,
+        proof_hash TEXT NOT NULL,
+        status TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        expires_at INTEGER,
+        revoked_at INTEGER,
+        revoked_reason TEXT
+      );
+      CREATE INDEX IF NOT EXISTS delegation_grants_issuer_key_idx
+        ON delegation_grants(issuer_key_id, status);
+      CREATE TABLE IF NOT EXISTS delegation_grant_events (
+        event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        grant_id TEXT NOT NULL REFERENCES delegation_grants(grant_id),
+        created_at INTEGER NOT NULL,
+        type TEXT NOT NULL,
+        payload_json TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS delegation_grant_events_idx
+        ON delegation_grant_events(grant_id, event_id);
     `);
     this.#ensureColumn(
       "devices",
@@ -331,7 +359,7 @@ export class StateStore {
     this.#ensureColumn("sessions", "scope_capability_id", "TEXT");
     this.#ensureColumn("sessions", "placement_decision_json", "TEXT");
     this.#ensureColumn("leases", "owner_device_run_id", "TEXT");
-    this.db.exec("PRAGMA user_version = 4;");
+    this.db.exec("PRAGMA user_version = 5;");
   }
 
   #ensureColumn(table, column, definition) {
@@ -1271,6 +1299,141 @@ export class StateStore {
       sha256: row.sha256,
       bytes: row.bytes,
       createdAt: iso(row.created_at),
+    }));
+  }
+
+  #publicDelegationGrant(row) {
+    if (!row) return null;
+    return {
+      grantId: row.grant_id,
+      issuanceNonce: row.issuance_nonce,
+      grantHash: row.grant_hash,
+      issuer: { subject: row.issuer_subject, keyId: row.issuer_key_id },
+      allowlistVersion: row.allowlist_version,
+      proofHash: row.proof_hash,
+      status: row.status,
+      createdAt: iso(row.created_at),
+      updatedAt: iso(row.updated_at),
+      expiresAt: iso(row.expires_at),
+      revokedAt: iso(row.revoked_at),
+      revokedReason: row.revoked_reason,
+    };
+  }
+
+  // Grant issue/revoke records are retained forever as the immutable authorization audit
+  // trail. Neither a nonce nor a revoked grant can be reactivated by replaying an envelope.
+  issueDelegationGrant({
+    grant,
+    grantHash,
+    proofHash,
+    issuerSubject,
+    issuerKeyId,
+    allowlistVersion,
+  }) {
+    const now = this.now();
+    const expiresAt = grant.validity.expiresAt == null ? null : Date.parse(grant.validity.expiresAt);
+    return this.transaction(() => {
+      const byNonce = this.db.prepare("SELECT * FROM delegation_grants WHERE issuance_nonce=?").get(grant.issuanceNonce);
+      if (byNonce) {
+        if (byNonce.status === "revoked") {
+          throw new ControlPlaneError("GRANT_REVOKED", "revoked delegation grants cannot be replayed", { status: 409 });
+        }
+        if (byNonce.grant_id !== grant.grantId || byNonce.grant_hash !== grantHash || byNonce.proof_hash !== proofHash) {
+          throw new ControlPlaneError("ISSUANCE_NONCE_REPLAY", "issuance nonce was used for different grant content", { status: 409 });
+        }
+        return { grant: this.#publicDelegationGrant(byNonce), reused: true };
+      }
+      const byId = this.db.prepare("SELECT * FROM delegation_grants WHERE grant_id=?").get(grant.grantId);
+      if (byId) {
+        if (byId.status === "revoked") {
+          throw new ControlPlaneError("GRANT_REVOKED", "revoked delegation grants cannot be replayed", { status: 409 });
+        }
+        if (byId.grant_hash !== grantHash || byId.proof_hash !== proofHash) {
+          throw new ControlPlaneError("GRANT_CONFLICT", "grant id was used for different signed content", { status: 409 });
+        }
+        return { grant: this.#publicDelegationGrant(byId), reused: true };
+      }
+      this.db.prepare(`
+        INSERT INTO delegation_grants (
+          grant_id, issuance_nonce, idempotency_key, grant_hash, grant_json,
+          issuer_subject, issuer_key_id, allowlist_version, proof_hash, status,
+          created_at, updated_at, expires_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
+      `).run(
+        grant.grantId,
+        grant.issuanceNonce,
+        grant.grantId,
+        grantHash,
+        canonicalJson(grant),
+        issuerSubject,
+        issuerKeyId,
+        allowlistVersion,
+        proofHash,
+        now,
+        now,
+        expiresAt,
+      );
+      this.#insertDelegationGrantEvent({
+        grantId: grant.grantId,
+        type: "delegation_grant.issued",
+        payload: { grantHash, issuerSubject, issuerKeyId, allowlistVersion, proofHash },
+        createdAt: now,
+      });
+      return {
+        grant: this.#publicDelegationGrant(this.db.prepare("SELECT * FROM delegation_grants WHERE grant_id=?").get(grant.grantId)),
+        reused: false,
+      };
+    });
+  }
+
+  getDelegationGrant(grantId) {
+    return this.#publicDelegationGrant(this.db.prepare("SELECT * FROM delegation_grants WHERE grant_id=?").get(grantId));
+  }
+
+  getDelegationGrantRecord(grantId) {
+    const row = this.db.prepare("SELECT * FROM delegation_grants WHERE grant_id=?").get(grantId);
+    if (!row) return null;
+    return { ...this.#publicDelegationGrant(row), grant: parseJson(row.grant_json, {}) };
+  }
+
+  listDelegationGrants() {
+    return this.db.prepare("SELECT * FROM delegation_grants ORDER BY created_at").all().map((row) => this.#publicDelegationGrant(row));
+  }
+
+  revokeDelegationGrant(grantId, { reason = "issuer_revoked" } = {}) {
+    const now = this.now();
+    return this.transaction(() => {
+      const row = this.db.prepare("SELECT * FROM delegation_grants WHERE grant_id=?").get(grantId);
+      if (!row) throw new ControlPlaneError("GRANT_NOT_FOUND", `unknown delegation grant ${grantId}`, { status: 404 });
+      if (row.status === "revoked") return this.#publicDelegationGrant(row);
+      this.db.prepare("UPDATE delegation_grants SET status='revoked', updated_at=?, revoked_at=?, revoked_reason=? WHERE grant_id=?")
+        .run(now, now, reason, grantId);
+      this.#insertDelegationGrantEvent({ grantId, type: "delegation_grant.revoked", payload: { reason }, createdAt: now });
+      return this.#publicDelegationGrant(this.db.prepare("SELECT * FROM delegation_grants WHERE grant_id=?").get(grantId));
+    });
+  }
+
+  revokeGrantsForIssuerKey(issuerKeyId, { reason = "issuer_key_unavailable" } = {}) {
+    const ids = this.db.prepare("SELECT grant_id FROM delegation_grants WHERE issuer_key_id=? AND status='active'").all(issuerKeyId);
+    return ids.map(({ grant_id: grantId }) => this.revokeDelegationGrant(grantId, { reason }));
+  }
+
+  #insertDelegationGrantEvent({ grantId, type, payload, createdAt }) {
+    const result = this.db.prepare(
+      "INSERT INTO delegation_grant_events (grant_id, created_at, type, payload_json) VALUES (?, ?, ?, ?)",
+    ).run(grantId, createdAt, type, canonicalJson(payload));
+    return Number(result.lastInsertRowid);
+  }
+
+  listDelegationGrantEvents(grantId, after = 0) {
+    return this.db.prepare(
+      "SELECT * FROM delegation_grant_events WHERE grant_id=? AND event_id>? ORDER BY event_id",
+    ).all(grantId, after).map((row) => ({
+      eventId: row.event_id,
+      grantId: row.grant_id,
+      createdAt: iso(row.created_at),
+      type: row.type,
+      payload: parseJson(row.payload_json, {}),
     }));
   }
 
