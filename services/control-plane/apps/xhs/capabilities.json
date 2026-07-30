@@ -45,6 +45,31 @@
     },
     {
       "schemaVersion": 1,
+      "id": "xhs.observe.note_detail",
+      "appId": "xhs",
+      "packageName": "com.xingin.xhs",
+      "versionRange": "observed",
+      "maturity": "E3",
+      "risk": "R0",
+      "resources": ["device", "transport:xiaowei:22222"],
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "outputSchema": { "type": "object" },
+      "preconditions": ["XHS is already on a note detail surface with a stable activity intent locator"],
+      "verification": { "mode": "state", "description": "device parser derives stable page and target fingerprints from the resumed note intent" },
+      "restoration": { "required": false, "description": "observation does not change device state" },
+      "timeoutMs": 20000,
+      "idempotency": "read_only",
+      "automationPolicy": { "mode": "automatic" },
+      "implementation": { "adapter": "xhs", "action": "observeOpenNoteDetail" },
+      "evidence": ["docs/plans/2026-07-30-explicit-target-phase1-implementation-batches.md"],
+      "availability": "implemented"
+    },
+    {
+      "schemaVersion": 1,
       "id": "xhs.input.comment_dry_run",
       "appId": "xhs",
       "packageName": "com.xingin.xhs",
@@ -106,21 +131,10 @@
       "resources": ["device", "transport:xiaowei:22222"],
       "inputSchema": {
         "type": "object",
-        "required": ["observationReceiptId", "targetFingerprint", "observation"],
+        "required": ["observationReceiptId", "targetFingerprint"],
         "properties": {
           "observationReceiptId": { "type": "string", "minLength": 1, "maxLength": 256 },
-          "targetFingerprint": { "type": "string", "minLength": 1, "maxLength": 256 },
-          "observation": {
-            "type": "object",
-            "required": ["accountFingerprint", "pageFingerprint", "targetFingerprint", "observedAt"],
-            "properties": {
-              "accountFingerprint": { "type": "string", "minLength": 1, "maxLength": 256 },
-              "pageFingerprint": { "type": "string", "minLength": 1, "maxLength": 256 },
-              "targetFingerprint": { "type": "string", "minLength": 1, "maxLength": 256 },
-              "observedAt": { "type": "string", "minLength": 1, "maxLength": 64 }
-            },
-            "additionalProperties": false
-          }
+          "targetFingerprint": { "type": "string", "minLength": 1, "maxLength": 256 }
         },
         "additionalProperties": false
       },

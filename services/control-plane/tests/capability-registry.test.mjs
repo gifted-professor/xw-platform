@@ -7,8 +7,8 @@ import { evaluateCapabilityPolicy } from "../control-plane/lib/policy.mjs";
 
 test("repository capabilities use the unified E0-E4 manifest", () => {
   const registry = CapabilityRegistry.load(fileURLToPath(new URL("../apps", import.meta.url)));
-  assert.equal(registry.capabilities.length, 20);
-  assert.equal(new Set(registry.capabilities.map((item) => item.id)).size, 20);
+  assert.equal(registry.capabilities.length, 21);
+  assert.equal(new Set(registry.capabilities.map((item) => item.id)).size, 21);
   assert.equal(registry.capabilities.some((item) => /^D/.test(item.maturity)), false);
   assert.equal(registry.capabilities.every((item) => /^E[0-4]$/.test(item.maturity)), true);
   assert.equal(registry.listPublic().some((item) => Object.hasOwn(item, "implementation")), false);
@@ -18,10 +18,9 @@ test("standing-grant collect is schema-bound and cannot enter the ordinary job l
   const registry = CapabilityRegistry.load(fileURLToPath(new URL("../apps", import.meta.url)));
   const collect = registry.require("xhs.collect.standing_grant");
   assert.throws(() => evaluateCapabilityPolicy(collect), { code: "STANDING_GRANT_MISSION_REQUIRED" });
-  assert.throws(() => registry.validateParams(collect.id, { observationReceiptId: "receipt", targetFingerprint: "target" }), { code: "PARAMS_SCHEMA_INVALID" });
+  assert.throws(() => registry.validateParams(collect.id, { observationReceiptId: "receipt" }), { code: "PARAMS_SCHEMA_INVALID" });
   assert.doesNotThrow(() => registry.validateParams(collect.id, {
     observationReceiptId: "receipt", targetFingerprint: "target",
-    observation: { accountFingerprint: "account", pageFingerprint: "page", targetFingerprint: "target", observedAt: "2026-07-30T00:00:00.000Z" },
   }));
 });
 

@@ -20,7 +20,7 @@
 
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { acquireTransportLock } from "../control-plane/lib/xiaowei-transport.mjs";
 import { ControlPlaneError } from "../control-plane/lib/errors.mjs";
 
@@ -291,6 +291,50 @@ export class FastOperator {
     }
     const m = out.match(/mCurrentFocus=Window\{[^}]+ ([^/}\s]+)\/([^}\s]+)/);
     return m ? { package: m[1], activity: m[2], raw: out } : { package: null, activity: null, raw: out };
+  }
+
+  // Read-only, parser-owned identity for the note currently on screen.  A display name,
+  // avatar, coordinate, or caller hint is never a target.  Only the stable 24-hex note ID
+  // carried by the resumed activity intent may become the explicit target fingerprint.
+  async observeOpenNoteDetail() {
+    const focus = await this.currentFocus();
+    if (focus.package !== "com.xingin.xhs" || !/(?:NoteDetailActivity|DetailFeedActivity)$/.test(focus.activity || "")) {
+      return { ok: false, notSent: true, step: "notOnExactNoteDetail" };
+    }
+    const raw = await this.session.exec(
+      "dumpsys activity activities 2>/dev/null | grep -E 'mResumedActivity|ACTIVITY|Hist #[0-9]+:|Intent \\{|intent=\\{|dat=' | head -160",
+      10000,
+    ).catch(() => "");
+    const lines = String(raw).split(/\r?\n/);
+    const normalizedActivity = (line) => {
+      const parsed = String(line).match(/\bcom\.xingin\.xhs\/([A-Za-z0-9_.$]+)/);
+      if (!parsed) return null;
+      return parsed[1].startsWith(".") ? `com.xingin.xhs${parsed[1]}` : parsed[1];
+    };
+    const isCurrentActivity = (line) => normalizedActivity(line) === focus.activity;
+    let start = lines.findIndex((line) => /\bHist #0:/.test(line) && isCurrentActivity(line));
+    if (start < 0) start = lines.findIndex((line) => /^\s*ACTIVITY\s/.test(line) && isCurrentActivity(line));
+    if (start < 0) return { ok: false, notSent: true, step: "stableNoteLocatorUnavailable" };
+    let end = lines.length;
+    for (let index = start + 1; index < lines.length; index += 1) {
+      if (/\bHist #[0-9]+:/.test(lines[index]) || /^\s*ACTIVITY\s/.test(lines[index])) {
+        end = index;
+        break;
+      }
+    }
+    const currentActivityBlock = lines.slice(start, end).join("\n");
+    const match = currentActivityBlock.match(
+      /(?:xhsdiscover:\/\/(?:item|discovery\/item)\/|https?:\/\/(?:www\.)?xiaohongshu\.com\/(?:explore|discovery\/item)\/)([0-9a-f]{24})(?=[/?&#}\s]|$)/i,
+    );
+    if (!match) return { ok: false, notSent: true, step: "stableNoteLocatorUnavailable" };
+    const locator = `xhs:note:${match[1].toLowerCase()}`;
+    const digest = (value) => createHash("sha256").update(value).digest("hex");
+    return {
+      ok: true,
+      pageFingerprint: digest(`xhs:page:${focus.package}:${focus.activity}:${locator}`),
+      targetFingerprint: digest(locator),
+      observedAt: new Date().toISOString(),
+    };
   }
 
   // hierarchy dump：exec-out uiautomator dump /dev/tty（一次性，避免持久 shell 分帧）
@@ -622,19 +666,13 @@ export class FastOperator {
     return { tapped: [x, y], countBefore: bar.favorite.countValue, labelBefore: bar.favorite.label, wasNumeric: bar.favorite.isNumeric };
   }
 
-  // This is intentionally separate from the legacy diagnostic favorite tap. It refuses before
-  // touching the screen unless the control plane supplies a fresh, complete observation and the
-  // current detail surface resolves exactly one uncollected favorite target.
-  async collectOnOpenNote({ observation } = {}) {
-    const observedAt = Date.parse(observation?.observedAt || "");
-    const required = ["accountFingerprint", "pageFingerprint", "targetFingerprint"];
-    if (!Number.isFinite(observedAt) || Date.now() - observedAt > 5000 || observedAt - Date.now() > 1000
-      || required.some((field) => typeof observation?.[field] !== "string" || observation[field] === "")) {
-      return { ok: false, notSent: true, step: "staleOrInvalidObservation" };
-    }
-    const focus = await this.currentFocus();
-    if (focus.package !== "com.xingin.xhs" || !/(?:NoteDetailActivity|DetailFeedActivity)$/.test(focus.activity || "")) {
-      return { ok: false, notSent: true, step: "notOnExactNoteDetail", activity: focus.activity || null };
+  // This is intentionally separate from the legacy diagnostic favorite tap. Immediately before
+  // touching the screen it re-reads the device-owned note locator and requires it to equal the
+  // target already fenced by ECP; no caller-provided observation fields are trusted.
+  async collectOnOpenNote({ targetFingerprint } = {}) {
+    const live = await this.observeOpenNoteDetail();
+    if (live.ok !== true || live.targetFingerprint !== targetFingerprint) {
+      return { ok: false, notSent: true, step: live.ok === true ? "targetChanged" : live.step };
     }
     const before = this.detailEngagementBar(await this.dump({ label: "collect-before" }));
     const favorite = before?.favorite;
@@ -1525,6 +1563,7 @@ function serve(port) {
         case "scrollN": out = await op.scrollN({ n: q.n ?? 1, down: q.down !== false, label: q.label }); break;
         case "tap": out = await op.tap(q.x, q.y); break;
         case "feedCards": { const d = await op.dump({ label: q.label }); out = { cards: op.feedCards(d), dumpMs: d._dumpMs }; break; }
+        case "observeOpenNoteDetail": out = await op.observeOpenNoteDetail(); break;
         case "openCard": { const d = await op.dump({ label: "open" }); const cards = op.feedCards(d); const c = cards[q.idx ?? 0]; out = await op.openCard(c); break; }
         case "backToFeed": out = await op.backToFeed(q.maxBack ?? 3); break;
         case "likeCard": { const d = await op.dump({ label: "like" }); const cards = op.feedCards(d); const c = cards[q.idx ?? 0]; out = { resolved: !!c?.likeButton, card: c, tapped: c?.likeButton ? await op.likeCard(c) : null }; break; }
@@ -1537,7 +1576,7 @@ function serve(port) {
             out = { ok: false, notSent: true, step: "receiptBindingInvalid" };
             break;
           }
-          out = await op.collectOnOpenNote({ observation: q.observation });
+          out = await op.collectOnOpenNote({ targetFingerprint: q.targetFingerprint });
           break;
         }
         case "undoCollectOnOpenNote": out = await op.undoCollectOnOpenNote({ collectProof: q.collectProof }); break;

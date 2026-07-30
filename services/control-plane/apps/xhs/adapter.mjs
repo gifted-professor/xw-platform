@@ -25,9 +25,7 @@ function leaseHeaders(leaseAuthorization) {
 function assertCollectReceiptParams(params) {
   const receiptId = params?.observationReceiptId;
   const target = params?.targetFingerprint;
-  const observed = params?.observation;
-  if (typeof receiptId !== "string" || receiptId === "" || typeof target !== "string" || target === ""
-    || !observed || observed.targetFingerprint !== target) {
+  if (typeof receiptId !== "string" || receiptId === "" || typeof target !== "string" || target === "") {
     const error = new ControlPlaneError("COLLECT_RECEIPT_BINDING_INVALID", "collect requires an exact receipt-to-target binding", { status: 409 });
     error.notSent = true;
     throw error;
@@ -72,6 +70,15 @@ export function createXhsAdapter({ fetchImpl = globalThis.fetch } = {}) {
       const output = execution.output;
       if (action === "metrics") return { ok: Boolean(output && typeof output === "object"), mode: "state" };
       if (action === "feedCards") return { ok: Array.isArray(output?.cards), mode: "state" };
+      if (action === "observeOpenNoteDetail") {
+        return {
+          ok: output?.ok === true
+            && typeof output?.pageFingerprint === "string"
+            && typeof output?.targetFingerprint === "string"
+            && Number.isFinite(Date.parse(output?.observedAt)),
+          mode: "state",
+        };
+      }
       if (action === "backToFeed") return { ok: output?.home === true || output?.restored === true || output?.ok === true, mode: "state" };
       if (action === "inputTextDryRun") {
         const editorText = String(output?.editorText || "");
@@ -97,6 +104,26 @@ export function createXhsAdapter({ fetchImpl = globalThis.fetch } = {}) {
         };
       }
       return { ok: false, ambiguous: true, mode: "custom" };
+    },
+    buildExplicitObservationReceipt({ capability, execution }) {
+      if (capability?.implementation?.action !== "observeOpenNoteDetail") return null;
+      const output = execution?.output;
+      const observedAt = Date.parse(output?.observedAt);
+      if (output?.ok !== true || typeof output?.pageFingerprint !== "string" || output.pageFingerprint === ""
+        || typeof output?.targetFingerprint !== "string" || output.targetFingerprint === ""
+        || !Number.isFinite(observedAt)) return null;
+      return {
+        pageFingerprint: output.pageFingerprint,
+        targetFingerprint: output.targetFingerprint,
+        observedAt: new Date(observedAt).toISOString(),
+      };
+    },
+    getExplicitObservationReceipt({ job, receiptId }) {
+      const sealed = job?.status === "succeeded" ? job.result?.explicitObservationReceipt : null;
+      if (!sealed || sealed.receiptId !== receiptId) return null;
+      const required = ["pageFingerprint", "targetFingerprint", "observedAt", "evidenceId", "evidenceHash"];
+      if (required.some((key) => typeof sealed[key] !== "string" || sealed[key] === "")) return null;
+      return Object.fromEntries(required.map((key) => [key, sealed[key]]));
     },
     async restore({ capability, device, params, execution, leaseAuthorization }) {
       if (!capability.restoration.required) return { ok: true };

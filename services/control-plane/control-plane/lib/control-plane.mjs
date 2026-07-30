@@ -1609,6 +1609,7 @@ export class ControlPlane {
     let primaryError;
     let restoreError;
     let heartbeatError;
+    let explicitObservationReceipt = null;
     const capability = job.capability;
     const adapter = this.adapters.require(capability.implementation.adapter);
     const device = this.state.requireDevice(job.deviceId, { includeRuntime: true });
@@ -1656,6 +1657,36 @@ export class ControlPlane {
         error.ambiguous = Boolean(verification.ambiguous);
         throw error;
       }
+      const receiptSourceKey = `${capability.id}:${adapter.id}`;
+      if (this.receiptAuthorityAllowlist.has(receiptSourceKey)) {
+        if (typeof adapter.buildExplicitObservationReceipt !== "function") {
+          throw new ControlPlaneError("EXPLICIT_RECEIPT_PROVENANCE_INVALID", "allowlisted receipt adapter has no parser-owned receipt builder", { status: 409 });
+        }
+        const draft = adapter.buildExplicitObservationReceipt({ job, capability, execution, verification });
+        if (!draft || typeof draft.pageFingerprint !== "string" || typeof draft.targetFingerprint !== "string"
+          || !Number.isFinite(Date.parse(draft.observedAt))) {
+          throw new ControlPlaneError("EXPLICIT_RECEIPT_INVALID", "allowlisted parser did not produce a complete note observation", { status: 409 });
+        }
+        const evidenceRecord = this.evidence.writeJson({
+          job,
+          kind: "explicit_observation",
+          label: "explicit-note-observation",
+          value: draft,
+        });
+        explicitObservationReceipt = {
+          receiptId: fingerprint({
+            jobId: job.jobId,
+            runId: job.runId,
+            pageFingerprint: draft.pageFingerprint,
+            targetFingerprint: draft.targetFingerprint,
+            observedAt: draft.observedAt,
+            evidenceHash: evidenceRecord.sha256,
+          }),
+          ...draft,
+          evidenceId: evidenceRecord.evidenceId,
+          evidenceHash: evidenceRecord.sha256,
+        };
+      }
       if (onVerified) await onVerified({ job, execution, verification });
     } catch (error) {
       primaryError = asControlError(error);
@@ -1687,7 +1718,10 @@ export class ControlPlane {
           label: file.label,
         });
       }
-      const summary = resultSummary(execution, verification, restoration, primaryError);
+      const summary = {
+        ...resultSummary(execution, verification, restoration, primaryError),
+        ...(explicitObservationReceipt ? { explicitObservationReceipt } : {}),
+      };
       this.evidence.writeJson({ job, kind: "result", label: "result", value: summary });
       if (restoreError || heartbeatError) {
         const code = restoreError?.code || heartbeatError?.code || "RECOVERY_REQUIRED";
