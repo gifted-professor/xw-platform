@@ -168,6 +168,8 @@ Explorer 产出 recipe 默认 **`verifyMode=human`**，content 可带 `[explorer
 | 能力地图 op 表 | `skills/<app>/SKILL.md` 的 op 表只列 `op` + 链接 + 自由度，**不跟踪 version 文字**（状态看子 skill frontmatter，别每次升 v1.0 都回写那一行）。 |
 | 输出示例 | 标「示例，非实机值」，**不追着实机值改**。实机值进 `verified` note。 |
 | dry-run | dry-run 真机跑绿即升 `v1.0 / verified:true`（note 标 `mode: dry-run`）。真动作（真赞 desc 翻转、真发评论）是**下一功能**，不作为本功能升 v1.0 的门槛。 |
+| 地图元信息 | `skills/<app>/SKILL.md` 元信息表记**全设备清单 + 各设备登录态/可用性**（正常 / 未登录 / 受限 / 青少年模式），不止记探索主机；集合验收排除某机时，原因落此表——勿只在 `tmp-know/` 短报口头记（停车场会丢）。 |
+| 真动作校验 | 真动作若「视觉成功但 dump 校验失败」（点后 a11y 死等），skill `verified` 仍只标 dry-run，**另起一行 `real-action: <op> 视觉成功/dump-fail，校验方式待定`** 显式标注，勿让后人误判真动作已验或未验。 |
 
 **收编**：Windows 先行落地的文件，Mac 一条命令拉回——`node scripts/adopt-from-windows.mjs <相对路径...>`（显式列文件，base64 拉回，不自动 diff）。
 
