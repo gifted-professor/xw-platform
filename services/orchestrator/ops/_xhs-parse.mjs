@@ -390,6 +390,82 @@ export function findFollowBtn(xml) {
   };
 }
 
+/** 主页浮层关注 CTA 选择器（xhs.follow.ensure overlay 模式）。
+ *  同屏可能有多个精确「关注」label（背景/普通 detail 控件 y≈161、统计 tab y≈567、浮层主 CTA y≈999），
+ *  通用 findFollowBtn 取 first-match 会命中背景节点。本函数仅在 tier-1 头像指纹存在时定位浮层主 CTA：
+ *  1) 必须有 tier-1 头像（ImageView clickable cy<600 content-desc ^头像[,，]），否则非浮层 → null；
+ *  2) 候选 label 必须在头像下方（cy > 头像 cy）；按「物理 CTA 容器 bounds」聚合所有 follow 态——同态去重，
+ *     同一 bounds 出现 ≥2 个不同态（含单节点 text/desc 矛盾）→ 歧义 → null，不让 XML 顺序决定 matched
+ *     （关注=点击 vs 已关注=幂等跳过，是安全分歧）；
+ *  3) 解析包含 label 的最小面积 enabled clickable 容器（几何包含）；同面积并列容器全收、不靠输入序取首个；
+ *  4) 屏宽取自「可信 root」——在包含头像的节点里面积最大者，且其宽须 > 2× 头像宽（全屏窗口远宽于头像块；
+ *     仅裹住头像的截断 wrapper 如 [0,0][400,700] 不满足 → 不可信）。头像宽是截断无关的稳定参考（tier-1
+ *     指纹必全在帧内），屏宽会被截断拉低。allNodes() 只解析 <node>、不以首节点为根；无可信 root → null；
+ *  5) 排除全屏/近全屏（宽 ≥ 屏宽 90%）clickable wrapper（点击消散层），非 CTA；用比例不硬编码坐标；
+ *  6) 剩余容器宽 ≥ max(屏宽 30%, 头像宽)——头像宽作截断无关地板，即使屏宽被截断拉低，窄统计 tab 仍被拒；
+ *  7) 唯一可点候选才返回其容器中心；零或多个 → null（fail-closed，绝不猜坐标）。
+ *  返回形状与 findFollowBtn 一致：{x,y,desc,matched,L,T,R,B}，便于调用方在浮层场景直接替换。 */
+export function findProfileFollowBtn(xml) {
+  const nodes = allNodes(xml);
+  const av = nodes.find(
+    (n) =>
+      n.cls === "ImageView" &&
+      n.clickable &&
+      n.cy < 600 &&
+      /^头像[,，]/.test(String(n.desc || "")),
+  );
+  if (!av) return null; // 无 tier-1 头像指纹 → 非主页浮层，交给通用 findFollowBtn
+  const contains = (a, b) => a.L <= b.L && a.T <= b.T && a.R >= b.R && a.B >= b.B;
+  const area = (n) => (n.R - n.L) * (n.B - n.T);
+  const avW = av.R - av.L;
+
+  // 可信 root：在「包含 tier-1 头像」的节点里取面积最大者，且宽须 > 2× 头像宽——全屏窗口远宽于头像块，
+  // 仅裹住头像的截断 wrapper（宽 ~头像）不满足。头像宽是截断无关的独立参考；不满足 → 无法确立屏宽 → null。
+  const root = nodes
+    .filter((n) => n !== av && contains(n, av) && n.R - n.L > 2 * avW)
+    .sort((a, b) => area(b) - area(a))[0];
+  if (!root) return null;
+  const screenW = root.R - root.L;
+  if (screenW < 100) return null;
+  // 头像宽作截断无关地板：屏宽被截断拉低时，窄统计 tab 仍被拒。
+  const minCtaW = Math.max(screenW * 0.3, avW);
+
+  // 按物理 CTA 容器 bounds 聚合所有 follow 态：同态去重；同一 bounds ≥2 个不同态 → 歧义 → null。
+  const byBounds = new Map(); // key -> { c, states: Set }
+  for (const l of nodes) {
+    const t = String(l.text || "").trim();
+    const d = String(l.desc || "").trim();
+    const states = new Set();
+    if (FOLLOW_LABELS.has(t)) states.add(t);
+    if (FOLLOW_LABELS.has(d)) states.add(d);
+    if (states.size === 0) continue; // 非四态 label
+    if (l.cy <= av.cy) continue; // 头像上方（含同高）→ 背景/普通 detail 控件，拒
+    // 包含 label 的全部 enabled clickable 容器，按面积升序；同面积并列全收（不靠输入序取首个）
+    const anc = nodes
+      .filter((n) => n !== l && n.clickable && n.enabled !== false && contains(n, l))
+      .sort((a, b) => area(a) - area(b));
+    if (!anc.length) continue; // 无可点容器 → 非可操作
+    const minA = area(anc[0]);
+    const minimal = anc.filter((a) => area(a) === minA);
+    for (const c of minimal) {
+      if (c.R - c.L >= screenW * 0.9) continue; // 全屏/近全屏 wrapper（消散层）→ 非 CTA，排除
+      if (c.R - c.L < minCtaW) continue; // 窄容器 → 统计 tab，拒
+      const key = `${c.L},${c.T},${c.R},${c.B}`;
+      if (!byBounds.has(key)) byBounds.set(key, { c, states: new Set() });
+      const entry = byBounds.get(key);
+      for (const s of states) entry.states.add(s);
+    }
+  }
+  const cands = [];
+  for (const { c, states } of byBounds.values()) {
+    if (states.size > 1) return null; // 同一物理 CTA 出现 ≥2 个不同 follow 态 → 歧义，fail-closed 不点击
+    if (states.size === 1) cands.push({ c, matched: [...states][0] });
+  }
+  if (cands.length !== 1) return null; // 零或多个 → fail-closed，绝不猜坐标
+  const { c, matched } = cands[0];
+  return { x: c.cx, y: c.cy, desc: matched, matched, L: c.L, T: c.T, R: c.R, B: c.B };
+}
+
 /** 主页浮层作者名提取（供 xhs.follow.ensure 的 targetUser 核对）。
  *  tier-1：clickable 头像 ImageView 的 content-desc「头像,<name>」取逗号后；tier-2（仅诊断，不采信）：
  *  浮层顶部 y<600 内、非数字非 meta、长 2-24 的 TextView。返回 { name, fallback }。
