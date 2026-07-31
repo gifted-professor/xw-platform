@@ -23,7 +23,7 @@
  * 注意（Windows bridge exec 约束）：本脚本禁止 console.error，一律 console.log。
  */
 import http from "node:http";
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import fs from "node:fs";
 import path from "node:path";
@@ -53,6 +53,16 @@ const TRUST_LOOPBACK = argOf("trust-loopback", "true") !== "false";
 // 只读观察者 / 受控代提交者凭证（abtop 远程通道）：observer 只读；operator 仅能调 /api/operator/*。
 const OBSERVER_TOKEN = argOf("observer-token", "");
 const OPERATOR_TOKEN = argOf("operator-token", "");
+// 角色 token 去重：鉴权按 human→agent→observer→operator 顺序匹配，任意两个非空角色 token
+// 相同会让低权限凭证被解析成更高权限角色（如 observer==human 时 observer 命中 human）。
+// 启动期即拒绝，避免静默提权。
+{
+  const _roleTokens = [AGENT_TOKEN, HUMAN_TOKEN, OBSERVER_TOKEN, OPERATOR_TOKEN].filter(Boolean);
+  if (_roleTokens.length !== new Set(_roleTokens).size) {
+    console.log("[registry] 拒绝启动：两个或多个非空角色 token 重复，会导致低权限凭证被解析成更高权限角色。请确保四个角色 token 互不相同。");
+    process.exit(1);
+  }
+}
 // 控制面已采集的 evidence 截图根目录（cache-only Screen API 读字节用，绝不触发设备）。
 const RUNS_ROOT = argOf("runs-root", process.env.CONTROL_PLANE_RUNS_ROOT || "");
 const CONTROL_TIMEOUT_MS = 3000;
@@ -948,8 +958,14 @@ const ENTRY_PROTOCOL = {
     job: "node control-plane/devicectl.mjs --ssh xhs-windows job submit --capability <id> --actor <actor> --idempotency-key <key> --params '<json>'",
     jobStatus: "node control-plane/devicectl.mjs --ssh xhs-windows job status --job <jobId>",
     session: "node control-plane/devicectl.mjs --ssh xhs-windows session acquire --actor <actor> --capability <id> --alias <01-04>",
+    controlPlaneReload: "ssh xhs-windows 'powershell -NoProfile -NonInteractive -File C:\\Users\\Public\\xhs-routing-v1-1\\scripts\\control-plane-task.ps1 -Action Stop; powershell -NoProfile -NonInteractive -File C:\\Users\\Public\\xhs-routing-v1-1\\scripts\\control-plane-task.ps1 -Action Start'",
+    serveReload01: "ssh xhs-windows 'powershell -NoProfile -NonInteractive -File C:\\Users\\Public\\xhs-registry\\serve-restart-01.ps1'",
+    serveReload02: "ssh xhs-windows 'powershell -NoProfile -NonInteractive -File C:\\Users\\Public\\xhs-registry\\serve-restart-02.ps1'",
+    serveReload03: "ssh xhs-windows 'powershell -NoProfile -NonInteractive -File C:\\Users\\Public\\xhs-registry\\serve-restart-03.ps1'",
+    serveReload04: "ssh xhs-windows 'powershell -NoProfile -NonInteractive -File C:\\Users\\Public\\xhs-registry\\serve-restart-04.ps1'",
   },
   redLines: [
+    "部署 reload 仅限 exact reviewed revision、activeLeases=0、runningJobs=0 且 MISSION_AUTO_APPROVAL_ENABLED/STANDING_GRANT_ENABLED 均为 OFF；不得把 reload 当设备动作入口",
     "禁止无 lease 调 GatewayOperator、临时脚本或旧 runner 碰手机",
     "禁止直写 control.db、直接清隔离或调用内部 approve 路径",
     "R2/R3 只提交，批准或拒绝只能由人完成",
@@ -1248,17 +1264,24 @@ function providedToken(req) {
   const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
   return url.searchParams.get("token") || String(req.headers["x-registry-token"] || "");
 }
+// observer/operator 凭证只认 header，禁止走 URL query（避免 token 出现在 URL/浏览器历史/日志）。
+function providedHeaderToken(req) {
+  return String(req.headers["x-registry-token"] || "");
+}
 
 // 请求角色："human" | "agent" | "loopback" | null（拒绝）
 function resolveAuth(req) {
-  if (!AGENT_TOKEN && !HUMAN_TOKEN) return "human"; // 无任何 token = 开放调试模式（与旧版一致）
+  // 四种 token 均空才进入开放调试；只配了 observer/operator 不能把所有请求当 human。
+  if (!AGENT_TOKEN && !HUMAN_TOKEN && !OBSERVER_TOKEN && !OPERATOR_TOKEN) return "human";
   const provided = providedToken(req);
   if (HUMAN_TOKEN && provided && safeEqual(provided, HUMAN_TOKEN)) return "human";
   const sessionRole = validSession(parseCookies(req)[SESSION_COOKIE]);
   if (sessionRole) return sessionRole;
   if (AGENT_TOKEN && provided && safeEqual(provided, AGENT_TOKEN)) return LEGACY_AUTH ? "human" : "agent";
-  if (OBSERVER_TOKEN && provided && safeEqual(provided, OBSERVER_TOKEN)) return "observer";
-  if (OPERATOR_TOKEN && provided && safeEqual(provided, OPERATOR_TOKEN)) return "operator";
+  // observer/operator 只认 header token，绝不接受 ?token= query 形式。
+  const headerToken = providedHeaderToken(req);
+  if (OBSERVER_TOKEN && headerToken && safeEqual(headerToken, OBSERVER_TOKEN)) return "observer";
+  if (OPERATOR_TOKEN && headerToken && safeEqual(headerToken, OPERATOR_TOKEN)) return "operator";
   if (TRUST_LOOPBACK && isLoopback(req)) return LEGACY_AUTH ? "human" : "loopback";
   return null;
 }
@@ -1311,42 +1334,8 @@ process.on("uncaughtException", (e) => console.log(`[registry] uncaughtException
 process.on("unhandledRejection", (e) => console.log(`[registry] unhandledRejection (kept alive): ${e?.stack || e}`));
 
 // ---------- Fleet / Screen / Operator API（abtop 远程通道）----------
-// 设计约束：observer 只读舰队与已采集截图；operator 仅能把白名单命令转成正式 job 提交。
-// 三者绝不直接碰 17920 写口 / 22222 / ADB / control.db 写入；Screen 只读 evidence 表 + 磁盘字节。
-
-// Operator 白名单：R0/R1、externalEffect:false、replay_safe/read_only。R2 外发仍走人工审批。
-const OPERATOR_ALLOWLIST = new Set([
-  "xhs.observe.feed", "xhs.observe.metrics",
-  "xianyu.observe.snapshot", "xianyu.observe.image_manifest",
-  "xiaowei.device.list",
-  "xianyu.publish.full_dry_run", "xianyu.publish.image_dry_run",
-  "xianyu.publish.input_dry_run", "xianyu.publish.open_dry_run",
-]);
-
-async function controlPlanePost(p, body) {
-  let res;
-  try {
-    res = await fetch(`${CONTROL}${p}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(CONTROL_TIMEOUT_MS + 2000),
-    });
-  } catch (e) {
-    return { status: 502, data: { ok: false, error: `控制面不可达: ${e.message}` } };
-  }
-  let data = {};
-  try { data = await res.json(); } catch { /* keep {} */ }
-  return { status: res.status, data };
-}
-
-async function controlPlaneGet(p) {
-  try {
-    return { ok: true, ...(await fetchJson(`${CONTROL}${p}`)) };
-  } catch (e) {
-    return { ok: false, error: `控制面不可达: ${e.message}` };
-  }
-}
+// 设计约束：observer 只读舰队与已采集截图；operator 本轮全面冻结（501）。
+// observer 绝不直接碰 17920 写口 / 22222 / ADB / control.db 写入；Screen 只读 evidence 表 + 磁盘字节。
 
 // alias → deviceId（只读 control.db devices 表；未注册返回 null）
 function deviceIdByAlias(alias) {
@@ -1356,19 +1345,28 @@ function deviceIdByAlias(alias) {
   }, null);
 }
 
-// 脱敏 fleet 设备：剥 serial/label/model/accounts/customer/notes/deviceId/nodeId/物理标签/路径。
+// 文本规范化：去控制字符、限长；用于对外 displayName/model。JSON 层只规范化，渲染层仍须转义。
+function normalizeText(value, maxLen) {
+  if (typeof value !== "string") return null;
+  const cleaned = value.replace(/[\x00-\x1f\x7f]/g, "").trim().slice(0, maxLen);
+  return cleaned || null;
+}
+
+// 脱敏 fleet 设备：保留安全 displayName/model；剥 serial/accounts/customer/notes/deviceId/runId/路径/参数。
 function redactFleetDevice(dev, entry) {
   const job = dev.activeJobs && dev.activeJobs[0] ? dev.activeJobs[0] : null;
   const lease = dev.control?.lease || null;
   return {
     alias: dev.alias,
+    displayName: normalizeText(dev.label, 60) ?? `设备 ${dev.alias}`,
+    model: normalizeText(dev.model, 60),
     online: dev.state?.online ?? null,
     ready: dev.state?.ready ?? null,
     quarantined: dev.state?.quarantined ?? null,
     quarantineReason: dev.control?.quarantineReason ?? null,
     lease: lease ? { held: true, kind: lease.kind ?? null, expiresAt: lease.expiresAt ?? null } : { held: false },
     currentTask: job
-      ? { capabilityId: job.capabilityId ?? null, jobId: job.jobId ?? null, actor: job.actorId ?? null, status: job.status ?? null }
+      ? { capabilityId: job.capabilityId ?? null, jobId: job.jobId ?? null, reportedActor: job.actorId ?? null, actorVerified: false, status: job.status ?? null }
       : null,
     streak: dev.jobStatus?.consecutiveSuccesses ?? null,
     unresolvedFailure: Boolean(dev.jobStatus?.unresolvedFailure),
@@ -1384,9 +1382,12 @@ function redactFleetDevice(dev, entry) {
 
 async function buildFleet() {
   const entry = await buildAgentEntry();
+  const degraded = Boolean(entry.sources.controlPlane.stale || entry.sources.controlDb.stale);
   return {
     ok: true,
+    schemaVersion: "xhs.observer.fleet.v1",
     generatedAt: entry.generatedAt,
+    degraded,
     sources: entry.sources,
     devices: entry.devices.map((d) => redactFleetDevice(d, entry)),
   };
@@ -1394,57 +1395,139 @@ async function buildFleet() {
 
 // ---------- cache-only Screen API ----------
 // 只返回控制面已采集的最近截图（evidence kind=screenshot）；前端刷新命中进程内缓存/304，绝不触发设备。
-const SCREEN_CACHE_TTL_MS = 10000;
-const screenCache = new Map(); // alias → { buf, sha, bytes, createdAt, jobId, runId, loadedAt }
+const _ttlMs = Number(argOf("screen-cache-ttl-ms", "10000"));
+const SCREEN_CACHE_TTL_MS = Number.isFinite(_ttlMs) ? Math.max(0, _ttlMs) : 10000; // 多久重新查数据库
+const SCREEN_STALE_AFTER_MS = 120000; // 截图年龄超过即标记 stale
+const SCREEN_MAX_BYTES = 8 * 1024 * 1024;
+const _minInterval = Number(argOf("screen-min-interval-ms", "1000"));
+const SCREEN_MIN_INTERVAL_MS = Number.isFinite(_minInterval) ? Math.max(0, _minInterval) : 1000;  // 同 alias 最小请求间隔，间隔内只返回缓存/304
+const screenCache = new Map();        // alias → { buf, sha, bytes, capturedAt, jobId, contentType, loadedAt, fallback }
+const screenInflight = new Map();     // alias → Promise<entry|null>（单飞，防并发穿透）
+const screenLastReq = new Map();      // alias → ts（限频）
+
+const IMAGE_SIGNATURES = [
+  { contentType: "image/png", head: [0x89, 0x50, 0x4e, 0x47] },
+  { contentType: "image/jpeg", head: [0xff, 0xd8, 0xff] },
+];
+
+function detectImageType(buf) {
+  for (const sig of IMAGE_SIGNATURES) {
+    if (buf.length >= sig.head.length && sig.head.every((b, i) => buf[i] === b)) return sig.contentType;
+  }
+  return null;
+}
+
+// 从 evidence 表读最新截图并重新校验：路径限制（realpath 防符号链接逃逸）、SHA-256、字节数、魔数。
+async function loadScreenEntry(alias, deviceId) {
+  if (!deviceId || !RUNS_ROOT) return null;
+  const row = queryControlDb((cdb) => cdb.prepare(`
+    SELECT e.path, e.run_id, e.sha256, e.bytes, e.created_at, e.job_id
+    FROM evidence e JOIN jobs j ON e.job_id = j.job_id
+    WHERE j.device_id = ? AND e.kind = 'screenshot'
+    ORDER BY e.created_at DESC LIMIT 1`).get(deviceId), null);
+  if (!row) return null;
+  if (!Number.isFinite(row.bytes) || row.bytes > SCREEN_MAX_BYTES) return { oversize: true };
+  const rootReal = await fs.promises.realpath(RUNS_ROOT).catch(() => null);
+  if (!rootReal) return null;
+  const target = path.join(RUNS_ROOT, row.run_id, row.path);
+  const targetReal = await fs.promises.realpath(target).catch(() => null);
+  if (!targetReal) return null;
+  if (targetReal !== rootReal && !targetReal.startsWith(rootReal + path.sep)) return null;
+  const buf = await fs.promises.readFile(targetReal).catch(() => null);
+  if (!buf || buf.length > SCREEN_MAX_BYTES) return null;
+  if (row.bytes != null && buf.length !== row.bytes) return null;
+  const sha = createHash("sha256").update(buf).digest("hex");
+  // SHA 校验收严：数据库摘要必须是合法 64 位十六进制 SHA-256，且与重算值严格一致。
+  // 空值或异常类型不得放行（否则绕过完整性校验），一律 404。
+  const expected = typeof row.sha256 === "string" ? row.sha256.trim().toLowerCase() : "";
+  if (!/^[0-9a-f]{64}$/.test(expected) || !safeEqual(sha, expected)) return null;
+  const contentType = detectImageType(buf);
+  if (!contentType) return null;
+  return {
+    buf, sha, bytes: buf.length,
+    capturedAt: row.created_at ? new Date(row.created_at).toISOString() : null,
+    jobId: row.job_id, contentType, loadedAt: Date.now(), fallback: false,
+  };
+}
+
+// 单飞：并发请求共用一次 DB + 文件读取。
+function loadScreenSingleflight(alias, deviceId) {
+  const existing = screenInflight.get(alias);
+  if (existing) return existing;
+  const p = (async () => {
+    try { return await loadScreenEntry(alias, deviceId); }
+    finally { screenInflight.delete(alias); }
+  })();
+  screenInflight.set(alias, p);
+  return p;
+}
+
+function screenEntryStale(entry, now) {
+  if (!entry) return false;
+  if (entry.fallback) return true;
+  if (!entry.capturedAt) return true;
+  const ageMs = now - Date.parse(entry.capturedAt);
+  return Number.isFinite(ageMs) && ageMs > SCREEN_STALE_AFTER_MS;
+}
 
 async function serveScreen(res, req, alias, metaOnly) {
   if (!alias) return sendJson(res, 400, { ok: false, error: "missing alias" });
   const now = Date.now();
+  const lastReq = screenLastReq.get(alias) ?? 0;
+  const throttled = now - lastReq < SCREEN_MIN_INTERVAL_MS;
+  screenLastReq.set(alias, now);
   let cached = screenCache.get(alias);
-  if (!cached || now - cached.loadedAt > SCREEN_CACHE_TTL_MS) {
+  const cacheFresh = cached && now - cached.loadedAt <= SCREEN_CACHE_TTL_MS;
+
+  if (!cacheFresh && !(throttled && cached)) {
     const deviceId = deviceIdByAlias(alias);
     if (!deviceId) {
       if (!cached) return sendJson(res, 404, { ok: false, error: "device not found", alias });
     } else {
-      const row = queryControlDb((cdb) => cdb.prepare(`
-        SELECT e.path, e.run_id, e.sha256, e.bytes, e.created_at, e.job_id
-        FROM evidence e JOIN jobs j ON e.job_id = j.job_id
-        WHERE j.device_id = ? AND e.kind = 'screenshot'
-        ORDER BY e.created_at DESC LIMIT 1`).get(deviceId), null);
-      if (row && RUNS_ROOT) {
-        let buf = null;
-        try { buf = fs.readFileSync(path.join(RUNS_ROOT, row.run_id, row.path)); } catch { /* file gone */ }
-        if (buf) {
-          cached = {
-            buf, sha: row.sha256, bytes: row.bytes,
-            createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
-            jobId: row.job_id, runId: row.run_id, loadedAt: now,
-          };
-          screenCache.set(alias, cached);
-        }
-      }
-      if (!cached) {
-        // 无新截图：保留旧缓存平滑降级，否则 404（明确不触发采集）
-        cached = screenCache.get(alias);
-        if (!cached) return sendJson(res, 404, { ok: false, error: "no cached screenshot", alias });
+      const loaded = await loadScreenSingleflight(alias, deviceId);
+      if (loaded && loaded.oversize) return sendJson(res, 413, { ok: false, error: "screenshot too large", alias });
+      if (loaded && !loaded.oversize) {
+        cached = loaded;
+        screenCache.set(alias, cached);
+      } else if (cached) {
+        // 无新图或校验失败：沿用旧缓存降级（标记 fallback），否则 404（绝不触发采集）
+        // 必须写回缓存：否则后续请求仍取到旧的 fallback=false 条目，会重复读盘并把 stale 误报成非 stale。
+        cached = { ...cached, fallback: true, loadedAt: now };
+        screenCache.set(alias, cached);
+      } else {
+        return sendJson(res, 404, { ok: false, error: "no cached screenshot", alias });
       }
     }
   }
+  if (!cached) return sendJson(res, 404, { ok: false, error: "no cached screenshot", alias });
+  const stale = screenEntryStale(cached, now);
+  const ageSeconds = cached.capturedAt ? Math.max(0, Math.round((now - Date.parse(cached.capturedAt)) / 1000)) : null;
+
   if (metaOnly) {
+    const metaHeaders = { "cache-control": "private, no-cache" };
+    if (cached.sha) metaHeaders.etag = `"${cached.sha}"`;
     return sendJson(res, 200, {
       ok: true, alias, sha256: cached.sha, bytes: cached.bytes,
-      createdAt: cached.createdAt, jobId: cached.jobId, runId: cached.runId,
-      ageSeconds: cached.createdAt ? Math.max(0, Math.round((now - Date.parse(cached.createdAt)) / 1000)) : null,
-    }, { "cache-control": "no-store" });
+      capturedAt: cached.capturedAt, jobId: cached.jobId, contentType: cached.contentType,
+      ageSeconds, stale,
+    }, metaHeaders);
   }
-  const inm = String(req.headers["if-none-match"] || "");
+  const inm = String(req.headers["if-none-match"] || "").replace(/^"(.*)"$/, "$1");
   if (cached.sha && inm && safeEqual(inm, cached.sha)) {
-    res.writeHead(304, { etag: cached.sha, "cache-control": "no-store" });
+    res.writeHead(304, { etag: `"${cached.sha}"`, "cache-control": "private, no-cache" });
     return res.end();
   }
-  const headers = { "content-type": "image/png", "content-length": cached.buf.length, "cache-control": "no-store" };
-  if (cached.sha) headers.etag = cached.sha;
-  if (cached.createdAt) headers["last-modified"] = new Date(cached.createdAt).toUTCString();
+  const headers = {
+    "content-type": cached.contentType || "application/octet-stream",
+    "content-length": cached.buf.length,
+    "cache-control": "private, no-cache",
+    "x-screen-stale": stale ? "1" : "0",
+  };
+  if (cached.sha) headers.etag = `"${cached.sha}"`;
+  if (cached.capturedAt) {
+    headers["last-modified"] = new Date(cached.capturedAt).toUTCString();
+    headers["x-screen-captured-at"] = cached.capturedAt;
+  }
   res.writeHead(200, headers);
   res.end(cached.buf);
 }
@@ -1455,6 +1538,15 @@ const server = http.createServer(async (req, res) => {
     return sendJson(res, 401, { ok: false, error: "unauthorized: provide ?token= or x-registry-token header" });
   }
   const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+  // ---------- 命名空间闸门 ----------
+  // observer 只能命中 /api/observer/v1/*；operator 只能命中 /api/operator/*；
+  // 反之 observer/operator 命名空间也只接受对应角色。其余一律 403。
+  const isObserverNs = url.pathname.startsWith("/api/observer/v1/");
+  const isOperatorNs = url.pathname.startsWith("/api/operator/");
+  if (role === "observer" && !isObserverNs) return sendJson(res, 403, { ok: false, error: "observer is restricted to /api/observer/v1/*" });
+  if (role === "operator" && !isOperatorNs) return sendJson(res, 403, { ok: false, error: "operator is restricted to /api/operator/*" });
+  if (isObserverNs && role !== "observer") return sendJson(res, 403, { ok: false, error: "observer namespace requires observer token" });
+  if (isOperatorNs && role !== "operator") return sendJson(res, 403, { ok: false, error: "operator namespace requires operator token" });
   try {
     const mintRole = req.method === "GET" && url.pathname === "/" ? queryTokenRole(req) : null;
     if (mintRole) {
@@ -1682,49 +1774,22 @@ ${reports.length > 1 ? '<h2 style="font-size:14px;margin-top:16px">历史报告<
       return res.end();
     }
     // ---------- Fleet / Screen / Operator API（abtop 远程通道）----------
-    if (req.method === "GET" && url.pathname === "/api/fleet") {
+    // observer 只读舰队与已采集截图；operator 本轮全面冻结（501）。
+    if (req.method === "GET" && url.pathname === "/api/observer/v1/fleet") {
       return sendJson(res, 200, await buildFleet(), { "cache-control": "no-store" });
     }
-    const screenMetaMatch = url.pathname.match(/^\/api\/fleet\/screen\/([^/]+)\/meta$/);
+    const screenMetaMatch = url.pathname.match(/^\/api\/observer\/v1\/screen\/([^/]+)\/meta$/);
     if (req.method === "GET" && screenMetaMatch) {
       return serveScreen(res, req, decodeURIComponent(screenMetaMatch[1]), true);
     }
-    const screenMatch = url.pathname.match(/^\/api\/fleet\/screen\/([^/]+)$/);
+    const screenMatch = url.pathname.match(/^\/api\/observer\/v1\/screen\/([^/]+)$/);
     if (req.method === "GET" && screenMatch) {
       return serveScreen(res, req, decodeURIComponent(screenMatch[1]), false);
     }
-    if (req.method === "POST" && url.pathname === "/api/operator/submit") {
-      if (role !== "operator") return sendJson(res, 403, { ok: false, error: "operator endpoint requires the operator token" });
-      const body = await readBody(req);
-      const capability = typeof body.capability === "string" ? body.capability.trim() : "";
-      const alias = typeof body.alias === "string" ? body.alias.trim() : "";
-      if (!capability || !alias) return sendJson(res, 400, { ok: false, error: "capability and alias required" });
-      if (!OPERATOR_ALLOWLIST.has(capability)) return sendJson(res, 403, { ok: false, error: "capability not on operator allowlist", capability });
-      const deviceId = deviceIdByAlias(alias);
-      if (!deviceId) return sendJson(res, 404, { ok: false, error: "device not found", alias });
-      const rawActor = typeof body.actor === "string" && body.actor.trim() ? body.actor.trim().slice(0, 40) : "default";
-      const actor = `abtop:${rawActor}`.slice(0, 60);
-      const params = body.params && typeof body.params === "object" && !Array.isArray(body.params) ? body.params : {};
-      const idempotencyKey = typeof body.idempotencyKey === "string" && body.idempotencyKey.trim() ? body.idempotencyKey.trim().slice(0, 80) : `${capability}:${alias}:${actor}:${Date.now()}`;
-      const result = await controlPlanePost("/control/v1/jobs", { capabilityId: capability, deviceId, actor, idempotencyKey, params });
-      const job = result.data?.job ?? null;
-      return sendJson(res, result.status, {
-        ok: result.status >= 200 && result.status < 300,
-        status: "submitted", capability, alias, actor,
-        jobId: job?.jobId ?? job?.job_id ?? null,
-        ...(result.data?.error ? { error: result.data.error } : {}),
-        ...(job ? { job } : {}),
-      });
-    }
-    const opJobMatch = url.pathname.match(/^\/api\/operator\/job\/([^/]+)$/);
-    if (req.method === "GET" && opJobMatch) {
-      const jobId = decodeURIComponent(opJobMatch[1]);
-      const data = await controlPlaneGet(`/control/v1/jobs/${encodeURIComponent(jobId)}`);
-      return sendJson(res, data.ok ? 200 : 502, data);
-    }
-    if (req.method === "POST" && url.pathname === "/api/operator/session") {
-      if (role !== "operator") return sendJson(res, 403, { ok: false, error: "operator endpoint requires the operator token" });
-      return sendJson(res, 501, { ok: false, error: "session conversion reserved" });
+    // Operator 全面冻结：submit/session/job 查询一律 501。
+    // 未来加固（强制幂等键、capability manifest 动态风险校验、任务归属、响应脱敏、审批、完整审计）后再整体启用。
+    if (url.pathname.startsWith("/api/operator/")) {
+      return sendJson(res, 501, { ok: false, error: "operator frozen; future hardening pending" });
     }
     sendJson(res, 404, { ok: false, error: `${req.method} ${url.pathname} not found` });
   } catch (e) {

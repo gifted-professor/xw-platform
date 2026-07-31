@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import fs from "node:fs";
 import http from "node:http";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import test from "node:test";
 import { DatabaseSync } from "node:sqlite";
 
@@ -14,7 +17,9 @@ const TOKEN = "registry-test-token";
 const HUMAN_TOKEN = "registry-test-human-token";
 const OBSERVER_TOKEN = "registry-test-observer-token";
 const OPERATOR_TOKEN = "registry-test-operator-token";
-const SCREEN_SHA = "testsha-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+// 真实 PNG 头字节（魔数 89 50 4E 47）+ IHDR 片段；Screen API 只校验魔数/SHA/字节数，不需完整可解码 PNG。
+const SCREEN_PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52]);
+const SCREEN_SHA = createHash("sha256").update(SCREEN_PNG).digest("hex");
 const now = Date.now();
 
 function freePort() {
@@ -68,7 +73,7 @@ function createControlDb(dbPath) {
   // dev-01 已采集截图（run-succ-2）—— cache-only Screen API 读这条
   db.prepare("INSERT INTO evidence VALUES (?,?,?,?,?,?,?,?)").run(
     "ev-1", "job-succ-2", "run-succ-2", "screenshot", "evidence/shot-aaaaaaaaaaaa.png",
-    SCREEN_SHA, 7, now - 5000);
+    SCREEN_SHA, SCREEN_PNG.length, now - 5000);
   db.prepare("INSERT INTO devices VALUES (?,?,?)").run("dev-01", "01",
     JSON.stringify({ enabled: true, tags: ["slot:01"], capabilityIds: ["xianyu.publish.open_dry_run", "xianyu.publish.save_draft_dry_run"] }));
   db.prepare("INSERT INTO devices VALUES (?,?,?)").run("dev-03", "03",
@@ -152,15 +157,15 @@ function json(res, status, value) {
   res.end(body);
 }
 
-async function startRegistry({ root, controlUrl, requireAuth = true, extraArgs = [], probeToken = null }) {
+async function startRegistry({ root, controlUrl, requireAuth = true, extraArgs = [], probeToken = null, nodeArgs = [], env = {} }) {
   const port = await freePort();
-  const args = [path.join(ROOT, "registry.mjs"), "--port", String(port), "--host", "127.0.0.1",
+  const args = [...nodeArgs, path.join(ROOT, "registry.mjs"), "--port", String(port), "--host", "127.0.0.1",
     "--control", controlUrl, "--db", path.join(root, "registry.db"), "--seed", path.join(root, "seed.json"),
     "--control-db", path.join(root, "control.db")];
   if (requireAuth) args.push("--agent-token", TOKEN, "--human-token", HUMAN_TOKEN, "--trust-loopback", "false",
     "--observer-token", OBSERVER_TOKEN, "--operator-token", OPERATOR_TOKEN);
   args.push(...extraArgs);
-  const child = spawn(process.execPath, args, { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(process.execPath, args, { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...env } });
   let logs = "";
   child.stdout.on("data", (chunk) => { logs += chunk; });
   child.stderr.on("data", (chunk) => { logs += chunk; });
@@ -201,7 +206,7 @@ test.before(async () => {
   // cache-only Screen API 的 runs-root：放一张假截图供 evidence 行读取
   runsRoot = path.join(tempRoot, "runs");
   await mkdir(path.join(runsRoot, "run-succ-2", "evidence"), { recursive: true });
-  await writeFile(path.join(runsRoot, "run-succ-2", "evidence", "shot-aaaaaaaaaaaa.png"), Buffer.from("PNGTEST"));
+  await writeFile(path.join(runsRoot, "run-succ-2", "evidence", "shot-aaaaaaaaaaaa.png"), SCREEN_PNG);
   control = createControlServer();
   control.server.listen(0, "127.0.0.1");
   await once(control.server, "listening");
@@ -221,6 +226,12 @@ test("agent entry aggregates leases, jobs, blockers and omits private identity f
   assert.equal(response.headers.get("cache-control"), "no-store");
   const entry = await response.json();
   assert.equal(entry.schemaVersion, "xhs.agent-entry.v2");
+  assert.match(entry.protocol.entrypoints.controlPlaneReload, /XhsDeviceControlPlaneV1|control-plane-task\.ps1/);
+  for (const alias of ["01", "02", "03", "04"]) {
+    assert.match(entry.protocol.entrypoints[`serveReload${alias}`], new RegExp(`serve-restart-${alias}\\.ps1`));
+  }
+  const protocol = JSON.stringify(entry.protocol);
+  assert.doesNotMatch(protocol, /--serial\b|--token\b|x-control-token|22222|XHS_ALLOW_BYPASS|fast-operator\.mjs/i);
   const dev01 = entry.devices.find((item) => item.alias === "01");
   const dev03 = entry.devices.find((item) => item.alias === "03");
   assert.equal(dev01.activeJobs[0].jobId, "job-running");
@@ -263,6 +274,11 @@ test("markdown entry is curl-readable and carries protocol red lines", async () 
   assert.match(body, /job 还是 session/);
   assert.match(body, /5038/);
   assert.match(body, /--ssh xhs-windows/);
+  assert.match(body, /controlPlaneReload/);
+  assert.match(body, /XhsDeviceControlPlaneV1|control-plane-task\.ps1/);
+  for (const alias of ["01", "02", "03", "04"]) {
+    assert.match(body, new RegExp(`serveReload${alias}.*serve-restart-${alias}\\.ps1`));
+  }
   assert.match(body, /online=yes/);
   assert.match(body, /ready=/);
   assert.match(body, /unresolvedFailure=none/);
@@ -643,29 +659,89 @@ test("agent entry marks controlDb stale when one approvals query fails", async (
 
 // ---------- Fleet / Screen / Operator API ----------
 
-test("observer can read /api/fleet but cannot write knowledge or approve", async () => {
+// 隔离夹具：为 Screen 负向测试构建独立 control.db（devices/jobs/evidence）+ runsRoot 文件。
+function buildScreenControlDb(dbPath, specs) {
+  const db = new DatabaseSync(dbPath);
+  db.exec(`
+    CREATE TABLE devices (device_id TEXT PRIMARY KEY, alias TEXT, routing_json TEXT);
+    CREATE TABLE jobs (job_id TEXT PRIMARY KEY, run_id TEXT, actor_id TEXT, device_id TEXT, capability_id TEXT,
+      capability_json TEXT, params_json TEXT, status TEXT, error_code TEXT,
+      created_at INTEGER, updated_at INTEGER, started_at INTEGER, finished_at INTEGER);
+    CREATE TABLE evidence (evidence_id TEXT PRIMARY KEY, job_id TEXT, run_id TEXT, kind TEXT, path TEXT,
+      sha256 TEXT, bytes INTEGER, created_at INTEGER);
+  `);
+  for (const s of specs) {
+    db.prepare("INSERT INTO devices VALUES (?,?,?)").run(s.deviceId, s.alias,
+      JSON.stringify({ enabled: true, tags: [`slot:${s.alias}`], capabilityIds: [] }));
+    db.prepare("INSERT INTO jobs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)").run(
+      s.jobId, s.runId, "agent-x", s.deviceId, "xianyu.observe.snapshot",
+      JSON.stringify({ id: "xianyu.observe.snapshot", appId: "xianyu", risk: "R0" }), "{}", "succeeded", null,
+      now - 10000, now - 5000, now - 9000, now - 5000);
+    db.prepare("INSERT INTO evidence VALUES (?,?,?,?,?,?,?,?)").run(
+      s.evidenceId, s.jobId, s.runId, "screenshot", s.path, s.sha256 ?? "", s.bytes ?? 0, s.createdAt ?? (now - 5000));
+  }
+  db.close();
+}
+
+async function writeRunsFile(runsRoot, runId, relPath, content) {
+  const dir = path.join(runsRoot, runId, path.dirname(relPath));
+  await mkdir(dir, { recursive: true });
+  await writeFile(path.join(runsRoot, runId, relPath), content);
+}
+
+// 启动一个隔离 registry（自带 control.db + runsRoot），用 observer token 访问 Screen。
+async function bootScreenRegistry({ specs, runsFiles = [], seedIdentities, extraArgs = [], nodeArgs = [], env = {}, counterFile = null }) {
+  const root = await mkdtemp(path.join(os.tmpdir(), "xhs-registry-screen-"));
+  createRegistryDb(path.join(root, "registry.db"));
+  buildScreenControlDb(path.join(root, "control.db"), specs);
+  await writeFile(path.join(root, "seed.json"), JSON.stringify({ identities: seedIdentities ?? specs.map((s) => ({ alias: s.alias, serial: `s-${s.alias}`, label: s.label ?? `设备${s.alias}`, model: s.model ?? "M1" })) }));
+  const runsRoot = path.join(root, "runs");
+  await mkdir(runsRoot, { recursive: true });
+  for (const f of runsFiles) await writeRunsFile(runsRoot, f.runId, f.relPath, f.content);
+  if (counterFile) {
+    // 在子进程里对 runsRoot 下的 fs 访问计数（runsRoot 在此处已知，避免调用方 TDZ）。
+    fs.writeFileSync(counterFile, "");
+    const preload = pathToFileURL(path.join(ROOT, "tests", "screen-count-preload.mjs")).href;
+    nodeArgs = ["--import", preload, ...nodeArgs];
+    env = { ...env, SCREEN_COUNTER_FILE: counterFile, SCREEN_COUNT_ROOT: runsRoot };
+  }
+  const reg = await startRegistry({
+    root, controlUrl: `http://127.0.0.1:${control.server.address().port}`,
+    extraArgs: ["--runs-root", runsRoot, "--screen-cache-ttl-ms", "200", "--screen-min-interval-ms", "0", ...extraArgs],
+    nodeArgs, env,
+  });
+  return { reg, root, runsRoot };
+}
+
+async function stopIsolated(reg, root) {
+  await stopRegistry(reg.child);
+  await rm(root, { recursive: true, force: true });
+}
+
+test("observer fleet DTO keeps safe displayName/model, renames reportedActor, stays read-only", async () => {
   const h = { "x-registry-token": OBSERVER_TOKEN };
-  const fleetRes = await fetch(`${registry.base}/api/fleet`, { headers: h });
+  const fleetRes = await fetch(`${registry.base}/api/observer/v1/fleet`, { headers: h });
   assert.equal(fleetRes.status, 200);
   const fleet = await fleetRes.json();
   assert.equal(fleet.ok, true);
+  assert.equal(fleet.schemaVersion, "xhs.observer.fleet.v1");
+  assert.equal(typeof fleet.degraded, "boolean");
   const dev01 = fleet.devices.find((d) => d.alias === "01");
   assert.ok(dev01, "fleet includes 01");
-  // 脱敏：不含 serial/label/model/accounts/customer/notes/deviceId
-  assert.equal("serial" in dev01, false);
-  assert.equal("label" in dev01, false);
-  assert.equal("model" in dev01, false);
-  assert.equal("accounts" in dev01, false);
-  assert.equal("customer" in dev01, false);
-  assert.equal("notes" in dev01, false);
+  // 保留安全字段
+  assert.equal(dev01.displayName, "一号 <script>alert(1)</script>"); // JSON 规范化不去 HTML；渲染层转义
+  assert.equal(dev01.model, "M1");
+  // 脱敏：不含 serial/accounts/customer/notes/deviceId/runId
+  for (const k of ["serial", "accounts", "customer", "notes", "deviceId", "runId"]) assert.equal(k in dev01, false, `${k} must be absent`);
   assert.equal(dev01.online, true);
   assert.equal(dev01.ready, false); // dev-01 有活跃 job → lease 占用 → not ready
   assert.equal(dev01.lease.held, true);
   assert.equal(dev01.lease.kind, "job");
   assert.equal(dev01.currentTask?.jobId, "job-running");
-  assert.equal(dev01.currentTask?.actor, "agent-alpha");
+  assert.equal(dev01.currentTask?.reportedActor, "agent-alpha");
+  assert.equal(dev01.currentTask?.actorVerified, false);
   assert.equal(dev01.streak, 2);
-  assert.ok(fleet.freshness || dev01.freshness, "freshness present");
+  assert.ok(dev01.freshness, "freshness present");
   // observer 不得写知识库
   const writeRes = await fetch(`${registry.base}/api/knowledge`, { method: "POST", headers: h, body: JSON.stringify({ id: "x", app: "x", title: "t", content: "c" }) });
   assert.equal(writeRes.status, 403);
@@ -674,64 +750,376 @@ test("observer can read /api/fleet but cannot write knowledge or approve", async
   assert.equal(approveRes.status, 403);
 });
 
-test("cache-only Screen API returns newest screenshot with ETag and 304 on revalidate", async () => {
+test("cache-only Screen API returns newest screenshot with quoted ETag, 304, and no runId in meta", async () => {
   const h = { "x-registry-token": OBSERVER_TOKEN };
-  const metaRes = await fetch(`${registry.base}/api/fleet/screen/01/meta`, { headers: h });
+  const metaRes = await fetch(`${registry.base}/api/observer/v1/screen/01/meta`, { headers: h });
   assert.equal(metaRes.status, 200);
   const meta = await metaRes.json();
   assert.equal(meta.ok, true);
   assert.equal(meta.sha256, SCREEN_SHA);
   assert.equal(meta.alias, "01");
-  // 强制缓存 miss：用未命中 alias 再回 01 也行，这里直接取图像
-  const imgRes = await fetch(`${registry.base}/api/fleet/screen/01`, { headers: h });
+  assert.equal(meta.contentType, "image/png");
+  assert.equal(meta.stale, false);
+  assert.equal("runId" in meta, false, "meta must not expose runId");
+  const imgRes = await fetch(`${registry.base}/api/observer/v1/screen/01`, { headers: h });
   assert.equal(imgRes.status, 200);
   assert.equal(imgRes.headers.get("content-type"), "image/png");
-  assert.equal(imgRes.headers.get("etag"), SCREEN_SHA);
+  assert.equal(imgRes.headers.get("etag"), `"${SCREEN_SHA}"`); // 带引号
+  assert.equal(imgRes.headers.get("cache-control"), "private, no-cache");
+  assert.equal(imgRes.headers.get("x-screen-stale"), "0");
   const buf = Buffer.from(await imgRes.arrayBuffer());
-  assert.equal(buf.toString("utf8"), "PNGTEST");
-  // 二次带 If-None-Match → 304
-  const reval = await fetch(`${registry.base}/api/fleet/screen/01`, { headers: { ...h, "if-none-match": SCREEN_SHA } });
+  assert.deepEqual(buf, SCREEN_PNG);
+  // 带引号 If-None-Match → 304
+  const reval = await fetch(`${registry.base}/api/observer/v1/screen/01`, { headers: { ...h, "if-none-match": `"${SCREEN_SHA}"` } });
   assert.equal(reval.status, 304);
+  assert.equal(reval.headers.get("etag"), `"${SCREEN_SHA}"`);
   // 无截图设备 → 404（不触发采集）
-  const noneRes = await fetch(`${registry.base}/api/fleet/screen/03/meta`, { headers: h });
+  const noneRes = await fetch(`${registry.base}/api/observer/v1/screen/03/meta`, { headers: h });
   assert.equal(noneRes.status, 404);
 });
 
-test("operator submits allowlisted job with namespaced actor and rejects non-allowlisted", async () => {
-  const h = { "x-registry-token": OPERATOR_TOKEN, "content-type": "application/json" };
+test("operator is frozen: submit/session/job all return 501; observer cannot reach operator ns", async () => {
+  const opH = { "x-registry-token": OPERATOR_TOKEN, "content-type": "application/json" };
+  const before = control.submissions.length;
   const submitRes = await fetch(`${registry.base}/api/operator/submit`, {
-    method: "POST", headers: h,
+    method: "POST", headers: opH,
     body: JSON.stringify({ capability: "xianyu.observe.snapshot", alias: "01", actor: "relay-1" }),
   });
-  assert.equal(submitRes.status, 202);
-  const submitted = await submitRes.json();
-  assert.equal(submitted.ok, true);
-  assert.equal(submitted.actor, "abtop:relay-1");
-  assert.ok(submitted.jobId, "jobId returned");
-  // 控制面收到 POST /control/v1/jobs，capability/device/actor 正确
-  assert.equal(control.submissions.length, 1);
-  assert.equal(control.submissions[0].capabilityId, "xianyu.observe.snapshot");
-  assert.equal(control.submissions[0].deviceId, "dev-01");
-  assert.equal(control.submissions[0].actor, "abtop:relay-1");
-  // 非白名单 → 403
-  const blockedRes = await fetch(`${registry.base}/api/operator/submit`, {
-    method: "POST", headers: h,
-    body: JSON.stringify({ capability: "xhs.comment.send", alias: "01" }),
-  });
-  assert.equal(blockedRes.status, 403);
-  // observer 不能调 operator 提交
+  assert.equal(submitRes.status, 501);
+  assert.equal(control.submissions.length, before, "frozen submit must not reach control plane");
+  const sessRes = await fetch(`${registry.base}/api/operator/session`, { method: "POST", headers: opH, body: "{}" });
+  assert.equal(sessRes.status, 501);
+  const jobRes = await fetch(`${registry.base}/api/operator/job/job-x`, { headers: opH });
+  assert.equal(jobRes.status, 501);
+  // observer 命中 operator 命名空间 → 403（命名空间闸门）
   const obsSubmit = await fetch(`${registry.base}/api/operator/submit`, {
     method: "POST", headers: { "x-registry-token": OBSERVER_TOKEN, "content-type": "application/json" },
     body: JSON.stringify({ capability: "xianyu.observe.snapshot", alias: "01" }),
   });
   assert.equal(obsSubmit.status, 403);
-  // session 转换预留 → 501
-  const sessRes = await fetch(`${registry.base}/api/operator/session`, { method: "POST", headers: h, body: "{}" });
-  assert.equal(sessRes.status, 501);
-  // job 状态代理
-  const jobRes = await fetch(`${registry.base}/api/operator/job/${submitted.jobId}`, { headers: h });
-  assert.equal(jobRes.status, 200);
-  const jobBody = await jobRes.json();
-  assert.equal(jobBody.ok, true);
-  assert.equal(jobBody.job.jobId, submitted.jobId);
+});
+
+test("registry refuses to start when two non-empty role tokens are identical", async () => {
+  // 鉴权按 human→agent→observer→operator 顺序匹配；重复 token 会让低权限凭证命中更高权限角色。
+  // 启动期即拒绝（exit 1），不得进入监听。
+  const root = await mkdtemp(path.join(os.tmpdir(), "xhs-registry-dup-"));
+  createRegistryDb(path.join(root, "registry.db"));
+  await writeFile(path.join(root, "seed.json"), JSON.stringify({ identities: [] }));
+  try {
+    await startRegistry({
+      root, controlUrl: `http://127.0.0.1:${control.server.address().port}`,
+      requireAuth: false,
+      extraArgs: ["--observer-token", "DUP", "--human-token", "DUP", "--agent-token", "A", "--trust-loopback", "false"],
+    });
+    assert.fail("registry must not start with duplicate role tokens");
+  } catch (e) {
+    assert.match(String(e.message), /拒绝启动.*token 重复|token 重复/, `expected dup-token rejection in logs, got: ${e.message}`);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+// 读取 preload 计数文件中指定 tag（READ/REAL）的行数；文件不存在记 0。
+function countTag(counterFile, tag) {
+  if (!fs.existsSync(counterFile)) return 0;
+  return fs.readFileSync(counterFile, "utf8").split("\n").filter((l) => l.startsWith(`${tag} `)).length;
+}
+
+// ---------- 负向测试 ----------
+
+test("observer is locked to /api/observer/v1/* and 403 elsewhere", async () => {
+  const h = { "x-registry-token": OBSERVER_TOKEN };
+  for (const p of ["/api/agent-entry", "/api/knowledge", "/api/approvals/pending", "/api/devices", "/", "/api/fleet", "/api/capabilities"]) {
+    const r = await fetch(`${registry.base}${p}`, { headers: h });
+    assert.equal(r.status, 403, `observer must be 403 on ${p}`);
+  }
+  const ok = await fetch(`${registry.base}/api/observer/v1/fleet`, { headers: h });
+  assert.equal(ok.status, 200);
+});
+
+test("observer token in URL query is rejected (header-only)", async () => {
+  const r = await fetch(`${registry.base}/api/observer/v1/fleet?token=${encodeURIComponent(OBSERVER_TOKEN)}`);
+  assert.equal(r.status, 401);
+});
+
+test("GET screen does not produce job/session/lease on the control plane", async () => {
+  const h = { "x-registry-token": OBSERVER_TOKEN };
+  const before = control.submissions.length;
+  await fetch(`${registry.base}/api/observer/v1/screen/01`, { headers: h });
+  await fetch(`${registry.base}/api/observer/v1/screen/01/meta`, { headers: h });
+  assert.equal(control.submissions.length, before, "screen GET must not submit any job");
+});
+
+test("concurrent observer screen requests share one disk load (singleflight) and do not trigger capture", async () => {
+  // 单飞 + 限频是进程内机制；用 --import preload 在子进程里对 runsRoot 下的 readFile 计数，
+  // 直接证明并发请求只发生一次磁盘加载（而非仅"响应一致"）。
+  const specs = [{
+    deviceId: "dev-c", alias: "cc", jobId: "job-c", runId: "run-c", evidenceId: "ev-c",
+    path: "evidence/shot-c.png", sha256: SCREEN_SHA, bytes: SCREEN_PNG.length, createdAt: now - 1000,
+  }];
+  const counterFile = path.join(os.tmpdir(), `screen-count-${process.pid}-${Math.floor(now)}.txt`);
+  const { reg, root } = await bootScreenRegistry({
+    specs, runsFiles: [{ runId: "run-c", relPath: "evidence/shot-c.png", content: SCREEN_PNG }],
+    counterFile,
+  });
+  try {
+    const h = { "x-registry-token": OBSERVER_TOKEN };
+    const before = control.submissions.length;
+    // 预热：第一次 GET 把缓存填好。清零计数后并发，验证并发只读 0 次（命中单飞/缓存）。
+    const warm = await fetch(`${reg.base}/api/observer/v1/screen/cc`, { headers: h });
+    assert.equal(warm.status, 200);
+    await warm.arrayBuffer();
+    // 等待计数文件落盘并清零，使后续并发从干净计数开始。
+    await new Promise((r) => setTimeout(r, 30));
+    fs.writeFileSync(counterFile, "");
+
+    const responses = await Promise.all(Array.from({ length: 8 }, () => fetch(`${reg.base}/api/observer/v1/screen/cc`, { headers: h })));
+    for (const r of responses) {
+      assert.equal(r.status, 200);
+      assert.equal(r.headers.get("etag"), `"${SCREEN_SHA}"`);
+    }
+    const bodies = await Promise.all(responses.map((r) => r.arrayBuffer()));
+    assert.ok(bodies.every((b) => Buffer.from(b).equals(SCREEN_PNG)), "all concurrent responses identical");
+    assert.equal(control.submissions.length, before, "no capture triggered");
+    // 并发命中缓存（TTL 200ms 内），不应再读盘；若读盘则单飞/缓存失效。
+    await new Promise((r) => setTimeout(r, 30));
+    const reads = countTag(counterFile, "READ");
+    assert.equal(reads, 0, `concurrent screen requests must not re-read disk (got ${reads} READ calls); singleflight/cache must serve from memory`);
+  } finally {
+    await stopIsolated(reg, root);
+    try { fs.unlinkSync(counterFile); } catch {}
+  }
+});
+
+test("concurrent observer screen requests on a cold cache share exactly one disk load (singleflight)", async () => {
+  // 冷缓存并发：8 个请求同时打到未填充的 alias，单飞应保证只发生一次磁盘加载。
+  const specs = [{
+    deviceId: "dev-c2", alias: "c2", jobId: "job-c2", runId: "run-c2", evidenceId: "ev-c2",
+    path: "evidence/shot-c2.png", sha256: SCREEN_SHA, bytes: SCREEN_PNG.length, createdAt: now - 1000,
+  }];
+  const counterFile = path.join(os.tmpdir(), `screen-count-cold-${process.pid}-${Math.floor(now)}.txt`);
+  const { reg, root } = await bootScreenRegistry({
+    specs, runsFiles: [{ runId: "run-c2", relPath: "evidence/shot-c2.png", content: SCREEN_PNG }],
+    counterFile,
+  });
+  try {
+    const h = { "x-registry-token": OBSERVER_TOKEN };
+    const responses = await Promise.all(Array.from({ length: 8 }, () => fetch(`${reg.base}/api/observer/v1/screen/c2`, { headers: h })));
+    for (const r of responses) {
+      assert.equal(r.status, 200);
+      assert.equal(r.headers.get("etag"), `"${SCREEN_SHA}"`);
+    }
+    await Promise.all(responses.map((r) => r.arrayBuffer()));
+    await new Promise((r) => setTimeout(r, 30));
+    const reads = countTag(counterFile, "READ");
+    assert.equal(reads, 1, `cold-cache concurrent requests must share exactly one disk load (got ${reads} READ calls); singleflight must coalesce`);
+  } finally {
+    await stopIsolated(reg, root);
+    try { fs.unlinkSync(counterFile); } catch {}
+  }
+});
+
+test("screen rejects path traversal evidence row", async () => {
+  const specs = [{
+    deviceId: "dev-e", alias: "ee", jobId: "job-e", runId: "run-e", evidenceId: "ev-e",
+    path: "../../evil.png", sha256: SCREEN_SHA, bytes: SCREEN_PNG.length, createdAt: now - 1000,
+  }];
+  const { reg, root } = await bootScreenRegistry({ specs, runsFiles: [{ runId: "run-e", relPath: "../../evil.png", content: SCREEN_PNG }] });
+  try {
+    const r = await fetch(`${reg.base}/api/observer/v1/screen/ee`, { headers: { "x-registry-token": OBSERVER_TOKEN } });
+    assert.equal(r.status, 404);
+  } finally {
+    await stopIsolated(reg, root);
+  }
+});
+
+test("screen rejects evidence whose sha256 does not match file content", async () => {
+  const specs = [{
+    deviceId: "dev-b", alias: "bb", jobId: "job-b", runId: "run-b", evidenceId: "ev-b",
+    path: "evidence/shot-b.png", sha256: "deadbeef".repeat(8), bytes: SCREEN_PNG.length, createdAt: now - 1000,
+  }];
+  const { reg, root } = await bootScreenRegistry({ specs, runsFiles: [{ runId: "run-b", relPath: "evidence/shot-b.png", content: SCREEN_PNG }] });
+  try {
+    const r = await fetch(`${reg.base}/api/observer/v1/screen/bb`, { headers: { "x-registry-token": OBSERVER_TOKEN } });
+    assert.equal(r.status, 404);
+  } finally {
+    await stopIsolated(reg, root);
+  }
+});
+
+test("screen rejects evidence with empty or non-hex sha256 (strict digest required)", async () => {
+  // 数据库摘要为空或非合法 64 位十六进制时，不得绕过完整性校验放行，一律 404。
+  for (const bad of ["", "not-a-sha", "abcd".repeat(7) /* 56 chars, too short */]) {
+    const alias = `badsha-${bad.length || "empty"}`;
+    const specs = [{
+      deviceId: `dev-${alias}`, alias, jobId: `job-${alias}`, runId: `run-${alias}`, evidenceId: `ev-${alias}`,
+      path: "evidence/shot.png", sha256: bad, bytes: SCREEN_PNG.length, createdAt: now - 1000,
+    }];
+    const { reg, root } = await bootScreenRegistry({ specs, runsFiles: [{ runId: `run-${alias}`, relPath: "evidence/shot.png", content: SCREEN_PNG }] });
+    try {
+      const r = await fetch(`${reg.base}/api/observer/v1/screen/${alias}`, { headers: { "x-registry-token": OBSERVER_TOKEN } });
+      assert.equal(r.status, 404, `empty/non-hex sha256 '${bad}' must be rejected (got ${r.status})`);
+    } finally {
+      await stopIsolated(reg, root);
+    }
+  }
+});
+
+test("screen rejects oversized screenshot", async () => {
+  const huge = 8 * 1024 * 1024 + 1; // 大于生产 SCREEN_MAX_BYTES（8 MiB）
+  const specs = [{
+    deviceId: "dev-h", alias: "hh", jobId: "job-h", runId: "run-h", evidenceId: "ev-h",
+    path: "evidence/shot-h.png", sha256: SCREEN_SHA, bytes: huge, createdAt: now - 1000,
+  }];
+  const { reg, root } = await bootScreenRegistry({ specs, runsFiles: [{ runId: "run-h", relPath: "evidence/shot-h.png", content: SCREEN_PNG }] });
+  try {
+    const r = await fetch(`${reg.base}/api/observer/v1/screen/hh`, { headers: { "x-registry-token": OBSERVER_TOKEN } });
+    assert.equal(r.status, 413);
+  } finally {
+    await stopIsolated(reg, root);
+  }
+});
+
+test("screen failure (runs-root missing) does not affect fleet or control plane", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "xhs-registry-noruns-"));
+  createRegistryDb(path.join(root, "registry.db"));
+  createControlDb(path.join(root, "control.db"));
+  await writeFile(path.join(root, "seed.json"), JSON.stringify({ identities: [{ alias: "01", serial: "s1", label: "一号", model: "M1" }] }));
+  const reg = await startRegistry({ root, controlUrl: `http://127.0.0.1:${control.server.address().port}`, extraArgs: ["--runs-root", path.join(root, "does-not-exist")] });
+  try {
+    const screen = await fetch(`${reg.base}/api/observer/v1/screen/01`, { headers: { "x-registry-token": OBSERVER_TOKEN } });
+    assert.equal(screen.status, 404);
+    const fleet = await fetch(`${reg.base}/api/observer/v1/fleet`, { headers: { "x-registry-token": OBSERVER_TOKEN } });
+    assert.equal(fleet.status, 200);
+  } finally {
+    await stopIsolated(reg, root);
+  }
+});
+
+test("screen meta marks stale when screenshot age exceeds stale-after threshold", async () => {
+  const specs = [{
+    deviceId: "dev-s", alias: "ss", jobId: "job-s", runId: "run-s", evidenceId: "ev-s",
+    path: "evidence/shot-s.png", sha256: SCREEN_SHA, bytes: SCREEN_PNG.length, createdAt: now - 200000, // 200s > 120s
+  }];
+  const { reg, root } = await bootScreenRegistry({ specs, runsFiles: [{ runId: "run-s", relPath: "evidence/shot-s.png", content: SCREEN_PNG }] });
+  try {
+    const meta = await (await fetch(`${reg.base}/api/observer/v1/screen/ss/meta`, { headers: { "x-registry-token": OBSERVER_TOKEN } })).json();
+    assert.equal(meta.stale, true);
+    assert.ok(meta.ageSeconds >= 120);
+  } finally {
+    await stopIsolated(reg, root);
+  }
+});
+
+test("screen meta marks stale when fresh load fails and old cache is reused (fallback)", async () => {
+  const specs = [{
+    deviceId: "dev-f", alias: "ff", jobId: "job-f", runId: "run-f", evidenceId: "ev-f",
+    path: "evidence/shot-f.png", sha256: SCREEN_SHA, bytes: SCREEN_PNG.length, createdAt: now - 1000,
+  }];
+  const { reg, root, runsRoot } = await bootScreenRegistry({ specs, runsFiles: [{ runId: "run-f", relPath: "evidence/shot-f.png", content: SCREEN_PNG }] });
+  try {
+    const h = { "x-registry-token": OBSERVER_TOKEN };
+    // 首次加载填充缓存
+    const first = await fetch(`${reg.base}/api/observer/v1/screen/ff`, { headers: h });
+    assert.equal(first.status, 200);
+    // 删除磁盘文件，等缓存 TTL（200ms）过期后重载 → 失败 → 沿用旧缓存 fallback → stale
+    await rm(path.join(runsRoot, "run-f", "evidence", "shot-f.png"), { force: true });
+    await new Promise((r) => setTimeout(r, 260));
+    const meta = await (await fetch(`${reg.base}/api/observer/v1/screen/ff/meta`, { headers: h })).json();
+    assert.equal(meta.stale, true);
+  } finally {
+    await stopIsolated(reg, root);
+  }
+});
+
+test("fallback marker is written back to cache so the next request stays stale without re-reading", async () => {
+  // 回归 P1：fallback=true 必须写回 screenCache。否则后续请求取到旧 fallback=false 条目，
+  // 在旧 loadedAt 的 TTL 已过后会再次重载（这里用 REAL 计数观测）。
+  // 写回后，紧接的第二次请求落在 fallback 条目的新 TTL 内 → 命中缓存、不再重载、仍 stale。
+  const specs = [{
+    deviceId: "dev-fb", alias: "fb", jobId: "job-fb", runId: "run-fb", evidenceId: "ev-fb",
+    path: "evidence/shot-fb.png", sha256: SCREEN_SHA, bytes: SCREEN_PNG.length, createdAt: now - 1000,
+  }];
+  const counterFile = path.join(os.tmpdir(), `screen-fb-${process.pid}-${Math.floor(now)}.txt`);
+  const { reg, root, runsRoot } = await bootScreenRegistry({
+    specs, runsFiles: [{ runId: "run-fb", relPath: "evidence/shot-fb.png", content: SCREEN_PNG }],
+    counterFile,
+  });
+  try {
+    const h = { "x-registry-token": OBSERVER_TOKEN };
+    // 首次加载填充缓存（fallback=false）
+    const first = await fetch(`${reg.base}/api/observer/v1/screen/fb`, { headers: h });
+    assert.equal(first.status, 200);
+    await first.arrayBuffer();
+    // 删除磁盘文件，等 TTL（200ms）过期后重载必失败 → 沿用旧缓存 fallback
+    await rm(path.join(runsRoot, "run-fb", "evidence", "shot-fb.png"), { force: true });
+    await new Promise((r) => setTimeout(r, 260));
+    // 第一次 fallback 请求：触发一次重载尝试（realpath 失败，无 readFile），写回 fallback 缓存
+    const meta1 = await (await fetch(`${reg.base}/api/observer/v1/screen/fb/meta`, { headers: h })).json();
+    assert.equal(meta1.stale, true, "first fallback request must be stale");
+    await new Promise((r) => setTimeout(r, 30));
+    const realAfter1 = countTag(counterFile, "REAL");
+    assert.ok(realAfter1 >= 2, `first fallback must have attempted a reload (got ${realAfter1} REAL calls)`);
+    // 紧接第二次请求：落在 fallback 条目新 TTL 内 → 应命中缓存，不再重载，仍 stale。
+    const meta2 = await (await fetch(`${reg.base}/api/observer/v1/screen/fb/meta`, { headers: h })).json();
+    assert.equal(meta2.stale, true, "second request must stay stale via written-back fallback cache");
+    await new Promise((r) => setTimeout(r, 30));
+    const realAfter2 = countTag(counterFile, "REAL");
+    assert.equal(realAfter2, realAfter1, `second request must not reload (REAL went ${realAfter1}->${realAfter2}); fallback must be served from cache`);
+  } finally {
+    await stopIsolated(reg, root);
+    try { fs.unlinkSync(counterFile); } catch {}
+  }
+});
+
+test("displayName/model are normalized (control chars stripped, length capped) and actorVerified is false", async () => {
+  const longLabel = "店" + "a".repeat(200);
+  const specs = [{
+    deviceId: "dev-n", alias: "nn", jobId: "job-n", runId: "run-n", evidenceId: "ev-n",
+    path: "evidence/shot-n.png", sha256: SCREEN_SHA, bytes: SCREEN_PNG.length, createdAt: now - 1000,
+  }];
+  const { reg, root } = await bootScreenRegistry({
+    specs,
+    runsFiles: [{ runId: "run-n", relPath: "evidence/shot-n.png", content: SCREEN_PNG }],
+    seedIdentities: [{ alias: "nn", serial: "s-nn", label: `a\nb<script>\x00${longLabel}`, model: "M\tModel" }],
+  });
+  try {
+    const fleet = await (await fetch(`${reg.base}/api/observer/v1/fleet`, { headers: { "x-registry-token": OBSERVER_TOKEN } })).json();
+    const dev = fleet.devices.find((d) => d.alias === "nn");
+    assert.ok(dev.displayName.length <= 60);
+    assert.equal(/[\x00-\x1f\x7f]/.test(dev.displayName), false, "no control chars in displayName");
+    assert.equal(dev.displayName.includes("<script>"), true); // HTML 不由 JSON 层剥离
+    assert.equal(/[\x00-\x1f\x7f]/.test(dev.model || ""), false);
+  } finally {
+    await stopIsolated(reg, root);
+  }
+});
+
+test("fleet reports ready=null and degraded=true when control plane is unreachable", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "xhs-registry-degraded-"));
+  createRegistryDb(path.join(root, "registry.db"));
+  createControlDb(path.join(root, "control.db"));
+  await writeFile(path.join(root, "seed.json"), JSON.stringify({ identities: [{ alias: "03", serial: "REPLACE_SERIAL_03", label: "三店", model: "M3" }] }));
+  // 控制面不可达：设备只来自身份缓存，online/quarantined/lease 全部未知 → ready=null，绝不假 Ready
+  const reg = await startRegistry({ root, controlUrl: "http://127.0.0.1:1" });
+  try {
+    const fleet = await (await fetch(`${reg.base}/api/observer/v1/fleet`, { headers: { "x-registry-token": OBSERVER_TOKEN } })).json();
+    assert.equal(fleet.degraded, true);
+    const dev = fleet.devices.find((d) => d.alias === "03");
+    assert.ok(dev, "03 present");
+    assert.equal(dev.ready, null, "ready must be unknown, not fake-Ready");
+  } finally {
+    await stopIsolated(reg, root);
+  }
+});
+
+test("screen meta response body never contains runId key", async () => {
+  const h = { "x-registry-token": OBSERVER_TOKEN };
+  const meta = await (await fetch(`${registry.base}/api/observer/v1/screen/01/meta`, { headers: h })).json();
+  assert.equal("runId" in meta, false);
+  assert.deepEqual(meta, {
+    ok: true, alias: "01", sha256: SCREEN_SHA, bytes: SCREEN_PNG.length,
+    capturedAt: meta.capturedAt, jobId: "job-succ-2", contentType: "image/png",
+    ageSeconds: meta.ageSeconds, stale: false,
+  });
 });
