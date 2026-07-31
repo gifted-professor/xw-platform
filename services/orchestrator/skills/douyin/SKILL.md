@@ -80,7 +80,7 @@ verified: false
 
 | op | 探索状态 | 可固化？ | 自由度 | 下一步 |
 |----|----------|----------|--------|--------|
-| search | ✅ 已固化 [`douyin-search`](douyin-search/SKILL.md) v0.1 | — | 自主 | 真机跑通后升 v1.0 |
+| search | ✅ 已固化 [`douyin-search`](douyin-search/SKILL.md) v1.0 / `verified:true` | — | 自主 | 01 真机验收通过（2026-07-31） |
 | like | desc 模式清晰 | ✅ dry-run | 自主（dry-run） | desc 翻转校验后固化 |
 | collect | desc 模式清晰 | ✅ dry-run | 自主（dry-run） | 同上 |
 | comment | 面板已摸清 | ⚠️ | **真发需审批** | 固化时只到打开面板 |

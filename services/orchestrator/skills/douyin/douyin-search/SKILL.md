@@ -4,8 +4,19 @@ description: 抖音搜索关键词，进结果页记录 Tabs 与卡片粗计数�
 triggers:
   - douyin-search
   - 抖音搜索
-version: "0.1"
-verified: false
+version: "1.0"
+verified:
+  - date: 2026-07-31
+    device: "01"
+    result: pass
+    note: "真机：DOUYIN_SEARCH=ok / TABS=综合,团购,视频,用户,图文,直播 / COUNT=6 / BACK_HOME=yes / exit=0"
+changelog:
+  - version: "1.0"
+    date: 2026-07-31
+    change: "01 真机验收通过（搜索→结果页→back 回壳），升 v1.0"
+  - version: "0.1"
+    date: 2026-07-31
+    change: "首个抖音业务脚本，对齐 01 烟测 SMOKE=ok"
 depends:
   - device-tap
   - device-dump
@@ -17,7 +28,7 @@ depends:
 
 # 抖音搜索（douyin-search）
 
-> 首个抖音业务脚本。v0.1 / `verified:false`——路径经 2026-07-31 01 烟测（SMOKE=ok），正式脚本待真机跑通后升 `v1.0`。
+> 首个抖音业务脚本。`v1.0` / `verified:true`——01 真机验收通过（2026-07-31：搜索→结果页→back 回壳）。
 
 ## 用法
 
@@ -62,14 +73,16 @@ launch com.ss.android.ugc.aweme (--force-stop) → settle 5.5s
 SEARCH_ENTRY=搜索@1009,145
 INPUT_XY=521,144
 FOCUS=...search.activity.SearchResultActivity
-TABS=综合,视频,用户,图文,直播,团购
+TABS=综合,团购,视频,用户,图文,直播
 TAB_COUNT=6
-COUNT=10
+COUNT=6
 DUMP=C:\Users\Public\xhs-agent-runs\...\douyin-01-*.xml
 BACK_HOME=yes
 DOUYIN_SEARCH=ok
 ALIAS=01
 ```
+
+> `TABS` 由 `extractTabs` 按 **x 坐标排序去重**，是 DOM 落点顺序，**非视觉从左到右顺序**（实机 01 落 `综合,团购,视频,用户,图文,直播`）。`COUNT` 是 `countCards` 启发式粗计数（clickable + 较大 + 结果区），仅参考，非精确卡片数。
 
 ## 验证
 
