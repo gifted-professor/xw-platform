@@ -10,7 +10,7 @@ verified:
     device: "01"
     result: pass
     mode: dry-run
-    note: "真机 dry-run：DOUYIN_COLLECT=dry-run / COLLECT_BEFORE=未选中，收藏1.1万，按钮 / COLLECT_XY=997,1775 / COLLECT_STATE=uncollected / exit=0"
+    note: "真机 dry-run：DOUYIN_COLLECT=dry-run / COLLECT_BEFORE=未选中，收藏1.1万，按钮 / COLLECT_XY=997,1775 / exit=0。真藏：截图确认黄星+「收藏成功」，但点后 a11y dump 长时间 missing hierarchy，脚本 dump 校验未绿；02/04 青少年模式挡 Feed dump"
 depends:
   - device-tap
   - device-dump

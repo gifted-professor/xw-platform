@@ -1,17 +1,11 @@
 #!/usr/bin/env node
 /**
- * Douyin like — 推荐 Feed 右侧栏定位点赞按钮；默认 --dry-run 只定位不点。
- * 对齐 2026-07-31 01 dump：desc「未点赞，喜欢N，按钮」/「已点赞，…」。
+ * Douyin follow — 推荐 Feed 右侧栏定位「关注」按钮；--dry-run 只定位不点。
  *
- *   node ops/douyin-like.mjs --alias 01 --dry-run
- *   node ops/douyin-like.mjs --alias 01                 # 真点赞（自主，慎用）
- *   node ops/douyin-like.mjs --alias 01 --dry-run --no-force-stop
+ *   node ops/douyin-follow.mjs --alias 01 --dry-run
+ *   node ops/douyin-follow.mjs --alias 01
  *
- * stdout: DOUYIN_LIKE=ok|skip|dry-run|fail ...
- * biz trace: op="douyin-like"，runOps 型 serial=null。
- *
- * 依赖：_explore-lib / _biz-trace / _xhs-parse(decodeEntities)；ops/launch-app|dump-ui|tap|focus。
- * 禁 console.error；零第三方依赖。
+ * biz: op="douyin-follow"
  */
 import { existsSync, readFileSync } from "node:fs";
 import { spawn } from "node:child_process";
@@ -27,9 +21,9 @@ const PKG = "com.ss.android.ugc.aweme";
 
 const { opt, flag } = parseArgs(process.argv.slice(2));
 if (flag("--help") || flag("-h")) {
-  console.log(`用法: node ops/douyin-like.mjs --alias <01-04> [--dry-run] [--no-force-stop]
-stdout: DOUYIN_LIKE=ok|skip|dry-run|fail LIKE_XY=… LIKE_BEFORE=…
-推荐 Feed 右侧栏定位点赞；--dry-run 只定位不点。不加 --dry-run 会真点赞。`);
+  console.log(`用法: node ops/douyin-follow.mjs --alias <01-04> [--dry-run] [--no-force-stop]
+stdout: DOUYIN_FOLLOW=ok|skip|dry-run|fail ...
+Feed 右侧栏关注；--dry-run 只定位不点。`);
   process.exit(0);
 }
 
@@ -74,11 +68,11 @@ function kv(t) {
 let t0 = Date.now();
 
 function fail(reason, extra = {}) {
-  console.log(`DOUYIN_LIKE=fail`);
+  console.log(`DOUYIN_FOLLOW=fail`);
   console.log(`REASON=${reason}`);
   for (const [k, v] of Object.entries(extra)) if (v != null) console.log(`${k}=${String(v).slice(0, 220)}`);
   console.log(`ALIAS=${alias}`);
-  bizRecord({ op: "douyin-like", outcome: "fail", reason, extra, alias, serial: null, startMs: t0 });
+  bizRecord({ op: "douyin-follow", outcome: "fail", reason, extra, alias, serial: null, startMs: t0 });
   process.exit(2);
 }
 
@@ -96,28 +90,29 @@ function allNodes(xml) {
       cy: Math.round((+b[2] + +b[4]) / 2),
       text: decodeEntities((tag.match(/text="([^"]*)"/) || [])[1] || ""),
       desc: decodeEntities((tag.match(/content-desc="([^"]*)"/) || [])[1] || ""),
-      clickable: /clickable="true"/.test(tag),
     });
   }
   return out;
 }
 
-/** 右侧栏点赞：desc 含「喜欢」+「按钮」，且偏右（cx>850） */
-function findLikeBtn(xml) {
+/** 右侧栏「关注」：desc 精确为「关注」或含关注且小按钮，cx>850，排除顶栏关注 Tab */
+function findFollowBtn(xml) {
   const ns = allNodes(xml);
-  const hits = ns.filter((n) =>
-    /喜欢/.test(n.desc) && /按钮/.test(n.desc) && n.cx > 850 && n.cy > 400 && n.cy < 2000
-  );
-  // 优先带「未点赞/已点赞」的主按钮（通常更高更完整）
-  hits.sort((a, b) => (b.B - b.T) - (a.B - a.T) || a.cy - b.cy);
+  const hits = ns.filter((n) => {
+    if (n.cx < 850 || n.cy < 400 || n.cy > 1600) return false;
+    if (n.desc === "关注") return true;
+    if (/^关注$/.test(n.text) && n.cy > 800) return true;
+    return false;
+  });
+  // 头像下的关注通常在 like 上方，取 cy 较小者
+  hits.sort((a, b) => a.cy - b.cy);
   return hits[0] || null;
 }
 
-function likeState(btn) {
-  const d = (btn && btn.desc) || "";
-  if (/已点赞/.test(d)) return "liked";
-  if (/未点赞/.test(d)) return "unliked";
-  if (/喜欢/.test(d)) return "unknown";
+function followState(btn) {
+  const d = ((btn && btn.desc) || "") + ((btn && btn.text) || "");
+  if (/已关注|互相关注/.test(d)) return "followed";
+  if (/关注/.test(d)) return "unfollowed";
   return "missing";
 }
 
@@ -145,37 +140,36 @@ async function main() {
   console.log(`FOCUS=${f.FOCUS || ""}`);
   if (!/aweme/i.test(f.FOCUS || "")) fail("not_douyin", { FOCUS: f.FOCUS || "" });
 
-  // dump 可空：settle 重试
   let d = null;
   let xml = "";
   for (let i = 0; i < 4; i++) {
     d = await dumpNow();
     if (d.DUMP && existsSync(d.DUMP)) {
       xml = readFileSync(d.DUMP, "utf8");
-      if (xml.includes("<hierarchy") && findLikeBtn(xml)) break;
+      if (xml.includes("<hierarchy") && findFollowBtn(xml)) break;
     }
     await sleep(2000 + i * 1000);
   }
   if (!d?.DUMP || !existsSync(d.DUMP)) fail("dump_feed");
   xml = readFileSync(d.DUMP, "utf8");
 
-  const btn = findLikeBtn(xml);
-  if (!btn) fail("like_btn_missing", { DUMP: d.DUMP });
-  const before = likeState(btn);
-  console.log(`LIKE_BEFORE=${btn.desc}`);
-  console.log(`LIKE_XY=${btn.cx},${btn.cy}`);
-  console.log(`LIKE_STATE=${before}`);
+  const btn = findFollowBtn(xml);
+  if (!btn) fail("follow_btn_missing", { DUMP: d.DUMP });
+  const before = followState(btn);
+  console.log(`FOLLOW_BEFORE=${btn.desc || btn.text}`);
+  console.log(`FOLLOW_XY=${btn.cx},${btn.cy}`);
+  console.log(`FOLLOW_STATE=${before}`);
   console.log(`DUMP=${d.DUMP}`);
 
-  if (before === "liked") {
-    console.log(`DOUYIN_LIKE=skip`);
-    console.log(`REASON=already-liked`);
+  if (before === "followed") {
+    console.log(`DOUYIN_FOLLOW=skip`);
+    console.log(`REASON=already-followed`);
     console.log(`ALIAS=${alias}`);
     bizRecord({
-      op: "douyin-like",
+      op: "douyin-follow",
       outcome: "skip",
-      reason: "already-liked",
-      extra: { desc: btn.desc },
+      reason: "already-followed",
+      extra: { desc: btn.desc || btn.text },
       alias,
       serial: null,
       startMs: t0,
@@ -184,14 +178,14 @@ async function main() {
   }
 
   if (dryRun) {
-    console.log(`DOUYIN_LIKE=dry-run`);
+    console.log(`DOUYIN_FOLLOW=dry-run`);
     console.log(`REASON=located-not-tapped`);
     console.log(`ALIAS=${alias}`);
     bizRecord({
-      op: "douyin-like",
+      op: "douyin-follow",
       outcome: "dry-run",
       reason: "located-not-tapped",
-      extra: { desc: btn.desc, x: btn.cx, y: btn.cy },
+      extra: { desc: btn.desc || btn.text, x: btn.cx, y: btn.cy },
       alias,
       serial: null,
       startMs: t0,
@@ -199,40 +193,39 @@ async function main() {
     process.exit(0);
   }
 
-  // 真点赞
   r = await tapXY(btn.cx, btn.cy);
-  if (r.code !== 0) fail("tap_like");
+  if (r.code !== 0) fail("tap_follow");
   await sleep(2200);
 
-  // 点后偶发空 dump —— settle 重试
   let afterBtn = null;
   for (let i = 0; i < 4; i++) {
     d = await dumpNow();
     if (d.DUMP && existsSync(d.DUMP)) {
       xml = readFileSync(d.DUMP, "utf8");
-      afterBtn = findLikeBtn(xml);
-      if (afterBtn) break;
+      afterBtn = findFollowBtn(xml);
+      // 关注后按钮可能消失或变已关注——也扫「已关注」
+      if (!afterBtn) {
+        const ns = allNodes(xml).filter((n) => n.cx > 850 && /已关注|互相关注/.test(n.desc + n.text));
+        afterBtn = ns[0] || null;
+      }
+      if (afterBtn || /已关注/.test(xml)) break;
     }
     await sleep(2000 + i * 1000);
   }
-  if (!afterBtn) fail("dump_after_like");
-  const afterDesc = afterBtn.desc || "";
-  const after = likeState(afterBtn);
-  console.log(`LIKE_AFTER=${afterDesc}`);
-  console.log(`LIKE_STATE_AFTER=${after}`);
+  const afterDesc = afterBtn ? (afterBtn.desc || afterBtn.text) : "";
+  const after = afterBtn ? followState(afterBtn) : (/已关注/.test(xml || "") ? "followed" : "missing");
+  console.log(`FOLLOW_AFTER=${afterDesc}`);
+  console.log(`FOLLOW_STATE_AFTER=${after}`);
 
-  const ok =
-    after === "liked" ||
-    (afterDesc && btn.desc && afterDesc !== btn.desc) ||
-    /已点赞/.test(afterDesc);
-  if (!ok) fail("like_not_confirmed", { LIKE_BEFORE: btn.desc, LIKE_AFTER: afterDesc });
+  const ok = after === "followed" || (afterDesc && (btn.desc || btn.text) && afterDesc !== (btn.desc || btn.text));
+  if (!ok) fail("follow_not_confirmed", { FOLLOW_BEFORE: btn.desc || btn.text, FOLLOW_AFTER: afterDesc });
 
-  console.log(`DOUYIN_LIKE=ok`);
+  console.log(`DOUYIN_FOLLOW=ok`);
   console.log(`ALIAS=${alias}`);
   bizRecord({
-    op: "douyin-like",
+    op: "douyin-follow",
     outcome: "ok",
-    extra: { before: btn.desc, after: afterDesc },
+    extra: { before: btn.desc || btn.text, after: afterDesc },
     alias,
     serial: null,
     startMs: t0,
@@ -241,12 +234,12 @@ async function main() {
 }
 
 main().catch((e) => {
-  console.log(`DOUYIN_LIKE=fail`);
+  console.log(`DOUYIN_FOLLOW=fail`);
   console.log(`REASON=exception`);
   console.log(`DETAIL=${String(e.message || e).slice(0, 300)}`);
   console.log(`ALIAS=${alias}`);
   bizRecord({
-    op: "douyin-like",
+    op: "douyin-follow",
     outcome: "fail",
     reason: "exception",
     extra: { detail: String(e.message || e).slice(0, 300) },

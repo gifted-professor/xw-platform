@@ -196,13 +196,21 @@ async function main() {
 
   r = await tapXY(btn.cx, btn.cy);
   if (r.code !== 0) fail("tap_collect");
-  await sleep(1800);
+  await sleep(2200);
 
-  d = await dumpNow();
-  if (!d.DUMP || !existsSync(d.DUMP)) fail("dump_after_collect");
-  xml = readFileSync(d.DUMP, "utf8");
-  const afterBtn = findCollectBtn(xml);
-  const afterDesc = afterBtn?.desc || "";
+  // 点后偶发空 dump（同 swipe 坑）—— settle 重试
+  let afterBtn = null;
+  for (let i = 0; i < 4; i++) {
+    d = await dumpNow();
+    if (d.DUMP && existsSync(d.DUMP)) {
+      xml = readFileSync(d.DUMP, "utf8");
+      afterBtn = findCollectBtn(xml);
+      if (afterBtn) break;
+    }
+    await sleep(2000 + i * 1000);
+  }
+  if (!afterBtn) fail("dump_after_collect");
+  const afterDesc = afterBtn.desc || "";
   const after = collectState(afterBtn);
   console.log(`COLLECT_AFTER=${afterDesc}`);
   console.log(`COLLECT_STATE_AFTER=${after}`);

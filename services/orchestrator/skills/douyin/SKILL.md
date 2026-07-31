@@ -81,10 +81,14 @@ verified: false
 | op | 探索状态 | 可固化？ | 自由度 | 下一步 |
 |----|----------|----------|--------|--------|
 | search | ✅ 已固化 [`douyin-search`](douyin-search/SKILL.md) v1.0 / `verified:true` | — | 自主 | 01 真机验收通过（2026-07-31） |
-| like | ✅ 已固化 [`douyin-like`](douyin-like/SKILL.md) v1.0 / `verified:true`（dry-run） | ✅ dry-run | 自主（dry-run） | 01 dry-run 验收通过（2026-07-31）；真赞 desc 翻转待验 |
-| collect | ✅ 已固化 [`douyin-collect`](douyin-collect/SKILL.md) | ✅ dry-run | 自主（dry-run） | 真藏 desc 翻转待验 |
+| like | ✅ 已固化 [`douyin-like`](douyin-like/SKILL.md) v1.0 / `verified:true`（dry-run） | ✅ dry-run | 自主（dry-run） | 见 like-set |
+| like-set | ✅ 已固化 [`douyin-like-set`](douyin-like-set/SKILL.md) | ✅ dry-run 多机 | 自主 | 默认 01,02；勿加 04（未登录） |
+| collect | ✅ 已固化 [`douyin-collect`](douyin-collect/SKILL.md) | ✅ dry-run | 自主（dry-run） | 真藏 dump 校验未稳；见 collect-set |
+| collect-set | ✅ 已固化 [`douyin-collect-set`](douyin-collect-set/SKILL.md) | ✅ dry-run 多机 | 自主 | 默认 01,02；勿加 04 |
+| rail-set | ✅ 已固化 [`douyin-rail-set`](douyin-rail-set/SKILL.md) | ✅ dry-run 三连 | 自主 | like→collect→follow @01,02 |
 | comment | 面板已摸清 | ⚠️ | **真发需审批** | 固化时只到打开面板 |
-| follow | 右侧栏 `关注` | ✅ | 自主 | 待验 |
+| follow | ✅ 已固化 [`douyin-follow`](douyin-follow/SKILL.md) | ✅ dry-run | 自主（dry-run） | 见 follow-set |
+| follow-set | ✅ 已固化 [`douyin-follow-set`](douyin-follow-set/SKILL.md) | ✅ dry-run 多机 | 自主 | 默认 01,02；勿加 04 |
 | dm | 消息 Tab 已摸清 | ⚠️ | **真发需审批** | 只观察 |
 | publish/shoot | 拍摄入口已摸 | 🔴 | **红线** | 只到拒绝权限，不上传 |
 

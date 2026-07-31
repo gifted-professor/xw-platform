@@ -140,6 +140,30 @@
 
 **规则**：自动化选**拒绝**（不进录制页）。即使进 `VideoRecordNewActivity` 也只观察，**拍摄/上传/开直播属红线外发**，需人审批。勿点「仅在使用中允许」再硬拍。
 
+### pitfall-douyin-collect-tap-kills-a11y-dump-20260731
+
+**问题**：推荐 Feed 点收藏后，真藏成功（黄星 + toast「收藏成功」），但随后长时间 `dump missing hierarchy` / `uiautomator could not get idle state`，脚本无法用 dump 做 desc 翻转校验。force-stop 可恢复 dump，但 Feed 已换条，无法回验同一视频。
+
+**规则**：`douyin-collect` **以 dry-run 定位为 v1.0 主验收**；真藏 dump 校验未稳前勿把「真藏 ok」当自动门槛。点后若需确认，优先截图看黄星/toast。点后 dump 死锁 → force-stop 恢复，勿空转重试过久。
+
+### pitfall-douyin-teen-mode-blocks-feed-dump-20260731
+
+**问题**：02 等机首次/久未开抖音时弹出「儿童/青少年模式」「我知道了」，挡住推荐 Feed；点过后仍可能长时间空 dump。
+
+**规则**：多机跑 douyin-* 前先确认已过青少年模式引导且 Feed dump 可见「未点赞/未选中，收藏」。未过引导的设备不进 dry-run 验收统计。
+
+### pitfall-douyin-04-no-login-skip-sets-20260731
+
+**问题**：04 机抖音**未登录账号**，Feed/右侧栏不可用，表现为 `dump_feed` / 空层，易被误判成青少年模式或 a11y 故障。
+
+**规则**：集合默认只跑 **01,02**；**勿把 04 加进 like/collect/follow/rail-set**。登录后再纳入。
+
+### pitfall-douyin-rail-needs-force-stop-each-op-20260731
+
+**问题**：`douyin-rail-set` 同机 like→collect→follow 若后续 op 带 `--no-force-stop`，01 易连环 `dump_feed`。
+
+**规则**：rail-set **每个 op 都 force-stop**（默认）；不要为省时间省掉。
+
 ---
 
 ## 新增坑点模板
