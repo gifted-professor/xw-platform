@@ -1,8 +1,11 @@
 // Windows helper: Xiaowei ws://127.0.0.1:22222 原子动作
-// node _win-xiaowei.mjs --serial <id> --action tap|shell|dump|focus|start|inputText
-//   [--x --y --cmd --out --package --activity --force-stop --text-b64 --text --refocus-x --refocus-y --clear-first --enter --defer-restore]
-import { writeFileSync, mkdirSync, existsSync } from "node:fs";
+//   单发：node _win-xiaowei.mjs --serial <id> --action tap|shell|dump|focus|start|inputText [--x --y --cmd --out --package --activity --force-stop --text-b64 --text --refocus-x --refocus-y --clear-first --enter --defer-restore]
+//   常驻：node _win-xiaowei.mjs --serial <id> --action repl
+//        stdin 按行读 JSON 命令 {op, ...}，stdout 按行回 JSON 结果。
+//        一条 ssh channel + 一个 node 进程常驻，一串动作复用，单动作延迟从 ~1.2s 降到 ~0.2s。
+import { writeFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import * as readline from "node:readline";
 
 const argv = process.argv.slice(2);
 const opt = (n, fb = null) => {
@@ -57,12 +60,11 @@ async function xwInvoke(payload, timeoutMs = 25000) {
   });
 }
 
-async function adbShell(command, timeoutMs = 20000) {
+async function adbShell(serial, command, timeoutMs = 20000) {
   const r = await xwInvoke({ action: "adb_shell", devices: serial, data: { command: String(command) } }, timeoutMs);
   if (r.code !== 10000) {
     throw new Error(`adb_shell failed code=${r.code} ${r.message || JSON.stringify(r).slice(0, 200)}`);
   }
-  // data may be map serial -> stdout or raw string
   const data = r.data;
   if (data == null) return "";
   if (typeof data === "string") return data;
@@ -76,199 +78,280 @@ async function adbShell(command, timeoutMs = 20000) {
 
 function parseFocus(raw) {
   const s = String(raw || "");
-  // mCurrentFocus=Window{... u0 package/activity}
   const m = s.match(/([a-zA-Z0-9_]+(?:\.[a-zA-Z0-9_]+)+)\/(\S+)/);
   if (m) return { package: m[1], activity: m[2].replace(/[\}\s].*$/, ""), raw: s.slice(0, 300) };
   const m2 = s.match(/mCurrentFocus=([^\n]+)/);
   return { package: null, activity: null, raw: (m2 ? m2[1] : s).slice(0, 300) };
 }
 
-try {
-  let result = { ok: true, action, serial };
+// ---- 动作处理（提函数，repl 与单发共用）----
 
-  if (action === "shell") {
-    const cmd = opt("--cmd");
-    if (!cmd) throw new Error("shell needs --cmd");
-    const stdout = await adbShell(cmd);
-    result.stdout = stdout.slice(0, 50000);
-  } else if (action === "tap") {
-    const x = Math.round(Number(opt("--x")));
-    const y = Math.round(Number(opt("--y")));
-    if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error("tap needs numeric --x --y");
-    await adbShell(`input tap ${x} ${y}`, 10000);
-    result.x = x;
-    result.y = y;
-  } else if (action === "focus") {
-    const raw = await adbShell(
-      "dumpsys window 2>/dev/null | grep -E 'mCurrentFocus|mFocusedApp'; dumpsys activity activities 2>/dev/null | grep -E 'mResumedActivity' | head -1",
+async function doShell(serial, p) {
+  let cmd = p.cmd;
+  if (p.cmdB64) cmd = Buffer.from(String(p.cmdB64), "base64").toString("utf8");
+  if (!cmd) throw new Error("shell needs cmd or cmdB64");
+  const stdout = await adbShell(serial, cmd);
+  return { ok: true, action: "shell", stdout: String(stdout).slice(0, 50000) };
+}
+
+async function doTap(serial, p) {
+  const x = Math.round(Number(p.x));
+  const y = Math.round(Number(p.y));
+  if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error("tap needs numeric x y");
+  await adbShell(serial, `input tap ${x} ${y}`, 10000);
+  return { ok: true, action: "tap", x, y };
+}
+
+async function doFocus(serial) {
+  const raw = await adbShell(
+    serial,
+    "dumpsys window 2>/dev/null | grep -E 'mCurrentFocus|mFocusedApp'; dumpsys activity activities 2>/dev/null | grep -E 'mResumedActivity' | head -1",
+    15000,
+  );
+  return { ok: true, action: "focus", ...parseFocus(raw) };
+}
+
+async function doDump(serial, p) {
+  const out = p.out;
+  if (!out) throw new Error("dump needs out path");
+  mkdirSync(dirname(out), { recursive: true });
+  const token = `${process.pid}-${Date.now()}`;
+  const remote = `/sdcard/xhs-dump-${token}.xml`;
+  await adbShell(serial, `uiautomator dump ${remote}`, 25000);
+  let b64 = "";
+  for (let i = 0; i < 3; i += 1) {
+    b64 = await adbShell(serial, `base64 ${remote}`, 25000).catch(() => "");
+    if (b64 && String(b64).trim()) break;
+    await sleep(400);
+  }
+  await adbShell(serial, `rm -f ${remote}`, 8000).catch(() => "");
+  const cleaned = String(b64).replace(/\s+/g, "");
+  if (!cleaned) throw new Error("dump empty base64");
+  const xml = Buffer.from(cleaned, "base64").toString("utf8");
+  if (!xml.includes("<hierarchy")) throw new Error("dump missing hierarchy");
+  writeFileSync(out, xml, "utf8");
+  return { ok: true, action: "dump", path: out, bytes: Buffer.byteLength(xml) };
+}
+
+async function doStart(serial, p) {
+  const pkg = p.package;
+  if (!pkg || !/^[a-zA-Z0-9._]+$/.test(pkg)) throw new Error("start needs safe package");
+  const activity = p.activity;
+  if (activity && !/^[A-Za-z0-9_$.\/]+$/.test(activity)) throw new Error("unsafe activity");
+  if (p.forceStop) {
+    await adbShell(serial, `am force-stop ${pkg}`, 12000);
+    await sleep(500);
+  }
+  let cmd;
+  if (activity) {
+    const comp = activity.includes("/") ? activity : `${pkg}/${activity}`;
+    cmd = `am start -W -n ${comp}`;
+  } else {
+    cmd = `monkey -p ${pkg} -c android.intent.category.LAUNCHER 1`;
+  }
+  const stdout = await adbShell(serial, cmd, 20000);
+  await sleep(800);
+  const raw = await adbShell(
+    serial,
+    "dumpsys window 2>/dev/null | grep -E 'mCurrentFocus|mFocusedApp' | head -3",
+    12000,
+  ).catch(() => "");
+  return { ok: true, action: "start", stdout: String(stdout).slice(0, 2000), focus: parseFocus(raw) };
+}
+
+async function doInputText(serial, p) {
+  const textRaw = p.textB64
+    ? Buffer.from(String(p.textB64), "base64").toString("utf8")
+    : (p.text || "");
+  const text = String(textRaw ?? "")
+    .replace(/\r\n/g, "\n")
+    .replace(/[\r\n]+/g, " ")
+    .replace(/[ \t ]+/g, " ")
+    .trim();
+  if (!text) throw new Error("inputText needs textB64 or text");
+
+  const hasRefocus = p.refocusX != null && p.refocusY != null
+    && Number.isFinite(Number(p.refocusX)) && Number.isFinite(Number(p.refocusY));
+  const clearFirst = !!p.clearFirst;
+  const doEnter = !!p.enter;
+  const deferRestore = !!p.deferRestore;
+
+  const priorImeRaw = await adbShell(serial, "settings get secure default_input_method", 8000).catch(() => "");
+  const priorIme = String(priorImeRaw || "").trim();
+  const audit = {
+    priorIme, bridgeIme: BRIDGE_IME, selected: false, refocused: false,
+    cleared: false, inputAccepted: false, enter: false, restored: false,
+  };
+
+  const restoreIme = async () => {
+    if (!priorIme || priorIme === BRIDGE_IME || priorIme === "null") {
+      audit.restored = true;
+      return;
+    }
+    try {
+      const cur = String(await adbShell(serial, "settings get secure default_input_method", 8000)).trim();
+      if (cur !== priorIme) {
+        const r = await xwInvoke({ action: "selectIme", devices: serial, data: { ime: priorIme } }, 12000);
+        if (r.code !== 10000) throw new Error(`restore selectIme code=${r.code}`);
+      }
+      audit.restored = true;
+    } catch (e) {
+      audit.restoreError = String(e.message || e).slice(0, 200);
+    }
+  };
+
+  try {
+    let cur = String(await adbShell(serial, "settings get secure default_input_method", 8000)).trim();
+    if (cur !== BRIDGE_IME) {
+      const r = await xwInvoke({ action: "selectIme", devices: serial, data: { ime: BRIDGE_IME } }, 12000);
+      if (r.code !== 10000) {
+        throw new Error(`selectIme XwIME failed code=${r.code} ${r.message || ""}`.slice(0, 200));
+      }
+      for (let i = 0; i < 8; i += 1) {
+        await sleep(200);
+        cur = String(await adbShell(serial, "settings get secure default_input_method", 8000)).trim();
+        if (cur === BRIDGE_IME) break;
+      }
+      if (cur !== BRIDGE_IME) throw new Error(`bridge IME not active after selectIme (cur=${cur})`);
+    }
+    audit.selected = true;
+    await sleep(400);
+
+    if (hasRefocus) {
+      const rx = Math.round(Number(p.refocusX));
+      const ry = Math.round(Number(p.refocusY));
+      await adbShell(serial, `input tap ${rx} ${ry}`, 10000);
+      await sleep(600);
+      audit.refocused = true;
+      audit.refocusX = rx;
+      audit.refocusY = ry;
+    }
+
+    if (clearFirst) {
+      await adbShell(
+        serial,
+        "input keyevent KEYCODE_MOVE_END " + Array(48).fill("KEYCODE_DEL").join(" "),
+        8000,
+      );
+      await sleep(150);
+      audit.cleared = true;
+    }
+
+    const ir = await xwInvoke(
+      { action: "inputText", devices: serial, data: { content: text } },
       15000,
     );
-    const parsed = parseFocus(raw);
-    result = { ...result, ...parsed };
-  } else if (action === "dump") {
-    const out = opt("--out");
-    if (!out) throw new Error("dump needs --out win path");
-    mkdirSync(dirname(out), { recursive: true });
-    const token = `${process.pid}-${Date.now()}`;
-    const remote = `/sdcard/xhs-dump-${token}.xml`;
-    await adbShell(`uiautomator dump ${remote}`, 25000);
-    let b64 = "";
-    for (let i = 0; i < 3; i += 1) {
-      b64 = await adbShell(`base64 ${remote}`, 25000).catch(() => "");
-      if (b64 && String(b64).trim()) break;
-      await sleep(400);
+    if (ir.code !== 10000) {
+      throw new Error(`inputText failed code=${ir.code} ${ir.message || ""}`.slice(0, 200));
     }
-    await adbShell(`rm -f ${remote}`, 8000).catch(() => "");
-    const cleaned = String(b64).replace(/\s+/g, "");
-    if (!cleaned) throw new Error("dump empty base64");
-    const xml = Buffer.from(cleaned, "base64").toString("utf8");
-    if (!xml.includes("<hierarchy")) throw new Error("dump missing hierarchy");
-    writeFileSync(out, xml, "utf8");
-    result.path = out;
-    result.bytes = Buffer.byteLength(xml);
-  } else if (action === "start") {
-    const pkg = opt("--package");
-    if (!pkg || !/^[a-zA-Z0-9._]+$/.test(pkg)) throw new Error("start needs safe --package");
-    const activity = opt("--activity");
-    if (activity && !/^[A-Za-z0-9_$.\/]+$/.test(activity)) throw new Error("unsafe --activity");
-    if (flag("--force-stop")) {
-      await adbShell(`am force-stop ${pkg}`, 12000);
-      await sleep(500);
+    audit.inputAccepted = true;
+
+    if (doEnter) {
+      await sleep(200);
+      await adbShell(serial, "input keyevent KEYCODE_ENTER", 8000);
+      audit.enter = true;
     }
-    let cmd;
-    if (activity) {
-      const comp = activity.includes("/") ? activity : `${pkg}/${activity}`;
-      cmd = `am start -W -n ${comp}`;
-    } else {
-      cmd = `monkey -p ${pkg} -c android.intent.category.LAUNCHER 1`;
-    }
-    const stdout = await adbShell(cmd, 20000);
-    await sleep(800);
-    const raw = await adbShell(
-      "dumpsys window 2>/dev/null | grep -E 'mCurrentFocus|mFocusedApp' | head -3",
-      12000,
-    ).catch(() => "");
-    result.stdout = String(stdout).slice(0, 2000);
-    result.focus = parseFocus(raw);
-  } else if (action === "inputText") {
-    // 效卫 XwIME：selectIme → (refocus) → inputText → optional ENTER → restore IME
-    // Flutter：切 IME 后必须 refocus，否则 inputAccepted 但字不进字段。
-    const textB64 = opt("--text-b64");
-    const textRaw = textB64
-      ? Buffer.from(String(textB64), "base64").toString("utf8")
-      : (opt("--text") || "");
-    const text = String(textRaw ?? "")
-      .replace(/\r\n/g, "\n")
-      .replace(/[\r\n]+/g, " ")
-      .replace(/[ \t\u00a0]+/g, " ")
-      .trim();
-    if (!text) throw new Error("inputText needs --text-b64 or --text");
-
-    const refocusX = opt("--refocus-x");
-    const refocusY = opt("--refocus-y");
-    const hasRefocus = refocusX != null && refocusY != null
-      && Number.isFinite(Number(refocusX)) && Number.isFinite(Number(refocusY));
-    const clearFirst = flag("--clear-first");
-    const doEnter = flag("--enter");
-    const deferRestore = flag("--defer-restore");
-
-    const priorImeRaw = await adbShell("settings get secure default_input_method", 8000).catch(() => "");
-    const priorIme = String(priorImeRaw || "").trim();
-    const audit = {
-      priorIme,
-      bridgeIme: BRIDGE_IME,
-      selected: false,
-      refocused: false,
-      cleared: false,
-      inputAccepted: false,
-      enter: false,
-      restored: false,
-    };
-
-    const restoreIme = async () => {
-      if (!priorIme || priorIme === BRIDGE_IME || priorIme === "null") {
-        audit.restored = true;
-        return;
-      }
-      try {
-        const cur = String(await adbShell("settings get secure default_input_method", 8000)).trim();
-        if (cur !== priorIme) {
-          const r = await xwInvoke({ action: "selectIme", devices: serial, data: { ime: priorIme } }, 12000);
-          if (r.code !== 10000) throw new Error(`restore selectIme code=${r.code}`);
-        }
-        audit.restored = true;
-      } catch (e) {
-        audit.restoreError = String(e.message || e).slice(0, 200);
-      }
-    };
-
-    try {
-      let cur = String(await adbShell("settings get secure default_input_method", 8000)).trim();
-      if (cur !== BRIDGE_IME) {
-        const r = await xwInvoke({ action: "selectIme", devices: serial, data: { ime: BRIDGE_IME } }, 12000);
-        if (r.code !== 10000) {
-          throw new Error(`selectIme XwIME failed code=${r.code} ${r.message || ""}`.slice(0, 200));
-        }
-        for (let i = 0; i < 8; i += 1) {
-          await sleep(200);
-          cur = String(await adbShell("settings get secure default_input_method", 8000)).trim();
-          if (cur === BRIDGE_IME) break;
-        }
-        if (cur !== BRIDGE_IME) throw new Error(`bridge IME not active after selectIme (cur=${cur})`);
-      }
-      audit.selected = true;
-      await sleep(400);
-
-      if (hasRefocus) {
-        const rx = Math.round(Number(refocusX));
-        const ry = Math.round(Number(refocusY));
-        await adbShell(`input tap ${rx} ${ry}`, 10000);
-        await sleep(600);
-        audit.refocused = true;
-        audit.refocusX = rx;
-        audit.refocusY = ry;
-      }
-
-      if (clearFirst) {
-        await adbShell(
-          "input keyevent KEYCODE_MOVE_END " + Array(48).fill("KEYCODE_DEL").join(" "),
-          8000,
-        );
-        await sleep(150);
-        audit.cleared = true;
-      }
-
-      const ir = await xwInvoke(
-        { action: "inputText", devices: serial, data: { content: text } },
-        15000,
-      );
-      if (ir.code !== 10000) {
-        throw new Error(`inputText failed code=${ir.code} ${ir.message || ""}`.slice(0, 200));
-      }
-      audit.inputAccepted = true;
-
-      if (doEnter) {
-        await sleep(200);
-        await adbShell("input keyevent KEYCODE_ENTER", 8000);
-        audit.enter = true;
-      }
-    } catch (e) {
-      await restoreIme();
-      throw e;
-    }
-
-    if (!deferRestore) await restoreIme();
-    else audit.restored = false;
-
-    result.audit = audit;
-    result.textLen = text.length;
-    result.textPreview = text.slice(0, 40);
-  } else {
-    throw new Error(`unknown action ${action}`);
+  } catch (e) {
+    await restoreIme();
+    throw e;
   }
 
+  if (!deferRestore) await restoreIme();
+  else audit.restored = false;
+
+  return { ok: true, action: "inputText", audit, textLen: text.length, textPreview: text.slice(0, 40) };
+}
+
+const HANDLERS = {
+  shell: doShell, tap: doTap, focus: doFocus, dump: doDump,
+  start: doStart, inputText: doInputText,
+  // 便捷别名
+  back: async (serial, p) => {
+    const times = Math.max(1, Math.min(5, Number(p.times ?? 1) || 1));
+    for (let i = 0; i < times; i += 1) {
+      await adbShell(serial, "input keyevent 4", 10000);
+    }
+    return { ok: true, action: "back", times };
+  },
+  swipe: async (serial, p) => {
+    const x1 = Math.round(Number(p.x1));
+    const y1 = Math.round(Number(p.y1));
+    const x2 = Math.round(Number(p.x2));
+    const y2 = Math.round(Number(p.y2));
+    const ms = Math.max(50, Number(p.ms ?? 350) || 350);
+    if (![x1, y1, x2, y2].every(Number.isFinite)) throw new Error("swipe needs x1 y1 x2 y2");
+    await adbShell(serial, `input swipe ${x1} ${y1} ${x2} ${y2} ${ms}`, 12000);
+    return { ok: true, action: "swipe", x1, y1, x2, y2, ms };
+  },
+};
+
+async function dispatch(req) {
+  const h = HANDLERS[req.op];
+  if (!h) throw new Error(`unknown op ${req.op}`);
+  return await h(serial, req);
+}
+
+// ---- repl：常驻 pipe，按行读命令/吐结果 ----
+async function runRepl() {
+  const rl = readline.createInterface({ input: process.stdin });
+  rl.on("line", async (line) => {
+    let req;
+    try { req = JSON.parse(line); } catch (e) {
+      process.stdout.write(JSON.stringify({ ok: false, error: `bad json: ${String(e.message || e).slice(0, 120)}` }) + "\n");
+      return;
+    }
+    try {
+      const r = await dispatch(req);
+      process.stdout.write(JSON.stringify(r) + "\n");
+    } catch (e) {
+      process.stdout.write(JSON.stringify({ ok: false, op: req && req.op, error: String(e.message || e).slice(0, 500) }) + "\n");
+    }
+  });
+  rl.on("close", () => process.exit(0));
+  // 给父进程一个就绪信号行，便于它在拿到这条后再开始发命令
+  process.stdout.write(JSON.stringify({ ok: true, action: "repl-ready", serial }) + "\n");
+}
+
+// ---- main ----
+async function main() {
+  if (action === "repl") {
+    await runRepl();
+    return; // 常驻，不打印单发结果
+  }
+  // 单发：把 argv 参数翻译成 dispatch 入参
+  const req = { op: action };
+  if (action === "shell") {
+    req.cmd = opt("--cmd");
+    req.cmdB64 = opt("--cmd-b64");
+  } else if (action === "tap") {
+    req.x = opt("--x");
+    req.y = opt("--y");
+  } else if (action === "dump") {
+    req.out = opt("--out");
+  } else if (action === "start") {
+    req.package = opt("--package");
+    req.activity = opt("--activity");
+    req.forceStop = flag("--force-stop");
+  } else if (action === "inputText") {
+    req.text = opt("--text");
+    req.textB64 = opt("--text-b64");
+    req.refocusX = opt("--refocus-x");
+    req.refocusY = opt("--refocus-y");
+    req.clearFirst = flag("--clear-first");
+    req.enter = flag("--enter");
+    req.deferRestore = flag("--defer-restore");
+  } else if (action === "back") {
+    req.times = Number(opt("--times", "1") || 1);
+  } else if (action === "swipe") {
+    req.x1 = opt("--x1"); req.y1 = opt("--y1"); req.x2 = opt("--x2"); req.y2 = opt("--y2");
+    req.ms = opt("--ms");
+  }
+  const result = await dispatch(req);
+  result.serial = serial;
   console.log(JSON.stringify(result));
-} catch (e) {
+}
+
+main().catch((e) => {
   console.log(JSON.stringify({ ok: false, action, serial, error: String(e.message || e).slice(0, 500) }));
   process.exit(5);
-}
+});
