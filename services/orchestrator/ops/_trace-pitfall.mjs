@@ -11,6 +11,7 @@
 //   - 单次失败 → 只记 trace，不写知识库
 //   - 同一签名（serial+op+normalizedError）滚动 7 天内 ≥2 次，或 ≥2 台设备同一签名 → POST
 // 只写 lifecycle=probe_unknown，绝不自动升 active_blocker/backlog。
+// 多机条件按 op+norm（不含 serial）聚设备数：签名 key 若含 serial，每桶恒 1 台，≥2 机永远触发不了。
 //
 // 依赖：Windows 本机 registry http://127.0.0.1:17930；node:fs / node:child_process / node:path / node:crypto
 import { readFileSync, readdirSync } from "node:fs";
@@ -123,29 +124,46 @@ function main() {
     }
   }
 
-  // 签名 → 次数 + 设备集合
-  const sigCount = new Map(); // sigKey -> {count, firstTs, lastTs, serials:Set, ops:Set, alias, errors:[]}
+  // 签名 → 次数 + 设备集合（key=serial|op|norm，同机重复用）
+  const sigCount = new Map(); // sigKey -> {serial, op, norm, count, firstTs, lastTs, alias, errors:[]}
+  // 设备桶（key=op+norm，不含 serial）→ 统计"≥2 台设备同一签名"
+  // 修复 review bug：签名 key 带 serial 时每桶 serials.size 恒为 1，多机条件永远触发不了
+  const devBuckets = new Map(); // devKey(JSON) -> {op, norm, count, firstTs, lastTs, serials:Set, alias, errors:[]}
   for (const f of allFail) {
     const sig = signatureOf(f.serial, f.op, f.error);
     const k = sigKey(sig);
-    const e = sigCount.get(k) || { count: 0, firstTs: f.ts, lastTs: f.ts, serials: new Set(), alias: f.alias, errors: [] };
+    const e = sigCount.get(k) || { serial: f.serial, op: f.op, norm: sig.norm, count: 0, firstTs: f.ts, lastTs: f.ts, serials: new Set(), alias: f.alias, errors: [] };
     e.count += 1;
     e.serials.add(f.serial);
     e.errors.push(f.error);
     if (f.ts < e.firstTs) e.firstTs = f.ts;
     if (f.ts > e.lastTs) e.lastTs = f.ts;
     sigCount.set(k, e);
+
+    // 多机层：按 op+norm（不含 serial）聚 distinct 设备数
+    const dk = JSON.stringify([sig.op, sig.norm]); // JSON key，避免 norm 里的 | 撞分隔符
+    const d = devBuckets.get(dk) || { op: sig.op, norm: sig.norm, count: 0, firstTs: f.ts, lastTs: f.ts, serials: new Set(), alias: f.alias, errors: [] };
+    d.count += 1;
+    d.serials.add(f.serial);
+    d.errors.push(f.error);
+    if (f.ts < d.firstTs) d.firstTs = f.ts;
+    if (f.ts > d.lastTs) d.lastTs = f.ts;
+    devBuckets.set(dk, d);
   }
 
-  // 达阈值：同签名 ≥2 次，或 ≥2 台设备
+  // 达阈值：同签名（serial+op+norm）滚动 7 天 ≥2 次（repeat）；或 ≥2 台设备同 op+norm（multi-device）
   const qualified = [];
-  for (const [k, e] of sigCount) {
-    const [serial, op, norm] = k.split("|");
-    const multiDevice = e.serials.size >= 2;
-    const repeat = e.count >= REPEAT_THRESHOLD;
-    if (repeat || multiDevice) {
-      qualified.push({ serial, op, norm, ...e });
+  const multiDevKeys = new Set(); // 已按 ≥2 机入列的 op+norm，per-serial 重复条目被涵盖则跳过
+  for (const [dk, d] of devBuckets) {
+    if (d.serials.size >= 2) {
+      multiDevKeys.add(dk);
+      qualified.push({ multi: true, ...d });
     }
+  }
+  for (const e of sigCount.values()) {
+    const dk = JSON.stringify([e.op, e.norm]);
+    if (multiDevKeys.has(dk)) continue; // 该签名已以多机条目 POST，不重复 per-serial
+    if (e.count >= REPEAT_THRESHOLD) qualified.push({ multi: false, ...e });
   }
 
   console.log(`trace files: ${dates.join(", ")}`);
@@ -163,23 +181,26 @@ function main() {
       const j = JSON.parse(resp);
       const hit = (j.knowledge || []).some((x) => {
         const title = String(x.title || "");
-        return title.includes("auto-") && (title.includes(q.op) || title.includes(q.serial));
+        return title.includes("auto-") && (title.includes(q.op) || (q.serial && title.includes(q.serial)));
       });
       existing = hit;
     } catch { /* query failed → assume not existing, will 409-guard on POST */ }
 
     if (existing) { skipped += 1; continue; }
 
-    const sigHash = hash8(`${q.serial}|${q.op}|${q.norm}`);
-    const id = `auto-${q.serial}-${q.op}-${sigHash}`;
-    const title = `[auto] ${q.alias || q.serial} ${q.op} failure: ${q.norm.slice(0, 60)}`;
+    const multi = !!q.multi;
+    const sigHash = hash8(`${multi ? "multi" : q.serial}|${q.op}|${q.norm}`);
+    const id = `auto-${multi ? `multi-${q.serials.size}` : q.serial}-${q.op}-${sigHash}`;
+    const title = `[auto] ${multi ? `multi-device(${q.serials.size})` : (q.alias || q.serial)} ${q.op} failure: ${q.norm.slice(0, 60)}`;
+    const devices = [...q.serials].join(", ");
+    const dumpsGlob = multi ? "fail-<serial>-* (per device)" : `fail-${q.serial}-*`;
     const content =
       `Auto-detected from trace ${q.firstTs}..${q.lastTs}.\n\n` +
-      `Serial: ${q.serial}\nAlias: ${q.alias || "-"}\nOp: ${q.op}\n` +
-      `Occurrences: ${q.count} (${q.serials.size} device(s))\n` +
+      `Devices: ${devices}\nAlias: ${q.alias || "-"}\nOp: ${q.op}\n` +
+      `Occurrences: ${q.count} across ${q.serials.size} device(s)\n` +
       `First/Last: ${q.firstTs} / ${q.lastTs}\n\n` +
       `Sample errors:\n${q.errors.slice(0, 3).map((e) => "  - " + String(e).slice(0, 300)).join("\n")}\n\n` +
-      `Context dumps (if any): C:\\Users\\Public\\xhs-agent-runs\\ops-trace\\context\\fail-${q.serial}-*\n` +
+      `Context dumps (if any): C:\\Users\\Public\\xhs-agent-runs\\ops-trace\\context\\${dumpsGlob}\n` +
       `Steps: view context dump -> reproduce -> classify transient or persistent`;
     const body = {
       id,
@@ -188,7 +209,7 @@ function main() {
       lifecycle: "probe_unknown",
       title,
       content,
-      appliesTo: [q.serial],
+      appliesTo: [...q.serials],
       verifyMode: "human",
       steps: ["查看 context dump", "复现", "判断偶发/持久"],
     };
