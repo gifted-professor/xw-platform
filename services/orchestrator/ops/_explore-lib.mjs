@@ -33,6 +33,15 @@ export function parseArgs(argv) {
   return { opt, flag };
 }
 
+// 推导调用本 lib 的脚本名（如 xhs-like-one），供 trace --tag 使用。
+function callerScriptName() {
+  try {
+    const p = process.argv[1];
+    if (!p) return null;
+    return String(p).split(/[\\/]/).pop().replace(/\.mjs$/, "") || null;
+  } catch { return null; }
+}
+
 /**
  * 本地模式：不经 SSH，本机直连 17930/17920/22222 + 本机 node helper。
  * 触发：XHS_LOCAL=1 | --local | win32 自动；XHS_LOCAL=0 显式关掉自动。
@@ -151,15 +160,21 @@ export function ensureWinHelper(ssh, localName = "_win-xiaowei.mjs") {
 }
 
 export function runWinXiaowei(ssh, remoteHelper, args) {
+  const finalArgs = [...args];
+  // 注入调用方脚本名供 trace --tag；alias 由调用方可选传（原子脚本暂无则跳过）
+  const scriptName = callerScriptName();
+  if (scriptName && !finalArgs.includes("--tag")) {
+    finalArgs.push("--tag", scriptName);
+  }
   try {
     if (isLocalMode()) {
-      return execFileSync(process.execPath, [remoteHelper, ...args], {
+      return execFileSync(process.execPath, [remoteHelper, ...finalArgs], {
         encoding: "utf8",
         maxBuffer: 16 * 1024 * 1024,
         stdio: ["ignore", "pipe", "pipe"],
       });
     }
-    return execFileSync("ssh", [...SSH_OPTS, ssh, "node", remoteHelper, ...args], {
+    return execFileSync("ssh", [...SSH_OPTS, ssh, "node", remoteHelper, ...finalArgs], {
       encoding: "utf8",
       maxBuffer: 16 * 1024 * 1024,
       stdio: ["ignore", "pipe", "pipe"],
@@ -235,11 +250,14 @@ export function parseKVLines(text) {
 export function openWinXwSession(ssh, alias) {
   const { serial } = resolveDevice(ssh, alias);
   const helper = ensureWinHelper(ssh);
+  const scriptName = callerScriptName();
+  const replArgs = ["--serial", serial, "--action", "repl", "--alias", alias];
+  if (scriptName) replArgs.push("--tag", scriptName);
   const child = isLocalMode()
-    ? spawn(process.execPath, [helper, "--serial", serial, "--action", "repl"], {
+    ? spawn(process.execPath, [helper, ...replArgs], {
         stdio: ["pipe", "pipe", "ignore"],
       })
-    : spawn("ssh", [...SSH_OPTS, ssh, "node", helper, "--serial", serial, "--action", "repl"], {
+    : spawn("ssh", [...SSH_OPTS, ssh, "node", helper, ...replArgs], {
         stdio: ["pipe", "pipe", "ignore"],
       });
   const pending = [];

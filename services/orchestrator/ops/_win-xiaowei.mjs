@@ -3,8 +3,8 @@
 //   常驻：node _win-xiaowei.mjs --serial <id> --action repl
 //        stdin 按行读 JSON 命令 {op, ...}，stdout 按行回 JSON 结果。
 //        一条 ssh channel + 一个 node 进程常驻，一串动作复用，单动作延迟从 ~1.2s 降到 ~0.2s。
-import { writeFileSync, mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { writeFileSync, mkdirSync, appendFileSync, copyFileSync, existsSync } from "node:fs";
+import { dirname, join } from "node:path";
 import * as readline from "node:readline";
 
 const argv = process.argv.slice(2);
@@ -18,9 +18,70 @@ const BRIDGE_IME = "com.android.xwkeyboard/.XwIME";
 
 const serial = opt("--serial");
 const action = opt("--action");
+const traceAlias = opt("--alias", null); // 调用方注入：设备 01-04
+const traceTag = opt("--tag", null);     // 调用方注入：脚本名，如 xhs-like-one
 if (!serial || !action) {
   console.log(JSON.stringify({ ok: false, error: "need --serial and --action" }));
   process.exit(2);
+}
+
+// ---- trace：被动记录每个设备动作，best-effort，绝不抛 ----
+const TRACE_DIR = "C:/Users/Public/xhs-agent-runs/ops-trace";
+const CONTEXT_DIR = join(TRACE_DIR, "context");
+let lastSuccessfulDumpPath = null;
+
+function traceRecord(op, ok, req, res, startMs) {
+  try {
+    mkdirSync(TRACE_DIR, { recursive: true });
+    const date = new Date().toISOString().slice(0, 10);
+    const line = JSON.stringify({
+      ts: new Date().toISOString(),
+      serial,
+      alias: traceAlias || null,
+      tag: traceTag || null,
+      pid: process.pid,
+      op,
+      ok: !!ok,
+      durationMs: Math.max(0, Date.now() - startMs),
+      req: scrubReq(op, req),
+      error: ok ? undefined : ((res && (res.error || res.message)) ? String(res.error || res.message).slice(0, 500) : String(res || "").slice(0, 500)),
+    }) + "\n";
+    appendFileSync(join(TRACE_DIR, `${date}.jsonl`), line, "utf8");
+  } catch { /* trace 是尽力而为，绝不炸主流程 */ }
+}
+
+function scrubReq(op, req) {
+  if (!req) return undefined;
+  const r = { ...req };
+  // 脱敏：不落 base64 原文
+  delete r.textB64;
+  delete r.cmdB64;
+  if (op === "inputText") {
+    r.textPreview = String(r.text || "").slice(0, 30);
+    delete r.text;
+  }
+  return r;
+}
+
+function saveFailureContext(req, errorText) {
+  try {
+    mkdirSync(CONTEXT_DIR, { recursive: true });
+    const ts = Date.now();
+    const prefix = join(CONTEXT_DIR, `fail-${serial}-${ts}`);
+    // copy session 内最后成功的 dump（无则只写 error.json，不伪造）
+    if (lastSuccessfulDumpPath && existsSync(lastSuccessfulDumpPath)) {
+      copyFileSync(lastSuccessfulDumpPath, `${prefix}-dump.xml`);
+    }
+    writeFileSync(`${prefix}-error.json`, JSON.stringify({
+      ts: new Date().toISOString(),
+      serial,
+      alias: traceAlias,
+      tag: traceTag,
+      failedOp: req && req.op,
+      error: String(errorText || "").slice(0, 500),
+      lastDumpPath: lastSuccessfulDumpPath,
+    }, null, 2), "utf8");
+  } catch { /* best-effort */ }
 }
 
 function sleep(ms) {
@@ -288,7 +349,25 @@ const HANDLERS = {
 async function dispatch(req) {
   const h = HANDLERS[req.op];
   if (!h) throw new Error(`unknown op ${req.op}`);
-  return await h(serial, req);
+  const start = Date.now();
+  try {
+    const result = await h(serial, req);
+    if (result && result.ok === false) {
+      // handler 返回 ok:false 但不抛（如某些失败走返回路径）——同样记失败
+      traceRecord(req.op, false, req, result, start);
+      saveFailureContext(req, result.error);
+      return result;
+    }
+    traceRecord(req.op, true, req, result, start);
+    if (req.op === "dump" && result && result.ok && result.path) {
+      lastSuccessfulDumpPath = result.path;
+    }
+    return result;
+  } catch (e) {
+    traceRecord(req.op, false, req, { error: e.message }, start);
+    saveFailureContext(req, e.message);
+    throw e;
+  }
 }
 
 // ---- repl：常驻 pipe，按行读命令/吐结果 ----
@@ -307,7 +386,10 @@ async function runRepl() {
       process.stdout.write(JSON.stringify({ ok: false, op: req && req.op, error: String(e.message || e).slice(0, 500) }) + "\n");
     }
   });
-  rl.on("close", () => process.exit(0));
+  rl.on("close", () => {
+    traceRecord("_session_end", true, {}, {}, Date.now());
+    process.exit(0);
+  });
   // 给父进程一个就绪信号行，便于它在拿到这条后再开始发命令
   process.stdout.write(JSON.stringify({ ok: true, action: "repl-ready", serial }) + "\n");
 }
