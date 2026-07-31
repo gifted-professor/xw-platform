@@ -91,8 +91,16 @@
 
 | 什么 | 在哪 |
 |---|---|
-| registry（身份/审批/知识库/面板） | Windows `127.0.0.1:17930`（手机经 tailscale `127.0.0.1:17930/?token=...`，token 在 Windows 任务 argLine） |
+| registry（身份/审批/知识库/面板/舰队/截图/Operator） | Windows `127.0.0.1:17930`（手机经 tailscale `127.0.0.1:17930/?token=...`，token 在 Windows 任务 argLine） |
 | 控制面 | Windows `127.0.0.1:17920` |
-| 设备 serve | 01→17895 / 02→17897 / 04→17896（loopback） |
+| 设备 serve | 01→17895 / 02→17897 / 03→17898 / 04→17896（loopback） |
 | MiMo 委派 | `mimo-ro run --dir <项目> "任务"`（key 池自动轮换） |
 | Windows 访问 | `ssh xhs-windows`（PowerShell；curl 用 curl.exe；复杂命令用 EncodedCommand） |
+
+## abtop 远程通道（2026-07-29 起，只读/受控）
+
+abtop 后端（浏览器控制台）**不直连** 17920/22222/ADB/control.db；统一经 registry 17930 的 Tailscale 入口，用独立 token：
+
+- `--observer-token`（只读）：`GET /api/fleet`（脱敏舰队：online/ready/隔离/占用/当前任务/reported actor/数据新鲜度）、`GET /api/fleet/screen/:alias[/meta]`（cache-only 已采集截图，刷新**不触发**设备 Screen/job/lease）。写知识库/审批 → 403。
+- `--operator-token`（受控提交）：`POST /api/operator/submit`（白名单 capability → 正式 job 提交控制面，actor 强制 `abtop:` 前缀）、`GET /api/operator/job/:id`（代理状态）、`POST /api/operator/session`（预留 501）。R0/R1 只读与 dry-run 白名单内真代提交；R2 外发仍走现有人工审批。
+- 部署：token 与 `--runs-root`（截图根目录，默认 `C:\Users\Public\xhs-agent-runs`）由 `install-registry-task.ps1 -ObserverToken … -OperatorToken … -RunsRoot …` 传入。

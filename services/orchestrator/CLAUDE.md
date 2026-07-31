@@ -72,10 +72,12 @@ cat watchdog/state.json
 
 `npm test`（node --test，tests/registry.test.mjs，13 个集成测试：起真实 registry 子进程 + 临时 sqlite + 假控制面）；`npm run check` 对三个 .mjs 跑 `node --check`。改 registry 行为必须先过这两个，再手动验关键端点：`/api/health`、`/api/agent-entry`、`/agent-entry.md`、`/api/approvals/pending`、面板 `/`。业务链验收仍靠 E2E 实跑，验收独立（执行者不自评）。
 
-## 鉴权模型（2026-07-27 起）
+## 鉴权模型（2026-07-27 起；2026-07-29 加 observer/operator）
 
 - `--agent-token`：读一切 + 写知识库/身份，**不能审批**（回落旧 `--token`）。
 - `--human-token`：唯一能 `approve/deny` 的凭证；actor 由凭证推导（`human:<--human-actor>`），body 自报无效；API approve 还需 `{"confirm":"APPROVE"}`。
+- `--observer-token`：**只读**角色，供 abtop 后端经 Tailscale 远程查看脱敏舰队状态与已采集截图；写知识库/身份/审批一律 403。
+- `--operator-token`：**受控提交**角色，仅能调 `/api/operator/*`；abtop 后端把白名单 capability 转成正式 job 提交到控制面，浏览器不直连 17920/22222/ADB/control.db；不能审批、不能写知识库。
 - loopback 免凭证 = 只读 + 知识库/身份写，永远不含审批。
 - **不传 `--human-token` = LEGACY 模式**，行为与旧单 token 版完全一致（迁移期兼容，长期必须带 human token 跑）。
 - 审批留痕：registry.db `approval_audit` 表，`GET /api/approvals/audit?limit=` 可查。
@@ -117,6 +119,12 @@ cat watchdog/state.json
 | GET `/api/approvals/recent?limit=` | 最近审批 |
 | GET `/api/approvals/audit?limit=` | registry 侧审批审计记录 |
 | POST `/api/approvals/:jobId/approve\|deny` | 代理到控制面（**仅 human token**；approve 需 body.confirm="APPROVE"；actor 凭证推导） |
+| GET `/api/fleet` | 脱敏舰队视图（observer/任意非 null role 可读；剥 serial/label/accounts/路径等） |
+| GET `/api/fleet/screen/:alias` | cache-only 最近截图（image/png + ETag；**绝不触发设备 Screen/job/lease**） |
+| GET `/api/fleet/screen/:alias/meta` | 同上 meta（sha256/bytes/createdAt/jobId/runId/ageSeconds，无字节） |
+| POST `/api/operator/submit` | abtop 代提交白名单 job（**仅 operator token**；actor 强制 `abtop:` 前缀；非白名单 403） |
+| GET `/api/operator/job/:id` | 代理控制面 job 状态（operator/observer/human 可读） |
+| POST `/api/operator/session` | session 转换预留（返回 501，占 namespace） |
 
 ## watchdog（无人值守验收，本目录自管）
 

@@ -1,6 +1,6 @@
 # xhs-registry 进度
 
-> 最后更新：2026-07-28 14:40 CST（Flutter typed HTTP tap canary 已绿；并发默认临时收敛到 01/02）
+> 最后更新：2026-07-28 21:52 CST（03/04 serve 恢复 + fleet 4/4 ready）
 
 ## 一句话现状（北极星，所有 agent 必读）
 
@@ -11,6 +11,10 @@
 **代码真源（2026-07-27 方案 A）**：GitHub `gifted-professor/xhs-device-agent` 的 **`main`** 是唯一权威。已合并 PR [#14](https://github.com/gifted-professor/xhs-device-agent/pull/14)（control-plane → main，merge `2923bef`）+ [#15](https://github.com/gifted-professor/xhs-device-agent/pull/15)（placement-entry v1.1 + 闲鱼恢复/4 机并发 → main，merge **`1f7ae22`**）。业务 tip `953d187`（discard-dry-run relaunch）已在 main 祖先链上。约定：新活从 `main` 拉短分支；禁止再往 `agent/placement-entry-v1-1-20260724` 长支无限堆；Windows `C:\Users\Public\xhs-routing-v1-1` 应对齐 `main`（`git checkout main && git pull`，`task-launch.json` gitCommit = **完整 40 字符** `git rev-parse HEAD`）。旧 draft 长支可留作考古，不再当生产入口。
 **Agent 入口（2026-07-26 已落地并通过四机 Phase A）**：碰机必须 `session acquire` / `job submit`（lease 可见）。`GatewayOperator`、XHS serve、旧 task-runner/greenarrow 直调均 fail-closed；退役 dashboard 的 legacy guard 默认也已切到 `enforce`。实验旁路必须同时设置 `XHS_ALLOW_BYPASS=1` 和非空 `XHS_BYPASS_REASON`，且不计生产验收。lease 授权同时绑定 public device id 与 private runtime id。`a982374` 已修复 canary session action 误按普通 job 路由的问题；01 canary 与 01–04 四 lease + 并发 `imeList` 均通过，最终 leases/pending 归零。完整交接见 **`HANDOFF-2026-07-26-agent-entry-xianyu-verify.md`**。
 **2026-07-28 两项能力缺口已补**：Windows `main`/task-launch 已对齐 `1b81c3cfda549f5b1a009cbbafbea2b7277acfa1`。01 canary `job_3be1ff61-9267-41a5-9e25-32177c3c7b09` 通过 `xianyu.probe.flutter_pointer_tap`：发布编辑页经 typed HTTP tap 进入 Flutter SKU 规格页，`httpTapAttempts=3`、`httpTapSucceeded=3`、`gatewayTapFallbacks=0`，verification/restoration 均 true，session 已释放。效卫 22222 仍为单实例共享连接，控制面跨设备 job 可重叠、传输请求全局串行；按用户决定，默认并发入口改为 `ops/conc2-full-dry-run.mjs`，硬固定 01/02，03/04 暂不进入默认并发。知识库：`xianyu-flutter-typed-http-tap-verified-20260728`、`xiaowei-concurrency-conc2-serialized-transport-20260728`。
+**2026-07-28 ops 交互传输丝滑化（零锁、零新服务）**：根因不是 22222 锁（控制面 named lock `transport:xiaowei:22222` 已在工作且无死锁），而是 lab/ops 交互路径每个原子动作都付一次完整 SSH 握手 + 新起 node + 新开 WS（~1.2s/动作，Tailnet→Windows OpenSSH channel 开销 ~1s + node 启动 ~0.3s）。`ops/_explore-lib.mjs` 三处改：① 全部 ssh/scp 加 `ControlMaster=auto`+固定 `ControlPath=~/.ssh/cm-xhs-windows`+`ControlPersist=600`，多动作共享一条常驻 TCP；② serial 本地缓存（`~/.xhs-serial-cache.json`，TTL 5min，`XHS_NO_SERIAL_CACHE=1` 逃生口），热路径不再每次 ssh+curl 查 registry 17930；③ `ensureWinHelper` 按远端 size 匹配才 scp，dev 改了 helper 自动重传。`ops/_win-xiaowei.mjs` 加 `repl` action：一个 node 进程常驻、按行读 stdin JSON 命令/吐 stdout JSON 结果，动作处理提为共享函数。`ops/_explore-lib.mjs` 加 `openWinXwSession()`（spawn repl + readline 收发）。实测：单发 `echo` ~1.2s→session ~40ms，`focus` ~1.2s→~225ms（dumpsys 设备端）；`xhs-like-one.mjs --dry-run` 已改用 session，全流程 17.18s（其中 ~7s UI sleep + ~7s uiautomator dump，传输不再是瓶颈）。单发 primitive（tap/shell/swipe/back/focus）仍保留 argv 模式供手敲 ad-hoc。本改动只覆盖 lab/ops 路径，不碰控制面 job 路径（conc4 的 720s 超时是另一回事，见 backlog）。
+**2026-07-28 收藏误报 + 发草稿 flake 修复（均为时序，非字段 bug）**：全量回归 7/9，两处 ⚠️ 实际动作成功但脚本判定失败。① `xhs-collect-one` 误报——用户初判「字段名冲突取了 LIKE」，核对代码不成立：其 verdict 与全绿的 `xhs-engage-one.doCollectAction` 逐字相同（都只读 `bar.collect`、从不读 `bar.like`），同逻辑不同结果 = verify dump 抓到未翻转底栏（a11y label 滞后于服务端计数）。修法：计数比对（21→22 即成功）+ 未确认则再等 1200ms 重 dump 一次。② `xhs-publish-draft` `caption_page_not_reached`——相册→(滤镜)→文案偶需两次「下一步」，且 22222 排队致「下一步」tap 丢失时循环 2 轮不够。修法：循环 2→3 轮、首步 settle 2800→3000、「下一步」tap 后比对 focus 没动则重点一次。两处 `node --check` + `npm test` 26/26 通过；未跑 live E2E（真收藏/真填草稿为账号动作，待回归 harness 复验）。
+**2026-07-28 03/04 serve 恢复 + fleet 4/4 ready（21:52 CST）**：根因：Hermes `xhs.observe.feed` 巡探（~08:05）发现四机 device serve 全挂（17895–98 无 LISTEN）；03 另缺 `metadata.xhsServePort` → `XHS_SERVE_UNCONFIGURED`。修法：Windows `control-plane.devices.json` 补 03→`17898`；新建并部署 `C:\Users\Public\xhs-registry\serve-restart-03.ps1`；`serve-restart-03/04.ps1` 拉起 03/04 serve（17898/17896 health 200）；控制面 `schtasks` 重启 reload 配置。刷绿：04 pinned `xiaowei.device.list` **`job_3c9ecfd2` succeeded**；03 同 capability **`job_ca078eba` succeeded**（中间 snapshot `job_d4ab4570` 仍 `GATEWAY_DEVICE_PROBE_FAILED`，不影响 registry ready）。终态 agent-entry **4/4 ready、0 lease**；01 serve `:17895` 仍无 LISTEN 但 ready 保持（闲鱼 R0 不依赖 xhs serve）。**待观察**：03 闲鱼 snapshot 仍 probe 失败，下次 xianyu job 前建议现场确认 USB/效卫枚举。
+**2026-07-28 ops 4 个 recipe 落地（定位数据来自已验证探索，未重探）**：① `ops/xhs-follow-one.mjs` 新建——detail 页关注，用 `openWinXwSession` 抄 xhs-like-one 结构，`findFollowBtn` 按节点定位（禁硬编码，已验坐标 846,161 命中），verify 用 re-dump 重试，`--dry-run` 只定位。实测 01 dry-run：`FOLLOW_XY=846,161`、`FOLLOW_BEFORE=关注`、定位准不 tap。② `ops/_xhs-parse.mjs` 加 4 函数：`findFollowBtn`/`followState`（已关注|回关|相互关注=followed，先判已关注避免子串误中）/`findCommentBox`/`parseComments`（返回 `{count,box,items}`，启发式不强求完美，空输入安全）。③ `ops/xhs-search.mjs --pages N`——swipe up 翻页、跨页 title+author 去重、focus 漂走/无新卡即停，`--pages 1` 行为不变。实测 02 `--pages 2`：PAGE1=4→PAGE2 fresh=4→COUNT=8、`PAGES_DONE=2`。④ `ops/xhs-publish-draft.mjs --publish`——默认仍不点发布（行为零破坏），`--publish` 经授权才点：空 caption fail-closed、点前留痕 `ABOUT_TO_PUBLISH=yes`+`PUBLISH_BTN=`+`CAPTION=`、点一次不重试、verify 离开文案页或回主页。全套 `node --check` + `npm test` 26/26 + `npm run check` 通过。follow-dry-run / search-pages 已 live 验；publish `--publish` 真发布不可逆，待人授权实跑。规格见 `docs/grok-recipes-2026-07-28.md`。
 
 ### Agent 统一入口与占用控制台（2026-07-26 20:39 CST）
 
@@ -81,6 +85,37 @@
 - **04 局部恢复（2026-07-28）**：旧失败 `job_0b5c725e-...` 为 `failed/VERIFICATION_FAILED` 但 `restoration.ok=true`、未隔离、lease 空；`xianyu.observe.snapshot` 对 04 route plan 明确 `NO_ELIGIBLE_DEVICE`，故不盲跑旧 L1/不写路由。改走单台 R1 campaign dry-run `job_d2565f31-58f4-49db-bb1b-f22c643e11bb`（`saveDraft=false`、`skipUpload=true`），终态 succeeded、verification/restoration true、lease 释放，04 ready 刷绿。
 - **设备 01 现场提醒**：bypass 直跑无控制面 lease → 无自动 restore，01 末态停在 `com.taobao.idlefish` FlutterBoost（非 home、非 compose）；下次控制面 job 的 `open` 步 force-stop+relaunch 会自重置，或手动 discard。
 
+### xhs.follow.ensure capability（2026-07-29）
+
+- **新增控制面 capability `xhs.follow.ensure`**：R2 / approval_required / approval_gated，仅接入 01。动机=补 `xhs-follow-one.mjs`（Explorer lab 脚本、随机点信息流卡片关注其作者、无 lease/无审批）的正道；同时修 `ops/_xhs-parse.mjs` `findFollowBtn` 旧 bug（精确匹配 `关注` → 关注后变 `已关注` 找不到 → 误判失败）。
+- **决策**：**VERIFY-ONLY on pre-positioned device**（镜像 commentOnOpenNote 范式）——capability 不导航/不开卡/不进 feed，input 仅一个必填 `targetUser`。operator 读主页浮层作者名 → normalizeUser 精确比对 targetUser → 不一致/读不到 **fail-closed 不 tap** → 分类关注按钮四态 → 已关注幂等 skip → 否则 tap → 重 dump 读 afterState → 标签明确翻到 followed 才算成功（after 空 ≠ 成功）。
+- **两仓分工**：控制面 capability 全部落 GPFS 路由仓 `xhs-device-agent`（worktree `xhs-follow-ensure`，从 origin/main 拉分支 `feat/xhs-follow-ensure-20260729`）；registry 仓只做解析加固 + fixture 测试。
+- **GPFS 改动**（worktree，未 push/未部署）：`apps/xhs/capabilities.json`（capability 条目，capability count 19→20）、`scripts/fast-operator.mjs`（helpers `profileOverlayOpen`/`profileAuthor`/`findFollowBtn` + `followEnsure` 方法 + serve `case "followEnsure"`）、`apps/xhs/adapter.mjs`（verify 分支 `afterState==="followed"`、ambiguous）、`control-plane/lib/control-plane.mjs`（resultSummary whitelist 加 targetUser/extractedAuthor/beforeState/afterState）、`config/control-plane.devices.example.json`（01 capabilityIds 加 `xhs.follow.ensure`）、三处测试（capability-registry count=20 + policy、control-plane-adapters followEnsure verify/not-sent、新建 fast-operator-follow 14 fixture）。
+- **registry 仓改动**：`ops/_xhs-parse.mjs` `findFollowBtn` 收紧为 **exact-set 等值** `{关注,已关注,回关,相互关注}`（trim，text/desc 分开，避免 `关注的话题` 假阳）；`followState` 修正 `回关`→unfollowed（对方关注你、你未关注，tap 即回关；旧代码误归 followed 会被 Explorer 当已关注跳过）；新增 `findProfileAuthor(xml)`（tier-1 `^头像[,，]` desc 取名，tier-2 顶部 TextView 兜底仅诊断）。新建 `tests/xhs-parse.test.mjs`（10 fixture：四状态/desc-only/缺失/假阳/作者正确/缺失/错误目标）。
+- **测试**：GPFS `npm test` **233/233** 全绿（+2：control-plane 全链 afterStateUnknown→ambiguous、normalize 碰撞反例）；registry `npm test` **33/33** + `npm run check` + `node --check ops/_xhs-parse.mjs` 全绿；GPFS `npm run check`（check-js 59 + secret-scan）全绿。
+- **P0 修复（独立验收 Request Changes 后，2026-07-29）**：独立 review 发现两个影响真实关注安全的代码问题，已修+补反例测试：
+  1. **tap 后失败被误标 notSent**：adapter 对所有 `result.ok===false` 统一设 `notSent=true`，但 `afterStateUnknown/notFlipped` 发生在 tap **之后** → 控制面据此落 `failed`（错误声称关注未发出）。修：operator 输出 `sent:true/false`；adapter 分类——`sent===true`→`error.sent+ambiguous`（→ 控制面 `ambiguous`，绝不 notSent），`sent!==true`→`notSent=true`（tap 前守卫）。补 control-plane 全链测试：`afterStateUnknown(sent)`→terminal `ambiguous`、`authorMismatch(notSent)`→`failed`、`followed`→`succeeded` 且公共 result 不含昵称。
+  2. **normalize 碰撞**：旧 `norm` 删内部 `_/-/·/空格` → `a-b==ab`、`张·三==张三`，错误目标能通过作者守卫（R2 阻断）。修：只做 `NFKC + trim + strip 前导@`，不删内部标点、不 lowercase；补碰撞反例测试（`a-b`≠`ab`、`张·三`≠`张三`→authorMismatch 不 tap）。长期应传稳定用户 ID，昵称非强身份锚点。
+  3. **公共结果脱敏**：resultSummary whitelist 去掉 `targetUser/extractedAuthor`（account identifier，agent-entry.md 规定公共 API 不得返回），改留脱敏 `authorMatched` 布尔 + `beforeState/afterState/restored/finalActivity`；原始昵称只在受控 serve 响应/审批终端可见。
+  4. **restoration 一致性**：`restoration.required=false`（UI 清理是 inline best-effort，非 quarantine 触发；follow 外部效应不由 restoration 撤销），但 operator 现如实报告 `backFromProfile` 的 `restored/finalActivity`（验证是否真回 IndexActivityV2）。
+  5. **maturity/availability 取舍**：保留 `maturity=E2`+`availability=approval_gated`——E0/E1 会触发 canary-session 闸门违背 req#1 job-only 模型；`dependency_pending_*` 会触发 `NO_ELIGIBLE_DEVICE` 硬闸连回归 job 都提交不了。manifest 是契约 spec（R2 人审批门），「尚未真机验证」由 `evidence=[]`+未部署 Windows live config+本节诚实记录体现，不靠 availability（availability 是路由硬闸，非文档字段）。
+- **待办（诚实）**：
+  - **未 push/未部署**：GPFS worktree 改动尚未 commit/push/PR/合 main；Windows 控制面未 pull/未重启；`config/control-plane.devices.json`（Windows 本地 live）01 capabilityIds 未加；registry `_xhs-parse.mjs` 未按 SHA256 传 Windows。
+  - **`头像,<name>` content-desc 格式未实证**（Risk #1）：仅来自 fast-operator 注释，无真实 dump fixture。tier-1 miss 即 fail-closed（authorMismatch，不 tap，安全），但 capability 在格式确认前**不能真正成功**。实施第一步=用 Explorer 在 01 抓真实主页浮层 dump 确认格式。
+  - **Hermes 10+ 真机回归（req#12）未执行**：独立验收，执行者不自评；需独立 setup 把 01 开到目标用户主页浮层（deep-link `xhs://note/<noteId>` → tap 作者头像），本 capability 按设计不导航，setup 不属 capability 范围。
+  - **知识库 recipe `recipe-xhs-follow-ensure-20260729` 待写**（留痕契约）。
+
+### abtop 远程通道：Fleet/Screen/Operator API（2026-07-29）
+
+- **动机**：abtop 后端（统一控制台）需要远程看设备舰队状态与截图、并把受控命令转成正式 job，但**不得直连** 17920/22222/ADB/control.db。现有控制面核心（job/session、lease、审批、audited recovery、设备执行）够用，不重做；只在 registry 17930 加三块**只读/受控** API，经 Tailscale 入口 + 独立 token。
+- **新增鉴权角色**：`--observer-token`（只读：fleet/截图；写知识库/身份/审批 → 403）、`--operator-token`（仅 `/api/operator/*`；不能审批/不能写知识库）。`resolveAuth()` 在 loopback 回落前加两支（`safeEqual`），写端 handler 与审批闸已排除两角色。
+- **Part 1 Fleet API** `GET /api/fleet`：复用 `buildAgentEntry()`，经 `redactFleetDevice()` 脱敏成 `{alias,online,ready,quarantined,lease,currentTask{capabilityId,jobId,actor,status},streak,unresolvedFailure,freshness{...}}`；剥除 serial/label/model/accounts/customer/notes/deviceId/identityKnown/nodeId/physicalLabel/runtimeId/metadata/routingProfile/路径/gitCommit。
+- **Part 2 cache-only Screen API** `GET /api/fleet/screen/:alias[/meta]`：只读 `queryControlDb` 查 `evidence` 表最新 `kind='screenshot'` 行（JOIN jobs on device_id），`readFile` `RUNS_ROOT/run_id/evidence/<path>`；返回 image/png + `ETag=sha256` + 进程内 ~10s 缓存 + `If-None-Match`→304；无截图→404 `no cached screenshot`。**绝不调 acquireLease/runAdapter/任何 17920 写口**——前端刷新零设备动作。`--runs-root` 由 argLine 传入（默认 `C:\Users\Public\xhs-agent-runs`）。
+- **Part 3 Operator API** `POST /api/operator/submit`（operator-token 专属）：`OPERATOR_ALLOWLIST`（9 个 R0/R1 只读与 dry-run capability：xhs.observe.feed/metrics、xianyu.observe.snapshot/image_manifest、xiaowei.device.list、xianyu.publish.{full,image,input,open}_dry_run）内 → `controlPlanePost` `/control/v1/jobs` 真代提交，actor 强制 `abtop:<body.actor>` 前缀防冒充；名单外 → 403。`GET /api/operator/job/:id` 代理控制面 job 状态；`POST /api/operator/session` 返回 501 占 namespace。R2 外发仍走现有人工审批。
+- **测试**：`npm test` **36/36** 全绿（+3：observer 读 fleet/写 403/审批 403、screen meta+image+ETag+304+404、operator 白名单代提交+名单外 403+observer 403+session 501+job 代理）；`npm run check` 全绿。修复了一处测试隔离 bug：`registry` 在用例内 restart（line 366）时漏传 `--runs-root` 导致后续 screen 测试 RUNS_ROOT 为空 → 404；已把 `runsRoot` 提为模块级并在 restart 处补传。
+- **部署**：`install-registry-task.ps1` 加 `-ObserverToken`/`-OperatorToken`/`-RunsRoot` 参数与 argLine 拼接；部署时填密钥并重装计划任务。`registry.mjs` 按 SHA256 传 Windows 后重启 `XhsDeviceRegistry`。
+- **待办**：Windows 实部署（传文件 + 重装任务 + Tailscale 验 `/api/fleet`）；abtop 后端对接 observer/operator token；真机验 `/api/fleet` 永不触发 17920 写口（查控制面日志无新 job/lease）。
+
 ### 闲鱼标准草稿链路（2026-07-26）
 
 - **形态**：按 App 固定剧本（非 LLM 临场点）；闲鱼在 `apps/xianyu` + `scripts/xianyu-operator.mjs`
@@ -118,7 +153,7 @@
 - ~~**当前阻塞**：P1 过滤 bug~~ 已修复（2026-07-25，三连修：b2fba6a P1 选目标 category-agnostic 只认 verifyMode；5339df9 跳过 device/session 目标 + 409 换目标 + generic repo-grep 取证；0f52cb7 noloc pitfall 24h 去重防刷库）。三端一致（origin=Windows=task-launch.json gitCommit 均 0f52cb7），巡航已恢复产出。新形态：6 个 recipe 被标 noloc（evidence 定位不到），待人裁决改 verifyMode=human 或补证据锚点，否则 24h 窗口过后会再刷一轮
 - 委派路由：**routing-table-v2**（知识库，2026-07-25 用户裁决）——验证类→MiMo、修复类（含 scout）→GLM/Grok、设计/验收/运维→Kimi、R2→人；v1 已废止
 - **fallback 链（2026-07-25 定；2026-07-28 补健康前置）**：进入热路径前先做轻量 availability/quota/已知故障检查；最近一次明确 quota 403、认证失败或连续超时的模型直接标 unavailable 并跳过，不先把任务送进去撞墙。候选池包含 **Claude / Codex / Grok / Kimi**（低成本验证可另用 MiMo/GLM）；按任务类型和当前健康状态选首个可用者，而不是写死单模型。独立验收的首选不可用时切下一只读 reviewer/watchdog，保持“不改文件、不碰设备”边界。失败即升档，不对坏模型重复重试。本次 Kimi 因 billing-cycle quota 403 被摘除，已切 Codex 只读 reviewer，未影响代码或设备。
-- 设备 serve：01→17895 / 02→17897 / 04→17896（serial 见 identities.seed.json）
+- 设备 serve：01→17895 / 02→17897 / 03→17898 / 04→17896（serial 见 identities.seed.json；Windows 恢复脚本 `serve-restart-0X.ps1` 在 `C:\Users\Public\xhs-registry\`，03 脚本 2026-07-28 新增）
 - 委派方式：`mimo-ro run --dir <项目> "任务"`（mimo-ro = ~/.mimocode/bin/mimo-ro，key 池轮换包装，池在 ~/.mimocode/key-pool.json 共 12 把，`mimo-ro --check` 体检，失败 key 自动标记 24h）；会话续接 `mimo-ro run -s <id>`。裸 `mimo` 也能用但只有单 key，推荐一律走 mimo-ro
 
 ## 委派路由规则（2026-07-24 定）
@@ -188,6 +223,7 @@
 11. ~~编号冲突~~ 已解决（2026-07-24 20:01）：飞书 02/03 编号是 07-13 旧数据，已按 serial 锚定改正为 02=REPLACE_SERIAL_02（棕色手机）、03=REPLACE_SERIAL_03（三店），与 seed 的 07-22/07-24 实证一致
 12. `/control/v1/devices` 公开视图不含 routingProfile（排查要看 control.db 或 query-routing.mjs）
 13. **watchdog 实际驱动者是临时终端循环（2026-07-27 发现）**：launchd `com.xhs.scout-watchdog` 因 macOS TCC 拒绝执行 Desktop 下脚本已被禁用（`.plist.disabled`），当前靠一个手工 `while true; do watchdog.sh; sleep 1800; done` 终端进程（s009 会话）驱动——终端一关 watchdog 就停。待办：把脚本移出 Desktop（或给 bash 授 Full Disk Access）后恢复 launchd 托管。
+14. **xhs.follow.ensure 待部署 + 待实证（2026-07-29）**：capability 代码+测试已就绪（GPFS 231/231、registry 33/33）但**未 push/未部署 Windows**；`头像,<name>` 头像 content-desc 格式未真实 dump 实证（tier-1 miss 即 fail-closed，安全但不可真正成功）；Hermes 10+ 真机回归（req#12）未执行（独立验收）。详见上文 `xhs.follow.ensure capability` 节。
 
 ## 工具
 
