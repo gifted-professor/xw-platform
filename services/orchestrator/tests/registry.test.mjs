@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import http from "node:http";
 import net from "node:net";
 import os from "node:os";
@@ -12,6 +12,9 @@ import { DatabaseSync } from "node:sqlite";
 const ROOT = path.resolve(import.meta.dirname, "..");
 const TOKEN = "registry-test-token";
 const HUMAN_TOKEN = "registry-test-human-token";
+const OBSERVER_TOKEN = "registry-test-observer-token";
+const OPERATOR_TOKEN = "registry-test-operator-token";
+const SCREEN_SHA = "testsha-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const now = Date.now();
 
 function freePort() {
@@ -57,7 +60,15 @@ function createControlDb(dbPath) {
     CREATE TABLE approvals (
       approval_id TEXT PRIMARY KEY, job_id TEXT, decision TEXT, actor_id TEXT, reason TEXT, created_at INTEGER
     );
+    CREATE TABLE evidence (
+      evidence_id TEXT PRIMARY KEY, job_id TEXT, run_id TEXT, kind TEXT, path TEXT,
+      sha256 TEXT, bytes INTEGER, created_at INTEGER
+    );
   `);
+  // dev-01 已采集截图（run-succ-2）—— cache-only Screen API 读这条
+  db.prepare("INSERT INTO evidence VALUES (?,?,?,?,?,?,?,?)").run(
+    "ev-1", "job-succ-2", "run-succ-2", "screenshot", "evidence/shot-aaaaaaaaaaaa.png",
+    SCREEN_SHA, 7, now - 5000);
   db.prepare("INSERT INTO devices VALUES (?,?,?)").run("dev-01", "01",
     JSON.stringify({ enabled: true, tags: ["slot:01"], capabilityIds: ["xianyu.publish.open_dry_run", "xianyu.publish.save_draft_dry_run"] }));
   db.prepare("INSERT INTO devices VALUES (?,?,?)").run("dev-03", "03",
@@ -90,6 +101,7 @@ function createControlDb(dbPath) {
 
 function createControlServer() {
   const decisions = [];
+  const submissions = [];
   const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && req.url === "/control/v1/health") return json(res, 200, { nodeId: "test-node", authority: true, activeLeases: 1 });
     if (req.method === "GET" && req.url === "/control/v1/devices") return json(res, 200, { devices: [
@@ -117,9 +129,21 @@ function createControlServer() {
       decisions.push(JSON.parse(Buffer.concat(chunks).toString("utf8")));
       return json(res, 200, { ok: true });
     }
+    if (req.method === "POST" && req.url === "/control/v1/jobs") {
+      const chunks = [];
+      for await (const chunk of req) chunks.push(chunk);
+      const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      submissions.push(body);
+      const jobId = `job-op-${submissions.length}`;
+      return json(res, 202, { ok: true, job: { jobId, deviceId: body.deviceId, capabilityId: body.capabilityId, actorId: body.actor, status: "queued" } });
+    }
+    const jobMatch = req.url.match(/^\/control\/v1\/jobs\/([^/]+)$/);
+    if (req.method === "GET" && jobMatch) {
+      return json(res, 200, { ok: true, job: { jobId: jobMatch[1], status: "queued" } });
+    }
     return json(res, 404, { ok: false });
   });
-  return { server, decisions };
+  return { server, decisions, submissions };
 }
 
 function json(res, status, value) {
@@ -133,7 +157,8 @@ async function startRegistry({ root, controlUrl, requireAuth = true, extraArgs =
   const args = [path.join(ROOT, "registry.mjs"), "--port", String(port), "--host", "127.0.0.1",
     "--control", controlUrl, "--db", path.join(root, "registry.db"), "--seed", path.join(root, "seed.json"),
     "--control-db", path.join(root, "control.db")];
-  if (requireAuth) args.push("--agent-token", TOKEN, "--human-token", HUMAN_TOKEN, "--trust-loopback", "false");
+  if (requireAuth) args.push("--agent-token", TOKEN, "--human-token", HUMAN_TOKEN, "--trust-loopback", "false",
+    "--observer-token", OBSERVER_TOKEN, "--operator-token", OPERATOR_TOKEN);
   args.push(...extraArgs);
   const child = spawn(process.execPath, args, { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"] });
   let logs = "";
@@ -163,6 +188,7 @@ async function stopRegistry(child) {
 let tempRoot;
 let control;
 let registry;
+let runsRoot;
 
 test.before(async () => {
   tempRoot = await mkdtemp(path.join(os.tmpdir(), "xhs-registry-test-"));
@@ -172,10 +198,15 @@ test.before(async () => {
     { alias: "01", serial: "serial-01", label: "一号 <script>alert(1)</script>", model: "M1", accounts: { xhs: "private-account" }, notes: "private-note" },
     { alias: "03", serial: "REPLACE_SERIAL_03", label: "三店", model: "M3" },
   ] }));
+  // cache-only Screen API 的 runs-root：放一张假截图供 evidence 行读取
+  runsRoot = path.join(tempRoot, "runs");
+  await mkdir(path.join(runsRoot, "run-succ-2", "evidence"), { recursive: true });
+  await writeFile(path.join(runsRoot, "run-succ-2", "evidence", "shot-aaaaaaaaaaaa.png"), Buffer.from("PNGTEST"));
   control = createControlServer();
   control.server.listen(0, "127.0.0.1");
   await once(control.server, "listening");
-  registry = await startRegistry({ root: tempRoot, controlUrl: `http://127.0.0.1:${control.server.address().port}` });
+  registry = await startRegistry({ root: tempRoot, controlUrl: `http://127.0.0.1:${control.server.address().port}`,
+    extraArgs: ["--runs-root", runsRoot] });
 });
 
 test.after(async () => {
@@ -332,7 +363,8 @@ test("knowledge lifecycle migration and terminal transition rules are enforced",
   assert.equal((await defaulted.json()).knowledge.lifecycle, "resolved");
 
   await stopRegistry(registry.child);
-  registry = await startRegistry({ root: tempRoot, controlUrl: `http://127.0.0.1:${control.server.address().port}` });
+  registry = await startRegistry({ root: tempRoot, controlUrl: `http://127.0.0.1:${control.server.address().port}`,
+    extraArgs: ["--runs-root", runsRoot] });
   const afterRestart = await (await fetch(`${registry.base}/api/agent-entry`, { headers: { "x-registry-token": TOKEN } })).json();
   assert.equal(afterRestart.blockers.active.length, 0);
   assert.equal(afterRestart.blockers.resolved.find((item) => item.id.includes("physical-disconnect")).resolution, "现场恢复并完成验证");
@@ -607,4 +639,99 @@ test("agent entry marks controlDb stale when one approvals query fails", async (
     await stopRegistry(partial.child);
     await rm(root, { recursive: true, force: true });
   }
+});
+
+// ---------- Fleet / Screen / Operator API ----------
+
+test("observer can read /api/fleet but cannot write knowledge or approve", async () => {
+  const h = { "x-registry-token": OBSERVER_TOKEN };
+  const fleetRes = await fetch(`${registry.base}/api/fleet`, { headers: h });
+  assert.equal(fleetRes.status, 200);
+  const fleet = await fleetRes.json();
+  assert.equal(fleet.ok, true);
+  const dev01 = fleet.devices.find((d) => d.alias === "01");
+  assert.ok(dev01, "fleet includes 01");
+  // 脱敏：不含 serial/label/model/accounts/customer/notes/deviceId
+  assert.equal("serial" in dev01, false);
+  assert.equal("label" in dev01, false);
+  assert.equal("model" in dev01, false);
+  assert.equal("accounts" in dev01, false);
+  assert.equal("customer" in dev01, false);
+  assert.equal("notes" in dev01, false);
+  assert.equal(dev01.online, true);
+  assert.equal(dev01.ready, false); // dev-01 有活跃 job → lease 占用 → not ready
+  assert.equal(dev01.lease.held, true);
+  assert.equal(dev01.lease.kind, "job");
+  assert.equal(dev01.currentTask?.jobId, "job-running");
+  assert.equal(dev01.currentTask?.actor, "agent-alpha");
+  assert.equal(dev01.streak, 2);
+  assert.ok(fleet.freshness || dev01.freshness, "freshness present");
+  // observer 不得写知识库
+  const writeRes = await fetch(`${registry.base}/api/knowledge`, { method: "POST", headers: h, body: JSON.stringify({ id: "x", app: "x", title: "t", content: "c" }) });
+  assert.equal(writeRes.status, 403);
+  // observer 不得审批
+  const approveRes = await fetch(`${registry.base}/api/approvals/job-approval/approve`, { method: "POST", headers: h, body: JSON.stringify({ confirm: "APPROVE" }) });
+  assert.equal(approveRes.status, 403);
+});
+
+test("cache-only Screen API returns newest screenshot with ETag and 304 on revalidate", async () => {
+  const h = { "x-registry-token": OBSERVER_TOKEN };
+  const metaRes = await fetch(`${registry.base}/api/fleet/screen/01/meta`, { headers: h });
+  assert.equal(metaRes.status, 200);
+  const meta = await metaRes.json();
+  assert.equal(meta.ok, true);
+  assert.equal(meta.sha256, SCREEN_SHA);
+  assert.equal(meta.alias, "01");
+  // 强制缓存 miss：用未命中 alias 再回 01 也行，这里直接取图像
+  const imgRes = await fetch(`${registry.base}/api/fleet/screen/01`, { headers: h });
+  assert.equal(imgRes.status, 200);
+  assert.equal(imgRes.headers.get("content-type"), "image/png");
+  assert.equal(imgRes.headers.get("etag"), SCREEN_SHA);
+  const buf = Buffer.from(await imgRes.arrayBuffer());
+  assert.equal(buf.toString("utf8"), "PNGTEST");
+  // 二次带 If-None-Match → 304
+  const reval = await fetch(`${registry.base}/api/fleet/screen/01`, { headers: { ...h, "if-none-match": SCREEN_SHA } });
+  assert.equal(reval.status, 304);
+  // 无截图设备 → 404（不触发采集）
+  const noneRes = await fetch(`${registry.base}/api/fleet/screen/03/meta`, { headers: h });
+  assert.equal(noneRes.status, 404);
+});
+
+test("operator submits allowlisted job with namespaced actor and rejects non-allowlisted", async () => {
+  const h = { "x-registry-token": OPERATOR_TOKEN, "content-type": "application/json" };
+  const submitRes = await fetch(`${registry.base}/api/operator/submit`, {
+    method: "POST", headers: h,
+    body: JSON.stringify({ capability: "xianyu.observe.snapshot", alias: "01", actor: "relay-1" }),
+  });
+  assert.equal(submitRes.status, 202);
+  const submitted = await submitRes.json();
+  assert.equal(submitted.ok, true);
+  assert.equal(submitted.actor, "abtop:relay-1");
+  assert.ok(submitted.jobId, "jobId returned");
+  // 控制面收到 POST /control/v1/jobs，capability/device/actor 正确
+  assert.equal(control.submissions.length, 1);
+  assert.equal(control.submissions[0].capabilityId, "xianyu.observe.snapshot");
+  assert.equal(control.submissions[0].deviceId, "dev-01");
+  assert.equal(control.submissions[0].actor, "abtop:relay-1");
+  // 非白名单 → 403
+  const blockedRes = await fetch(`${registry.base}/api/operator/submit`, {
+    method: "POST", headers: h,
+    body: JSON.stringify({ capability: "xhs.comment.send", alias: "01" }),
+  });
+  assert.equal(blockedRes.status, 403);
+  // observer 不能调 operator 提交
+  const obsSubmit = await fetch(`${registry.base}/api/operator/submit`, {
+    method: "POST", headers: { "x-registry-token": OBSERVER_TOKEN, "content-type": "application/json" },
+    body: JSON.stringify({ capability: "xianyu.observe.snapshot", alias: "01" }),
+  });
+  assert.equal(obsSubmit.status, 403);
+  // session 转换预留 → 501
+  const sessRes = await fetch(`${registry.base}/api/operator/session`, { method: "POST", headers: h, body: "{}" });
+  assert.equal(sessRes.status, 501);
+  // job 状态代理
+  const jobRes = await fetch(`${registry.base}/api/operator/job/${submitted.jobId}`, { headers: h });
+  assert.equal(jobRes.status, 200);
+  const jobBody = await jobRes.json();
+  assert.equal(jobBody.ok, true);
+  assert.equal(jobBody.job.jobId, submitted.jobId);
 });

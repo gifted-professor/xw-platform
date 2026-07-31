@@ -50,6 +50,11 @@ const HUMAN_ACTOR = argOf("human-actor", "console");
 const LEGACY_AUTH = !HUMAN_TOKEN;
 const IDENTITY_STALE_S = Math.max(60, Number(argOf("identity-stale-s", "900")) || 900);
 const TRUST_LOOPBACK = argOf("trust-loopback", "true") !== "false";
+// 只读观察者 / 受控代提交者凭证（abtop 远程通道）：observer 只读；operator 仅能调 /api/operator/*。
+const OBSERVER_TOKEN = argOf("observer-token", "");
+const OPERATOR_TOKEN = argOf("operator-token", "");
+// 控制面已采集的 evidence 截图根目录（cache-only Screen API 读字节用，绝不触发设备）。
+const RUNS_ROOT = argOf("runs-root", process.env.CONTROL_PLANE_RUNS_ROOT || "");
 const CONTROL_TIMEOUT_MS = 3000;
 const SESSION_TTL_S = 30 * 60;
 const SESSION_COOKIE = "xhs_registry_session";
@@ -1215,7 +1220,7 @@ function safeEqual(left, right) {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-const SESSION_ROLES = new Set(["human", "agent"]);
+const SESSION_ROLES = new Set(["human", "agent", "observer"]);
 
 function issueSession(role = "human") {
   const payload = `${role}.${Math.floor(Date.now() / 1000) + SESSION_TTL_S}.${randomBytes(18).toString("base64url")}`;
@@ -1252,6 +1257,8 @@ function resolveAuth(req) {
   const sessionRole = validSession(parseCookies(req)[SESSION_COOKIE]);
   if (sessionRole) return sessionRole;
   if (AGENT_TOKEN && provided && safeEqual(provided, AGENT_TOKEN)) return LEGACY_AUTH ? "human" : "agent";
+  if (OBSERVER_TOKEN && provided && safeEqual(provided, OBSERVER_TOKEN)) return "observer";
+  if (OPERATOR_TOKEN && provided && safeEqual(provided, OPERATOR_TOKEN)) return "operator";
   if (TRUST_LOOPBACK && isLoopback(req)) return LEGACY_AUTH ? "human" : "loopback";
   return null;
 }
@@ -1278,6 +1285,11 @@ function sendText(res, status, body, contentType, headers = {}) {
   res.end(body);
 }
 
+// observer 只读、operator 仅 /api/operator/*：两者都不得写知识库/身份。
+function readOnlyRole(role) {
+  return role === "observer" || role === "operator";
+}
+
 async function readBody(req) {
   const chunks = [];
   for await (const c of req) chunks.push(c);
@@ -1297,6 +1309,145 @@ async function readForm(req) {
 // 未捕获异常只记录不退出（node:sqlite 原生 abort 无法拦截，靠计划任务重启兜底）。
 process.on("uncaughtException", (e) => console.log(`[registry] uncaughtException (kept alive): ${e.stack || e}`));
 process.on("unhandledRejection", (e) => console.log(`[registry] unhandledRejection (kept alive): ${e?.stack || e}`));
+
+// ---------- Fleet / Screen / Operator API（abtop 远程通道）----------
+// 设计约束：observer 只读舰队与已采集截图；operator 仅能把白名单命令转成正式 job 提交。
+// 三者绝不直接碰 17920 写口 / 22222 / ADB / control.db 写入；Screen 只读 evidence 表 + 磁盘字节。
+
+// Operator 白名单：R0/R1、externalEffect:false、replay_safe/read_only。R2 外发仍走人工审批。
+const OPERATOR_ALLOWLIST = new Set([
+  "xhs.observe.feed", "xhs.observe.metrics",
+  "xianyu.observe.snapshot", "xianyu.observe.image_manifest",
+  "xiaowei.device.list",
+  "xianyu.publish.full_dry_run", "xianyu.publish.image_dry_run",
+  "xianyu.publish.input_dry_run", "xianyu.publish.open_dry_run",
+]);
+
+async function controlPlanePost(p, body) {
+  let res;
+  try {
+    res = await fetch(`${CONTROL}${p}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(CONTROL_TIMEOUT_MS + 2000),
+    });
+  } catch (e) {
+    return { status: 502, data: { ok: false, error: `控制面不可达: ${e.message}` } };
+  }
+  let data = {};
+  try { data = await res.json(); } catch { /* keep {} */ }
+  return { status: res.status, data };
+}
+
+async function controlPlaneGet(p) {
+  try {
+    return { ok: true, ...(await fetchJson(`${CONTROL}${p}`)) };
+  } catch (e) {
+    return { ok: false, error: `控制面不可达: ${e.message}` };
+  }
+}
+
+// alias → deviceId（只读 control.db devices 表；未注册返回 null）
+function deviceIdByAlias(alias) {
+  return queryControlDb((cdb) => {
+    const row = cdb.prepare("SELECT device_id FROM devices WHERE alias = ?").get(alias);
+    return row?.device_id ?? null;
+  }, null);
+}
+
+// 脱敏 fleet 设备：剥 serial/label/model/accounts/customer/notes/deviceId/nodeId/物理标签/路径。
+function redactFleetDevice(dev, entry) {
+  const job = dev.activeJobs && dev.activeJobs[0] ? dev.activeJobs[0] : null;
+  const lease = dev.control?.lease || null;
+  return {
+    alias: dev.alias,
+    online: dev.state?.online ?? null,
+    ready: dev.state?.ready ?? null,
+    quarantined: dev.state?.quarantined ?? null,
+    quarantineReason: dev.control?.quarantineReason ?? null,
+    lease: lease ? { held: true, kind: lease.kind ?? null, expiresAt: lease.expiresAt ?? null } : { held: false },
+    currentTask: job
+      ? { capabilityId: job.capabilityId ?? null, jobId: job.jobId ?? null, actor: job.actorId ?? null, status: job.status ?? null }
+      : null,
+    streak: dev.jobStatus?.consecutiveSuccesses ?? null,
+    unresolvedFailure: Boolean(dev.jobStatus?.unresolvedFailure),
+    freshness: {
+      generatedAt: entry.generatedAt,
+      controlPlane: { reachable: entry.sources.controlPlane.reachable, stale: entry.sources.controlPlane.stale },
+      controlDb: { reachable: entry.sources.controlDb.reachable, stale: entry.sources.controlDb.stale },
+      identityAgeSeconds: entry.sources.identityCache.ageSeconds ?? null,
+      identityStale: entry.sources.identityCache.stale ?? null,
+    },
+  };
+}
+
+async function buildFleet() {
+  const entry = await buildAgentEntry();
+  return {
+    ok: true,
+    generatedAt: entry.generatedAt,
+    sources: entry.sources,
+    devices: entry.devices.map((d) => redactFleetDevice(d, entry)),
+  };
+}
+
+// ---------- cache-only Screen API ----------
+// 只返回控制面已采集的最近截图（evidence kind=screenshot）；前端刷新命中进程内缓存/304，绝不触发设备。
+const SCREEN_CACHE_TTL_MS = 10000;
+const screenCache = new Map(); // alias → { buf, sha, bytes, createdAt, jobId, runId, loadedAt }
+
+async function serveScreen(res, req, alias, metaOnly) {
+  if (!alias) return sendJson(res, 400, { ok: false, error: "missing alias" });
+  const now = Date.now();
+  let cached = screenCache.get(alias);
+  if (!cached || now - cached.loadedAt > SCREEN_CACHE_TTL_MS) {
+    const deviceId = deviceIdByAlias(alias);
+    if (!deviceId) {
+      if (!cached) return sendJson(res, 404, { ok: false, error: "device not found", alias });
+    } else {
+      const row = queryControlDb((cdb) => cdb.prepare(`
+        SELECT e.path, e.run_id, e.sha256, e.bytes, e.created_at, e.job_id
+        FROM evidence e JOIN jobs j ON e.job_id = j.job_id
+        WHERE j.device_id = ? AND e.kind = 'screenshot'
+        ORDER BY e.created_at DESC LIMIT 1`).get(deviceId), null);
+      if (row && RUNS_ROOT) {
+        let buf = null;
+        try { buf = fs.readFileSync(path.join(RUNS_ROOT, row.run_id, row.path)); } catch { /* file gone */ }
+        if (buf) {
+          cached = {
+            buf, sha: row.sha256, bytes: row.bytes,
+            createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
+            jobId: row.job_id, runId: row.run_id, loadedAt: now,
+          };
+          screenCache.set(alias, cached);
+        }
+      }
+      if (!cached) {
+        // 无新截图：保留旧缓存平滑降级，否则 404（明确不触发采集）
+        cached = screenCache.get(alias);
+        if (!cached) return sendJson(res, 404, { ok: false, error: "no cached screenshot", alias });
+      }
+    }
+  }
+  if (metaOnly) {
+    return sendJson(res, 200, {
+      ok: true, alias, sha256: cached.sha, bytes: cached.bytes,
+      createdAt: cached.createdAt, jobId: cached.jobId, runId: cached.runId,
+      ageSeconds: cached.createdAt ? Math.max(0, Math.round((now - Date.parse(cached.createdAt)) / 1000)) : null,
+    }, { "cache-control": "no-store" });
+  }
+  const inm = String(req.headers["if-none-match"] || "");
+  if (cached.sha && inm && safeEqual(inm, cached.sha)) {
+    res.writeHead(304, { etag: cached.sha, "cache-control": "no-store" });
+    return res.end();
+  }
+  const headers = { "content-type": "image/png", "content-length": cached.buf.length, "cache-control": "no-store" };
+  if (cached.sha) headers.etag = cached.sha;
+  if (cached.createdAt) headers["last-modified"] = new Date(cached.createdAt).toUTCString();
+  res.writeHead(200, headers);
+  res.end(cached.buf);
+}
 
 const server = http.createServer(async (req, res) => {
   const role = resolveAuth(req);
@@ -1421,6 +1572,7 @@ ${reports.length > 1 ? '<h2 style="font-size:14px;margin-top:16px">历史报告<
       return sendText(res, 200, body, "text/markdown; charset=utf-8", { "cache-control": "no-store" });
     }
     if (req.method === "PUT" && url.pathname === "/api/identities") {
+      if (readOnlyRole(role)) return sendJson(res, 403, { ok: false, error: "observer/operator is read-only" });
       const body = await readBody(req);
       if (!Array.isArray(body.identities)) return sendJson(res, 400, { ok: false, error: "identities must be an array" });
       replaceIdentities(body.identities);
@@ -1439,17 +1591,20 @@ ${reports.length > 1 ? '<h2 style="font-size:14px;margin-top:16px">历史报告<
       return sendJson(res, 200, { ok: true, count: items.length, total, knowledge: items });
     }
     if (req.method === "POST" && url.pathname === "/api/knowledge") {
+      if (readOnlyRole(role)) return sendJson(res, 403, { ok: false, error: "observer/operator is read-only" });
       const body = await readBody(req);
       const created = addKnowledge(body);
       return sendJson(res, 201, { ok: true, knowledge: created });
     }
     let km = url.pathname.match(/^\/api\/knowledge\/([^/]+)\/verify$/);
     if (req.method === "POST" && km) {
+      if (readOnlyRole(role)) return sendJson(res, 403, { ok: false, error: "observer/operator is read-only" });
       const body = await readBody(req);
       return sendJson(res, 200, { ok: true, knowledge: verifyKnowledge(decodeURIComponent(km[1]), body.by) });
     }
     km = url.pathname.match(/^\/api\/knowledge\/([^/]+)\/flag-engineer$/);
     if (req.method === "POST" && km) {
+      if (readOnlyRole(role)) return sendJson(res, 403, { ok: false, error: "observer/operator is read-only" });
       const body = await readBody(req);
       return sendJson(res, 200, { ok: true, knowledge: flagEngineer(decodeURIComponent(km[1]), body.needs !== false) });
     }
@@ -1458,6 +1613,7 @@ ${reports.length > 1 ? '<h2 style="font-size:14px;margin-top:16px">历史报告<
       return sendJson(res, 200, { ok: true, knowledge: getKnowledge(decodeURIComponent(km[1])) });
     }
     if (req.method === "PATCH" && km) {
+      if (readOnlyRole(role)) return sendJson(res, 403, { ok: false, error: "observer/operator is read-only" });
       const rawId = decodeURIComponent(km[1]);
       const body = await readBody(req);
       return sendJson(res, 200, { ok: true, knowledge: updateKnowledge(rawId, body) });
@@ -1524,6 +1680,51 @@ ${reports.length > 1 ? '<h2 style="font-size:14px;margin-top:16px">历史报告<
       const notice = proxied.status >= 200 && proxied.status < 300 ? (km[2] === "approve" ? "approved" : "denied") : "failed";
       res.writeHead(303, { location: `/?notice=${notice}`, "cache-control": "no-store" });
       return res.end();
+    }
+    // ---------- Fleet / Screen / Operator API（abtop 远程通道）----------
+    if (req.method === "GET" && url.pathname === "/api/fleet") {
+      return sendJson(res, 200, await buildFleet(), { "cache-control": "no-store" });
+    }
+    const screenMetaMatch = url.pathname.match(/^\/api\/fleet\/screen\/([^/]+)\/meta$/);
+    if (req.method === "GET" && screenMetaMatch) {
+      return serveScreen(res, req, decodeURIComponent(screenMetaMatch[1]), true);
+    }
+    const screenMatch = url.pathname.match(/^\/api\/fleet\/screen\/([^/]+)$/);
+    if (req.method === "GET" && screenMatch) {
+      return serveScreen(res, req, decodeURIComponent(screenMatch[1]), false);
+    }
+    if (req.method === "POST" && url.pathname === "/api/operator/submit") {
+      if (role !== "operator") return sendJson(res, 403, { ok: false, error: "operator endpoint requires the operator token" });
+      const body = await readBody(req);
+      const capability = typeof body.capability === "string" ? body.capability.trim() : "";
+      const alias = typeof body.alias === "string" ? body.alias.trim() : "";
+      if (!capability || !alias) return sendJson(res, 400, { ok: false, error: "capability and alias required" });
+      if (!OPERATOR_ALLOWLIST.has(capability)) return sendJson(res, 403, { ok: false, error: "capability not on operator allowlist", capability });
+      const deviceId = deviceIdByAlias(alias);
+      if (!deviceId) return sendJson(res, 404, { ok: false, error: "device not found", alias });
+      const rawActor = typeof body.actor === "string" && body.actor.trim() ? body.actor.trim().slice(0, 40) : "default";
+      const actor = `abtop:${rawActor}`.slice(0, 60);
+      const params = body.params && typeof body.params === "object" && !Array.isArray(body.params) ? body.params : {};
+      const idempotencyKey = typeof body.idempotencyKey === "string" && body.idempotencyKey.trim() ? body.idempotencyKey.trim().slice(0, 80) : `${capability}:${alias}:${actor}:${Date.now()}`;
+      const result = await controlPlanePost("/control/v1/jobs", { capabilityId: capability, deviceId, actor, idempotencyKey, params });
+      const job = result.data?.job ?? null;
+      return sendJson(res, result.status, {
+        ok: result.status >= 200 && result.status < 300,
+        status: "submitted", capability, alias, actor,
+        jobId: job?.jobId ?? job?.job_id ?? null,
+        ...(result.data?.error ? { error: result.data.error } : {}),
+        ...(job ? { job } : {}),
+      });
+    }
+    const opJobMatch = url.pathname.match(/^\/api\/operator\/job\/([^/]+)$/);
+    if (req.method === "GET" && opJobMatch) {
+      const jobId = decodeURIComponent(opJobMatch[1]);
+      const data = await controlPlaneGet(`/control/v1/jobs/${encodeURIComponent(jobId)}`);
+      return sendJson(res, data.ok ? 200 : 502, data);
+    }
+    if (req.method === "POST" && url.pathname === "/api/operator/session") {
+      if (role !== "operator") return sendJson(res, 403, { ok: false, error: "operator endpoint requires the operator token" });
+      return sendJson(res, 501, { ok: false, error: "session conversion reserved" });
     }
     sendJson(res, 404, { ok: false, error: `${req.method} ${url.pathname} not found` });
   } catch (e) {

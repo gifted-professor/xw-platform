@@ -2,13 +2,22 @@ param(
   # agent token 保持旧值 = sync-feishu / 现有 agent 零改动；轮换时两边一起改
   [string]$AgentToken = "REDACTED_OLD_AGENT_TOKEN",
   # human token 是唯一能 approve/deny 的凭证；不传则 registry 跑在 LEGACY 模式（单 token 管一切）
-  [string]$HumanToken = ""
+  [string]$HumanToken = "",
+  # observer token：abtop 远程只读舰队/截图，不能写不能审批；不传则不开 observer 角色
+  [string]$ObserverToken = "",
+  # operator token：abtop 后端代提交白名单 job；不传则不开 operator 角色
+  [string]$OperatorToken = "",
+  # runs-root：cache-only Screen API 读已采集截图的根目录（=控制面 runsRoot）
+  [string]$RunsRoot = "C:\Users\Public\xhs-agent-runs"
 )
 $ErrorActionPreference = "Stop"
 $taskName = "XhsDeviceRegistry"
 $workDir = "C:\Users\Public\xhs-registry"
 $argLine = '"' + $workDir + '\registry.mjs" --port 17930 --host 0.0.0.0 --control http://127.0.0.1:17920 --db "' + $workDir + '\registry.db" --agent-token ' + $AgentToken
 if ($HumanToken) { $argLine += ' --human-token ' + $HumanToken }
+if ($ObserverToken) { $argLine += ' --observer-token ' + $ObserverToken }
+if ($OperatorToken) { $argLine += ' --operator-token ' + $OperatorToken }
+if ($RunsRoot) { $argLine += ' --runs-root "' + $RunsRoot + '"' }
 $action = New-ScheduledTaskAction -Execute "node.exe" -Argument $argLine -WorkingDirectory $workDir
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -DontStopOnIdleEnd -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Hours 0)
 # AtStartup 触发器：没有它任务只能手动 Start，重启后 17930 不会自动拉起
