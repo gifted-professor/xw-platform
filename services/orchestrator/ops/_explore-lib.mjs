@@ -1,9 +1,10 @@
-// Mac 侧共享：alias→serial、scp helper、调 Windows _win-xiaowei
+// 双端共享：alias→serial、helper、调 _win-xiaowei
+// Mac = SSH/SCP；Windows = 本地短路（XHS_LOCAL=1 / --local / win32 自动）
 import { execFileSync, spawn } from "node:child_process";
 import { createInterface } from "node:readline";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, statSync, copyFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -32,7 +33,46 @@ export function parseArgs(argv) {
   return { opt, flag };
 }
 
+/**
+ * 本地模式：不经 SSH，本机直连 17930/17920/22222 + 本机 node helper。
+ * 触发：XHS_LOCAL=1 | --local | win32 自动；XHS_LOCAL=0 显式关掉自动。
+ */
+export function isLocalMode(argv = process.argv) {
+  if (process.env.XHS_LOCAL === "0") return false;
+  if (process.env.XHS_LOCAL === "1") return true;
+  if (argv.includes("--local")) return true;
+  return process.platform === "win32";
+}
+
+function localCurl(url) {
+  try {
+    return execFileSync("curl.exe", ["-s", "-m", "12", url], {
+      encoding: "utf8",
+      maxBuffer: 8 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch (e) {
+    // curl 不可用时用 Node http 子进程兜底
+    try {
+      return execFileSync(
+        process.execPath,
+        [
+          "-e",
+          `const http=require('http');http.get(${JSON.stringify(url)},{timeout:12000},r=>{const a=[];r.on('data',d=>a.push(d));r.on('end',()=>process.stdout.write(Buffer.concat(a)))}).on('error',e=>{console.error(e.message);process.exit(1)})`,
+        ],
+        { encoding: "utf8", maxBuffer: 8 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"], timeout: 15000 },
+      );
+    } catch (e2) {
+      const msg = `${e.stderr || e.message || ""} / ${e2.stderr || e2.message || ""}`;
+      throw new Error(`localCurl ${url} failed: ${msg.slice(0, 300)}`);
+    }
+  }
+}
+
 export function sshCurl(ssh, url) {
+  if (isLocalMode()) {
+    return localCurl(url);
+  }
   return execFileSync("ssh", [...SSH_OPTS, ssh, "curl.exe", "-s", "-m", "12", url], {
     encoding: "utf8",
     maxBuffer: 8 * 1024 * 1024,
@@ -88,8 +128,12 @@ export function resolveDevice(ssh, alias) {
 
 export function ensureWinHelper(ssh, localName = "_win-xiaowei.mjs") {
   const local = join(__dirname, localName);
-  const remote = `C:/Users/Public/xhs-registry/tmp-know/${localName}`;
   if (!existsSync(local)) throw new Error(`missing ${local}`);
+  if (isLocalMode()) {
+    // 本机即执行面：直接用 ops/ 下 helper，禁止 scp
+    return local;
+  }
+  const remote = `C:/Users/Public/xhs-registry/tmp-know/${localName}`;
   // 仅在远端 size≠本地时才 scp——dev 改了 helper 会自动重传（size 变），其余动作零传输。
   const localSize = statSync(local).size;
   let remoteSize = "";
@@ -108,6 +152,13 @@ export function ensureWinHelper(ssh, localName = "_win-xiaowei.mjs") {
 
 export function runWinXiaowei(ssh, remoteHelper, args) {
   try {
+    if (isLocalMode()) {
+      return execFileSync(process.execPath, [remoteHelper, ...args], {
+        encoding: "utf8",
+        maxBuffer: 16 * 1024 * 1024,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    }
     return execFileSync("ssh", [...SSH_OPTS, ssh, "node", remoteHelper, ...args], {
       encoding: "utf8",
       maxBuffer: 16 * 1024 * 1024,
@@ -143,8 +194,22 @@ export function parseJsonLine(raw) {
   return JSON.parse(String(raw).slice(a));
 }
 
+function samePath(a, b) {
+  try {
+    return normalize(resolve(String(a).replace(/\//g, "\\"))).toLowerCase()
+      === normalize(resolve(String(b).replace(/\//g, "\\"))).toLowerCase();
+  } catch {
+    return String(a).replace(/\\/g, "/").toLowerCase() === String(b).replace(/\\/g, "/").toLowerCase();
+  }
+}
+
 export function scpFrom(ssh, remote, local) {
   mkdirSync(dirname(local), { recursive: true });
+  if (isLocalMode()) {
+    if (samePath(remote, local)) return;
+    copyFileSync(remote, local);
+    return;
+  }
   execFileSync("scp", [...SSH_OPTS, `${ssh}:${remote}`, local], { stdio: ["ignore", "pipe", "pipe"] });
 }
 
@@ -158,7 +223,7 @@ export function parseKVLines(text) {
 }
 
 /**
- * 常驻 pipe session：开一条 ssh channel + 一个 node repl 进程，一串动作复用。
+ * 常驻 pipe session：Mac 开一条 ssh channel + node repl；Windows 本地直接 spawn node repl。
  * 单动作延迟从 ~1.2s（每动作新握手）降到 ~0.2s（只走本地 WS 回环）。
  * 无锁、无新服务生命周期——pipe 由调用方 own，close() 即结束。
  *
@@ -170,9 +235,13 @@ export function parseKVLines(text) {
 export function openWinXwSession(ssh, alias) {
   const { serial } = resolveDevice(ssh, alias);
   const helper = ensureWinHelper(ssh);
-  const child = spawn("ssh", [...SSH_OPTS, ssh, "node", helper, "--serial", serial, "--action", "repl"], {
-    stdio: ["pipe", "pipe", "ignore"],
-  });
+  const child = isLocalMode()
+    ? spawn(process.execPath, [helper, "--serial", serial, "--action", "repl"], {
+        stdio: ["pipe", "pipe", "ignore"],
+      })
+    : spawn("ssh", [...SSH_OPTS, ssh, "node", helper, "--serial", serial, "--action", "repl"], {
+        stdio: ["pipe", "pipe", "ignore"],
+      });
   const pending = [];
   const rl = createInterface({ input: child.stdout });
   const readyResolvers = [];
@@ -190,8 +259,8 @@ export function openWinXwSession(ssh, alias) {
     if (r) r(line);
   });
   let closed = false;
-  const ready = new Promise((resolve, reject) => {
-    readyResolvers.push(resolve);
+  const ready = new Promise((resolveP, reject) => {
+    readyResolvers.push(resolveP);
     const t = setTimeout(() => reject(new Error("repl ready timeout (no repl-ready line)")), 15000);
     child.on("error", (e) => { clearTimeout(t); reject(e); });
     child.on("exit", (code) => {
@@ -204,13 +273,13 @@ export function openWinXwSession(ssh, alias) {
 
   async function cmd(payload, timeoutMs = 60000) {
     if (closed) throw new Error("repl session closed");
-    const p = new Promise((resolve, reject) => {
+    const p = new Promise((resolveP, reject) => {
       const t = setTimeout(() => reject(new Error(`repl cmd timeout ${payload.op}`)), timeoutMs);
       pending.push((line) => {
         clearTimeout(t);
         if (line == null) reject(new Error("repl exited mid-cmd"));
         else {
-          try { resolve(JSON.parse(line)); } catch (e) { reject(new Error(`repl bad json: ${line.slice(0, 200)}`)); }
+          try { resolveP(JSON.parse(line)); } catch (e) { reject(new Error(`repl bad json: ${line.slice(0, 200)}`)); }
         }
       });
     });

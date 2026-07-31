@@ -31,6 +31,10 @@ node ops/xhs-like-one.mjs --alias <01-04>
 
 # 只定位不点赞（dry-run）
 node ops/xhs-like-one.mjs --alias <01-04> --dry-run
+
+# Windows 本地
+set XHS_LOCAL=1
+node ops/xhs-like-one.mjs --alias 01 --dry-run
 ```
 
 ## 流程

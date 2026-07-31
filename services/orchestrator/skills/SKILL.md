@@ -95,11 +95,14 @@ triggers:
 ## 开工前
 
 ```bash
-# 查看 live 状态
-ssh xhs-windows 'curl.exe -s http://127.0.0.1:17930/agent-entry.md'
-
-# 前置检查
+# Mac（默认 SSH → Windows）
 node ops/explore-preflight.mjs --alias 01
+
+# Windows（本机直连，不经 SSH）
+set XHS_LOCAL=1
+node ops/explore-preflight.mjs --alias 01
+# 或: node ops/explore-preflight.mjs --alias 01 --local
+# win32 下也可省略开关（自动本地）
 ```
 
 **检查通过就直接动手，不要先问「我能不能做」。**
@@ -141,6 +144,6 @@ agent 自主探索 → 发现新能力/新坑 → 写入知识库 → 更新 ski
 
 ## 环境
 
-- **Mac**：skills 定义 + 脚本源码 + 测试
-- **Windows**：控制面 17920 + registry 17930 + 设备 serve
+- **调用面**：Mac（SSH）或 Windows（`XHS_LOCAL=1` / `--local` / win32 自动）
+- **执行面（始终）**：Windows — 控制面 17920 + registry 17930 + `_win-xiaowei` → 小薇 22222
 - **手机**：01-04 经 USB → Windows → 小薇 22222

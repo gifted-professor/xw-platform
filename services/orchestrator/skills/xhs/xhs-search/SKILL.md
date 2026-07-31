@@ -35,6 +35,10 @@ node ops/xhs-search.mjs --alias <01-04> --keyword "关键词"
 
 # 搜索多页
 node ops/xhs-search.mjs --alias <01-04> --keyword "关键词" --pages 3
+
+# Windows 本地
+set XHS_LOCAL=1
+node ops/xhs-search.mjs --alias 01 --keyword "关键词"
 ```
 
 ## 参数

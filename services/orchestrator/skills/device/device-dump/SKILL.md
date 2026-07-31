@@ -18,11 +18,15 @@ verified:
 ## 用法
 
 ```bash
-# 默认输出到 stdout
+# 默认输出到临时目录
 node ops/dump-ui.mjs --alias <01-04>
 
 # 保存到文件
 node ops/dump-ui.mjs --alias <01-04> --out /tmp/dump.xml
+
+# Windows 本地
+set XHS_LOCAL=1
+node ops/dump-ui.mjs --alias 01
 ```
 
 ## 参数

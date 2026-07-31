@@ -2,12 +2,14 @@
 // Explorer 开工检查：不通则非 0，禁止开干。
 //
 //   node ops/explore-preflight.mjs --alias 01
+//   node ops/explore-preflight.mjs --alias 01 --local
+//   set XHS_LOCAL=1 && node ops/explore-preflight.mjs --alias 01
 //   node ops/explore-preflight.mjs --alias 01 --require-17910
 //
 // exit: 0 可开工 | 2 舰队/设备不行 | 4 客户端/SSH
 
 import { execFileSync } from "node:child_process";
-// execFileSync used for netstat probe too
+import { isLocalMode, sshCurl as libSshCurl } from "./_explore-lib.mjs";
 
 const argv = process.argv.slice(2);
 const opt = (n, fb = null) => {
@@ -17,7 +19,7 @@ const opt = (n, fb = null) => {
 const flag = (n) => argv.includes(n);
 
 if (flag("--help") || flag("-h")) {
-  console.log(`用法: node ops/explore-preflight.mjs --alias <01-04> [--ssh xhs-windows] [--require-17910]
+  console.log(`用法: node ops/explore-preflight.mjs --alias <01-04> [--ssh xhs-windows] [--local] [--require-17910]
 
 检查顺序:
   1) registry 17930 /control health 17920
@@ -26,6 +28,8 @@ if (flag("--help") || flag("-h")) {
   4) 小薇 22222 端口 LISTEN（交互 ops 依赖它，不通=失败）
   5) 可选 17910 device/v1/devices（--require-17910 时不通=失败；默认只警告）
 
+本地模式: XHS_LOCAL=1 | --local | win32 自动（直连本机，不经 SSH）
+
 exit: 0 ok | 2 fleet/device | 4 client/ssh`);
   process.exit(0);
 }
@@ -33,6 +37,7 @@ exit: 0 ok | 2 fleet/device | 4 client/ssh`);
 const ALIAS = opt("--alias");
 const SSH = opt("--ssh", "xhs-windows");
 const REQUIRE_17910 = flag("--require-17910");
+const LOCAL = isLocalMode();
 
 if (!ALIAS) {
   console.log("✗ 需要 --alias 01|02|03|04");
@@ -41,15 +46,25 @@ if (!ALIAS) {
 
 function sshCurl(url) {
   try {
-    return execFileSync(
-      "ssh",
-      [SSH, "curl.exe", "-s", "-m", "12", url],
-      { encoding: "utf8", maxBuffer: 8 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] },
-    );
+    return libSshCurl(SSH, url);
   } catch (e) {
-    const msg = `${e.stderr || e.stdout || e.message || ""}`.slice(0, 300);
+    const msg = `${e.message || e}`.slice(0, 300);
     throw new Error(`curl ${url} failed: ${msg}`);
   }
+}
+
+function probe22222() {
+  if (LOCAL) {
+    return execFileSync("cmd", ["/c", "netstat -ano | findstr 22222"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  }
+  return execFileSync(
+    "ssh",
+    [SSH, "cmd", "/c", "netstat -ano | findstr 22222"],
+    { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+  );
 }
 
 function suggestUiAccess(alias) {
@@ -61,7 +76,7 @@ const log = (m) => console.log(m);
 const problems = [];
 
 try {
-  log(`[preflight] alias=${ALIAS} ssh=${SSH}`);
+  log(`[preflight] alias=${ALIAS} ${LOCAL ? "mode=local" : `ssh=${SSH}`}`);
 
   // 1) health
   let h30, h20;
@@ -127,11 +142,7 @@ try {
 
   // 4) Xiaowei 22222（tap/dump/screenshot 真通道）
   try {
-    const listen = execFileSync(
-      "ssh",
-      [SSH, "cmd", "/c", "netstat -ano | findstr 22222"],
-      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-    );
+    const listen = probe22222();
     if (!/LISTENING/i.test(listen) && !/22222/.test(listen)) {
       problems.push("xiaowei 22222 未检测到 LISTEN（交互 ops 不可用）");
     } else {
