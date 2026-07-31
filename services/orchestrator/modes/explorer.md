@@ -158,6 +158,19 @@ Explorer 产出 recipe 默认 **`verifyMode=human`**，content 可带 `[explorer
 
 > 新 App 首轮探索即建 `skills/<app>/SKILL.md` 当能力地图**唯一权威落点**，勿把地图停在 `tmp-know/` 草稿停车场——草稿会被下次同步/清理丢失，且无契约约束。
 
+### 固化轻量约定（explore 散条 → `skills/<app>/<op>/` v1.0）
+
+固化成业务脚本时**别过度仪式化**，守住三条：
+
+| 项 | 约定 |
+|----|------|
+| `verified` | `verified: true` + 一行 note（`date / device / result`，dry-run 加 `mode: dry-run`）。**不写 `changelog` 数组**——git 历史就是 changelog。 |
+| 能力地图 op 表 | `skills/<app>/SKILL.md` 的 op 表只列 `op` + 链接 + 自由度，**不跟踪 version 文字**（状态看子 skill frontmatter，别每次升 v1.0 都回写那一行）。 |
+| 输出示例 | 标「示例，非实机值」，**不追着实机值改**。实机值进 `verified` note。 |
+| dry-run | dry-run 真机跑绿即升 `v1.0 / verified:true`（note 标 `mode: dry-run`）。真动作（真赞 desc 翻转、真发评论）是**下一功能**，不作为本功能升 v1.0 的门槛。 |
+
+**收编**：Windows 先行落地的文件，Mac 一条命令拉回——`node scripts/adopt-from-windows.mjs <相对路径...>`（显式列文件，base64 拉回，不自动 diff）。
+
 ---
 
 ## 10. 派工模板（复制即用）

@@ -44,6 +44,16 @@ ssh xhs-windows 'node C:\Users\Public\xhs-registry\ops\_trace-pitfall.mjs --evid
 
 TRACE_DIR 是绝对路径，无需 cd。证据块格式与字段见 [`ops/proposal-TEMPLATE.md`](proposal-TEMPLATE.md)。
 
+## Mac 收编先行落地文件
+
+Windows agent 验收时常直接在部署副本写新 `ops/`/`skills/` 文件（先行落地）。源在 Mac，**不收编会被下次单向 sync 冲掉**。Mac 一条命令 base64 拉回（只读 Windows、只写 Mac 仓库，不向 Windows 推部署）：
+
+```bash
+node scripts/adopt-from-windows.mjs ops/douyin-like.mjs skills/douyin/douyin-like/SKILL.md
+```
+
+显式列文件，**不自动 diff**（agent 责任，避免把落后副本当新增拉回覆盖）。固化轻量约定（verified 一行 note / op 表不回写 version / 输出示例标示例 / dry-run 即 v1.0）见 [`modes/explorer.md`](../modes/explorer.md) §9「固化轻量约定」。
+
 ## 非目标
 
 - 不在本目录维护第二套 `ops-win/`
