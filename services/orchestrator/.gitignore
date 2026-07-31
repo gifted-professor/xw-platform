@@ -23,3 +23,16 @@ watchdog/launchd.err.log
 
 # 工具生成的 wiki 缓存
 .qoder/
+
+# macOS 元数据
+.DS_Store
+
+# IDE / agent tooling（skill symlink，非源码）
+.claude/
+.codex/
+
+# git worktree 存储（EnterWorktree 生成）
+.gitworktrees/
+
+# 本地数据库（非源码）
+aionui-backend.db
