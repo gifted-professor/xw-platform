@@ -15,3 +15,9 @@ config/control-plane.devices.json
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
+
+# cleanup additions (local scratch, not source)
+tmp/
+.DS_Store
+*.bak-local
+*.bak
