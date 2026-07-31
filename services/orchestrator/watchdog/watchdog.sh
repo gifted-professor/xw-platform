@@ -5,7 +5,7 @@ set -u
 
 WD="/Users/a1234/Desktop/Coding/xhs-registry/watchdog"
 REPO="/Volumes/GPFS/Users/a1234/Desktop/Coding/xhs-device-agent-routing-v1-1"
-BRANCH="agent/placement-entry-v1-1-20260724"
+BRANCH="main"
 STATE="$WD/state.json"
 LOG="$WD/watchdog.log"
 COOLDOWN_S=2700   # 两次 kimi 唤醒最小间隔 45min

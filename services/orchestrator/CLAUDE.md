@@ -132,7 +132,7 @@ cat watchdog/state.json
 - 哨兵逻辑：检测两路变化——① GPFS git 仓库 origin 分支新 commit；② 知识库新 `needsEngineer` 条目（经 SSH 查 registry API）。**无变化零 LLM 成本静默退出**。
 - 有变化且过 45min（`COOLDOWN_S=2700`）冷却 → 拼装 `SUPERVISOR.md` 模板（`{{CHANGES}}` 占位）→ `kimi --print -p` 无头验收，报告写 `watchdog/reports/<UTC时间戳>.md`。
 - **v1 只验收不派工**：不调 mimo-ro、不 push、不重启服务、不碰手机。state 记 lastSha/flags/lastKimiRun。
-- 路径硬编码 `REPO=/Volumes/GPFS/.../xhs-device-agent-routing-v1-1`、`BRANCH=agent/placement-entry-v1-1-20260724`，GPFS 未挂载时整轮跳过。
+- 路径硬编码 `REPO=/Volumes/GPFS/.../xhs-device-agent-routing-v1-1`、`BRANCH=main`（2026-07-31 改：原监听已废弃的 `agent/placement-entry-v1-1-20260724` 长支，PROGRESS.md 已宣布 main 为唯一权威），GPFS 未挂载时整轮跳过。
 
 ## sync-feishu.mjs 注意
 
