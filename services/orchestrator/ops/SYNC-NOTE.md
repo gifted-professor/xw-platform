@@ -34,6 +34,16 @@ node ops/explore-preflight.mjs --alias 01
 - `skills/` 在部署目录是**只读同步副本**：源在 Mac 仓库，改动一律回 Mac commit → push → 再同步到本机。
 - 在本机直接改 `skills/` 会被下次同步覆盖。权限分层见 [`skills/CONTRIBUTING.md`](../skills/CONTRIBUTING.md)（坑点放开 / 契约带 verified / 权限仅人改）。
 
+## Mac 复核触发证据
+
+提案（`ops/proposal-*.md`）的触发证据都可用下面命令在 Mac 上原样重跑复核（只读，不 POST）：
+
+```bash
+ssh xhs-windows 'node C:\Users\Public\xhs-registry\ops\_trace-pitfall.mjs --evidence "<query>" --json'
+```
+
+TRACE_DIR 是绝对路径，无需 cd。证据块格式与字段见 [`ops/proposal-TEMPLATE.md`](proposal-TEMPLATE.md)。
+
 ## 非目标
 
 - 不在本目录维护第二套 `ops-win/`

@@ -13,7 +13,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // 每个 ops 脚本都是独立 node 进程，靠固定 ControlPath 共享同一个 master socket。
 // 无锁——不串行化任何动作，只省掉重复的 SSH 握手开销。
 const SSH_CTRL = join(homedir(), ".ssh", "cm-xhs-windows");
-const SSH_OPTS = [
+export const SSH_OPTS = [
   "-o", "ControlMaster=auto",
   "-o", `ControlPath=${SSH_CTRL}`,
   "-o", "ControlPersist=600",

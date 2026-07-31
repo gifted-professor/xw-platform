@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "./_explore-lib.mjs";
+import { bizRecord } from "./_biz-trace.mjs";
 import { parseSearchResults, isHomeFocus } from "./_xhs-parse.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -36,6 +37,8 @@ if (!alias || !keyword) {
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+let t0 = Date.now(); // 业务动作起点（module-scope，fail/catch 也能引用）
 
 function runOps(args, timeoutMs = 120000) {
   return new Promise((resolve) => {
@@ -69,6 +72,8 @@ function fail(reason, extra = {}) {
   console.log(`REASON=${reason}`);
   for (const [k, v] of Object.entries(extra)) if (v != null) console.log(`${k}=${v}`);
   console.log(`ALIAS=${alias}`);
+  // biz trace：终态同步落盘（SSH 路径同步 execFileSync），落完再 exit
+  bizRecord({ op: "search", outcome: "fail", reason, extra, alias, serial: null, startMs: t0 });
   process.exit(2);
 }
 
@@ -110,6 +115,7 @@ function findSearchInput(xml) {
 }
 
 async function main() {
+  t0 = Date.now();
   const launchArgs = ["ops/launch-app.mjs", "--alias", alias, "--package", PKG, "--ssh", ssh];
   if (forceStop) launchArgs.push("--force-stop");
   let r = await runOps(launchArgs, 45000);
@@ -214,6 +220,7 @@ async function main() {
   if (allCards.length < 1) fail("no_cards");
   console.log(`SEARCH=ok`);
   console.log(`ALIAS=${alias}`);
+  bizRecord({ op: "search", outcome: "ok", alias, serial: null, startMs: t0 });
   process.exit(0);
 }
 
@@ -222,5 +229,6 @@ main().catch((e) => {
   console.log(`REASON=exception`);
   console.log(`DETAIL=${String(e.message || e).slice(0, 300)}`);
   console.log(`ALIAS=${alias}`);
+  bizRecord({ op: "search", outcome: "fail", reason: "exception", extra: { detail: String(e.message || e).slice(0, 300) }, alias, serial: null, startMs: t0 });
   process.exit(4);
 });

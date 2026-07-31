@@ -16,6 +16,7 @@ import { existsSync, readFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseArgs, openWinXwSession, scpFrom } from "./_explore-lib.mjs";
+import { bizRecord } from "./_biz-trace.mjs";
 import {
   parseFeedCards,
   pickFeedCard,
@@ -48,6 +49,7 @@ function sleep(ms) {
 }
 
 let s;
+let t0 = Date.now(); // 业务动作起点（module-scope，fail/catch 也能引用）
 
 function fail(reason, extra = {}) {
   console.log(`FOLLOW=fail`);
@@ -57,6 +59,8 @@ function fail(reason, extra = {}) {
   }
   console.log(`ALIAS=${alias}`);
   try { s && s.close(); } catch { /* */ }
+  // biz trace：终态同步落盘（SSH 路径同步 execFileSync），落完再 exit
+  bizRecord({ op: "follow", outcome: "fail", reason, extra, alias, serial: (s && s.serial) || null, startMs: t0 });
   process.exit(2);
 }
 
@@ -113,6 +117,7 @@ async function backHome() {
 }
 
 async function main() {
+  t0 = Date.now();
   s = openWinXwSession(ssh, alias);
   await s.ready;
 
@@ -186,6 +191,7 @@ async function main() {
     console.log(`REASON=already-followed`);
     await backHome();
     console.log(`ALIAS=${alias}`);
+    bizRecord({ op: "follow", outcome: "skip", reason: "already-followed", alias, serial: (s && s.serial) || null, startMs: t0 });
     s.close();
     process.exit(0);
   }
@@ -195,6 +201,7 @@ async function main() {
     console.log(`REASON=located-not-tapped`);
     await back();
     console.log(`ALIAS=${alias}`);
+    bizRecord({ op: "follow", outcome: "dry-run", reason: "located-not-tapped", alias, serial: (s && s.serial) || null, startMs: t0 });
     s.close();
     process.exit(0);
   }
@@ -237,6 +244,7 @@ async function main() {
   if (!ok) fail("follow_not_confirmed", { FOLLOW_BEFORE: beforeDesc, FOLLOW_AFTER: afterDesc });
   console.log(`FOLLOW=ok`);
   console.log(`ALIAS=${alias}`);
+  bizRecord({ op: "follow", outcome: "ok", alias, serial: (s && s.serial) || null, startMs: t0 });
   s.close();
   process.exit(0);
 }
@@ -247,5 +255,6 @@ main().catch((e) => {
   console.log(`DETAIL=${String(e.message || e).slice(0, 300)}`);
   console.log(`ALIAS=${alias}`);
   try { s && s.close(); } catch { /* */ }
+  bizRecord({ op: "follow", outcome: "fail", reason: "exception", extra: { detail: String(e.message || e).slice(0, 300) }, alias, serial: (s && s.serial) || null, startMs: t0 });
   process.exit(4);
 });

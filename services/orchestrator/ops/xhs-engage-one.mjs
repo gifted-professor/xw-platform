@@ -16,6 +16,7 @@ import { spawn } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "./_explore-lib.mjs";
+import { bizRecord } from "./_biz-trace.mjs";
 import {
   parseFeedCards,
   parseSearchResults,
@@ -93,11 +94,15 @@ function kv(t) {
   return o;
 }
 
+let t0 = Date.now(); // 业务动作起点（module-scope，fail/catch 也能引用）
+
 function fail(reason, extra = {}) {
   console.log(`ENGAGE=fail`);
   console.log(`REASON=${reason}`);
   for (const [k, v] of Object.entries(extra)) if (v != null && v !== "") console.log(`${k}=${String(v).slice(0, 200)}`);
   console.log(`ALIAS=${alias}`);
+  // biz trace：终态同步落盘（SSH 路径同步 execFileSync），落完再 exit；partial 子失败记在 reason/extra
+  bizRecord({ op: "engage", outcome: "fail", reason, extra, alias, serial: null, startMs: t0 });
   process.exit(2);
 }
 
@@ -338,6 +343,7 @@ async function doCommentAction(bar, text) {
 }
 
 async function main() {
+  t0 = Date.now();
   if (keyword) await openFromSearch(keyword);
   else await openFromFeed();
 
@@ -350,6 +356,7 @@ async function main() {
     console.log(`ENGAGE=dry-run`);
     await backHome();
     console.log(`ALIAS=${alias}`);
+    bizRecord({ op: "engage", outcome: "dry-run", alias, serial: null, startMs: t0 });
     process.exit(0);
   }
 
@@ -398,6 +405,7 @@ async function main() {
   if (!ok) fail("partial", { LIKE: results.like?.ok, COLLECT: results.collect?.ok, COMMENT: results.comment?.ok });
   console.log(`ENGAGE=ok`);
   console.log(`ALIAS=${alias}`);
+  bizRecord({ op: "engage", outcome: "ok", alias, serial: null, startMs: t0 });
   process.exit(0);
 }
 
@@ -406,5 +414,6 @@ main().catch((e) => {
   console.log(`REASON=exception`);
   console.log(`DETAIL=${String(e.message || e).slice(0, 300)}`);
   console.log(`ALIAS=${alias}`);
+  bizRecord({ op: "engage", outcome: "fail", reason: "exception", extra: { detail: String(e.message || e).slice(0, 300) }, alias, serial: null, startMs: t0 });
   process.exit(4);
 });

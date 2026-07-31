@@ -16,6 +16,7 @@ import { existsSync, readFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseArgs, openWinXwSession, scpFrom } from "./_explore-lib.mjs";
+import { bizRecord } from "./_biz-trace.mjs";
 import {
   parseFeedCards,
   pickFeedCard,
@@ -48,6 +49,7 @@ function sleep(ms) {
 }
 
 let s; // session，module-scope 便于 fail() 关闭
+let t0 = Date.now(); // 业务动作起点（module-scope，fail/catch 也能引用）
 
 function fail(reason, extra = {}) {
   console.log(`LIKE=fail`);
@@ -57,6 +59,8 @@ function fail(reason, extra = {}) {
   }
   console.log(`ALIAS=${alias}`);
   try { s && s.close(); } catch { /* */ }
+  // biz trace：终态同步落盘（SSH 路径同步 execFileSync），落完再 exit
+  bizRecord({ op: "like", outcome: "fail", reason, extra, alias, serial: (s && s.serial) || null, startMs: t0 });
   process.exit(2);
 }
 
@@ -104,6 +108,7 @@ async function launch() {
 }
 
 async function main() {
+  t0 = Date.now();
   s = openWinXwSession(ssh, alias);
   await s.ready;
 
@@ -188,6 +193,7 @@ async function main() {
     console.log(`BACK_HOME=${isHomeFocus(f.FOCUS) ? "yes" : "no"}`);
     console.log(`FOCUS=${f.FOCUS || ""}`);
     console.log(`ALIAS=${alias}`);
+    bizRecord({ op: "like", outcome: "skip", reason: "already-liked", alias, serial: (s && s.serial) || null, startMs: t0 });
     s.close();
     process.exit(0);
   }
@@ -197,6 +203,7 @@ async function main() {
     console.log(`REASON=located-not-tapped`);
     await back();
     console.log(`ALIAS=${alias}`);
+    bizRecord({ op: "like", outcome: "dry-run", reason: "located-not-tapped", alias, serial: (s && s.serial) || null, startMs: t0 });
     s.close();
     process.exit(0);
   }
@@ -239,11 +246,13 @@ async function main() {
     console.log(`LIKE=ok`);
     console.log(`WARN=back_not_home`);
     console.log(`ALIAS=${alias}`);
+    bizRecord({ op: "like", outcome: "ok", alias, serial: (s && s.serial) || null, startMs: t0 });
     s.close();
     process.exit(0);
   }
   console.log(`LIKE=ok`);
   console.log(`ALIAS=${alias}`);
+  bizRecord({ op: "like", outcome: "ok", alias, serial: (s && s.serial) || null, startMs: t0 });
   s.close();
   process.exit(0);
 }
@@ -254,5 +263,6 @@ main().catch((e) => {
   console.log(`DETAIL=${String(e.message || e).slice(0, 300)}`);
   console.log(`ALIAS=${alias}`);
   try { s && s.close(); } catch { /* */ }
+  bizRecord({ op: "like", outcome: "fail", reason: "exception", extra: { detail: String(e.message || e).slice(0, 300) }, alias, serial: (s && s.serial) || null, startMs: t0 });
   process.exit(4);
 });

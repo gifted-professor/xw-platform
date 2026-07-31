@@ -13,6 +13,7 @@ import { spawn } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "./_explore-lib.mjs";
+import { bizRecord } from "./_biz-trace.mjs";
 import { decodeEntities, isHomeFocus, findEditText } from "./_xhs-parse.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -66,11 +67,15 @@ function kv(t) {
   return o;
 }
 
+let t0 = Date.now(); // 业务动作起点（module-scope，fail/catch 也能引用）
+
 function fail(reason, extra = {}) {
   console.log(`PUBLISH_ENTRY=fail`);
   console.log(`REASON=${reason}`);
   for (const [k, v] of Object.entries(extra)) if (v != null) console.log(`${k}=${String(v).slice(0, 220)}`);
   console.log(`ALIAS=${alias}`);
+  // biz trace：终态同步落盘（SSH 路径同步 execFileSync），落完再 exit
+  bizRecord({ op: "publish_entry", outcome: "fail", reason, extra, alias, serial: null, startMs: t0 });
   process.exit(2);
 }
 
@@ -120,6 +125,7 @@ async function tapXY(x, y) {
 }
 
 async function main() {
+  t0 = Date.now();
   const launchArgs = ["ops/launch-app.mjs", "--alias", alias, "--package", PKG, "--ssh", ssh];
   if (forceStop) launchArgs.push("--force-stop");
   let r = await runOps(launchArgs, 45000);
@@ -222,6 +228,7 @@ async function main() {
   console.log(`PUBLISHED=no`);
   console.log(`PUBLISH_ENTRY=ok`);
   console.log(`ALIAS=${alias}`);
+  bizRecord({ op: "publish_entry", outcome: "ok", reason: "entry-reached", alias, serial: null, startMs: t0 });
   process.exit(0);
 }
 
@@ -230,5 +237,6 @@ main().catch((e) => {
   console.log(`REASON=exception`);
   console.log(`DETAIL=${String(e.message || e).slice(0, 300)}`);
   console.log(`ALIAS=${alias}`);
+  bizRecord({ op: "publish_entry", outcome: "fail", reason: "exception", extra: { detail: String(e.message || e).slice(0, 300) }, alias, serial: null, startMs: t0 });
   process.exit(4);
 });

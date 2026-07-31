@@ -16,6 +16,7 @@ import { spawn } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "./_explore-lib.mjs";
+import { bizRecord } from "./_biz-trace.mjs";
 import {
   parseFeedCards,
   pickFeedCard,
@@ -82,11 +83,15 @@ function kv(t) {
   return o;
 }
 
+let t0 = Date.now(); // 业务动作起点（module-scope，fail/catch 也能引用）
+
 function fail(reason, extra = {}) {
   console.log(`DM=fail`);
   console.log(`REASON=${reason}`);
   for (const [k, v] of Object.entries(extra)) if (v != null) console.log(`${k}=${String(v).slice(0, 200)}`);
   console.log(`ALIAS=${alias}`);
+  // biz trace：终态同步落盘（SSH 路径同步 execFileSync），落完再 exit
+  bizRecord({ op: "dm", outcome: "fail", reason, extra, alias, serial: null, startMs: t0 });
   process.exit(2);
 }
 
@@ -139,6 +144,7 @@ async function tapXY(x, y) {
 }
 
 async function main() {
+  t0 = Date.now();
   const launchArgs = ["ops/launch-app.mjs", "--alias", alias, "--package", PKG, "--ssh", ssh];
   if (forceStop) launchArgs.push("--force-stop");
   let r = await runOps(launchArgs, 45000);
@@ -255,6 +261,7 @@ async function main() {
     console.log(`DM=ok`);
     console.log(`MODE=open-only`);
     console.log(`ALIAS=${alias}`);
+    bizRecord({ op: "dm", outcome: "ok", reason: "open-only", alias, serial: null, startMs: t0 });
     process.exit(0);
   }
 
@@ -292,6 +299,7 @@ async function main() {
     console.log(`DM=ok`);
     console.log(`MODE=typed-no-send`);
     console.log(`ALIAS=${alias}`);
+    bizRecord({ op: "dm", outcome: "ok", reason: "typed-no-send", alias, serial: null, startMs: t0 });
     process.exit(0);
   }
 
@@ -306,6 +314,7 @@ async function main() {
   console.log(`DM=ok`);
   console.log(`MODE=sent`);
   console.log(`ALIAS=${alias}`);
+  bizRecord({ op: "dm", outcome: "ok", reason: "sent", alias, serial: null, startMs: t0 });
   process.exit(0);
 }
 
@@ -324,5 +333,6 @@ main().catch((e) => {
   console.log(`REASON=exception`);
   console.log(`DETAIL=${String(e.message || e).slice(0, 300)}`);
   console.log(`ALIAS=${alias}`);
+  bizRecord({ op: "dm", outcome: "fail", reason: "exception", extra: { detail: String(e.message || e).slice(0, 300) }, alias, serial: null, startMs: t0 });
   process.exit(4);
 });

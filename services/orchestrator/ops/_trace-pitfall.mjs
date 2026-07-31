@@ -6,12 +6,15 @@
 //   node ops/_trace-pitfall.mjs --dry-run            # 只输出，不 POST
 //   node ops/_trace-pitfall.mjs --since-hour 2       # 只看最近 N 小时（相对 now）
 //   node ops/_trace-pitfall.mjs --confirm            # 真实 POST（仅人手动触发）
+//   node ops/_trace-pitfall.mjs --evidence "kind:biz op:like" --json  # 只读证据模式
 //
 // 升级门槛（硬规则）：
 //   - 单次失败 → 只记 trace，不写知识库
-//   - 同一签名（serial+op+normalizedError）滚动 7 天内 ≥2 次，或 ≥2 台设备同一签名 → POST
+//   - 同一签名（kind+deviceKey+op+normalizedError）滚动 7 天内 ≥2 次，或 ≥2 台设备同一签名 → POST
 // 只写 lifecycle=probe_unknown，绝不自动升 active_blocker/backlog。
-// 多机条件按 op+norm（不含 serial）聚设备数：签名 key 若含 serial，每桶恒 1 台，≥2 机永远触发不了。
+// 多机条件按 kind+op+norm（不含 deviceKey）聚设备数；deviceKey = serial || alias || "?"。
+// 业务层（kind:biz）失败也按同一阈值 POST，id 前缀 auto-biz-，content 带 attempts/ok-rate。
+// --evidence <query> 只读证据模式（不 POST），--json 输出供 Mac 复验比对。
 //
 // 依赖：Windows 本机 registry http://127.0.0.1:17930；node:fs / node:child_process / node:path / node:crypto
 import { readFileSync, readdirSync } from "node:fs";
@@ -26,7 +29,7 @@ const opt = (n, fb = null) => {
 };
 const flag = (n) => argv.includes(n);
 
-const TRACE_DIR = "C:/Users/Public/xhs-agent-runs/ops-trace";
+const TRACE_DIR = process.env.XHS_TRACE_DIR || "C:/Users/Public/xhs-agent-runs/ops-trace";
 const REGISTRY = "http://127.0.0.1:17930";
 const WINDOW_DAYS = 7;          // 滚动窗口
 const REPEAT_THRESHOLD = 2;     // 同一签名次数
@@ -37,6 +40,11 @@ const SINCE_HOUR = Number(opt("--since-hour", "0") || 0);
 function hash8(s) {
   return createHash("sha256").update(String(s)).digest("hex").slice(0, 8);
 }
+
+// ---- 行级辅助 ----
+function deviceKeyOf(r) { return String(r.serial || r.alias || "?"); }
+function rowKind(r) { return r.kind === "biz" ? "biz" : "mech"; }
+function isFailure(r) { return r.kind === "biz" ? r.outcome === "fail" : r.ok === false; }
 
 // 归一化 error：去路径/数字序列/pid/时间戳/ip，截前 80 字符，保证同坑不同参数不裂签名。
 function normalizeError(e) {
@@ -51,12 +59,90 @@ function normalizeError(e) {
     .slice(0, 80);
 }
 
-function signatureOf(serial, op, error) {
-  return { serial, op, norm: normalizeError(error) };
+// ---- 证据查询解析 ----
+function parseEvidenceQuery(terms) {
+  const q = { kind: null, ops: [], serials: [], aliases: [], outcomes: [], bare: [] };
+  for (const t of terms) {
+    if (!t) continue;
+    if (t === "kind:all") { q.kind = "all"; continue; }
+    const m = t.match(/^(kind|op|serial|alias|outcome):(.+)$/);
+    if (m) {
+      const [, k, v] = m;
+      if (k === "kind") q.kind = v;
+      else if (k === "op") q.ops.push(v);
+      else if (k === "serial") q.serials.push(v);
+      else if (k === "alias") q.aliases.push(v);
+      else if (k === "outcome") q.outcomes.push(v);
+    } else {
+      q.bare.push(t.toLowerCase());
+    }
+  }
+  return q;
 }
 
-function sigKey(s) {
-  return `${s.serial}|${s.op}|${s.norm}`;
+function structuralMatch(q, r) {
+  const kind = rowKind(r);
+  if (q.kind && q.kind !== "all" && kind !== q.kind) return false;
+  if (q.ops.length && !q.ops.includes(r.op)) return false;
+  if (q.serials.length && !q.serials.includes(String(r.serial || ""))) return false;
+  if (q.aliases.length && !q.aliases.includes(String(r.alias || ""))) return false;
+  return true;
+}
+
+function fullMatch(q, r) {
+  if (!structuralMatch(q, r)) return false;
+  if (q.outcomes.length) {
+    if (rowKind(r) !== "biz") return false; // mech 行无 outcome，outcome 过滤仅 biz
+    if (!q.outcomes.includes(r.outcome)) return false;
+  }
+  if (q.bare.length) {
+    const norm = normalizeError(r.error || r.reason || "").toLowerCase();
+    for (const b of q.bare) if (!norm.includes(b)) return false;
+  }
+  return true;
+}
+
+// ---- 签名聚合 ----
+function aggregate(rows) {
+  const agg = new Map(); // `${kind}|${op}|${norm}` -> {kind,op,norm,count,firstTs,lastTs,devices:Set,perDevice:Map,perDay:Map,aliases:Set,errors:[]}
+  for (const r of rows) {
+    if (!isFailure(r)) continue;
+    const kind = rowKind(r);
+    const norm = normalizeError(r.error || r.reason || "");
+    const dk = deviceKeyOf(r);
+    const key = `${kind}|${r.op || "?"}|${norm}`;
+    let a = agg.get(key);
+    if (!a) {
+      a = { kind, op: r.op || "?", norm, count: 0, firstTs: r.ts, lastTs: r.ts, devices: new Set(), perDevice: new Map(), perDay: new Map(), aliases: new Set(), errors: [] };
+      agg.set(key, a);
+    }
+    a.count += 1;
+    a.devices.add(dk);
+    a.perDevice.set(dk, (a.perDevice.get(dk) || 0) + 1);
+    a.perDay.set(r._date, (a.perDay.get(r._date) || 0) + 1);
+    a.aliases.add(String(r.alias || ""));
+    a.errors.push(r.error || r.reason || "");
+    if (r.ts && r.ts < a.firstTs) a.firstTs = r.ts;
+    if (r.ts && r.ts > a.lastTs) a.lastTs = r.ts;
+  }
+  return agg;
+}
+
+// ---- op 级 tally（biz 行） ----
+function opTallyFor(rows, op) {
+  let total = 0, ok = 0, fail = 0, skip = 0, dryRun = 0;
+  for (const r of rows) {
+    if (rowKind(r) !== "biz" || r.op !== op) continue;
+    total += 1;
+    const o = r.outcome || "fail";
+    if (o === "ok") ok++;
+    else if (o === "fail") fail++;
+    else if (o === "skip") skip++;
+    else if (o === "dry-run") dryRun++;
+    else fail++;
+  }
+  const attempts = ok + fail;
+  return { total, ok, fail, skip, dryRun, attempts, okRate: attempts ? +(ok / attempts).toFixed(3) : null };
 }
 
 function localHttpGet(url, timeoutMs = 8000) {
@@ -80,7 +166,6 @@ function listTraceDates() {
 }
 
 function readTraceFile(date) {
-  // date 可能带扩展名（来自 listTraceDates）或不带（来自 --date），统一去重
   const p = join(TRACE_DIR, `${String(date).replace(/\.jsonl$/, "")}.jsonl`);
   let raw;
   try { raw = readFileSync(p, "utf8"); } catch { return []; }
@@ -92,124 +177,192 @@ function readTraceFile(date) {
   return rows;
 }
 
+// ---- 证据模式（只读，不 POST） ----
+function runEvidence(qRaw, rows, dates) {
+  const q = parseEvidenceQuery(qRaw.split(/\s+/).filter(Boolean));
+  const structRows = rows.filter((r) => structuralMatch(q, r));
+  const matchRows = structRows.filter((r) => isFailure(r) && fullMatch(q, r));
+  const agg = aggregate(matchRows);
+
+  // biz op 级 tally（structRows 中该 op 的全部 biz 行）
+  const bizTally = new Map();
+  for (const r of structRows) {
+    if (rowKind(r) !== "biz") continue;
+    const o = r.op || "?";
+    if (!bizTally.has(o)) bizTally.set(o, opTallyFor(structRows, o));
+  }
+
+  const matched = [];
+  for (const a of agg.values()) {
+    const via = a.devices.size >= 2 ? "multi-device" : (a.count >= REPEAT_THRESHOLD ? "repeat" : null);
+    const tally = a.kind === "biz" ? bizTally.get(a.op) : null;
+    matched.push({
+      kind: a.kind, op: a.op, norm: a.norm,
+      count: a.count,
+      perDay: Object.fromEntries([...a.perDay].sort()),
+      devices: [...a.devices].sort(),
+      aliases: [...a.aliases].filter(Boolean).sort(),
+      perSerial: Object.fromEntries([...a.perDevice].sort()),
+      firstTs: a.firstTs, lastTs: a.lastTs,
+      sampleErrors: a.errors.slice(0, 3),
+      ...(tally ? { attempts: tally.attempts, failures: tally.fail, ok: tally.ok, skip: tally.skip, dryRun: tally.dryRun, okRate: tally.okRate } : {}),
+      qualified: via !== null,
+      qualifiedVia: via,
+    });
+  }
+
+  // 统计
+  let mechFail = 0, bizFail = 0;
+  for (const r of rows) {
+    if (!isFailure(r)) continue;
+    if (rowKind(r) === "biz") bizFail++; else mechFail++;
+  }
+  let bizTot = { total: 0, ok: 0, fail: 0, skip: 0, dryRun: 0 };
+  for (const t of bizTally.values()) { bizTot.total += t.total; bizTot.ok += t.ok; bizTot.fail += t.fail; bizTot.skip += t.skip; bizTot.dryRun += t.dryRun; }
+
+  const command = `node ops/_trace-pitfall.mjs --evidence "${qRaw}" --json`;
+  const reVerify = `ssh xhs-windows 'node C:\\Users\\Public\\xhs-registry\\ops\\_trace-pitfall.mjs --evidence "${qRaw}" --json'`;
+
+  const out = {
+    ok: true, mode: "evidence",
+    command, reVerify,
+    scanned: TRACE_DIR,
+    window: { dates, windowDays: WINDOW_DAYS, sinceHour: SINCE_HOUR },
+    query: { kind: q.kind || "all", ops: q.ops, serials: q.serials, aliases: q.aliases, outcomes: q.outcomes, bareTokens: q.bare },
+    rowsScanned: rows.length,
+    totalFailures: mechFail + bizFail,
+    totalBizAttempts: bizTot.total,
+    matched,
+  };
+
+  if (flag("--json")) {
+    console.log(JSON.stringify(out, null, 2));
+  } else {
+    console.log(`TRACE DIR: ${TRACE_DIR}`);
+    console.log(`WINDOW: ${dates.join("..")} (${dates.length} files)`);
+    console.log(`COMMAND: ${command}`);
+    console.log(`RE-VERIFY (Mac): ${reVerify}`);
+    console.log(`rows scanned: ${rows.length} | failures: ${mechFail + bizFail} (mech ${mechFail} / biz ${bizFail})`);
+    if (bizTot.total) console.log(`biz attempts: ${bizTot.total} (ok ${bizTot.ok} / fail ${bizTot.fail} / skip ${bizTot.skip} / dry-run ${bizTot.dryRun})`);
+    console.log(`matched signatures: ${matched.length}`);
+    for (const m of matched) {
+      const tag = m.kind === "biz" ? "[biz]" : "[mech]";
+      console.log(`\n${tag} op=${m.op}  norm=${m.norm.slice(0, 60)}`);
+      console.log(`  failures: ${m.count} | devices: ${m.devices.join(", ")}`);
+      if (m.attempts != null) console.log(`  attempts: ${m.attempts} | ok-rate: ${Math.round((m.okRate || 0) * 100)}% (ok ${m.ok} / fail ${m.failures} / skip ${m.skip} / dry-run ${m.dryRun})`);
+      console.log(`  per-day: ${Object.entries(m.perDay).map(([d, c]) => `${d}:${c}`).join("  ")}`);
+      console.log(`  qualified: ${m.qualified} (${m.qualifiedVia || "no"})`);
+    }
+  }
+}
+
+// ---- 默认扫描 + POST ----
 function main() {
   let dates;
   if (DATE_OVERRIDE) {
     dates = [DATE_OVERRIDE];
   } else {
-    // 最近 7 天（含今天）
     const today = new Date().toISOString().slice(0, 10);
     const all = listTraceDates();
-    // 注意 d 是 "YYYY-MM-DD.jsonl"，比日期串长——必须 slice(0,10) 再比，否则永远 > today
     dates = all.filter((d) => d.slice(0, 10) <= today).slice(-WINDOW_DAYS);
-    if (SINCE_HOUR > 0) dates = all.slice(-1); // since-hour 只看最新文件，行级过滤
+    if (SINCE_HOUR > 0) dates = all.slice(-1);
   }
   if (!dates.length) {
     console.log("no trace files found in " + TRACE_DIR);
     return;
   }
 
-  // 读全部日期 → 收集失败行
-  const rowsByDate = {};
-  let allFail = [];
+  // 读全部日期
+  const rows = [];
+  const bizOpTally = new Map(); // op -> {total, ok, fail, skip, dryRun}
+  const cutoff = SINCE_HOUR > 0 ? Date.now() - SINCE_HOUR * 3600 * 1000 : 0;
   for (const d of dates) {
-    const rows = readTraceFile(d);
-    rowsByDate[d] = rows;
-    const cutoff = SINCE_HOUR > 0 ? Date.now() - SINCE_HOUR * 3600 * 1000 : 0;
-    for (const r of rows) {
-      if (r.ok === false) {
-        if (cutoff && Date.parse(r.ts || "") < cutoff) continue;
-        allFail.push({ ...r, _date: d });
+    for (const r of readTraceFile(d)) {
+      if (cutoff && Date.parse(r.ts || "") < cutoff) continue;
+      r._date = d;
+      rows.push(r);
+      if (rowKind(r) === "biz") {
+        const o = r.op || "?";
+        const t = bizOpTally.get(o) || { total: 0, ok: 0, fail: 0, skip: 0, dryRun: 0 };
+        t.total += 1;
+        const oc = r.outcome || "fail";
+        if (oc === "ok") t.ok++; else if (oc === "fail") t.fail++; else if (oc === "skip") t.skip++; else if (oc === "dry-run") t.dryRun++; else t.fail++;
+        bizOpTally.set(o, t);
       }
     }
   }
 
-  // 签名 → 次数 + 设备集合（key=serial|op|norm，同机重复用）
-  const sigCount = new Map(); // sigKey -> {serial, op, norm, count, firstTs, lastTs, alias, errors:[]}
-  // 设备桶（key=op+norm，不含 serial）→ 统计"≥2 台设备同一签名"
-  // 修复 review bug：签名 key 带 serial 时每桶 serials.size 恒为 1，多机条件永远触发不了
-  const devBuckets = new Map(); // devKey(JSON) -> {op, norm, count, firstTs, lastTs, serials:Set, alias, errors:[]}
-  for (const f of allFail) {
-    const sig = signatureOf(f.serial, f.op, f.error);
-    const k = sigKey(sig);
-    const e = sigCount.get(k) || { serial: f.serial, op: f.op, norm: sig.norm, count: 0, firstTs: f.ts, lastTs: f.ts, serials: new Set(), alias: f.alias, errors: [] };
-    e.count += 1;
-    e.serials.add(f.serial);
-    e.errors.push(f.error);
-    if (f.ts < e.firstTs) e.firstTs = f.ts;
-    if (f.ts > e.lastTs) e.lastTs = f.ts;
-    sigCount.set(k, e);
+  // 证据模式（只读，不 POST）
+  const evidenceQuery = opt("--evidence");
+  if (evidenceQuery != null) { runEvidence(evidenceQuery, rows, dates); return; }
 
-    // 多机层：按 op+norm（不含 serial）聚 distinct 设备数
-    const dk = JSON.stringify([sig.op, sig.norm]); // JSON key，避免 norm 里的 | 撞分隔符
-    const d = devBuckets.get(dk) || { op: sig.op, norm: sig.norm, count: 0, firstTs: f.ts, lastTs: f.ts, serials: new Set(), alias: f.alias, errors: [] };
-    d.count += 1;
-    d.serials.add(f.serial);
-    d.errors.push(f.error);
-    if (f.ts < d.firstTs) d.firstTs = f.ts;
-    if (f.ts > d.lastTs) d.lastTs = f.ts;
-    devBuckets.set(dk, d);
+  // 签名聚合（按 kind|op|norm 跨 deviceKey 汇总）
+  const agg = aggregate(rows);
+
+  // 统计
+  let mechFail = 0, bizFail = 0;
+  for (const r of rows) {
+    if (!isFailure(r)) continue;
+    if (rowKind(r) === "biz") bizFail++; else mechFail++;
   }
+  let bizTot = { total: 0, ok: 0, fail: 0, skip: 0, dryRun: 0 };
+  for (const t of bizOpTally.values()) { bizTot.total += t.total; bizTot.ok += t.ok; bizTot.fail += t.fail; bizTot.skip += t.skip; bizTot.dryRun += t.dryRun; }
 
-  // 达阈值：同签名（serial+op+norm）滚动 7 天 ≥2 次（repeat）；或 ≥2 台设备同 op+norm（multi-device）
+  // 达阈值
   const qualified = [];
-  const multiDevKeys = new Set(); // 已按 ≥2 机入列的 op+norm，per-serial 重复条目被涵盖则跳过
-  for (const [dk, d] of devBuckets) {
-    if (d.serials.size >= 2) {
-      multiDevKeys.add(dk);
-      qualified.push({ multi: true, ...d });
-    }
-  }
-  for (const e of sigCount.values()) {
-    const dk = JSON.stringify([e.op, e.norm]);
-    if (multiDevKeys.has(dk)) continue; // 该签名已以多机条目 POST，不重复 per-serial
-    if (e.count >= REPEAT_THRESHOLD) qualified.push({ multi: false, ...e });
+  for (const a of agg.values()) {
+    const via = a.devices.size >= 2 ? "multi-device" : (a.count >= REPEAT_THRESHOLD ? "repeat" : null);
+    if (via) qualified.push({ ...a, qualifiedVia: via });
   }
 
   console.log(`trace files: ${dates.join(", ")}`);
-  console.log(`sessions failures (ok:false rows): ${allFail.length}`);
-  console.log(`distinct signatures: ${sigCount.size}`);
+  console.log(`sessions failures (ok:false rows): ${mechFail}`);
+  if (bizFail) console.log(`biz failures (kind:biz fail): ${bizFail}`);
+  if (bizTot.total) console.log(`biz attempts: ${bizTot.total} (ok ${bizTot.ok} / fail ${bizTot.fail} / skip ${bizTot.skip} / dry-run ${bizTot.dryRun})`);
+  console.log(`distinct signatures: ${agg.size}`);
   console.log(`qualified (repeat>=${REPEAT_THRESHOLD} or multi-device): ${qualified.length}`);
 
-  // 已存在检查
+  // POST
   let created = 0, skipped = 0, wouldCreate = 0;
-  for (const q of qualified) {
-    const qs = encodeURIComponent(`${q.op} ${q.norm}`);
+  for (const a of qualified) {
+    const multi = a.qualifiedVia === "multi-device";
+    const deviceKey = multi ? "multi" : [...a.devices][0];
+    const firstAlias = [...a.aliases].find(Boolean) || deviceKey;
+    const kindTag = a.kind === "biz" ? "biz|" : "";
+    const hashBase = multi ? `${kindTag}multi|${a.op}|${a.norm}` : `${kindTag}${deviceKey}|${a.op}|${a.norm}`;
+    const sigHash = hash8(hashBase);
+    const id = `auto-${a.kind === "biz" ? "biz-" : ""}${multi ? `multi-${a.devices.size}` : deviceKey}-${a.op}-${sigHash}`;
+    const title = `[auto]${a.kind === "biz" ? "[biz]" : ""} ${multi ? `multi-device(${a.devices.size})` : firstAlias} ${a.op} failure: ${a.norm.slice(0, 60)}`;
+    const devices = [...a.devices].sort().join(", ");
+    const tally = a.kind === "biz" ? bizOpTally.get(a.op) : null;
+    const content =
+      `Auto-detected from trace ${a.firstTs}..${a.lastTs}.\n\n` +
+      `Devices: ${devices}\nAlias: ${firstAlias}\nOp: ${a.op}\n` +
+      `Occurrences: ${a.count} across ${a.devices.size} device(s)\n` +
+      (tally ? `Attempts/ok-rate: ${tally.ok + tally.fail} attempts, ${tally.ok + tally.fail ? Math.round(tally.ok / (tally.ok + tally.fail) * 100) : 0}% ok (ok ${tally.ok} / fail ${tally.fail} / skip ${tally.skip} / dry-run ${tally.dryRun})\n` : "") +
+      `First/Last: ${a.firstTs} / ${a.lastTs}\n\n` +
+      `Sample errors:\n${a.errors.slice(0, 3).map((e) => "  - " + String(e).slice(0, 300)).join("\n")}\n\n` +
+      `Context dumps (if any): C:\\Users\\Public\\xhs-agent-runs\\ops-trace\\context\\${multi ? "fail-<serial>-* (per device)" : `fail-${deviceKey}-*`}\n` +
+      `Steps: view context dump -> reproduce -> classify transient or persistent`;
+
+    // 已存在检查
+    const qs = encodeURIComponent(`${a.op} ${a.norm}`);
     let existing = false;
     try {
       const resp = localHttpGet(`${REGISTRY}/api/knowledge?q=${qs}`);
       const j = JSON.parse(resp);
       const hit = (j.knowledge || []).some((x) => {
         const title = String(x.title || "");
-        return title.includes("auto-") && (title.includes(q.op) || (q.serial && title.includes(q.serial)));
+        return title.includes("auto-") && (title.includes(a.op) || (deviceKey !== "multi" && title.includes(deviceKey)));
       });
       existing = hit;
-    } catch { /* query failed → assume not existing, will 409-guard on POST */ }
-
+    } catch { /* assume not existing */ }
     if (existing) { skipped += 1; continue; }
 
-    const multi = !!q.multi;
-    const sigHash = hash8(`${multi ? "multi" : q.serial}|${q.op}|${q.norm}`);
-    const id = `auto-${multi ? `multi-${q.serials.size}` : q.serial}-${q.op}-${sigHash}`;
-    const title = `[auto] ${multi ? `multi-device(${q.serials.size})` : (q.alias || q.serial)} ${q.op} failure: ${q.norm.slice(0, 60)}`;
-    const devices = [...q.serials].join(", ");
-    const dumpsGlob = multi ? "fail-<serial>-* (per device)" : `fail-${q.serial}-*`;
-    const content =
-      `Auto-detected from trace ${q.firstTs}..${q.lastTs}.\n\n` +
-      `Devices: ${devices}\nAlias: ${q.alias || "-"}\nOp: ${q.op}\n` +
-      `Occurrences: ${q.count} across ${q.serials.size} device(s)\n` +
-      `First/Last: ${q.firstTs} / ${q.lastTs}\n\n` +
-      `Sample errors:\n${q.errors.slice(0, 3).map((e) => "  - " + String(e).slice(0, 300)).join("\n")}\n\n` +
-      `Context dumps (if any): C:\\Users\\Public\\xhs-agent-runs\\ops-trace\\context\\${dumpsGlob}\n` +
-      `Steps: view context dump -> reproduce -> classify transient or persistent`;
     const body = {
-      id,
-      app: "xhs",
-      category: "pitfall",
-      lifecycle: "probe_unknown",
-      title,
-      content,
-      appliesTo: [...q.serials],
+      id, app: "xhs", category: "pitfall", lifecycle: "probe_unknown",
+      title, content,
+      appliesTo: [...a.devices],
       verifyMode: "human",
       steps: ["查看 context dump", "复现", "判断偶发/持久"],
     };
