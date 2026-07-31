@@ -29,6 +29,11 @@ node ops/explore-preflight.mjs --alias 01
 
 `win32` 下也可省略 `XHS_LOCAL`（`_explore-lib` 自动本地）。不要用 `Host xhs-windows → 127.0.0.1` 当正式方案。
 
+## Skills 只读（Windows 侧）
+
+- `skills/` 在部署目录是**只读同步副本**：源在 Mac 仓库，改动一律回 Mac commit → push → 再同步到本机。
+- 在本机直接改 `skills/` 会被下次同步覆盖。权限分层见 [`skills/CONTRIBUTING.md`](../skills/CONTRIBUTING.md)（坑点放开 / 契约带 verified / 权限仅人改）。
+
 ## 非目标
 
 - 不在本目录维护第二套 `ops-win/`

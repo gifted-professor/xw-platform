@@ -131,6 +131,18 @@ agent 自主探索 → 发现新能力/新坑 → 写入知识库 → 更新 ski
 - `v1.x` — 小修（坑点补充、参数调整）
 - `v2.0` — 行为变更（不向后兼容）
 
+### 谁可以改 skills
+
+按 [`skills/CONTRIBUTING.md`](CONTRIBUTING.md) 三层执行：
+
+| 层 | 改什么 | 门槛 |
+|----|--------|------|
+| 坑点 | `shared/pitfalls.md` 等 | 直接写，踩坑即记 |
+| 契约 | 单个 skill 的 `SKILL.md` | 带 `verified` + 验证证据；升 `v1.0` 要真机跑过 |
+| 权限 | 授权模型 / 红线 / 自由度列 / 本文 | **仅人**，agent 只能写提案 |
+
+**Windows 侧 skills 只读**：源在 Mac 仓库，改在 Mac push 后同步。
+
 ## 红线（只有这些）
 
 | 禁止 | 原因 |
