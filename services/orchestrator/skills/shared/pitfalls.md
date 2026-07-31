@@ -100,6 +100,48 @@
 
 ---
 
+## 抖音（douyin）
+
+> 探索产出：`explore-douyin-*` knowledge + Windows 草稿 `tmp-know/douyin-explore-01.md`（01 / 2026-07-31）。App 级能力地图见 [`skills/douyin/SKILL.md`](../douyin/SKILL.md)。
+
+### pitfall-douyin-splash-activity-name-20260731
+
+**问题**：抖音首页/朋友/消息/我四个 Tab 长期挂在 `…splash.SplashActivity`，**Activity 名不是闪屏过渡页**。靠 Activity 名判当前页会全错。
+
+**规则**：判 Tab 看底栏选中文案 / 顶栏（`已选中，推荐` / `编辑主页`），不看 Activity。搜索（`SearchResultActivity`）、拍摄（`VideoRecordNewActivity`）、设置（`DouYinSettingNewVersionActivity`）才是独立 Activity。
+
+### pitfall-douyin-friend-follow-empty-dump-20260731
+
+**问题**：朋友 Tab、关注顶栏 Tab dump 经常空（弱 class / 动态加载），与首页推荐 Feed 不同。
+
+**规则**：朋友/关注 Tab **优先截图兜底**，不强磕 dump。属 dump-first 降级策略的已知实例（见 explorer.md §5）。
+
+### pitfall-douyin-swipe-empty-dump-20260731
+
+**问题**：推荐 Feed 上滑切下一条后偶发空 dump。
+
+**规则**：settle 2–5s 重试；顽固则 `--force-stop` 再 `launch-app`。勿在空 dump 上盲点坐标。
+
+### pitfall-douyin-sidebar-content-mutable-20260731
+
+**问题**：首页侧边栏入口内容随账号状态变（本次落到作者「日常/Detail」流，非设置抽屉）。
+
+**规则**：侧边栏 **勿写死假设**（≠ 设置抽屉）。点开后先 dump/截图确认落在哪，再决定下一步。
+
+### pitfall-douyin-bottombar-text-not-clickable-20260731
+
+**问题**：底栏五键（首页/朋友/拍摄/消息/我）text 常为 `clickable=false`。
+
+**规则**：底栏**点中心坐标仍有效**，不能靠 `clickable` 判可用。坐标见 [`skills/douyin/SKILL.md`](../douyin/SKILL.md) 底栏表。
+
+### pitfall-douyin-miui-shoot-permission-20260731
+
+**问题**：拍摄入口常先弹 MIUI 相机权限对话框（`是否允许"抖音"拍摄照片或录制视频`）。
+
+**规则**：自动化选**拒绝**（不进录制页）。即使进 `VideoRecordNewActivity` 也只观察，**拍摄/上传/开直播属红线外发**，需人审批。勿点「仅在使用中允许」再硬拍。
+
+---
+
 ## 新增坑点模板
 
 发现新坑时，按此模板补充：

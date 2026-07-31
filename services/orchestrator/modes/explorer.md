@@ -152,8 +152,11 @@ Explorer 产出 recipe 默认 **`verifyMode=human`**，content 可带 `[explorer
 | 类型 | 落点 |
 |------|------|
 | 结论/坐标/dump 能力 | `POST /api/knowledge` id=`explore-<app>-<scope>-<yyyymmdd>` |
-| 坑 | pitfall（vision 偏移、dump 空、preflight 失败原因） |
+| **App 级能力地图** | `skills/<app>/SKILL.md`（App 总览页，`v0.x`/`verified:false` 起步；探索散条在此聚合，单 op 固化后下沉 `skills/<app>/<op>/`） |
+| 坑 | pitfall（vision 偏移、dump 空、preflight 失败原因）→ `shared/pitfalls.md` 对应章节 |
 | 交接摘要 | **写在同一 knowledge content** 小节「交接摘要」（不强制独立 HANDOFF 文件） |
+
+> 新 App 首轮探索即建 `skills/<app>/SKILL.md` 当能力地图**唯一权威落点**，勿把地图停在 `tmp-know/` 草稿停车场——草稿会被下次同步/清理丢失，且无契约约束。
 
 ---
 
