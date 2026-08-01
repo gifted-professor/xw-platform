@@ -33,13 +33,18 @@
 - timeout:
 - ambiguous outcome:
 
-## Evidence and cleanup
+## Evidence and cleanup (structured references, not narrative)
 
-- runtime run ID:
-- evidence hashes:
+- runtime run ID (v1 run envelope):
+- effect IDs and statuses (ECP verified / not_sent / ambiguous):
+- evidence bundle hashes (manifest / artifacts, sha256):
+- target fingerprint / before / after state:
 - final foreground state:
 - IME restored:
 - draft/sent/published:
+
+A valid record must fill every reference above from the actual run/effect/evidence bundle;
+prose is a view, the hashes and IDs are the evidence (REX Phase 5 B6a).
 
 ## Unverified boundaries
 
