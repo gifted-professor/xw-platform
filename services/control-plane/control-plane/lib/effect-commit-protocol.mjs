@@ -1,4 +1,4 @@
-import { evaluateMissionEffect, targetFingerprint } from "./mission-policy.mjs";
+import { evaluateMissionEffect, isSoftProvenanceAuthority, targetFingerprint } from "./mission-policy.mjs";
 
 function blocked(code) {
   return { status: "blocked", code };
@@ -81,15 +81,16 @@ export class EffectCommitProtocol {
     }
   }
 
-  // REX Phase 5 §8.4 (P5b): a soft parent-grant fence under nonpayment records a
-  // provenance_debt and lets the effect proceed — decayed/missing provenance is a debt, not a
-  // payment-gate block. Returns true when the fence was soft (caller continues past it) and
-  // false when it must still block. Legacy (no soft flag) is untouched.
+  // REX Phase 5 §8.4 (P5b): a soft budget fence under nonpayment lets the effect proceed —
+  // decayed/missing provenance (PARENT_GRANT_*, provenance_debt) or a lapsed mission
+  // (MISSION_EXPIRED, budget_debt) is a debt, not a payment-gate block. Returns true when the
+  // fence was soft (caller continues past it) and false when it must still block. Legacy (no
+  // soft flag) is untouched.
   #softProvenance(parent, mission) {
     if (!parent || parent.ok !== false || parent.soft !== true) return false;
     if (typeof this.debtSink === "function") {
       this.debtSink({
-        kind: "provenance_debt",
+        kind: isSoftProvenanceAuthority(parent.code) ? "provenance_debt" : "budget_debt",
         missionId: mission?.missionId ?? null,
         code: parent.code,
         createdAt: new Date().toISOString(),

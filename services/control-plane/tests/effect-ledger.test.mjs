@@ -177,3 +177,30 @@ test("beginEffect never persists raw private text, target identity, tokens, or u
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+// ── REX Phase 5 §8.4 (P5b): count/frequency budget 软预算 ─────────────────────────
+// plan B3 line 828-829：count/frequency/expiry 软预算。nonpayment_v1 下 totalCount/perTarget/
+// frequency 预算耗尽不再抛 BUDGET_*，而是继续预留 + debtSink 记 budget_debt；legacy 恒抛。
+test("REX P5b: nonpayment_v1 ledger soft-fences an exhausted budget with budget debt; legacy still throws", () => {
+  const root = mkdtempSync(join(tmpdir(), "effect-ledger-budget-soft-"));
+  const { state, mission, run } = setup(join(root, "control.db"));
+  const debt = [];
+  try {
+    const nonpayLedger = new EffectLedger({ state, policyMode: { active: true }, debtSink: (entry) => debt.push(entry) });
+    const first = nonpayLedger.beginEffect({ mission, deviceRunId: run.deviceRunId, action: "follow", target: "target-a", intent: { surface: "social-effect" }, idempotencyKey: "nonpay-budget-1" });
+    assert.equal(first.status, "not_sent");
+    // totalCount=1 is now exhausted; nonpayment reserves past the budget and records budget debt
+    const over = nonpayLedger.beginEffect({ mission, deviceRunId: run.deviceRunId, action: "follow", target: "target-b", intent: { surface: "social-effect" }, idempotencyKey: "nonpay-budget-2" });
+    assert.ok(over.effectId);
+    assert.equal(debt.length, 1);
+    assert.equal(debt[0].kind, "budget_debt");
+    assert.equal(debt[0].code, "BUDGET_EXCEEDED");
+
+    // legacy ledger on the same state still throws — fail-closed unchanged
+    const legacyLedger = new EffectLedger({ state });
+    assert.throws(() => legacyLedger.beginEffect({ mission, deviceRunId: run.deviceRunId, action: "follow", target: "target-a", intent: { surface: "social-effect" }, idempotencyKey: "legacy-budget-3" }), { code: "BUDGET_EXCEEDED" });
+  } finally {
+    state.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});

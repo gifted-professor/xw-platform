@@ -1,7 +1,7 @@
 import { ControlPlaneError } from "./errors.mjs";
 import {
   evaluateMissionEffect as classifyEffect,
-  isSoftProvenanceAuthority,
+  isSoftBudgetAuthority,
   missionContentHash,
   SNAPSHOT_MAX_AGE_MS,
   validateMissionPolicy,
@@ -174,7 +174,8 @@ export class MissionRuntime {
     const current = mission?.missionId ? this.state.getMissionForRuntime(mission.missionId) : mission;
     if (!current?.parentGrantId) return { ok: true };
     const nonpayment = policyMode && policyMode.active === true;
-    const soft = (code) => ({ ok: false, code, ...(nonpayment && isSoftProvenanceAuthority(code) ? { soft: true } : {}) });
+    // REX P5b: soft-budget family = decayed provenance (PARENT_GRANT_*) ∪ MISSION_EXPIRED.
+    const soft = (code) => ({ ok: false, code, ...(nonpayment && isSoftBudgetAuthority(code) ? { soft: true } : {}) });
     const now = this.now();
     if (current.status !== "active") return soft(current.status === "revoked" ? "MISSION_REVOKED" : "MISSION_INACTIVE");
     const childNotBefore = Date.parse(current.validity?.notBefore);
@@ -214,9 +215,10 @@ export class MissionRuntime {
   }
 
   // REX Phase 5 §8.4 (P5b): nonpayment_v1 (policyMode.active) with a debtSink soft-passes a
-  // PARENT_GRANT_* failure — records a provenance_debt and returns the mission instead of
-  // throwing. MISSION_NOT_FOUND / MISSION_REVOKED / MISSION_EXPIRED and verified-discovery
-  // authority stay hard. Legacy (no policyMode) throws the original code byte-for-byte.
+  // decayed-provenance (PARENT_GRANT_*) failure — records a provenance_debt — and a lapsed
+  // mission (MISSION_EXPIRED) — records a budget_debt — returning the mission instead of
+  // throwing. MISSION_NOT_FOUND / MISSION_REVOKED and verified-discovery authority stay hard.
+  // Legacy (no policyMode) throws the original code byte-for-byte.
   requireActiveMission(missionId, { policyMode = null, debtSink = null } = {}) {
     const mission = this.state.getMissionForRuntime(missionId);
     if (!mission) throw new ControlPlaneError("MISSION_NOT_FOUND", `unknown mission ${missionId}`, { status: 404 });
@@ -225,6 +227,19 @@ export class MissionRuntime {
     }
     const expiresAtMs = Date.parse(mission.validity?.expiresAt);
     if (Number.isFinite(expiresAtMs) && this.now() >= expiresAtMs) {
+      // REX P5b: expiry is soft budget — under nonpayment_v1 a lapsed mission proceeds with a
+      // budget_debt instead of throwing. Legacy (no policyMode) throws MISSION_EXPIRED unchanged.
+      if (policyMode && policyMode.active === true) {
+        if (typeof debtSink === "function") {
+          debtSink({
+            kind: "budget_debt",
+            missionId,
+            code: "MISSION_EXPIRED",
+            createdAt: new Date().toISOString(),
+          });
+        }
+        return mission;
+      }
       throw new ControlPlaneError("MISSION_EXPIRED", `mission ${missionId} has expired`, { status: 409 });
     }
     const discovery = this.verifyAuthoritativeDiscovery(mission);

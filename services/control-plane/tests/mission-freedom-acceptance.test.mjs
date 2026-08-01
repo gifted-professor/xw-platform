@@ -342,3 +342,30 @@ test("REX P5b: nonpayment_v1 relaxes out-of-scope action/target to soft ecp+debt
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+// ── REX Phase 5 §8.4 (P5b): expiry 软预算（纯函数）──────────────────────────────────
+// plan B3 line 828-829：count/frequency/expiry 软预算。MISSION_EXPIRED 在 nonpayment_v1 下
+// 对非支付 social action 软 ecp+debt；payment / publish / delete 在过期任务上仍硬栅栏（payment
+// 永不松；releaseable 只在任务存活时）。legacy 恒 blocked。
+test("REX P5b: expiry soft-fences non-payment social effects; payment/publish/delete stay fenced", () => {
+  const expired = {
+    status: "active",
+    validity: { expiresAt: "2001-01-01T00:00:00Z" },
+    scope: { actions: ["follow", "like", "collect", "comment", "dm"], targets: { values: ["target-a"] } },
+    policy: { publish: "confirm", delete: "confirm", payment: "confirm" },
+  };
+  // nonpayment: expired non-payment social effect → soft ecp + debt
+  const soft = evaluateMissionEffect(expired, { action: "follow", target: "target-a" }, { policyMode: { active: true } });
+  assert.equal(soft.decision, "ecp");
+  assert.equal(soft.reason, "MISSION_EXPIRED");
+  assert.equal(soft.debt, true);
+  // legacy: expired → blocked
+  assert.equal(evaluateMissionEffect(expired, { action: "follow", target: "target-a" }).decision, "blocked");
+  assert.equal(evaluateMissionEffect(expired, { action: "follow", target: "target-a" }, { policyMode: null }).decision, "blocked");
+  // payment never relaxes, even on an expired mission under nonpayment
+  assert.equal(evaluateMissionEffect(expired, { action: "payment", target: "target-a" }, { policyMode: { active: true } }).decision, "blocked");
+  // publish/delete are releaseable only while the mission is live — expiry keeps them fenced
+  const released = { ...expired, policy: { publish: "allow_within_scope", delete: "allow_within_scope", payment: "confirm" } };
+  assert.equal(evaluateMissionEffect(released, { action: "publish", target: "target-a" }, { policyMode: { active: true } }).decision, "blocked");
+  assert.equal(evaluateMissionEffect(released, { action: "delete", target: "target-a" }, { policyMode: { active: true } }).decision, "blocked");
+});

@@ -257,12 +257,20 @@ export function missionContentHash(policy) {
   return fingerprint(content);
 }
 
-// REX Phase 5 §8.4 (P5b): a parent-grant authority failure is only soft-able for the
-// PARENT_GRANT_* family (decayed / missing / hash-drifted provenance). Mission-level fences —
-// MISSION_REVOKED (explicit or cascade human-cancel), MISSION_EXPIRED, MISSION_NOT_YET_VALID,
-// MISSION_INACTIVE — are authority in their own right and stay hard in every policy mode.
+// REX Phase 5 §8.4 (P5b): a parent-grant authority failure is soft-able for the
+// PARENT_GRANT_* family (decayed / missing / hash-drifted provenance). MISSION_REVOKED stays
+// hard in every mode (the one human-cancel fence). MISSION_NOT_YET_VALID / MISSION_INACTIVE
+// are not decayed provenance either — they stay hard. This subset drives provenance_debt.
 export function isSoftProvenanceAuthority(code) {
   return typeof code === "string" && code.startsWith("PARENT_GRANT_");
+}
+
+// REX Phase 5 §8.4 (P5b): the soft-budget authority family = decayed provenance (PARENT_GRANT_*)
+// ∪ MISSION_EXPIRED (count/frequency/expiry 软预算). Used by the send boundary so a lapsed
+// mission's non-payment send proceeds under nonpayment_v1; MISSION_REVOKED/EXPIRED-not-mission
+// fences never match.
+export function isSoftBudgetAuthority(code) {
+  return typeof code === "string" && (code === "MISSION_EXPIRED" || code.startsWith("PARENT_GRANT_"));
 }
 
 export function targetFingerprint(target) {
@@ -295,6 +303,13 @@ export function evaluateMissionEffect(mission, { action, target }, { now = Date.
   }
   const expiresAtMs = Date.parse(mission.validity?.expiresAt);
   if (Number.isFinite(expiresAtMs) && now() >= expiresAtMs) {
+    // REX Phase 5 §8.4 (P5b): expiry is a soft budget for non-payment effects under
+    // nonpayment_v1 — a lapsed validity is decayed context, not the payment gate. payment /
+    // publish / delete (releaseable only while the mission itself is live) stay hard-fenced on
+    // expiry. Legacy (policyMode null) is unchanged: everything blocks.
+    if (nonpayment && action !== "payment" && action !== "publish" && action !== "delete") {
+      return { decision: "ecp", reason: "MISSION_EXPIRED", debt: true };
+    }
     return { decision: "blocked", reason: "MISSION_EXPIRED" };
   }
 

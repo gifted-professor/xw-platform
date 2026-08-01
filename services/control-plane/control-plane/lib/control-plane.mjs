@@ -199,7 +199,13 @@ export class ControlPlane {
     });
     this.firewall = new EffectFirewall();
     this.discoveryProducer = typeof discoveryProducer === "function" ? discoveryProducer : null;
-    this.effectLedger = new EffectLedger({ state });
+    // REX Phase 5 §8.4 (P5b): the ledger shares the control plane's nonpayment_v1 mode and debt
+    // sink so an exhausted count/frequency budget soft-fences to budget_debt instead of throwing.
+    this.effectLedger = new EffectLedger({
+      state,
+      ...(this.policyMode ? { policyMode: this.policyMode } : {}),
+      ...(this.debtOnLowDisk ? { debtSink: (entry) => this.evidenceDebt.push(entry) } : {}),
+    });
     this.acquireTransportLock = typeof acquireTransportLock === "function"
       ? acquireTransportLock
       : defaultAcquireTransportLock;

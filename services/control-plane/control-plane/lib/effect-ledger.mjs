@@ -2,9 +2,14 @@ import { ControlPlaneError } from "./errors.mjs";
 import { evaluateMissionEffect, targetFingerprint } from "./mission-policy.mjs";
 
 export class EffectLedger {
-  constructor({ state } = {}) {
+  // REX Phase 5 §8.4 (P5b): policyMode threads nonpayment_v1 into the durable budget gate
+  // (softBudget) and debtSink records the resulting budget_debt. Defaults null = legacy
+  // fail-closed, byte-for-byte unchanged.
+  constructor({ state, policyMode = null, debtSink = null } = {}) {
     if (!state) throw new TypeError("EffectLedger requires a StateStore");
     this.state = state;
+    this.policyMode = policyMode;
+    this.debtSink = debtSink;
   }
 
   beginEffect({ mission, deviceRunId, action, target, intent = {}, idempotencyKey, allowProtected = false, policyMode = null }) {
@@ -36,6 +41,10 @@ export class EffectLedger {
       // REX Phase 5 §8.4 (P5b): only the soft out-of-scope path (policy.debt) relaxes the
       // durable scope gate; in-scope and payment/protected effects keep softScope=false.
       softScope: Boolean(policy.debt),
+      // REX P5b: an exhausted count/frequency budget under nonpayment_v1 is a budget_debt, not
+      // a block. Payment/protected effects never reach here soft (they keep policy.debt false).
+      softBudget: (policyMode ?? this.policyMode)?.active === true,
+      debtSink: this.debtSink,
     });
     return { ...result.effect, reused: result.reused };
   }

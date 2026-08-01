@@ -4,7 +4,7 @@ import { dirname } from "node:path";
 
 import { canonicalJson, fingerprint, newId, sha256 } from "./canonical.mjs";
 import { ControlPlaneError } from "./errors.mjs";
-import { isSoftProvenanceAuthority } from "./mission-policy.mjs";
+import { isSoftBudgetAuthority } from "./mission-policy.mjs";
 import {
   normalizePlacementRequest,
   normalizeRoutingProfile,
@@ -2226,7 +2226,11 @@ export class StateStore {
     ).all(missionId).map((row) => this.#publicMissionEffect(row));
   }
 
-  beginMissionEffect({ mission, deviceRunId, action, targetHash, intent = {}, idempotencyKey, status = "started", softScope = false }) {
+  // REX Phase 5 §8.4 (P5b): softBudget (set by the ledger under nonpayment_v1) turns an
+  // exhausted count/frequency budget into a durable budget_debt instead of throwing — a
+  // non-payment social effect past its budget is debt, not a hard block. Legacy default false
+  // keeps the BUDGET_* gates fail-closed byte-for-byte.
+  beginMissionEffect({ mission, deviceRunId, action, targetHash, intent = {}, idempotencyKey, status = "started", softScope = false, softBudget = false, debtSink = null }) {
     if (!mission?.missionId || !deviceRunId || !action || !targetHash || !idempotencyKey) {
       throw new TypeError("mission, deviceRunId, action, targetHash, and idempotencyKey are required");
     }
@@ -2260,16 +2264,28 @@ export class StateStore {
       const totalCount = Number(mission.scope.totalCount || 0);
       const perTargetCount = Number(mission.scope.perTargetCount || 0);
       const frequency = mission.scope.frequency || {};
-      if (totalCount > 0 && live.length >= totalCount) {
-        throw new ControlPlaneError("BUDGET_EXCEEDED", "Mission total effect budget is exhausted", { status: 409 });
-      }
-      if (perTargetCount > 0 && live.filter((row) => row.target_hash === targetHash).length >= perTargetCount) {
-        throw new ControlPlaneError("BUDGET_PER_TARGET_EXCEEDED", "Mission per-target budget is exhausted", { status: 409 });
-      }
       const frequencyCount = Number(frequency.count || 0);
       const windowMs = Number(frequency.windowSeconds || 0) * 1000;
-      if (frequencyCount > 0 && windowMs > 0 && live.filter((row) => row.created_at >= now - windowMs).length >= frequencyCount) {
-        throw new ControlPlaneError("BUDGET_THROTTLED", "Mission frequency budget is exhausted", { status: 409 });
+      let budgetCode = null;
+      if (totalCount > 0 && live.length >= totalCount) budgetCode = "BUDGET_EXCEEDED";
+      else if (perTargetCount > 0 && live.filter((row) => row.target_hash === targetHash).length >= perTargetCount) budgetCode = "BUDGET_PER_TARGET_EXCEEDED";
+      else if (frequencyCount > 0 && windowMs > 0 && live.filter((row) => row.created_at >= now - windowMs).length >= frequencyCount) budgetCode = "BUDGET_THROTTLED";
+      if (budgetCode && !softBudget) {
+        throw new ControlPlaneError(budgetCode, "Mission budget is exhausted", { status: 409 });
+      }
+      if (budgetCode && softBudget) {
+        // REX P5b: exhausted count/frequency budget under nonpayment_v1 is a soft-budget debt,
+        // not a block — the reservation still proceeds so the non-payment effect may run.
+        if (typeof debtSink === "function") {
+          debtSink({
+            kind: "budget_debt",
+            missionId: mission.missionId,
+            code: budgetCode,
+            action,
+            targetHash,
+            createdAt: new Date().toISOString(),
+          });
+        }
       }
       const effectId = newId("effect");
       const reservation = { total: 1, perTarget: 1, frequency: 1 };
@@ -2427,11 +2443,12 @@ export class StateStore {
       else if (Number.isFinite(Date.parse(grantValidity.expiresAt)) && now >= Date.parse(grantValidity.expiresAt)) authorityCode = "PARENT_GRANT_EXPIRED";
       else if (Number.isFinite(Date.parse(missionValidity.notBefore)) && now < Date.parse(missionValidity.notBefore)) authorityCode = "MISSION_NOT_YET_VALID";
       else if (Number.isFinite(Date.parse(missionValidity.expiresAt)) && now >= Date.parse(missionValidity.expiresAt)) authorityCode = "MISSION_EXPIRED";
-      // REX Phase 5 §8.4 (P5b): nonpayment_v1 (softAuthority) treats a decayed PARENT_GRANT_*
-      // fence as provenance, not authority — the send proceeds and the ECP already recorded the
-      // provenance_debt. MISSION_REVOKED / MISSION_EXPIRED / MISSION_NOT_YET_VALID and any
-      // legacy call (softAuthority=false) still cancel the reservation and fail closed.
-      if (authorityCode && !(softAuthority === true && isSoftProvenanceAuthority(authorityCode))) {
+      // REX Phase 5 §8.4 (P5b): nonpayment_v1 (softAuthority) treats a decayed provenance or
+      // budget fence (PARENT_GRANT_* / MISSION_EXPIRED) as soft context — the send proceeds and
+      // the ECP already recorded the provenance_debt / budget_debt. MISSION_REVOKED /
+      // MISSION_NOT_YET_VALID and any legacy call (softAuthority=false) still cancel the
+      // reservation and fail closed.
+      if (authorityCode && !(softAuthority === true && isSoftBudgetAuthority(authorityCode))) {
         this.db.prepare("UPDATE mission_effects SET status='cancelled', reservation_released=1, retry_blocked=1, updated_at=?, finished_at=? WHERE effect_id=? AND status='not_sent'")
           .run(now, now, effectId);
         this.#insertMissionEvent({ missionId, type: "effect.cancelled", payload: { effectId, reason: authorityCode }, createdAt: now });

@@ -310,3 +310,49 @@ test("REX P5b: nonpayment_v1 soft-fences an expired parent grant with provenance
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+// ── REX Phase 5 §8.4 (P5b): expiry 软预算 ───────────────────────────────────────
+// plan B3 line 828-829：count/frequency/expiry 软预算。MISSION_EXPIRED（子任务过期）在
+// nonpayment_v1 下 soft-fence 成 budget_debt（requireActiveMission + verifyParentGrant），
+// legacy 仍 MISSION_EXPIRED 硬。MISSION_REVOKED 仍是唯一人类撤销硬栅栏。
+test("REX P5b: nonpayment_v1 soft-fences an expired child mission with budget debt; legacy stays hard", () => {
+  const root = tempRoot();
+  const state = new StateStore({ dbPath: join(root, "control.db") });
+  const runtime = new MissionRuntime({ state });
+  const NONPAY = { active: true };
+  const debt = [];
+  try {
+    const grant = {
+      grantId: "grant-expiry-child", issuanceNonce: "n1", app: "xhs", accountFingerprint: "local-alias",
+      controllers: ["agent:runner"],
+      authorization: { primitives: [], socialActions: ["follow", "like", "collect", "comment", "dm"], missionOnlyActions: [], prohibitedActions: [] },
+      targets: { mode: "explicit_fingerprints", values: ["target-hash-aaa"] },
+      budget: { maxima: { totalCount: 5, perTargetCount: 1, frequency: { count: 1, windowSeconds: 3600 } }, defaults: { totalCount: 5, perTargetCount: 1, frequency: { count: 1, windowSeconds: 3600 } } },
+      validity: { expiresAt: "2099-07-29T16:00:00Z" }, // parent grant stays live
+    };
+    state.issueDelegationGrant({ grant, grantHash: "grant-expiry-child-hash", proofHash: "proof", issuerSubject: "user:a1234", issuerKeyId: "test", allowlistVersion: 1 });
+    const { mission } = runtime.createMission(
+      { ...base, idempotencyKey: "expired-child", validity: { expiresAt: "2001-01-01T00:00:00Z" } },
+      { parentGrantId: grant.grantId, parentGrantHash: "grant-expiry-child-hash" },
+    );
+
+    // legacy: child expiry is a hard fence at both gates
+    assert.equal(runtime.verifyParentGrant(mission).ok, false);
+    assert.equal(runtime.verifyParentGrant(mission).code, "MISSION_EXPIRED");
+    assert.throws(() => runtime.requireActiveMission(mission.missionId), { code: "MISSION_EXPIRED" });
+
+    // nonpayment: child expiry soft-fences with budget debt (kind budget_debt, code MISSION_EXPIRED)
+    const softParent = runtime.verifyParentGrant(mission, {}, { policyMode: NONPAY });
+    assert.equal(softParent.ok, false);
+    assert.equal(softParent.code, "MISSION_EXPIRED");
+    assert.equal(softParent.soft, true);
+    const resolved = runtime.requireActiveMission(mission.missionId, { policyMode: NONPAY, debtSink: (entry) => debt.push(entry) });
+    assert.equal(resolved.missionId, mission.missionId);
+    assert.equal(debt.length, 1);
+    assert.equal(debt[0].kind, "budget_debt");
+    assert.equal(debt[0].code, "MISSION_EXPIRED");
+  } finally {
+    state.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
