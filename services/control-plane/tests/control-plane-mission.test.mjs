@@ -44,6 +44,7 @@ function setup({
   standingGrantAdrAccepted = true,
   capabilities = [r2Capability()],
   effectIntentSchema = undefined,
+  policyMode = null,
 } = {}) {
   const root = mkdtempSync(join(tmpdir(), "mission-cmd-"));
   const state = new StateStore({ dbPath: join(root, "control.db") });
@@ -83,6 +84,7 @@ function setup({
     adrAccepted,
     standingGrantAdrAccepted,
     effectIntentSchema,
+    policyMode,
     acquireTransportLock: () => Promise.resolve(() => {}),
   });
   control.start();
@@ -601,6 +603,29 @@ test("a legacy non-Mission R2 job retains its manual waiting_approval gate", () 
     assert.equal(created.job.approvalRequired, true);
     assert.equal(created.job.status, "waiting_approval");
     assert.equal(created.job.externalEffect, true);
+  } finally {
+    f.close();
+  }
+});
+
+// REX Phase 5 §8.2 B9 反转：nonpayment_v1 active（fake adapter）下，同一非支付 R2
+// follow job 不再 waiting_approval——非支付一律自由。legacy 闸作为 fallback 保留上方测试。
+// liveness：job 进 queued（dispatch 队列）+ adapter 实际被调用（无审批门阻挡执行）。
+test("nonpayment_v1: a non-Mission R2 follow job is free and dispatches without approval", async () => {
+  const f = setup({ policyMode: { active: true, mode: "nonpayment_v1", effectiveDecisionSource: "deployed-runtime" } });
+  try {
+    const created = f.control.submitJob({
+      idempotencyKey: "freedom-r2-01",
+      actorId: "agent-a",
+      capabilityId: "xhs.follow.r2",
+      params: {},
+    });
+    assert.equal(created.job.approvalRequired, false, "nonpayment_v1: non-payment R2 follow must not require approval");
+    assert.notEqual(created.job.status, "waiting_approval", "nonpayment_v1: must not wait for approval");
+    assert.equal(created.job.externalEffect, true, "externalEffect stays as a fact");
+    // liveness：等 pump 把 queued job 跑到 adapter（无审批门阻挡 dispatch）
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    assert.ok(f.adapterCalls.length >= 1, "nonpayment_v1: adapter executed without approval gate");
   } finally {
     f.close();
   }
