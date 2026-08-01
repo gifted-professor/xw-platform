@@ -564,6 +564,83 @@ test("nonpayment_v1: mid-run evidence write failure becomes debt and the non-pay
   } finally { await f.close(); }
 });
 
+// ─── §8.4 B5：adapter 统一收到 effect/payment/debt context（pre-execution effect intent）───
+//
+// #runJob 在 guardFinancialCommit 后把分类结果（当前被丢弃）+ job/capability effect 意图 +
+// debt 模式并进 context/authorizedContext，execute/verify/restore 三处都能读到。forward-compatible：
+// 既有 adapter 只解构 {capability,device,params,...}，新字段不破坏它们。
+
+function effectContextCaptureAdapter(capture) {
+  return {
+    id: "test",
+    async execute(ctx) { capture.execute = ctx; return { vendorCode: 0 }; },
+    async verify(ctx) { capture.verify = ctx; return { ok: true, mode: "custom" }; },
+    async restore(ctx) { capture.restore = ctx; return { ok: true }; },
+  };
+}
+
+test("nonpayment_v1: adapter execute/verify/restore receive effect, payment, and debt context", async () => {
+  const capture = {};
+  const cap = manifest("test.external.ctxinject", {
+    risk: "R2", idempotency: "external_effect", automationPolicy: { mode: "approval_required" },
+  });
+  const f = fixture({
+    capabilities: [cap],
+    adapter: effectContextCaptureAdapter(capture),
+    policyMode: { active: true, mode: "nonpayment_v1", effectiveDecisionSource: "deployed-runtime" },
+  });
+  try {
+    const submitted = f.control.submitJob({
+      idempotencyKey: "ctx-inject-np", actorId: "agent-a", authorityNodeId: "DESKTOP-3I1EVHE",
+      capabilityId: cap.id, params: {},
+    }).job;
+    await f.control.waitForJob(submitted.jobId);
+    // execute
+    assert.ok(capture.execute, "adapter.execute was called");
+    assert.equal(capture.execute.effect.externalEffect, true, "effect.externalEffect derived from job");
+    assert.equal(capture.execute.effect.idempotency, "external_effect");
+    assert.equal(capture.execute.effect.risk, "R2");
+    assert.equal(capture.execute.effect.actionClass, "unknown", "non-payment params → actionClass unknown");
+    assert.equal(capture.execute.payment.actionClass, "unknown");
+    assert.equal(capture.execute.payment.guarded, false);
+    assert.equal(capture.execute.debt.mode, "nonpayment_v1");
+    // verify 拿到同一 effect/payment/debt（spread 自 context）
+    assert.equal(capture.verify.effect.idempotency, "external_effect");
+    assert.equal(capture.verify.payment.actionClass, "unknown");
+    assert.equal(capture.verify.debt.mode, "nonpayment_v1");
+    // restore 同理
+    assert.equal(capture.restore.effect.idempotency, "external_effect");
+    assert.equal(capture.restore.debt.mode, "nonpayment_v1");
+  } finally { await f.close(); }
+});
+
+test("legacy: adapter context reports debt.mode='legacy' and still carries effect/payment", async () => {
+  const capture = {};
+  // read_only automatic 在 legacy 下也派发（不受 blanket approval lock）；用来验证 legacy 的
+  // context 注入。R2 external_effect 在 legacy 仍被锁成 waiting_approval（REX 要反转的旧锁），
+  // 不适合做 legacy dispatch 样本。
+  const cap = manifest("test.observe.ctxlegacy", {
+    risk: "R0", idempotency: "read_only", automationPolicy: { mode: "automatic" },
+  });
+  const f = fixture({
+    capabilities: [cap],
+    adapter: effectContextCaptureAdapter(capture),
+    policyMode: null,
+  });
+  try {
+    const submitted = f.control.submitJob({
+      idempotencyKey: "ctx-inject-legacy", actorId: "agent-a", authorityNodeId: "DESKTOP-3I1EVHE",
+      capabilityId: cap.id, params: {},
+    }).job;
+    await f.control.waitForJob(submitted.jobId);
+    assert.ok(capture.execute);
+    assert.equal(capture.execute.debt.mode, "legacy");
+    assert.equal(capture.execute.effect.idempotency, "read_only");
+    assert.equal(capture.execute.effect.externalEffect, false);
+    assert.equal(capture.execute.payment.actionClass, "unknown");
+  } finally { await f.close(); }
+});
+
 // ─── §8.1 item 3：ControlPlane.start 在 nonpayment_v1 迁移历史 waiting_approval ───
 test("nonpayment_v1: migrateLegacyPending frees a legacy waiting job and dispatches the fresh job", async () => {
   let executions = 0;

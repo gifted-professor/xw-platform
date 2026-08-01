@@ -316,6 +316,30 @@ export class ControlPlane {
     return /pay|payment|financial|checkout|recharge|transfer|wallet|redpacket|topup|deposit/i.test(id);
   }
 
+  // REX Phase 5 §8.4 B5：构造统一 adapter effect/payment/debt context。runJob 主派发路径传
+  // guardFinancialCommit 结果（financialCommit）；recovery 路径不重跑 guard，传 null → payment
+  // 退化为 unknown/recovery。effect = pre-execution 意图；payment = 金融分类；debt = evidence-debt
+  // 模式。三处 adapter 调用（execute/verify/restore + recoverJob restore + inspectRecovery）统一可读。
+  #adapterEffectContext(job, capability, financialCommit = null) {
+    const effect = {
+      externalEffect: Boolean(job?.externalEffect),
+      idempotency: capability?.idempotency,
+      risk: capability?.risk,
+      actionClass: financialCommit ? financialCommit.actionClass : "unknown",
+    };
+    const payment = financialCommit
+      ? {
+          actionClass: financialCommit.actionClass,
+          reasonCode: financialCommit.reasonCode,
+          guarded: financialCommit.guarded,
+          ...(financialCommit.targetControlFingerprint ? { targetControlFingerprint: financialCommit.targetControlFingerprint } : {}),
+          ...(financialCommit.approved ? { approved: true } : {}),
+        }
+      : { actionClass: "unknown", reasonCode: financialCommit === null ? "RECOVERY_PATH" : "NO_FINANCIAL_SEMANTICS", guarded: false };
+    const debt = { mode: this.debtOnLowDisk ? "nonpayment_v1" : "legacy" };
+    return { effect, payment, debt };
+  }
+
   async stop() {
     this.started = false;
     clearInterval(this.scheduler);
@@ -1198,6 +1222,7 @@ export class ControlPlane {
         verification: null,
         error: null,
         recoveryAttempt: true,
+        ...this.#adapterEffectContext(job, capability, null),
       });
       if (heartbeatError) throw heartbeatError;
       const attached = [];
@@ -1430,6 +1455,7 @@ export class ControlPlane {
           deviceId: job.deviceId,
           controlUrl: this.operatorControlUrl,
         },
+        ...this.#adapterEffectContext(job, capability, null),
       });
       if (heartbeatError) throw heartbeatError;
       if (output?.ok !== true || output?.stoppedBeforeAction !== true) {
@@ -1956,10 +1982,16 @@ export class ControlPlane {
       // 共用 chokepoint。对 job.params 做一次轻量 classify——generic capability 被用来
       // 点支付按钮（params 带 financial_commit target/context）即在此 fail-closed。
       // 唯一放行路径是携带经 paymentApprovalVerifier 验证通过的人类签名批准（PHC 流）。
-      await guardFinancialCommit(
+      const financialCommit = await guardFinancialCommit(
         { ...job.params, app: capability.appId, deviceId: job.deviceId },
         { verifyApproval: this.paymentApprovalVerifier },
       );
+      // REX Phase 5 §8.4 B5：把 effect intent + payment 分类 + debt 模式并进 adapter context，
+      // execute/verify/restore 三处统一可读（spread 自 context/authorizedContext）。forward-
+      // compatible：既有 adapter 只解构 {capability,device,params,...}，新字段不破坏它们。
+      const ctx = this.#adapterEffectContext(job, capability, financialCommit);
+      context.effect = ctx.effect; context.payment = ctx.payment; context.debt = ctx.debt;
+      authorizedContext.effect = ctx.effect; authorizedContext.payment = ctx.payment; authorizedContext.debt = ctx.debt;
       execution = await adapter.execute(authorizedContext);
       if (heartbeatError) throw heartbeatError;
 
