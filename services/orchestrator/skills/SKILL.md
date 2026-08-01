@@ -1,9 +1,13 @@
 ---
 name: xhs-device
-description: 小红书/闲鱼多设备自动化 Skills 总入口。路由到具体的 device/xhs/xianyu skill，管理进化机制和知识沉淀。
+description: 小红书/闲鱼/抖音/微信多设备自动化 Skills 总入口。路由到具体的 device/xhs/xianyu/douyin/wechat skill，管理进化机制和知识沉淀。
 triggers:
   - xhs-device
   - 设备操作
+  - douyin
+  - 抖音操作
+  - wechat
+  - 微信操作
   - 手机操作
   - 小红书操作
   - 闲鱼操作
