@@ -36,6 +36,8 @@ npm run check   # node --check 三个 .mjs
 
 | commit | 项 | 摘要 |
 |---|---|---|
+| `640dfb6` | §8.4 B3 | **count/frequency/expiry 软预算**（P5b，B3-deep 4/4）：`isSoftBudgetAuthority` = PARENT_GRANT_* ∪ MISSION_EXPIRED；`evaluateMissionEffect` 过期非支付动作 → 软 ecp+debt，payment/publish/delete 过期仍 blocked；mission-runtime 对 MISSION_EXPIRED 软通过记 `budget_debt`；state-store `beginMissionEffect` 三预算门（BUDGET_EXCEEDED/PER_TARGET/THROTTLED）软化为 budget_debt、send 边界用 `isSoftBudgetAuthority`；ledger/control-plane 透传 policyMode+debtSink。红灯 3 测 → 474/472/0/2。 |
+| `c76c2b4` | §8.4 B3 | **delegation-grant 退热路径成可选 provenance**（P5b，B3-deep 3/4）：nonpayment_v1 soft-fence PARENT_GRANT_*（缺失/过期/hash 漂移 → `provenance_debt`，run-open/ECP/tuple 各边界软通过）；MISSION_REVOKED 任何模式硬。红灯 2 测。 |
 | `8ec7105` | §8.4 B3 | **mission-policy action/target 软预算**（P5b）：`evaluateMissionEffect` 加 `policyMode`，nonpayment_v1 下出 scope 非支付 action/target 从 scope_violation 改软 ecp+debt；firewall 传播 debt、ECP/ledger/state-store `softScope` 透传（soft 出 scope 成 durable 软预算预留不抛）；legacy 逐字节不变，payment 永 phc。红灯 3 测。 |
 | `16ce175` | §8.4 B3 | **ECP recordEvidence 失败→debt**（P5b）：`recordEvidence` 此前未 await 且无守卫（同步抛错覆盖 verified→ambiguous、异步 reject 变 unhandledRejection）。现在总是 await，`debtSink` 存在时记 `ecp_evidence_failed` debt 并保留 verified；无 debtSink rethrow（legacy 降级 ambiguous 不变）。红灯 2 测。 |
 | `afe3ca6` | §8.4 B5 | adapter `execute`/`verify`/`restore` + recoverJob restore + inspectRecovery 统一收到 `effect`/`payment`/`debt` context。`#adapterEffectContext(job,cap,financialCommit)` helper：`guardFinancialCommit` 结果（此前被丢弃）现注入 adapter。forward-compatible。红灯 2 测。 |
@@ -80,10 +82,11 @@ A 仓提交：仅文档（`8abf108`/`6f3238d`/`b65bb45`/`5f03664`/`ded25da`/`1a8
 
 ## 6. 其余 Phase 5 未完（按计划顺序，都在 §8.2 NO-GO 红区）
 
-- **B3-deep 余项（已做 2/4）**：
-  - ✅ `mission-policy.mjs`（B `8ec7105`）：action/target 从权限门降为软预算（nonpayment_v1 下出 scope 非支付 → 软 ecp+debt）；payment 永远 PHC。count/frequency/expiry 软预算（state-store BUDGET_* + requireActiveMission）尚未做，属后续 commit。
+- **B3-deep 余项（已做 4/4）**：
+  - ✅ `mission-policy.mjs`（B `8ec7105`）：action/target 从权限门降为软预算（nonpayment_v1 下出 scope 非支付 → 软 ecp+debt）；payment 永远 PHC。
   - ✅ `effect-commit-protocol.mjs`（B `16ce175`）：`recordEvidence` 已做 debt 化改造（debtSink 记 ecp_evidence_failed，legacy 降级 ambiguous 不变）。**注意——recordEvidence 在生产接线仍未传**（`control-plane.mjs` `createEffectCommitProtocol` 只传 state/ledger/deviceRuns/missions/evidence + handlers），是 test-only/前瞻路径；线 833「非支付证据写失败继续」要等真接进生产才有实际意义。现改造已保证未来接上即安全。
-  - `delegation-grant-policy.mjs` / `delegation-grant-runtime.mjs`：grant 退热路径成可选 provenance/revocation metadata；parent grant 缺失/过期不阻断非支付，记 provenance debt。
+  - ✅ delegation-grant 退热路径（B `c76c2b4`）：parent grant 缺失/过期/hash 漂移在 nonpayment_v1 下成可选 provenance（`provenance_debt`），run-open/ECP/tuple 各边界软通过；MISSION_REVOKED 任何模式硬。
+  - ✅ count/frequency/expiry 软预算（B `640dfb6`）：BUDGET_* 三门 + MISSION_EXPIRED 在 nonpayment_v1 下软化为 `budget_debt`；payment/publish/delete 过期仍 blocked。
   - `effect-firewall.mjs` surface 拆 financial observe/prepare/candidate/commit（refinement，`payment` surface 已存在）。
 - **B6**：`scripts/vision-safety.mjs` 删 publish/send/order/buy/follow blanket 禁词 → 目标控件级 financial-commit 正向识别（接 `classifyFinancialCommit`）；`prompts/xhs-page-classifier.txt` 四级 financial 类别；`scripts/gateway-operator.mjs`/`xiaowei-http-adapter.mjs`/`fast-operator.mjs`/`greenarrow-api.mjs`/`task-runner.mjs`/`xianyu-operator.mjs`/`xhs-watcher.mjs`/`xhs-watcher-launch.ps1` 统一 protected input + run/lease/effect context。
 - **B5 余**：5 个 `apps/*/adapter.mjs` 当前只解构既有字段，新 effect/payment/debt 字段已可用；若某 adapter 要用 effect/payment/debt 决策行为，再按需读。`apps/*/capabilities.json` 不能加 `effectClass` 字段（`capability-registry.mjs` 不在白名单，`ALLOWED_FIELDS` 会拒）。
