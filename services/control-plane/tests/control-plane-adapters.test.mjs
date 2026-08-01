@@ -359,10 +359,19 @@ test("Xianyu adapter preserves stop-before-publish and discard verification", as
   })).ok, false);
 
   const fullDraftCap = registry.require("xianyu.publish.full_draft_dry_run");
+  // REX Phase 5 §8.2 B9 反转：legacy 下旧锁仍在（external_effect + approval_required →
+  // approvalRequired:true），作为迁移期 fallback 文档；
   assert.deepEqual(evaluateCapabilityPolicy(fullDraftCap), {
     approvalRequired: true,
     externalEffect: true,
   });
+  // nonpayment_v1 active（fake adapter）下：非支付 draft dry-run 不再要求审批——自由 +
+  // liveness（adapter 实际执行 dispatch，不拦）。externalEffect 仍作为事实返回。
+  const activeMode = { active: true, effectiveDecisionSource: "deployed-runtime", mode: "nonpayment_v1" };
+  const freed = evaluateCapabilityPolicy(fullDraftCap, { policyMode: activeMode });
+  assert.equal(freed.approvalRequired, false, "nonpayment_v1: non-payment draft must not require approval");
+  assert.equal(freed.externalEffect, true, "externalEffect stays as a fact for ECP/reconcile semantics");
+  assert.equal(freed.effectiveDecisionSource, "deployed-runtime");
   const draftExec = await adapter.execute({
     capability: fullDraftCap,
     device: privateDevice,
