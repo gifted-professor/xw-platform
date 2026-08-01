@@ -2,12 +2,12 @@
   "positive": [
     {
       "name": "verified transfer confirmation",
-      "target": { "text": "确认转账", "fingerprint": "pay-final-transfer-v1" },
+      "target": { "text": "确认转账", "fingerprint": "pay-final-transfer-v1", "verifiedFinalControl": true },
       "context": { "stage": "final", "amount": "88.00", "currency": "CNY", "payeeRef": "redacted:merchant" }
     },
     {
       "name": "verified passwordless purchase",
-      "target": { "text": "免密支付并购买", "fingerprint": "pay-final-passwordless-v1" },
+      "target": { "text": "免密支付并购买", "fingerprint": "pay-final-passwordless-v1", "oneClickDebit": true },
       "context": { "stage": "final", "amount": "12.00", "currency": "CNY", "payeeRef": "redacted:merchant" }
     }
   ],

@@ -1,7 +1,7 @@
 // A minimal, zero-dependency JSON Schema (draft 2020-12 subset) validator. It is intentionally
 // small: it supports the keywords the control-plane's own schemas use — type (incl. unions),
 // const, enum, required, properties, additionalProperties, min/max length and items, pattern,
-// uniqueItems, $ref, and oneOf — enough to enforce
+// uniqueItems, $ref, oneOf, allOf, not, and if/then/else — enough to enforce
 // the effect-intent envelope at runtime against the canonical schema file, so the schema is the
 // source of truth rather than a dormant document. It returns a list of human-readable errors.
 // It is NOT a general-purpose validator; unsupported keywords are ignored.
@@ -37,6 +37,20 @@ export function validateJsonSchema(value, schema, path = "$", root = schema) {
   if (Array.isArray(schema.oneOf)) {
     const matches = schema.oneOf.filter((candidate) => validateJsonSchema(value, candidate, path, root).length === 0);
     if (matches.length !== 1) errors.push(`${path}: expected exactly one matching schema`);
+  }
+  if (Array.isArray(schema.allOf)) {
+    for (const candidate of schema.allOf) {
+      errors.push(...validateJsonSchema(value, candidate, path, root));
+    }
+  }
+  if (schema.not && validateJsonSchema(value, schema.not, path, root).length === 0) {
+    errors.push(`${path}: matched a forbidden schema`);
+  }
+  if (schema.if) {
+    const branch = validateJsonSchema(value, schema.if, path, root).length === 0
+      ? schema.then
+      : schema.else;
+    if (branch) errors.push(...validateJsonSchema(value, branch, path, root));
   }
   if (schema.const !== undefined && value !== schema.const) {
     errors.push(`${path}: expected const ${JSON.stringify(schema.const)}`);

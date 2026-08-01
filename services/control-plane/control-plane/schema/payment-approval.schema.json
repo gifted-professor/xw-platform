@@ -21,6 +21,7 @@
     "createdAt",
     "expiresAt",
     "purpose",
+    "issuer",
     "signature"
   ],
   "properties": {
@@ -40,6 +41,17 @@
     "createdAt": { "type": "string", "format": "date-time" },
     "expiresAt": { "type": "string", "format": "date-time" },
     "purpose": { "const": "financial_commit" },
+    "issuer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["subject", "role", "keyId", "allowlistVersion"],
+      "properties": {
+        "subject": { "type": "string", "minLength": 1 },
+        "role": { "const": "human" },
+        "keyId": { "type": "string", "minLength": 1 },
+        "allowlistVersion": { "type": "integer", "minimum": 1 }
+      }
+    },
     "signature": { "type": "string", "minLength": 1 }
   }
 }
