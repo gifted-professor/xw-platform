@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:xhs:contract:cross-repo-release:v1",
+  "title": "Cross-repository runtime release",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaId",
+    "schemaVersion",
+    "releaseId",
+    "registryCommit",
+    "deviceAgentCommit",
+    "windowsRegistryCommit",
+    "taskLaunchCommit",
+    "policyMode",
+    "evidenceMode",
+    "runtimePolicyVersion",
+    "effectiveDecisionSource",
+    "policyDocDebt",
+    "schemaContracts",
+    "deployedAt"
+  ],
+  "properties": {
+    "schemaId": { "const": "xhs.cross-repo-release.v1" },
+    "schemaVersion": { "const": 1 },
+    "releaseId": { "type": "string", "minLength": 1 },
+    "registryCommit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "deviceAgentCommit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "windowsRegistryCommit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "taskLaunchCommit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "policyMode": { "enum": ["legacy", "shadow", "nonpayment_v1"] },
+    "evidenceMode": { "enum": ["legacy", "dual", "v1"] },
+    "runtimePolicyVersion": { "const": "xhs.nonpayment-autonomy.v1" },
+    "effectiveDecisionSource": { "enum": ["deployed-runtime", "shadow"] },
+    "policyDocDebt": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "legacyRule", "supersededForRelease"],
+        "properties": {
+          "path": { "type": "string", "minLength": 1 },
+          "legacyRule": { "type": "string", "minLength": 1 },
+          "supersededForRelease": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "schemaContracts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["schemaId", "sha256"],
+        "properties": {
+          "schemaId": { "type": "string", "minLength": 1 },
+          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+        }
+      }
+    },
+    "deployedAt": { "type": "string", "format": "date-time" }
+  }
+}

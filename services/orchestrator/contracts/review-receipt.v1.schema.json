@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:xhs:contract:review-receipt:v1",
+  "title": "Mac review receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaId",
+    "schemaVersion",
+    "reviewId",
+    "runId",
+    "manifestSha256",
+    "producerCommit",
+    "reviewedAt",
+    "claims",
+    "evidenceDebt"
+  ],
+  "properties": {
+    "schemaId": { "const": "xhs.review-receipt.v1" },
+    "schemaVersion": { "const": 1 },
+    "reviewId": { "type": "string", "minLength": 1 },
+    "runId": { "type": "string", "pattern": "^run_" },
+    "manifestSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "producerCommit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "reviewedAt": { "type": "string", "format": "date-time" },
+    "claims": { "type": "array", "items": { "type": "object" } },
+    "evidenceDebt": { "type": "array", "items": { "type": "object" } }
+  }
+}
