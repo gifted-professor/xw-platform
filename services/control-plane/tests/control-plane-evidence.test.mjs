@@ -99,3 +99,87 @@ test("EvidenceStore fails closed on missing, escaped, or tampered private eviden
     assert.throws(() => evidence.findByIdAndHash(escaped.evidenceId, hash), { code: "EVIDENCE_PATH_INVALID" });
   } finally { state.close(); rmSync(root, { recursive: true, force: true }); }
 });
+
+// ─── REX Phase 5 §8.4：evidence-failure-as-debt（非支付不 block）───
+//
+// REX 核心论点：证据写/容量失败对非支付只产生 evidence_debt，绝不阻断派发。
+// 唯一硬闸是资金最终提交。assertCapacity 在非支付下走 debt 旁路（调 debtSink
+// 记录 + 返回 debt 标志），不再抛 EVIDENCE_DISK_LOW；支付/legacy 仍 fail-closed。
+// 用 minFreeBytes=MAX_SAFE_INTEGER 强制 freeBytes<required 触发低盘路径。
+
+test("assertCapacity legacy fails closed on low disk (EVIDENCE_DISK_LOW)", () => {
+  const root = mkdtempSync(join(tempBase, "capacity-legacy-"));
+  const state = new StateStore({ dbPath: join(root, "control.db") });
+  try {
+    const evidence = new EvidenceStore({
+      runsRoot: join(root, "runs"),
+      state,
+      minFreeBytes: Number.MAX_SAFE_INTEGER,
+      minExternalEffectFreeBytes: Number.MAX_SAFE_INTEGER,
+    });
+    assert.throws(() => evidence.assertCapacity({ externalEffect: false }), { code: "EVIDENCE_DISK_LOW" });
+    assert.throws(() => evidence.assertCapacity({ externalEffect: true }), { code: "EVIDENCE_DISK_LOW" });
+  } finally { state.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test("assertCapacity debtOnLowDisk records debt and does not throw for non-payment", () => {
+  const root = mkdtempSync(join(tempBase, "capacity-debt-"));
+  const state = new StateStore({ dbPath: join(root, "control.db") });
+  try {
+    const evidence = new EvidenceStore({
+      runsRoot: join(root, "runs"),
+      state,
+      minFreeBytes: Number.MAX_SAFE_INTEGER,
+      minExternalEffectFreeBytes: Number.MAX_SAFE_INTEGER,
+    });
+    const debt = [];
+    const debtSink = (entry) => debt.push(entry);
+    const result = evidence.assertCapacity({ externalEffect: false, debtOnLowDisk: true, debtSink });
+    assert.equal(result.debt, true, "debtOnLowDisk must return debt:true instead of throwing");
+    assert.equal(result.code, "EVIDENCE_DISK_LOW");
+    assert.equal(typeof result.freeBytes, "number");
+    assert.equal(result.requiredBytes, Number.MAX_SAFE_INTEGER);
+    assert.equal(debt.length, 1, "debtSink must be invoked exactly once");
+    assert.equal(debt[0].code, "EVIDENCE_DISK_LOW");
+    assert.equal(debt[0].externalEffect, false);
+    assert.equal(debt[0].requiredBytes, Number.MAX_SAFE_INTEGER);
+    assert.equal(typeof debt[0].freeBytes, "number");
+    assert.equal(typeof debt[0].createdAt, "string");
+  } finally { state.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test("assertCapacity debtOnLowDisk without a debtSink still does not throw (debt recorded in result only)", () => {
+  const root = mkdtempSync(join(tempBase, "capacity-debt-nosink-"));
+  const state = new StateStore({ dbPath: join(root, "control.db") });
+  try {
+    const evidence = new EvidenceStore({
+      runsRoot: join(root, "runs"),
+      state,
+      minFreeBytes: Number.MAX_SAFE_INTEGER,
+      minExternalEffectFreeBytes: Number.MAX_SAFE_INTEGER,
+    });
+    const result = evidence.assertCapacity({ externalEffect: true, debtOnLowDisk: true });
+    assert.equal(result.debt, true);
+    assert.equal(result.code, "EVIDENCE_DISK_LOW");
+    assert.equal(result.externalEffect, true);
+  } finally { state.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test("assertCapacity debtOnLowDisk false/absent stays fail-closed (legacy preserved)", () => {
+  const root = mkdtempSync(join(tempBase, "capacity-legacy-preserved-"));
+  const state = new StateStore({ dbPath: join(root, "control.db") });
+  try {
+    const evidence = new EvidenceStore({
+      runsRoot: join(root, "runs"),
+      state,
+      minFreeBytes: Number.MAX_SAFE_INTEGER,
+      minExternalEffectFreeBytes: Number.MAX_SAFE_INTEGER,
+    });
+    const debt = [];
+    assert.throws(
+      () => evidence.assertCapacity({ externalEffect: false, debtOnLowDisk: false, debtSink: (e) => debt.push(e) }),
+      { code: "EVIDENCE_DISK_LOW" },
+    );
+    assert.equal(debt.length, 0, "legacy path must not invoke debtSink");
+  } finally { state.close(); rmSync(root, { recursive: true, force: true }); }
+});

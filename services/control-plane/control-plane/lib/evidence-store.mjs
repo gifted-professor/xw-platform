@@ -61,10 +61,25 @@ export class EvidenceStore {
     return Number(info.bavail) * Number(info.bsize);
   }
 
-  assertCapacity({ externalEffect = false } = {}) {
+  assertCapacity({ externalEffect = false, debtOnLowDisk = false, debtSink = null } = {}) {
     const freeBytes = this.freeBytes();
     const required = externalEffect ? this.minExternalEffectFreeBytes : this.minFreeBytes;
     if (freeBytes < required) {
+      // REX Phase 5 §8.4：非支付 evidence 容量失败走 debt 旁路，不阻断派发。
+      // debtOnLowDisk=true 时记录 evidence_debt（经 debtSink 回调 + 返回 debt 标志），
+      // 不抛 EVIDENCE_DISK_LOW；唯一硬闸是资金最终提交（支付路径仍 fail-closed，
+      // 传 debtOnLowDisk=false/缺省即 legacy 抛错）。debtSink 缺省时只返回 debt 标志。
+      if (debtOnLowDisk) {
+        const debtEntry = {
+          code: "EVIDENCE_DISK_LOW",
+          externalEffect,
+          freeBytes,
+          requiredBytes: required,
+          createdAt: new Date().toISOString(),
+        };
+        if (typeof debtSink === "function") debtSink(debtEntry);
+        return { debt: true, ...debtEntry };
+      }
       throw new ControlPlaneError("EVIDENCE_DISK_LOW", "not enough free space for a new run", {
         status: 507,
         details: { freeBytes, requiredBytes: required, externalEffect },
