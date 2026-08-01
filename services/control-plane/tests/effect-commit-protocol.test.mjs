@@ -337,3 +337,84 @@ test("ECP notSent retry keeps the durable reservation when target or control rec
     rmSync(fixture.root, { recursive: true, force: true });
   }
 });
+
+// ── REX Phase 5 §8.4 (P5b): ECP recordEvidence 证据失败 → debt，不覆盖 verified ────────
+// plan B3 line 833「非支付证据写失败继续」。非支付（debtSink）下 recordEvidence 抛错 → 记
+// ecp_evidence_failed debt + 保留 verified outcome；legacy（无 debtSink）→ 维持既有降级 ambiguous。
+test("REX P5b: recordEvidence sync throw in non-payment mode records debt and keeps verified outcome", async () => {
+  const fixture = setup();
+  const debt = [];
+  try {
+    const ecp = new EffectCommitProtocol({
+      state: fixture.state, ledger: new EffectLedger({ state: fixture.state }), deviceRuns: fixture.runs,
+      recheck: async () => correctState(),
+      execute: async () => ({ httpStatus: 200 }),
+      verify: async () => ({ ok: true, afterState: "following", evidenceRefs: ["verified-hash"] }),
+      restore: async () => ({ ok: true }),
+      recordEvidence: () => { throw Object.assign(new Error("evidence sqlite full"), { code: "RECORD_EVIDENCE_DISK_FULL" }); },
+      debtSink: (entry) => debt.push(entry),
+    });
+    const result = await ecp.commit({
+      tuple: fixture.run.tuple, mission: fixture.mission, action: "follow", target: "target-a",
+      intent: { surface: "social-effect" }, idempotencyKey: "ecp-p5b-follow-1",
+    });
+    assert.equal(result.status, "verified");
+    assert.equal(result.effect.status, "verified");
+    assert.equal(debt.length, 1);
+    assert.equal(debt[0].kind, "ecp_evidence_failed");
+    assert.equal(debt[0].effectId, result.effect.effectId);
+    assert.equal(debt[0].code, "RECORD_EVIDENCE_DISK_FULL");
+  } finally {
+    fixture.state.close();
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("REX P5b: recordEvidence async rejection is awaited and recorded as debt, not clobbering verified", async () => {
+  const fixture = setup();
+  const debt = [];
+  try {
+    const ecp = new EffectCommitProtocol({
+      state: fixture.state, ledger: new EffectLedger({ state: fixture.state }), deviceRuns: fixture.runs,
+      recheck: async () => correctState(),
+      execute: async () => ({ httpStatus: 200 }),
+      verify: async () => ({ ok: true, evidenceRefs: ["verified-hash"] }),
+      restore: async () => ({ ok: true }),
+      recordEvidence: async () => { await new Promise((resolve) => setTimeout(resolve, 5)); throw new Error("async evidence write failed"); },
+      debtSink: (entry) => debt.push(entry),
+    });
+    const result = await ecp.commit({
+      tuple: fixture.run.tuple, mission: fixture.mission, action: "follow", target: "target-a",
+      intent: { surface: "social-effect" }, idempotencyKey: "ecp-p5b-follow-2",
+    });
+    assert.equal(result.status, "verified");
+    assert.equal(debt.length, 1);
+    assert.equal(debt[0].kind, "ecp_evidence_failed");
+  } finally {
+    fixture.state.close();
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("REX P5b: legacy (no debtSink) recordEvidence throw still degrades to ambiguous (fail-closed preserved)", async () => {
+  const fixture = setup();
+  try {
+    const ecp = new EffectCommitProtocol({
+      state: fixture.state, ledger: new EffectLedger({ state: fixture.state }), deviceRuns: fixture.runs,
+      recheck: async () => correctState(),
+      execute: async () => ({ httpStatus: 200 }),
+      verify: async () => ({ ok: true, evidenceRefs: ["verified-hash"] }),
+      restore: async () => ({ ok: true }),
+      recordEvidence: () => { throw new Error("legacy evidence write failed"); },
+    });
+    const result = await ecp.commit({
+      tuple: fixture.run.tuple, mission: fixture.mission, action: "follow", target: "target-a",
+      intent: { surface: "social-effect" }, idempotencyKey: "ecp-p5b-follow-3",
+    });
+    assert.equal(result.status, "ambiguous");
+    assert.equal(result.effect.status, "ambiguous");
+  } finally {
+    fixture.state.close();
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});

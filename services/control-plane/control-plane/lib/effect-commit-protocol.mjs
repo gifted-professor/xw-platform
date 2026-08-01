@@ -33,7 +33,7 @@ function verifyExplicitReceiptEvidence(state, evidence, input) {
 }
 
 export class EffectCommitProtocol {
-  constructor({ state, ledger, deviceRuns, missions = null, evidence = null, recheck, execute, verify, restore, recordEvidence = null } = {}) {
+  constructor({ state, ledger, deviceRuns, missions = null, evidence = null, recheck, execute, verify, restore, recordEvidence = null, debtSink = null } = {}) {
     if (!state || !ledger || !deviceRuns) throw new TypeError("ECP requires state, ledger, and deviceRuns");
     if (typeof recheck !== "function" || typeof execute !== "function" || typeof verify !== "function" || typeof restore !== "function") {
       throw new TypeError("ECP requires recheck, execute, verify, and restore handlers");
@@ -48,6 +48,34 @@ export class EffectCommitProtocol {
     this.verify = verify;
     this.restore = restore;
     this.recordEvidence = recordEvidence;
+    // REX Phase 5 §8.4 (P5b): nonpayment_v1 sinks evidence-write failures into evidence_debt
+    // instead of letting them degrade a verified outcome to ambiguous. Null = legacy fail-closed.
+    this.debtSink = debtSink;
+  }
+
+  // REX Phase 5 §8.4 (P5b): recordEvidence is wired but was neither awaited nor guarded — a sync
+  // throw landed in the outer catch and overwrote an already-verified outcome with ambiguous, and
+  // an async rejection became an unhandledRejection. Now it is always awaited. With a debtSink the
+  // failure is recorded as ecp_evidence_failed debt and the verified outcome is preserved (non-
+  // payment evidence loss is a debt, not a reversal). Without a debtSink the error is rethrown so
+  // legacy fail-closed degradation to ambiguous is byte-for-byte unchanged.
+  async #recordEvidenceDebtAware(record) {
+    if (typeof this.recordEvidence !== "function") return;
+    try {
+      await this.recordEvidence(record);
+    } catch (error) {
+      if (typeof this.debtSink === "function") {
+        this.debtSink({
+          kind: "ecp_evidence_failed",
+          effectId: record.effectId,
+          code: error?.code || "RECORD_EVIDENCE_FAILED",
+          message: error?.message || String(error),
+          createdAt: new Date().toISOString(),
+        });
+        return;
+      }
+      throw error;
+    }
   }
 
   async prepare(input) {
@@ -117,7 +145,7 @@ export class EffectCommitProtocol {
       } else {
         outcome = this.ledger.recordOutcome(effect.effectId, { status: "ambiguous", evidenceRefs: verification?.evidenceRefs || [] });
       }
-      if (typeof this.recordEvidence === "function") this.recordEvidence({ effectId: effect.effectId, evidenceRefs: outcome.evidenceRefs });
+      await this.#recordEvidenceDebtAware({ effectId: effect.effectId, evidenceRefs: outcome.evidenceRefs });
       return { status: outcome.status, effect: outcome };
     } catch (error) {
       const notSent = error?.code === "NOT_SENT";
@@ -192,7 +220,7 @@ export class EffectCommitProtocol {
         status: verification?.ok === true ? "verified" : "ambiguous",
         evidenceRefs: verification?.evidenceRefs || [],
       });
-      if (typeof this.recordEvidence === "function") this.recordEvidence({ effectId, evidenceRefs: outcome.evidenceRefs });
+      await this.#recordEvidenceDebtAware({ effectId, evidenceRefs: outcome.evidenceRefs });
       return { status: outcome.status, effect: outcome, retried };
     } catch (error) {
       const notSent = error?.code === "NOT_SENT";
