@@ -54,7 +54,7 @@ HEAD:   7e7696ea1d31ff6dd2ea345c419ca0be7d394c4a
 |---|---|---|---|
 | Phase 0/0.5 | 完成 | 用户过目、源码授权、governance 先行、两仓 scope 冻结 | 删除/永久销户/隐私保留仍保持未勾，不得擅自放宽 |
 | Phase 1 | 完成 | 两仓 contracts、scope manifest、fixtures、红灯测试 | 无 Windows 部署 |
-| Phase 2 | **部分完成** | classifier、fingerprint、fake tripwire、payment verifier、PHC binding/expiry/签名核心 | 生产输入路径接线、durable pending、list/decide、Registry UI/API、runtime signer/verifier 装配仍未完成 |
+| Phase 2 | **完成（GO）** | classifier、fingerprint、fake tripwire、payment verifier、PHC binding/expiry/签名核心、durable pending + 重启 recovered_cancelled、payment-commits list/decide API、Registry 人类确认面 + Ed25519 签名 oracle、生产输入路径全接 guardFinancialCommit fail-closed | runtime signer/verifier 装配（server.mjs/bootstrap.mjs 传 verifier）与 PHC→#runJob approval threading 留给加真实支付 capability 时再做；当前无 capability 标 financialCommit，闸 dormant；legacy PS1 只读采集 out-of-scope。提交：B 9a36130 + cf5d4ee，A 4405a60 |
 | Phase 3 | 未开始 | 仅有 schema/红灯 fixture | Evidence v1、降级链、双写、Review shadow、adopt staging 全未做 |
 | Phase 4 | 未开始 | 仅有 nonpayment schema/fixtures/红灯测试 | Broker shadow、unknown→Explorer、queue/reroute、session bridge 全未做 |
 | Phase 4.5 | 未开始 | 仅有 sequence fixture | 基线、candidate 回放、p50/p95、30-step/100-step 性能门全未跑 |
@@ -132,6 +132,13 @@ RED: nonpayment autonomy policy is not implemented   # ambiguous effect 路径
    - 验签失败保持 waiting，不执行底层 effect。
 
 ### 4.2 仍未完成
+
+> **2026-08-01 更新：A/B/C/D 全部完成，Phase 2 GO（见 §4.3）。** 下方原文保留作接手记录。
+> - A 生产输入路径接线 → B `cf5d4ee`：能力准入闸（policy.mjs）+ #runJob chokepoint + 直运 fail-closed（XiaoweiTransport/greenarrow/XiaoweiHttpAdapter/FastOperator），8 个测试证明每路径 financial_commit 在触碰设备前 transport=0；legacy PS1 经审计为只读采集，out-of-scope。
+> - B durable pending + 重启 recovered_cancelled → B `9a36130`。
+> - C payment-commits list/decide API → B `9a36130`。
+> - D Registry 人类确认面 + Ed25519 签名 oracle → A `4405a60`。
+> - 遗留（非阻塞）：runtime verifier 装配（server.mjs/bootstrap.mjs）与 PHC→#runJob approval threading 留给加真实支付 capability 时再做；当前无 capability 标 financialCommit，全链 dormant。
 
 #### A. 所有生产输入路径接同一个 guard
 
@@ -545,13 +552,15 @@ GO/NO-GO：
 
 只做 Phase 2 收尾，不并行启动 Phase 3/4：
 
-1. 重新核对两仓 HEAD/status 和主计划 scope manifest。
-2. 为 B durable pending + list/decide 写红灯测试。
-3. 为 A Registry role/CSRF/signer/payment-only UI 写红灯测试。
-4. 把 tripwire 接到生产 typed/raw 输入共用层，证明没有 bypass，同时保持普通 primitive 零同步视觉。
-5. 实现 durable pending、live handle、重启取消、human-only signed decide。
-6. 运行两仓全量测试、scope、check、secret scan。
-7. 提交 Phase 2 报告；Phase 2 GO 后再开始 Evidence v1。
+1. ✅ 重新核对两仓 HEAD/status 和主计划 scope manifest。
+2. ✅ 为 B durable pending + list/decide 写红灯测试 → 实现（B `9a36130`）。
+3. ✅ 为 A Registry role/CSRF/signer/payment-only UI 写红灯测试 → 实现（A `4405a60`，80/80 绿）。
+4. ✅ 把 tripwire 接到生产 typed/raw 输入共用层，证明没有 bypass，同时保持普通 primitive 零同步视觉（B `cf5d4ee`，8 个接线测试证明每路径 fail-closed + 非金融透传零同步）。
+5. ✅ 实现 durable pending、live handle、重启取消、human-only signed decide（B `9a36130` + A `4405a60`）。
+6. ✅ 运行两仓全量测试、scope、check、secret scan（B 403/409 + 4 预期红、A 80/80；B check-js 97 + secret-scan pass；A check pass；两仓 0 out-of-whitelist）。
+7. ✅ Phase 2 GO：见 §4.3。下一步 Phase 3 Evidence v1。
+
+**Phase 2 GO 已达成**（§4.3 全条满足）。遗留非阻塞项：runtime verifier 装配 + PHC→#runId approval threading，留给加真实支付 capability 时做。
 
 若实现中发现白名单之外必须改的文件，立即停止，只提交计划增补给用户，不能偷偷扩大范围。
 
