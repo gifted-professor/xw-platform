@@ -257,6 +257,14 @@ export function missionContentHash(policy) {
   return fingerprint(content);
 }
 
+// REX Phase 5 §8.4 (P5b): a parent-grant authority failure is only soft-able for the
+// PARENT_GRANT_* family (decayed / missing / hash-drifted provenance). Mission-level fences —
+// MISSION_REVOKED (explicit or cascade human-cancel), MISSION_EXPIRED, MISSION_NOT_YET_VALID,
+// MISSION_INACTIVE — are authority in their own right and stay hard in every policy mode.
+export function isSoftProvenanceAuthority(code) {
+  return typeof code === "string" && code.startsWith("PARENT_GRANT_");
+}
+
 export function targetFingerprint(target) {
   if (target === null || target === undefined) return null;
   if (typeof target === "string") return target;

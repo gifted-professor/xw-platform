@@ -1,6 +1,7 @@
 import { ControlPlaneError } from "./errors.mjs";
 import {
   evaluateMissionEffect as classifyEffect,
+  isSoftProvenanceAuthority,
   missionContentHash,
   SNAPSHOT_MAX_AGE_MS,
   validateMissionPolicy,
@@ -165,48 +166,58 @@ export class MissionRuntime {
   // Parent Grants are live authority, not creation-time metadata.  Every effect boundary
   // re-reads the durable parent record so revocation or immutable-hash drift cannot be
   // bypassed by retaining an old Mission object in memory.
-  verifyParentGrant(mission, { action = null, target = null } = {}) {
+  // REX Phase 5 §8.4 (P5b): policyMode.active (nonpayment_v1) turns a PARENT_GRANT_* failure
+  // into an optional-provenance soft fence ({ ok:false, code, soft:true }) instead of a hard
+  // block — the grant is decayed metadata, not the payment gate. MISSION_REVOKED and the other
+  // mission-level fences stay hard in every mode. Legacy (policyMode null) is unchanged.
+  verifyParentGrant(mission, { action = null, target = null } = {}, { policyMode = null } = {}) {
     const current = mission?.missionId ? this.state.getMissionForRuntime(mission.missionId) : mission;
     if (!current?.parentGrantId) return { ok: true };
+    const nonpayment = policyMode && policyMode.active === true;
+    const soft = (code) => ({ ok: false, code, ...(nonpayment && isSoftProvenanceAuthority(code) ? { soft: true } : {}) });
     const now = this.now();
-    if (current.status !== "active") return { ok: false, code: current.status === "revoked" ? "MISSION_REVOKED" : "MISSION_INACTIVE" };
+    if (current.status !== "active") return soft(current.status === "revoked" ? "MISSION_REVOKED" : "MISSION_INACTIVE");
     const childNotBefore = Date.parse(current.validity?.notBefore);
     const childExpiry = Date.parse(current.validity?.expiresAt);
-    if (Number.isFinite(childNotBefore) && now < childNotBefore) return { ok: false, code: "MISSION_NOT_YET_VALID" };
-    if (Number.isFinite(childExpiry) && now >= childExpiry) return { ok: false, code: "MISSION_EXPIRED" };
+    if (Number.isFinite(childNotBefore) && now < childNotBefore) return soft("MISSION_NOT_YET_VALID");
+    if (Number.isFinite(childExpiry) && now >= childExpiry) return soft("MISSION_EXPIRED");
     const record = this.state.getDelegationGrantRecord(current.parentGrantId);
-    if (!record || record.status !== "active") return { ok: false, code: "PARENT_GRANT_INACTIVE" };
-    if (record.grantHash !== current.parentGrantHash) return { ok: false, code: "PARENT_GRANT_HASH_DRIFT" };
+    if (!record || record.status !== "active") return soft("PARENT_GRANT_INACTIVE");
+    if (record.grantHash !== current.parentGrantHash) return soft("PARENT_GRANT_HASH_DRIFT");
     const parent = record.grant;
     const parentNotBefore = Date.parse(parent.validity?.notBefore);
     const parentExpiry = Date.parse(parent.validity?.expiresAt);
-    if (Number.isFinite(parentNotBefore) && now < parentNotBefore) return { ok: false, code: "PARENT_GRANT_NOT_YET_VALID" };
-    if (Number.isFinite(parentExpiry) && now >= parentExpiry) return { ok: false, code: "PARENT_GRANT_EXPIRED" };
+    if (Number.isFinite(parentNotBefore) && now < parentNotBefore) return soft("PARENT_GRANT_NOT_YET_VALID");
+    if (Number.isFinite(parentExpiry) && now >= parentExpiry) return soft("PARENT_GRANT_EXPIRED");
     if (parent.app !== current.app || parent.accountFingerprint !== current.account
       || !Array.isArray(current.controllers) || current.controllers.some((controller) => !parent.controllers.includes(controller))) {
-      return { ok: false, code: "PARENT_GRANT_SUBSET_INVALID" };
+      return soft("PARENT_GRANT_SUBSET_INVALID");
     }
     const actions = current.scope?.actions || [];
     const allowed = new Set([...(parent.authorization?.primitives || []), ...(parent.authorization?.socialActions || []), ...(parent.authorization?.missionOnlyActions || [])]);
     if (actions.some((item) => !allowed.has(item) || parent.authorization?.prohibitedActions?.includes(item))
       || (action && (!allowed.has(action) || parent.authorization?.prohibitedActions?.includes(action)))) {
-      return { ok: false, code: "PARENT_GRANT_SUBSET_INVALID" };
+      return soft("PARENT_GRANT_SUBSET_INVALID");
     }
     if (parent.targets?.mode === "explicit_fingerprints") {
       const targets = current.scope?.targets?.values || [];
       if (targets.some((item) => !parent.targets.values.includes(item)) || (target && !parent.targets.values.includes(target))) {
-        return { ok: false, code: "PARENT_GRANT_SUBSET_INVALID" };
+        return soft("PARENT_GRANT_SUBSET_INVALID");
       }
     }
     const maxima = parent.budget?.maxima;
     if (!maxima || current.scope.totalCount > maxima.totalCount || current.scope.perTargetCount > maxima.perTargetCount
       || current.scope.frequency.count > maxima.frequency.count || current.scope.frequency.windowSeconds > maxima.frequency.windowSeconds) {
-      return { ok: false, code: "PARENT_GRANT_SUBSET_INVALID" };
+      return soft("PARENT_GRANT_SUBSET_INVALID");
     }
     return { ok: true, mission: current, parent };
   }
 
-  requireActiveMission(missionId) {
+  // REX Phase 5 §8.4 (P5b): nonpayment_v1 (policyMode.active) with a debtSink soft-passes a
+  // PARENT_GRANT_* failure — records a provenance_debt and returns the mission instead of
+  // throwing. MISSION_NOT_FOUND / MISSION_REVOKED / MISSION_EXPIRED and verified-discovery
+  // authority stay hard. Legacy (no policyMode) throws the original code byte-for-byte.
+  requireActiveMission(missionId, { policyMode = null, debtSink = null } = {}) {
     const mission = this.state.getMissionForRuntime(missionId);
     if (!mission) throw new ControlPlaneError("MISSION_NOT_FOUND", `unknown mission ${missionId}`, { status: 404 });
     if (mission.status === "revoked") {
@@ -220,8 +231,24 @@ export class MissionRuntime {
     if (!discovery.ok) {
       throw new ControlPlaneError(discovery.code, "Mission verified discovery is no longer authoritative", { status: 409 });
     }
-    const parent = this.verifyParentGrant(mission);
-    if (!parent.ok) throw new ControlPlaneError(parent.code, "Mission parent Grant is no longer authoritative", { status: 409 });
+    const parent = this.verifyParentGrant(mission, {}, { policyMode });
+    if (!parent.ok) {
+      // REX P5b: a soft PARENT_GRANT_* fence passes through (provenance debt is best-effort —
+      // the caller that already recorded the debt may have passed no sink here, e.g. a tuple gate
+      // downstream of the ECP's own #softProvenance). Legacy (hard) throws unchanged.
+      if (parent.soft === true) {
+        if (typeof debtSink === "function") {
+          debtSink({
+            kind: "provenance_debt",
+            missionId,
+            code: parent.code,
+            createdAt: new Date().toISOString(),
+          });
+        }
+        return mission;
+      }
+      throw new ControlPlaneError(parent.code, "Mission parent Grant is no longer authoritative", { status: 409 });
+    }
     return mission;
   }
 

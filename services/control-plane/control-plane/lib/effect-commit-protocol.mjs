@@ -81,15 +81,34 @@ export class EffectCommitProtocol {
     }
   }
 
+  // REX Phase 5 §8.4 (P5b): a soft parent-grant fence under nonpayment records a
+  // provenance_debt and lets the effect proceed — decayed/missing provenance is a debt, not a
+  // payment-gate block. Returns true when the fence was soft (caller continues past it) and
+  // false when it must still block. Legacy (no soft flag) is untouched.
+  #softProvenance(parent, mission) {
+    if (!parent || parent.ok !== false || parent.soft !== true) return false;
+    if (typeof this.debtSink === "function") {
+      this.debtSink({
+        kind: "provenance_debt",
+        missionId: mission?.missionId ?? null,
+        code: parent.code,
+        createdAt: new Date().toISOString(),
+      });
+    }
+    return true;
+  }
+
   async prepare(input) {
-    const parent = this.missions?.verifyParentGrant(input.mission, { action: input.action, target: input.target });
-    if (parent && !parent.ok) return blocked(parent.code);
+    const parent = this.missions?.verifyParentGrant(input.mission, { action: input.action, target: input.target }, { policyMode: this.policyMode });
+    if (parent && !parent.ok) {
+      if (!this.#softProvenance(parent, input.mission)) return blocked(parent.code);
+    }
     const discovery = this.missions?.verifyAuthoritativeDiscovery(input.mission);
     if (discovery && !discovery.ok) return blocked(discovery.code);
     const policy = evaluateMissionEffect(input.mission, { action: input.action, target: input.target }, { policyMode: this.policyMode });
     if (policy.decision === "scope_violation") return blocked("SCOPE_VIOLATION");
     if (policy.decision === "blocked") return blocked(policy.reason);
-    this.deviceRuns.assertControlTuple(input.tuple);
+    this.deviceRuns.assertControlTuple(input.tuple, { policyMode: this.policyMode, debtSink: null });
     const rechecked = await this.recheck(input);
     const code = correctnessCode(input.mission, input.target, rechecked);
     if (code) return blocked(code);
@@ -108,17 +127,22 @@ export class EffectCommitProtocol {
     const { effect, rechecked, policy, ...input } = prepared;
     let outcome = null;
     try {
-      const parent = this.missions?.verifyParentGrant(input.mission, { action: input.action, target: input.target });
+      const parent = this.missions?.verifyParentGrant(input.mission, { action: input.action, target: input.target }, { policyMode: this.policyMode });
       if (parent && !parent.ok) {
-        outcome = this.state.terminalizeMissionEffectAuthorityLoss({ effectId: effect.effectId, missionId: input.mission.missionId, deviceRunId: input.tuple.deviceRunId, leaseId: this.state.getDeviceRun(input.tuple.deviceRunId)?.leaseId, sessionId: input.tuple.sessionId, controllerEpoch: input.tuple.controllerEpoch, code: parent.code });
-        return blocked(parent.code);
+        if (this.#softProvenance(parent, input.mission)) {
+          // REX P5b: expired/missing parent grant under nonpayment is provenance debt — the
+          // send continues past it instead of terminalizing the run.
+        } else {
+          outcome = this.state.terminalizeMissionEffectAuthorityLoss({ effectId: effect.effectId, missionId: input.mission.missionId, deviceRunId: input.tuple.deviceRunId, leaseId: this.state.getDeviceRun(input.tuple.deviceRunId)?.leaseId, sessionId: input.tuple.sessionId, controllerEpoch: input.tuple.controllerEpoch, code: parent.code });
+          return blocked(parent.code);
+        }
       }
       const discovery = this.missions?.verifyAuthoritativeDiscovery(input.mission);
       if (discovery && !discovery.ok) {
         outcome = this.ledger.recordOutcome(effect.effectId, { status: "cancelled" });
         return blocked(discovery.code);
       }
-      this.deviceRuns.assertControlTuple(input.tuple);
+      this.deviceRuns.assertControlTuple(input.tuple, { policyMode: this.policyMode, debtSink: null });
       const current = await this.recheck(input);
       const code = correctnessCode(input.mission, input.target, current);
       if (code) {
@@ -135,7 +159,7 @@ export class EffectCommitProtocol {
       }
       try {
         if (input.mission?.parentGrantId && policy.decision !== "phc") {
-          this.ledger.beginEffectSend({ effectId: effect.effectId, receiptId: receipt?.receiptId || null, missionId: input.mission.missionId, deviceRunId: input.tuple.deviceRunId, leaseId: receipt?.leaseId, sessionId: input.tuple.sessionId, controllerEpoch: input.tuple.controllerEpoch, targetFingerprint: targetFingerprint(input.target) });
+          this.ledger.beginEffectSend({ effectId: effect.effectId, receiptId: receipt?.receiptId || null, missionId: input.mission.missionId, deviceRunId: input.tuple.deviceRunId, leaseId: receipt?.leaseId, sessionId: input.tuple.sessionId, controllerEpoch: input.tuple.controllerEpoch, targetFingerprint: targetFingerprint(input.target), softAuthority: this.policyMode?.active === true });
         } else if (policy.decision === "phc") this.ledger.startAuthorizedEffect(effect.effectId);
         else this.ledger.startEffectForExecution(effect.effectId);
       } catch (error) {
@@ -172,9 +196,11 @@ export class EffectCommitProtocol {
   // before one retry; caller-provided booleans cannot authorize an external effect.
   async retryNotSentInPlace(input) {
     const { effectId, tuple, mission, target } = input || {};
-    this.deviceRuns.assertControlTuple(tuple);
-    const parent = this.missions?.verifyParentGrant(mission, { action: input?.action, target });
-    if (parent && !parent.ok) return blocked(parent.code);
+    this.deviceRuns.assertControlTuple(tuple, { policyMode: this.policyMode, debtSink: null });
+    const parent = this.missions?.verifyParentGrant(mission, { action: input?.action, target }, { policyMode: this.policyMode });
+    if (parent && !parent.ok) {
+      if (!this.#softProvenance(parent, mission)) return blocked(parent.code);
+    }
     const discovery = this.missions?.verifyAuthoritativeDiscovery(mission);
     if (discovery && !discovery.ok) return blocked(discovery.code);
     const effect = this.state.listMissionEffects(mission?.missionId)
@@ -194,12 +220,14 @@ export class EffectCommitProtocol {
     const retried = this.ledger.retryNotSent(effectId, { rechecked: true });
     let outcome = null;
     try {
-      const liveParent = this.missions?.verifyParentGrant(mission, { action, target });
+      const liveParent = this.missions?.verifyParentGrant(mission, { action, target }, { policyMode: this.policyMode });
       if (liveParent && !liveParent.ok) {
-        outcome = this.state.terminalizeMissionEffectAuthorityLoss({ effectId, missionId: mission.missionId, deviceRunId: tuple.deviceRunId, leaseId: this.state.getDeviceRun(tuple.deviceRunId)?.leaseId, sessionId: tuple.sessionId, controllerEpoch: tuple.controllerEpoch, code: liveParent.code });
-        return blocked(liveParent.code);
+        if (!this.#softProvenance(liveParent, mission)) {
+          outcome = this.state.terminalizeMissionEffectAuthorityLoss({ effectId, missionId: mission.missionId, deviceRunId: tuple.deviceRunId, leaseId: this.state.getDeviceRun(tuple.deviceRunId)?.leaseId, sessionId: tuple.sessionId, controllerEpoch: tuple.controllerEpoch, code: liveParent.code });
+          return blocked(liveParent.code);
+        }
       }
-      this.deviceRuns.assertControlTuple(tuple);
+      this.deviceRuns.assertControlTuple(tuple, { policyMode: this.policyMode, debtSink: null });
       const current = await this.recheck(input);
       const currentCode = correctnessCode(mission, target, current);
       if (currentCode) {
@@ -212,7 +240,7 @@ export class EffectCommitProtocol {
         return blocked(receipt);
       }
       try {
-        if (mission?.parentGrantId) this.ledger.beginEffectSend({ effectId, receiptId: receipt?.receiptId || null, missionId: mission.missionId, deviceRunId: tuple.deviceRunId, leaseId: receipt?.leaseId, sessionId: tuple.sessionId, controllerEpoch: tuple.controllerEpoch, targetFingerprint: targetFingerprint(target) });
+        if (mission?.parentGrantId) this.ledger.beginEffectSend({ effectId, receiptId: receipt?.receiptId || null, missionId: mission.missionId, deviceRunId: tuple.deviceRunId, leaseId: receipt?.leaseId, sessionId: tuple.sessionId, controllerEpoch: tuple.controllerEpoch, targetFingerprint: targetFingerprint(target), softAuthority: this.policyMode?.active === true });
         else this.ledger.startEffectForExecution(effectId);
       } catch (error) {
         if (/^(?:PARENT_GRANT|MISSION_)/.test(error?.code || "")) return blocked(error.code);

@@ -394,3 +394,67 @@ test("REX P5b: legacy ControlPlane still blocks out-of-scope target on social su
     await fixture.close();
   }
 });
+
+// ── REX Phase 5 §8.4 (P5b): ControlPlane dispatch 越过过期 parent grant（provenance debt）──
+// plan B3 line 828：parent grant 过期不阻断非支付 dispatch。nonpayment_v1 下 executeMissionPrimitive
+// 不再因 PARENT_GRANT_EXPIRED 抛错，继续 classify 并记 provenance_debt；legacy 仍抛。
+test("REX P5b: ControlPlane dispatch proceeds past an expired parent grant under nonpayment_v1 with provenance debt", async () => {
+  const fixture = await setupControl({ policyMode: NONPAY_POLICY });
+  try {
+    const grant = {
+      grantId: "explorer-provenance-grant", issuanceNonce: "n1", app: "xhs", accountFingerprint: "local-alias-provenance",
+      controllers: ["agent:runner"],
+      authorization: { primitives: [], socialActions: ["follow", "like", "collect", "comment", "dm", "publish", "delete"], missionOnlyActions: [], prohibitedActions: [] },
+      targets: { mode: "explicit_fingerprints", values: ["target-hash-aaa"] },
+      budget: { maxima: { totalCount: 5, perTargetCount: 1, frequency: { count: 1, windowSeconds: 3600 } }, defaults: { totalCount: 5, perTargetCount: 1, frequency: { count: 1, windowSeconds: 3600 } } },
+      validity: { expiresAt: new Date(Date.now() - 1000).toISOString() }, // already expired
+    };
+    fixture.state.issueDelegationGrant({ grant, grantHash: "explorer-provenance-hash", proofHash: "proof", issuerSubject: "user:a1234", issuerKeyId: "test", allowlistVersion: 1 });
+    // account differs from the setupControl default mission so missionContentHash → a fresh
+    // missionId that truly binds the expired parent grant (identical content would reuse the
+    // parent-less default mission and never exercise the grant fence).
+    const { mission } = fixture.control.missions.createMission(
+      { ...missionInput, idempotencyKey: "freedom-explorer-provenance", account: "local-alias-provenance" },
+      { parentGrantId: grant.grantId, parentGrantHash: "explorer-provenance-hash" },
+    );
+    const run = fixture.control.openDeviceRun({ missionId: mission.missionId, controllerAgent: "agent:runner" });
+    const result = await fixture.control.executeMissionPrimitive(run.tuple, {
+      primitive: "tap",
+      envelope: { declaredIntent: "tap", snapshot: freshSurface("social-effect", { effectAction: "follow" }), observedTargetFingerprint: BOUND },
+    });
+    assert.equal(result.verdict.decision, "ecp");
+    const entry = fixture.control.evidenceDebt.at(-1);
+    assert.equal(entry.kind, "provenance_debt");
+    assert.equal(entry.code, "PARENT_GRANT_EXPIRED");
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("REX P5b: legacy ControlPlane dispatch still rejects an expired parent grant", async () => {
+  const fixture = await setupControl();
+  try {
+    const grant = {
+      grantId: "explorer-provenance-grant-legacy", issuanceNonce: "n2", app: "xhs", accountFingerprint: "local-alias-provenance-legacy",
+      controllers: ["agent:runner"],
+      authorization: { primitives: [], socialActions: ["follow"], missionOnlyActions: [], prohibitedActions: [] },
+      targets: { mode: "explicit_fingerprints", values: ["target-hash-aaa"] },
+      budget: { maxima: { totalCount: 5, perTargetCount: 1, frequency: { count: 1, windowSeconds: 3600 } }, defaults: { totalCount: 5, perTargetCount: 1, frequency: { count: 1, windowSeconds: 3600 } } },
+      validity: { expiresAt: new Date(Date.now() - 1000).toISOString() },
+    };
+    fixture.state.issueDelegationGrant({ grant, grantHash: "explorer-provenance-hash-legacy", proofHash: "proof", issuerSubject: "user:a1234", issuerKeyId: "test", allowlistVersion: 1 });
+    // distinct account so this mission binds the expired grant rather than reusing the default
+    const { mission } = fixture.control.missions.createMission(
+      { ...missionInput, idempotencyKey: "freedom-explorer-provenance-legacy", account: "local-alias-provenance-legacy" },
+      { parentGrantId: grant.grantId, parentGrantHash: "explorer-provenance-hash-legacy" },
+    );
+    // legacy fences the expired grant at run-open (DeviceRun.openDeviceRun → requireActiveMission)
+    assert.throws(
+      () => fixture.control.openDeviceRun({ missionId: mission.missionId, controllerAgent: "agent:runner" }),
+      { code: "PARENT_GRANT_EXPIRED" },
+    );
+    assert.equal(fixture.control.evidenceDebt.length, 0, "legacy must not record provenance debt");
+  } finally {
+    await fixture.close();
+  }
+});

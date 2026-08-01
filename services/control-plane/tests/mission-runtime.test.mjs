@@ -256,3 +256,57 @@ test("requireActiveMission fails closed for unknown ids", () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+// ── REX Phase 5 §8.4 (P5b): delegation-grant 退热路径成可选 provenance ────────────────
+// plan B3 line 827-828：parent grant 缺失/过期不阻断非支付，记 provenance debt。nonpayment_v1
+// 下 verifyParentGrant 的非 MISSION_REVOKED 失败返回 soft:true；requireActiveMission 软通过并
+// 经 debtSink 记 provenance_debt。MISSION_REVOKED（显式撤销/级联撤销）任何模式都硬。
+test("REX P5b: nonpayment_v1 soft-fences an expired parent grant with provenance debt; legacy and revoke stay hard", () => {
+  const root = tempRoot();
+  let now = Date.now();
+  const state = new StateStore({ dbPath: join(root, "control.db"), now: () => now });
+  const runtime = new MissionRuntime({ state, now: () => now });
+  const NONPAY = { active: true };
+  const debt = [];
+  try {
+    const grant = {
+      grantId: "grant-provenance-expiry", issuanceNonce: "n1", app: "xhs", accountFingerprint: "local-alias",
+      controllers: ["agent:runner"],
+      authorization: { primitives: [], socialActions: ["follow", "like", "collect", "comment", "dm"], missionOnlyActions: [], prohibitedActions: [] },
+      targets: { mode: "explicit_fingerprints", values: ["target-hash-aaa"] },
+      budget: { maxima: { totalCount: 5, perTargetCount: 1, frequency: { count: 1, windowSeconds: 3600 } }, defaults: { totalCount: 5, perTargetCount: 1, frequency: { count: 1, windowSeconds: 3600 } } },
+      validity: { expiresAt: new Date(now + 1000).toISOString() },
+    };
+    state.issueDelegationGrant({ grant, grantHash: "grant-provenance-hash", proofHash: "proof", issuerSubject: "user:a1234", issuerKeyId: "test", allowlistVersion: 1 });
+    const { mission } = runtime.createMission({ ...base, idempotencyKey: "provenance-expiry" }, { parentGrantId: grant.grantId, parentGrantHash: "grant-provenance-hash" });
+
+    // while the parent is live both modes verify ok
+    assert.equal(runtime.verifyParentGrant(mission, { action: "follow", target: "target-hash-aaa" }).ok, true);
+    assert.equal(runtime.verifyParentGrant(mission, { action: "follow", target: "target-hash-aaa" }, { policyMode: NONPAY }).ok, true);
+
+    // parent expires → legacy hard-fences, nonpayment soft-fences with provenance debt
+    now += 1001;
+    assert.equal(runtime.verifyParentGrant(mission, { action: "follow", target: "target-hash-aaa" }).ok, false);
+    const softParent = runtime.verifyParentGrant(mission, { action: "follow", target: "target-hash-aaa" }, { policyMode: NONPAY });
+    assert.equal(softParent.ok, false);
+    assert.equal(softParent.code, "PARENT_GRANT_EXPIRED");
+    assert.equal(softParent.soft, true);
+    assert.throws(() => runtime.requireActiveMission(mission.missionId), { code: "PARENT_GRANT_EXPIRED" });
+    const resolved = runtime.requireActiveMission(mission.missionId, { policyMode: NONPAY, debtSink: (entry) => debt.push(entry) });
+    assert.equal(resolved.missionId, mission.missionId);
+    assert.equal(debt.length, 1);
+    assert.equal(debt[0].kind, "provenance_debt");
+    assert.equal(debt[0].code, "PARENT_GRANT_EXPIRED");
+
+    // MISSION_REVOKED (explicit revoke) stays hard under nonpayment — the one human-cancel fence
+    runtime.revokeMission(mission.missionId, { actorId: "human:operator", reason: "user-revoke" });
+    const revoked = runtime.verifyParentGrant(mission, { action: "follow", target: "target-hash-aaa" }, { policyMode: NONPAY });
+    assert.equal(revoked.ok, false);
+    assert.equal(revoked.code, "MISSION_REVOKED");
+    assert.equal(revoked.soft, undefined);
+    assert.throws(() => runtime.requireActiveMission(mission.missionId, { policyMode: NONPAY }), { code: "MISSION_REVOKED" });
+  } finally {
+    state.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});

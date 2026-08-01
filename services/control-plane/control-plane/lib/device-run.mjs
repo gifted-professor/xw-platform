@@ -16,6 +16,10 @@ export class DeviceRunRuntime {
     leaseTtlMs = 60000,
     leaseHeartbeatMs = 10000,
     now = Date.now,
+    // REX Phase 5 §8.4 (P5b): nonpayment_v1 (policyMode.active) soft-passes a decayed
+    // PARENT_GRANT_* fence at run-open — provenance debt, not a block. Null = legacy fail-closed.
+    policyMode = null,
+    debtSink = null,
   }) {
     if (!state) throw new TypeError("DeviceRunRuntime requires a StateStore");
     if (!missions) throw new TypeError("DeviceRunRuntime requires a MissionRuntime");
@@ -29,6 +33,8 @@ export class DeviceRunRuntime {
     this.leaseTtlMs = leaseTtlMs;
     this.leaseHeartbeatMs = leaseHeartbeatMs;
     this.now = now;
+    this.policyMode = policyMode;
+    this.debtSink = debtSink;
     this.heartbeats = new Map();
   }
 
@@ -39,7 +45,7 @@ export class DeviceRunRuntime {
     if (typeof controllerAgent !== "string" || controllerAgent.trim() === "") {
       throw new ControlPlaneError("CONTROLLER_REQUIRED", "controllerAgent is required", { status: 400 });
     }
-    const mission = this.missions.requireActiveMission(missionId);
+    const mission = this.missions.requireActiveMission(missionId, { policyMode: this.policyMode, debtSink: this.debtSink });
     if (!mission.controllers.includes(controllerAgent)) {
       throw new ControlPlaneError(
         "CONTROLLER_NOT_AUTHORIZED",
@@ -62,7 +68,11 @@ export class DeviceRunRuntime {
   // Validates the complete fencing tuple against the current DeviceRun binding. A token
   // never replaces any element; a command missing any member, or carrying a stale epoch or
   // wrong controller, is rejected. Returns the current device run on success.
-  assertControlTuple(tuple) {
+  // REX Phase 5 §8.4 (P5b): the caller can override the mode for this boundary (the ECP passes
+  // its own policyMode/debtSink so a per-ECP nonpayment run soft-passes its tuple gate). When
+  // omitted the DeviceRunRuntime's own (ControlPlane-wired) mode applies, which is the same value
+  // in production. Explicit null from a legacy caller stays hard / debt-free.
+  assertControlTuple(tuple, { policyMode, debtSink } = {}) {
     if (!tuple || typeof tuple !== "object") {
       throw new ControlPlaneError("CONTROL_TUPLE_INCOMPLETE", "control tuple is required", { status: 400 });
     }
@@ -107,7 +117,10 @@ export class DeviceRunRuntime {
     // The mission and parent Grant may have expired or been revoked between open and this
     // command.  Reuse MissionRuntime's durable live-authority check rather than the stale
     // public row, so every tuple boundary carries the same validity semantics as ECP.
-    const mission = this.missions.requireActiveMission(tuple.missionId);
+    const mission = this.missions.requireActiveMission(tuple.missionId, {
+      policyMode: policyMode !== undefined ? policyMode : this.policyMode,
+      debtSink: debtSink !== undefined ? debtSink : this.debtSink,
+    });
     if (!mission.controllers.includes(tuple.controllerAgent)) {
       throw new ControlPlaneError("CONTROLLER_NOT_AUTHORIZED", "controller is no longer authorized", { status: 403 });
     }

@@ -192,6 +192,10 @@ export class ControlPlane {
       authorityNodeId,
       leaseTtlMs,
       leaseHeartbeatMs,
+      // REX Phase 5 §8.4 (P5b): nonpayment_v1 soft-passes a decayed parent grant at run-open
+      // and sinks the provenance debt; legacy stays fail-closed.
+      ...(this.policyMode ? { policyMode: this.policyMode } : {}),
+      ...(this.debtOnLowDisk ? { debtSink: (entry) => this.evidenceDebt.push(entry) } : {}),
     });
     this.firewall = new EffectFirewall();
     this.discoveryProducer = typeof discoveryProducer === "function" ? discoveryProducer : null;
@@ -593,8 +597,10 @@ export class ControlPlane {
       missions: this.missions,
       evidence: this.evidence,
       // REX Phase 5 §8.4 (P5b): thread nonpayment_v1 so ECP scope (action/target) relaxes to
-      // soft budget on the non-payment path; legacy (null) is byte-for-byte unchanged.
+      // soft budget on the non-payment path; legacy (null) is byte-for-byte unchanged. The
+      // debtSink carries ECP provenance/evidence debt into the shared evidenceDebt array.
       ...(this.policyMode ? { policyMode: this.policyMode } : {}),
+      ...(this.debtOnLowDisk ? { debtSink: (entry) => this.evidenceDebt.push(entry) } : {}),
       ...handlers,
     });
   }
@@ -900,7 +906,12 @@ export class ControlPlane {
       );
     }
     const run = this.assertControlTuple(tuple);
-    const mission = this.missions.requireActiveMission(tuple.missionId);
+    // REX Phase 5 §8.4 (P5b): nonpayment_v1 soft-passes a decayed parent grant at dispatch —
+    // the run already recorded the provenance_debt at open; legacy (no policyMode) still throws.
+    const mission = this.missions.requireActiveMission(tuple.missionId, {
+      policyMode: this.policyMode,
+      debtSink: this.debtOnLowDisk ? (entry) => this.evidenceDebt.push(entry) : null,
+    });
     const verdict = this.firewall.classify(mergedEnvelope, mission, { policyMode: this.policyMode });
     // REX Phase 5 (P5a): a reobserve verdict under nonpayment_v1 records an evidence_debt entry
     // (evidence failures / unclear state never block non-payment dispatch). legacy (debtOnLowDisk

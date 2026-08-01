@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 
 import { canonicalJson, fingerprint, newId, sha256 } from "./canonical.mjs";
 import { ControlPlaneError } from "./errors.mjs";
+import { isSoftProvenanceAuthority } from "./mission-policy.mjs";
 import {
   normalizePlacementRequest,
   normalizeRoutingProfile,
@@ -2402,7 +2403,7 @@ export class StateStore {
 
   // This is the final synchronous boundary before an external effect: no await, callback, or
   // file I/O may intervene between the durable authority/receipt re-read and effect_started.
-  beginMissionEffectSend({ effectId, receiptId = null, missionId, deviceRunId, leaseId, sessionId, controllerEpoch, targetFingerprint }) {
+  beginMissionEffectSend({ effectId, receiptId = null, missionId, deviceRunId, leaseId, sessionId, controllerEpoch, targetFingerprint, softAuthority = false }) {
     let authorityError = null;
     const result = this.transaction(() => {
       const now = this.now();
@@ -2426,7 +2427,11 @@ export class StateStore {
       else if (Number.isFinite(Date.parse(grantValidity.expiresAt)) && now >= Date.parse(grantValidity.expiresAt)) authorityCode = "PARENT_GRANT_EXPIRED";
       else if (Number.isFinite(Date.parse(missionValidity.notBefore)) && now < Date.parse(missionValidity.notBefore)) authorityCode = "MISSION_NOT_YET_VALID";
       else if (Number.isFinite(Date.parse(missionValidity.expiresAt)) && now >= Date.parse(missionValidity.expiresAt)) authorityCode = "MISSION_EXPIRED";
-      if (authorityCode) {
+      // REX Phase 5 §8.4 (P5b): nonpayment_v1 (softAuthority) treats a decayed PARENT_GRANT_*
+      // fence as provenance, not authority — the send proceeds and the ECP already recorded the
+      // provenance_debt. MISSION_REVOKED / MISSION_EXPIRED / MISSION_NOT_YET_VALID and any
+      // legacy call (softAuthority=false) still cancel the reservation and fail closed.
+      if (authorityCode && !(softAuthority === true && isSoftProvenanceAuthority(authorityCode))) {
         this.db.prepare("UPDATE mission_effects SET status='cancelled', reservation_released=1, retry_blocked=1, updated_at=?, finished_at=? WHERE effect_id=? AND status='not_sent'")
           .run(now, now, effectId);
         this.#insertMissionEvent({ missionId, type: "effect.cancelled", payload: { effectId, reason: authorityCode }, createdAt: now });
@@ -2450,7 +2455,7 @@ export class StateStore {
         const sourceCapability = parseJson(sourceJob?.capability_json, {});
         if (receipt.status !== "recorded" || now - receipt.server_received_at > 5000 || receipt.mission_id !== missionId || receipt.device_run_id !== deviceRunId
           || receipt.lease_id !== leaseId || receipt.session_id !== sessionId || receipt.controller_epoch !== controllerEpoch || receipt.target_fingerprint !== targetFingerprint
-          || receipt.grant_id !== grant.grant_id || receipt.grant_hash !== grant.grant_hash || evidence?.sha256 !== receipt.evidence_hash
+          || receipt.grant_id !== grant?.grant_id || receipt.grant_hash !== grant?.grant_hash || evidence?.sha256 !== receipt.evidence_hash
           || !sourceJob || sourceJob.status !== "succeeded" || sourceJob.run_id !== receipt.source_run_id || sourceJob.session_id !== sessionId
           || sourceJob.device_id !== run.device_id || sourceJob.capability_id !== receipt.source_capability_id || sourceCapability.implementation?.adapter !== receipt.source_adapter_id
           || evidence.job_id !== sourceJob.job_id || evidence.run_id !== sourceJob.run_id) {

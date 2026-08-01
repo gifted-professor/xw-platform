@@ -457,3 +457,48 @@ test("REX P5b: ECP policyMode commits out-of-scope target for nonpayment; legacy
     rmSync(fixture.root, { recursive: true, force: true });
   }
 });
+
+// ── REX Phase 5 §8.4 (P5b): ECP parent grant 退热路径成可选 provenance ────────────────
+// plan B3 line 828：parent grant 过期不阻断非支付。nonpayment ECP.prepare 越过过期 parent
+// grant（provenance debt），legacy ECP 仍 PARENT_GRANT_EXPIRED blocked。
+test("REX P5b: nonpayment ECP prepare proceeds past an expired parent grant with provenance debt; legacy fences", async () => {
+  let now = Date.now();
+  const root = mkdtempSync(join(tmpdir(), "effect-commit-provenance-"));
+  const state = new StateStore({ dbPath: join(root, "control.db"), now: () => now });
+  const missions = new MissionRuntime({ state, now: () => now });
+  const runs = new DeviceRunRuntime({ state, missions, authorityNodeId: AUTHORITY });
+  const debt = [];
+  try {
+    state.upsertNode({ nodeId: AUTHORITY, authority: true });
+    state.upsertDevice({ alias: "01", physicalLabel: "rack-01", nodeId: AUTHORITY, runtimeId: "private-01", routingProfile: { enabled: true, tags: ["slot:01"], capabilityIds: [] } });
+    const grant = parentGrant("grant-provenance");
+    grant.validity.expiresAt = new Date(now + 1000).toISOString();
+    state.issueDelegationGrant({ grant, grantHash: "grant-provenance-hash", proofHash: "proof", issuerSubject: "user:a1234", issuerKeyId: "test", allowlistVersion: 1 });
+    const { mission } = missions.createMission({ ...parentMissionInput("parent-provenance") }, { parentGrantId: grant.grantId, parentGrantHash: "grant-provenance-hash" });
+    const run = runs.openDeviceRun({ missionId: mission.missionId, controllerAgent: "agent:runner" });
+    now += 1001; // parent grant expired before prepare
+
+    const nonpayEcp = new EffectCommitProtocol({
+      state, ledger: new EffectLedger({ state }), deviceRuns: runs, missions,
+      policyMode: { active: true }, debtSink: (entry) => debt.push(entry),
+      recheck: async () => correctState(), execute: async () => ({ httpStatus: 200 }),
+      verify: async () => ({ ok: true }), restore: async () => ({ ok: true }),
+    });
+    const prepared = await nonpayEcp.prepare({ tuple: run.tuple, mission, action: "follow", target: "target-a", idempotencyKey: "effect-provenance-nonpay" });
+    assert.equal(prepared.status, "prepared");
+    assert.equal(debt.length, 1);
+    assert.equal(debt[0].kind, "provenance_debt");
+    assert.equal(debt[0].code, "PARENT_GRANT_EXPIRED");
+
+    const legacyEcp = new EffectCommitProtocol({
+      state, ledger: new EffectLedger({ state }), deviceRuns: runs, missions,
+      recheck: async () => correctState(), execute: async () => ({}), verify: async () => ({ ok: true }), restore: async () => ({ ok: true }),
+    });
+    const blocked = await legacyEcp.prepare({ tuple: run.tuple, mission, action: "follow", target: "target-a", idempotencyKey: "effect-provenance-legacy" });
+    assert.equal(blocked.status, "blocked");
+    assert.equal(blocked.code, "PARENT_GRANT_EXPIRED");
+  } finally {
+    state.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
