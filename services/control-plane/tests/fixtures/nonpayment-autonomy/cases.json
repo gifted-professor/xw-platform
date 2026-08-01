@@ -1,0 +1,32 @@
+[
+  {
+    "name": "wallet observation",
+    "input": { "actionClass": "financial_observe", "knownCapability": true, "resourceAvailable": true },
+    "expected": { "decision": "dispatch_known", "humanApprovalRequired": false, "paymentHold": false }
+  },
+  {
+    "name": "enter checkout",
+    "input": { "actionClass": "financial_prepare", "knownCapability": false, "resourceAvailable": true },
+    "expected": { "decision": "dispatch_explorer", "humanApprovalRequired": false, "paymentHold": false }
+  },
+  {
+    "name": "ordinary social effect",
+    "input": { "actionClass": "nonfinancial_effect", "knownCapability": true, "resourceAvailable": true },
+    "expected": { "decision": "dispatch_known", "humanApprovalRequired": false, "paymentHold": false }
+  },
+  {
+    "name": "unknown operation",
+    "input": { "actionClass": "unknown", "knownCapability": false, "resourceAvailable": true },
+    "expected": { "decision": "dispatch_explorer", "humanApprovalRequired": false, "paymentHold": false }
+  },
+  {
+    "name": "busy device",
+    "input": { "actionClass": "nonfinancial_effect", "knownCapability": true, "resourceAvailable": false },
+    "expected": { "decision": "queue_resource", "humanApprovalRequired": false, "paymentHold": false }
+  },
+  {
+    "name": "final payment",
+    "input": { "actionClass": "financial_commit", "knownCapability": true, "resourceAvailable": true },
+    "expected": { "decision": "wait_financial_commit", "humanApprovalRequired": true, "paymentHold": true }
+  }
+]

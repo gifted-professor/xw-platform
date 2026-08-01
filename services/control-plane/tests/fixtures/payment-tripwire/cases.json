@@ -1,0 +1,31 @@
+{
+  "positive": [
+    {
+      "name": "verified transfer confirmation",
+      "target": { "text": "确认转账", "fingerprint": "pay-final-transfer-v1" },
+      "context": { "stage": "final", "amount": "88.00", "currency": "CNY", "payeeRef": "redacted:merchant" }
+    },
+    {
+      "name": "verified passwordless purchase",
+      "target": { "text": "免密支付并购买", "fingerprint": "pay-final-passwordless-v1" },
+      "context": { "stage": "final", "amount": "12.00", "currency": "CNY", "payeeRef": "redacted:merchant" }
+    }
+  ],
+  "negative": [
+    {
+      "name": "wallet entry",
+      "target": { "text": "钱包", "fingerprint": "wallet-entry" },
+      "context": { "stage": "navigation" }
+    },
+    {
+      "name": "enter checkout",
+      "target": { "text": "去结算", "fingerprint": "checkout-entry" },
+      "context": { "stage": "prepare", "amount": "12.00", "currency": "CNY" }
+    },
+    {
+      "name": "unknown ordinary control",
+      "target": { "text": "继续", "fingerprint": "unknown-control" },
+      "context": { "stage": "unknown" }
+    }
+  ]
+}
