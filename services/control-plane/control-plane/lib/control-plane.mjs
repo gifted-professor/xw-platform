@@ -149,6 +149,7 @@ export class ControlPlane {
     receiptAuthorityAllowlist = [],
     effectIntentSchema = EFFECT_INTENT_SCHEMA,
     paymentApprovalVerifier = null,
+    policyMode = null,
     now = Date.now,
   }) {
     this.state = state;
@@ -156,6 +157,10 @@ export class ControlPlane {
     this.adapters = adapters instanceof AdapterRegistry ? adapters : new AdapterRegistry(adapters);
     this.evidence = evidence;
     this.authorityNodeId = authorityNodeId;
+    // REX Phase 5 §8.1 item 1：nonpayment_v1 模式（resolvePolicyMode 解析结果）。
+    // 默认 null = legacy，旧行为全保留，既有测试不破。active（fake adapter）时，
+    // evaluateCapabilityPolicy 对非支付 capability 不再 approvalRequired（非支付一律自由）。
+    this.policyMode = policyMode;
     this.operatorControlUrl = operatorControlUrl;
     this.transportStatus = transportStatus;
     this.schedulerIntervalMs = schedulerIntervalMs;
@@ -354,7 +359,7 @@ export class ControlPlane {
     }
     const session = this.state.validateSession(run.sessionId, token);
     const capability = this.capabilities.validateParams(capabilityId, {});
-    const policy = evaluateCapabilityPolicy(capability, { canary: session.canary, invocation: "session" });
+    const policy = evaluateCapabilityPolicy(capability, { canary: session.canary, invocation: "session", policyMode: this.policyMode });
     if (capability.risk !== "R0" || policy.approvalRequired || capability.idempotency !== "read_only") {
       throw new ControlPlaneError("DISCOVERY_PRODUCER_POLICY_INVALID", "Discovery producer must be an automatic read-only R0 capability", { status: 409 });
     }
@@ -675,7 +680,7 @@ export class ControlPlane {
 
       const params = { observationReceiptId: receipt.receiptId, targetFingerprint: sealed.targetFingerprint };
       const collectCapability = this.capabilities.validateParams("xhs.collect.standing_grant", params);
-      evaluateCapabilityPolicy(collectCapability, { canary: true, invocation: "mission_effect" });
+      evaluateCapabilityPolicy(collectCapability, { canary: true, invocation: "mission_effect", policyMode: this.policyMode });
       collectCreated = this.state.createJob({
         idempotencyKey: `${idempotencyKey}:collect`, actorId: controllerAgent, authorityNodeId: this.authorityNodeId,
         deviceId: run.deviceId, placement: {}, capability: collectCapability, params, canary: true,
@@ -837,7 +842,7 @@ export class ControlPlane {
     canary = false,
   }) {
     const capability = this.capabilities.validateParams(capabilityId, params);
-    const policy = evaluateCapabilityPolicy(capability, { canary, invocation: "job" });
+    const policy = evaluateCapabilityPolicy(capability, { canary, invocation: "job", policyMode: this.policyMode });
     this.evidence.assertCapacity({ externalEffect: policy.externalEffect });
     const created = this.state.createJob({
       idempotencyKey,
@@ -877,7 +882,7 @@ export class ControlPlane {
     }
     try {
       const capability = this.capabilities.validateParams(capabilityId, params);
-      const policy = evaluateCapabilityPolicy(capability, { canary, invocation });
+      const policy = evaluateCapabilityPolicy(capability, { canary, invocation, policyMode: this.policyMode });
       const route = this.state.planPlacement({
         authorityNodeId: this.authorityNodeId,
         capability,
@@ -1661,7 +1666,7 @@ export class ControlPlane {
     canary = false,
   }) {
     const capability = capabilityId ? this.capabilities.require(capabilityId) : null;
-    if (capability) evaluateCapabilityPolicy(capability, { canary, invocation: "session" });
+    if (capability) evaluateCapabilityPolicy(capability, { canary, invocation: "session", policyMode: this.policyMode });
     return this.state.createSession({
       actorId,
       authorityNodeId: this.authorityNodeId,
@@ -1706,7 +1711,7 @@ export class ControlPlane {
       );
     }
     const capability = this.capabilities.validateParams(capabilityId, params);
-    const policy = evaluateCapabilityPolicy(capability, { canary: session.canary, invocation: "session" });
+    const policy = evaluateCapabilityPolicy(capability, { canary: session.canary, invocation: "session", policyMode: this.policyMode });
     if (policy.approvalRequired) {
       throw new ControlPlaneError(
         "APPROVAL_REQUIRED",
