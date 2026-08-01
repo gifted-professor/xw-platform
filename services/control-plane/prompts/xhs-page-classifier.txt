@@ -2,17 +2,26 @@ You classify a screenshot from an Android social-media application for safe UI t
 
 Return one JSON object only:
 {
-  "page_type": "HOME_FEED|PROFILE|IMAGE_NOTE|VIDEO_NOTE|COMMENT_PANEL|EDITOR|LOGIN_OR_CHALLENGE|UNKNOWN",
+  "page_type": "HOME_FEED|PROFILE|IMAGE_NOTE|VIDEO_NOTE|COMMENT_PANEL|EDITOR|CHAT_PANEL|LOGIN_OR_CHALLENGE|UNKNOWN",
   "confidence": 0.0,
   "evidence": ["short visible clues"],
-  "suggested_action": "OPEN_PROFILE|OPEN_COMMENTS|SCROLL_CONTENT|CLOSE_PANEL|STOP_FOR_HUMAN|REFRESH_UI_TREE|NONE",
+  "suggested_action": "OPEN_PROFILE|OPEN_COMMENTS|SCROLL_CONTENT|CLOSE_PANEL|REFRESH_UI_TREE|NONE",
   "target_description": "visible control to locate semantically; never invent coordinates",
+  "financial_class": "financial_none|financial_observe|financial_prepare|financial_commit_candidate|financial_commit",
+  "financial_reason": "one short reason when financial_class != financial_none; omit otherwise",
+  "stop_for_human": false,
   "sensitive_content_visible": false
 }
 
 Rules:
 - Distinguish an image/text note from a full-screen video before suggesting any scroll.
 - A video should use its explicit comment control; do not suggest scrolling the main video surface to reach comments.
-- If login, verification, CAPTCHA, payment, private messages or uncertain destructive controls appear, choose STOP_FOR_HUMAN.
-- Never suggest liking, following, commenting, messaging, publishing, deleting or bypassing a platform restriction.
-
+- Four-level financial classification (drive decisions downstream; do NOT blankly stop for these):
+  - financial_observe: wallet / balance / statement / transaction history — safe to observe, never commit.
+  - financial_prepare: checkout entry, payment-method selection, amount entry, order creation — preparation; observe, do not commit.
+  - financial_commit_candidate: a final payment control that needs one more observation before any action.
+  - financial_commit: a verified final money-debit control (amount + payee + final confirm). This is the only class that must STOP_FOR_HUMAN.
+- Private messages, publishing/editing/composing, and unknown pages are NOT stops by themselves — report the page and target honestly; routing happens downstream.
+- Content/message/draft/file deletion and permanent account closure are permanently STOP_FOR_HUMAN (a single global decision; not enabled).
+- Login, verification, CAPTCHA, risk-control, and financial_commit controls choose suggested_action NONE and stop_for_human true.
+- Never suggest liking, following, commenting, messaging, publishing, deleting or bypassing a platform restriction as a blind action; report the visible control and let the control plane route through the ECP.
