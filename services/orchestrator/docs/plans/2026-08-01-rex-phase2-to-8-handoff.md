@@ -56,7 +56,7 @@ HEAD:   7e7696ea1d31ff6dd2ea345c419ca0be7d394c4a
 | Phase 1 | 完成 | 两仓 contracts、scope manifest、fixtures、红灯测试 | 无 Windows 部署 |
 | Phase 2 | **完成（GO）** | classifier、fingerprint、fake tripwire、payment verifier、PHC binding/expiry/签名核心、durable pending + 重启 recovered_cancelled、payment-commits list/decide API、Registry 人类确认面 + Ed25519 签名 oracle、生产输入路径全接 guardFinancialCommit fail-closed | runtime signer/verifier 装配（server.mjs/bootstrap.mjs 传 verifier）与 PHC→#runJob approval threading 留给加真实支付 capability 时再做；当前无 capability 标 financialCommit，闸 dormant；legacy PS1 只读采集 out-of-scope。提交：B 9a36130 + cf5d4ee，A 4405a60 |
 | Phase 3 | **完成（GO）** | B 仓 evidence sidecar 降级链（primary→spool→ring→stdout→debt，写失败不阻 dispatch）+ sealed outbox exporter（seal crash 不产生半 adoption、旧证据不被改写）；A 仓统一 run-context 层、evidence ledger（写失败不 throw 业务层）、evidence-contract reader（四种 legacy/v1/both/empty 组合都可读、绝不 throw 业务层）、离线 validate-run-bundle + render-acceptance（纯函数、不影响派发） | 非阻塞：review-windows.mjs / adopt-from-windows.mjs 这两个 Mac SSH 治理脚本尚未接新 v1 contract reader（legacy fallback/debt 报告、staging/atomic/receipt 升级）；runtime sidecar 装配（把 createEvidenceSidecar 接进 #runJob/adapter 执行路径）留给加真实 evidence 写入点时再做。当前 GO 由离线模块 + 16 例 A 测试 + 6 例 B 测试保证。提交：B c0b66e3 + 8956fd8，A 78259bc |
-| Phase 4 | 未开始 | 仅有 nonpayment schema/fixtures/红灯测试 | Broker shadow、unknown→Explorer、queue/reroute、session bridge 全未做 |
+| Phase 4 | **完成（GO）** | nonpayment-autonomy-policy.mjs（evaluateNonpaymentAutonomy：非支付一律自由，唯一硬闸 financial_commit；ambiguous→reconcile_effect；默认 shadow）+ explorer-session-bridge.mjs（ExplorerSessionBridge：session acquire 一次、preflight 一次、连续 primitive 走热传输、普通 primitive 零同步观测）+ shadowCompare 入口 | 非阻塞：§6.3 item 2-6/8 的 router/control-plane/mission-policy 接线（把新策略接进 live dispatch、unknown→Explorer 路由、lease busy queue/reroute、mission/grant/budget 降 context、L0 lease-free dump）留给 Phase 5/8 切流——Phase 4 GO 明确要求「新策略仍未 active」，故接线不在本阶段。当前 GO 由两模块 + 4 例红灯转绿保证。提交：B fa578b4 |
 | Phase 4.5 | 未开始 | 仅有 sequence fixture | 基线、candidate 回放、p50/p95、30-step/100-step 性能门全未跑 |
 | Phase 5 | 未开始 | 无 | nonpayment_v1 离线 active、旧断言反转、legacy migration、policyDocDebt 全未做 |
 | Phase 6 | 未授权/未开始 | 无 | Windows 暗部署需要第二次用户授权 |
@@ -325,16 +325,21 @@ A: ops/explore-preflight.mjs
 A: ops/_win-xiaowei.mjs
 ```
 
-### 6.4 已知红灯
+### 6.4 已知红灯 → 全绿
 
-- `tests/non-financial-autonomy.test.mjs`
-- `tests/autonomous-lease.test.mjs`
-- `tests/ambiguous-effect.test.mjs`
+`tests/non-financial-autonomy.test.mjs`（2 例）、`tests/ambiguous-effect.test.mjs`（1 例）、`tests/autonomous-lease.test.mjs`（1 例）全绿（B fa578b4）。B 全套 414 例 412 绿 0 红。
 
-### 6.5 Phase 4 GO
+### 6.5 Phase 4 GO — 全部满足
 
-- 全部非支付 fixture 的 new verdict 只属于 dispatch/queue/retry/explorer/reconcile；
-- payment final 全 hold；
+- ✅ 全部非支付 fixture 的 new verdict 只属于 dispatch/queue/retry/explorer/reconcile（6 fixture + ambiguous 全合规）；
+- ✅ payment final 全 hold（financial_commit → wait_financial_commit + paymentHold:true）；
+- ✅ shadow 下 job/lease/adapter/transport 调用数与 legacy 完全一致（新策略未接进 live dispatch，默认 shadow，legacy 执行未改）；
+- ✅ session acquire 每会话一次，普通 primitive 不重复 preflight/lease（autonomous-lease：acquire=1/preflight=1/transport=4）；
+- ✅ 新策略仍未 active、未部署、未碰手机（两模块仅被测试 import，未接 router/control-plane live 路径，无 Windows 部署）。
+
+### 6.6 非阻塞遗留（不在 Phase 4，属 Phase 5/8 切流）
+
+- §6.3 item 2-6/8 的接线：把 `evaluateNonpaymentAutonomy` 接进 `router.mjs`/`control-plane.mjs` live dispatch（shadow→v1 切流）、unknown/no-route 自动转 Explorer 路由、lease busy → accepted_queue/reroute、mission/grant/budget 降为 context+soft budget+auto-renew/debt、L0 read-only lease-free dump/observe。这些是「让新策略 active」的工作，Phase 4 GO 明确要求不 active，故留到 Phase 5（离线 active）与 Phase 8（切流收口）。
 - shadow 下 job、lease、adapter/transport 调用数与 legacy 完全一致；
 - session acquire 每会话一次，普通 primitive 不重复 preflight/lease；
 - 新策略仍未 active、未部署、未碰手机。
