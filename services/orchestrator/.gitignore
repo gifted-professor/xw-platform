@@ -28,8 +28,13 @@ watchdog/launchd.err.log
 .DS_Store
 
 # IDE / agent tooling（skill symlink，非源码）
-.claude/
+.claude/*
 .codex/
+# 例外：本仓库自带的 project skill（registry-review）跟 git 走，换 Mac/重 clone 自动发现；
+# 其余 .claude/ 仍 ignore（保护 aionui symlinks / 本地 settings）
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/registry-review/
 
 # git worktree 存储（EnterWorktree 生成）
 .gitworktrees/
