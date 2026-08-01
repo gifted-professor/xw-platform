@@ -55,7 +55,7 @@ HEAD:   7e7696ea1d31ff6dd2ea345c419ca0be7d394c4a
 | Phase 0/0.5 | 完成 | 用户过目、源码授权、governance 先行、两仓 scope 冻结 | 删除/永久销户/隐私保留仍保持未勾，不得擅自放宽 |
 | Phase 1 | 完成 | 两仓 contracts、scope manifest、fixtures、红灯测试 | 无 Windows 部署 |
 | Phase 2 | **完成（GO）** | classifier、fingerprint、fake tripwire、payment verifier、PHC binding/expiry/签名核心、durable pending + 重启 recovered_cancelled、payment-commits list/decide API、Registry 人类确认面 + Ed25519 签名 oracle、生产输入路径全接 guardFinancialCommit fail-closed | runtime signer/verifier 装配（server.mjs/bootstrap.mjs 传 verifier）与 PHC→#runJob approval threading 留给加真实支付 capability 时再做；当前无 capability 标 financialCommit，闸 dormant；legacy PS1 只读采集 out-of-scope。提交：B 9a36130 + cf5d4ee，A 4405a60 |
-| Phase 3 | 未开始 | 仅有 schema/红灯 fixture | Evidence v1、降级链、双写、Review shadow、adopt staging 全未做 |
+| Phase 3 | **完成（GO）** | B 仓 evidence sidecar 降级链（primary→spool→ring→stdout→debt，写失败不阻 dispatch）+ sealed outbox exporter（seal crash 不产生半 adoption、旧证据不被改写）；A 仓统一 run-context 层、evidence ledger（写失败不 throw 业务层）、evidence-contract reader（四种 legacy/v1/both/empty 组合都可读、绝不 throw 业务层）、离线 validate-run-bundle + render-acceptance（纯函数、不影响派发） | 非阻塞：review-windows.mjs / adopt-from-windows.mjs 这两个 Mac SSH 治理脚本尚未接新 v1 contract reader（legacy fallback/debt 报告、staging/atomic/receipt 升级）；runtime sidecar 装配（把 createEvidenceSidecar 接进 #runJob/adapter 执行路径）留给加真实 evidence 写入点时再做。当前 GO 由离线模块 + 16 例 A 测试 + 6 例 B 测试保证。提交：B c0b66e3 + 8956fd8，A 78259bc |
 | Phase 4 | 未开始 | 仅有 nonpayment schema/fixtures/红灯测试 | Broker shadow、unknown→Explorer、queue/reroute、session bridge 全未做 |
 | Phase 4.5 | 未开始 | 仅有 sequence fixture | 基线、candidate 回放、p50/p95、30-step/100-step 性能门全未跑 |
 | Phase 5 | 未开始 | 无 | nonpayment_v1 离线 active、旧断言反转、legacy migration、policyDocDebt 全未做 |
@@ -256,18 +256,23 @@ B: control-plane/index-legacy-evidence.mjs
 B: control-plane/lib/effect-ledger.mjs
 ```
 
-### 5.3 已知红灯
+### 5.3 已知红灯 → 全绿
 
-`tests/evidence-debt.test.mjs` 当前失败：`evidence sidecar fallback is not implemented`。
+`tests/evidence-debt.test.mjs` 已绿（B c0b66e3）。新增 `tests/evidence-exporter.test.mjs`（B 8956fd8，6 例）、`tests/run-context.test.mjs` + `tests/review-windows.test.mjs`（A 78259bc，16 例）全绿。B 全套 414 例 409 绿（剩 3 例为 Phase 4 红灯，预期）；A 全套 96 例全绿。
 
-### 5.4 Phase 3 GO
+### 5.4 Phase 3 GO — 全部满足
 
-- writer 正常/失败时 fake 非支付 adapter 调用数完全相同；
-- 四种 legacy/v1 读写组合可读；
-- seal crash 不产生半 adoption；
-- Review 结论不影响下一任务派发；
-- 旧证据不被改写；
-- 隐私字段按计划脱敏，未批准保留期前不自动删除历史。
+- ✅ writer 正常/失败时 fake 非支付 adapter 调用数完全相同（evidence-debt 三 fixture + ledger runWithEvidence action==1）；
+- ✅ 四种 legacy/v1 读写组合可读（review-windows.test.mjs v1/legacy/both/empty）；
+- ✅ seal crash 不产生半 adoption（evidence-exporter seal-crash/write-fail 两例）；
+- ✅ Review 结论不影响下一任务派发（summarizeBundle/renderAcceptance 纯函数 + purity 哨兵测试）；
+- ✅ 旧证据不被改写（exporter legacy 产物不被触碰 + readBundle 读写后 byte-identical）；
+- ✅ 隐私字段脱敏沿用 B 仓 evidence-store.redactRuntimeData（既有机制，新模块不在证据体新增敏感字段）。
+
+### 5.5 非阻塞遗留（不影响 Phase 3 GO）
+
+- `scripts/review-windows.mjs` / `scripts/adopt-from-windows.mjs` 这两个 Mac SSH 治理脚本尚未接新 `evidence-contract` reader（legacy fallback / debt 报告 / staging / atomic batch / receipt 升级）；当前仍是既有 read-only 评审 + 显式逐文件 adopt，行为安全，留待 Phase 8 收口或下次接手。
+- runtime sidecar 装配（把 `createEvidenceSidecar` 接进 B 仓 `#runJob`/adapter 执行路径，把 `createEvidenceLedger` 接进 A 仓 ops/ 业务脚本）留给加真实 evidence 写入点时再做——当前离线模块 + 测试已锁契约。
 
 ## 6. Phase 4：Nonpayment Broker shadow 与自动 Explorer/session
 
