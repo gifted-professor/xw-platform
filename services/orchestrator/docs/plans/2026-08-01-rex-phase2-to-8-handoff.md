@@ -402,13 +402,31 @@ L0 控制面不可用仍能只读观察
 - ✅ 计划外文件为 0（A nonpayment-liveness scope guard 持续绿，所有新文件在白名单）；
 - ✅ 仍不需要 Windows/真机（全离线 fake adapter）。
 
-### 8.3 Phase 5 剩余（不满足完整 GO，留待续做）
+### 8.3 Phase 5 进度（部分完成，续做）
 
-- ❌ §8.2 B9 逐文件旧断言反转：~39 个测试/源对（capability-registry、control-plane-core/server/mission/state/placement/evidence/command-runner/transport/legacy、mission-runtime/explorer-firewall/freedom-acceptance、effect-commit-protocol、effect-ledger、protected-human-commit、delegation-grant-policy/runtime、discovery-session/state、device-run、recovery-inspection、operator-access、devicectl、standing-grant、xhs-collect、explicit-observation-receipt、xhs-explore、vision-safety、gateway-operator、fast-operator-*、xiaowei-http-adapter、scout-exploreFresh、xianyu-*）。每个反转必须加对应 liveness，不是简单删 blocked assertion；且必须区分 payment-approval（保留）与非 payment-approval（反转），紧密耦合，需逐文件读源+测试协同改，浅做会破坏 425 绿或弱化支付测试（§8.2 NO-GO）。
+**已完成的关键结构里程碑 —— nonpayment_v1 已接入 live dispatch 路径：**
+
+- ✅ `control-plane/lib/policy.mjs`：`evaluateCapabilityPolicy(capability, { canary, invocation, policyMode })` 在返回前新增 `policyMode.active===true` 短路 → `{approvalRequired:false, externalEffect, effectiveDecisionSource}`。默认 `policyMode=null` = legacy，425+ 旧测试零行为变化。
+- ✅ `control-plane/lib/control-plane.mjs`：构造器新增 `policyMode` 参数存 `this.policyMode`；**全部 6 个 `evaluateCapabilityPolicy` 调用点**（session 检查×2、submitJob、planRoute、collectCapability mission_effect、session 复检）已透传 `policyMode: this.policyMode`。即生产不传 policyMode 仍 legacy，fake adapter 传 `{active:true,mode:"nonpayment_v1"}` 即非支付自由 dispatch。
+- ✅ 4 个代表性非支付审批锁反转（每个：保留 legacy fallback 断言 + 新增 nonpayment_v1 自由断言 + liveness，非简单删）：
+  1. `tests/control-plane-adapters.test.mjs` — `xianyu.publish.full_draft_dry_run`（external_effect draft）policy 层：legacy `approvalRequired:true` 保留 + nonpayment_v1 `approvalRequired:false`、externalEffect 仍作事实返回 + adapter 实际 execute/verify liveness。
+  2. `tests/mission-freedom-acceptance.test.mjs` — R2 follow submitJob：legacy `waiting_approval` 保留 + nonpayment_v1 `status:"queued"` 不再 waiting + pump drain liveness。
+  3. `tests/control-plane-mission.test.mjs` — `setup()` 增 `policyMode` 透传；legacy R2 `waiting_approval` 保留 + 新测试 nonpayment_v1 R2 follow `approvalRequired:false` + `await setTimeout(120)` adapter 至少 1 次 dispatch liveness。
+  4. `tests/control-plane-core.test.mjs` — `fixture()` 增 `policyMode` 透传；legacy external effect `waiting_approval` 保留 + nonpayment_v1 external effect `approvalRequired:false` + `waitForJob` executions≥1 liveness。
+- ✅ B 全套验证：429 tests / 427 pass / 0 fail / 2 skip（反转前 425→427，逐反转后稳定 427-429，0 fail 全程）。payment/PHC 测试未删未弱化。
+
+### 8.4 Phase 5 剩余（不满足完整 GO，留待续做）
+
+- ⚠️ §8.2 B9 逐文件旧断言反转 **剩余 ~35 文件**（已做 4：adapters、mission-freedom-acceptance、control-plane-mission、control-plane-core）。
+  - **关键澄清**：B9 列出的 39 文件是**逐文件审查候选**，不是「所有 blocked 断言都要反转」。每个文件须区分三类：
+    - **非支付审批锁**（external_effect/approval_required → `approvalRequired:true`/`waiting_approval`）：反转（已建立安全模式：gate 源于 `policyMode.active`，保留 legacy fallback + nonpayment_v1 自由 + liveness）。代表已做 4 个；剩余 `waiting_approval` 命中已极少（`control-plane-mission:368` 是已覆盖的同一 R2 机制在不同 gate-denial 测试里的复用，无需重复反转）。
+    - **合法 scope/mission/safety 闸**（mission revoked、parent grant expired、target mismatch、captcha/risk-control surface、ADR_0008 denial、AUTHORITATIVE_OBSERVATION_REQUIRED、scope_violation）：**必须保留**，这些不是非支付审批锁。`effect-commit-protocol.test.mjs`、`mission-explorer-firewall.test.mjs`、`control-plane-mission.test.mjs` 大量 `blocked` 属此类。
+    - **payment/PHC 断言**（financial_commit、protected-human-commit）：**保留并增强**（§8.2 line 991 + NO-GO）。
+  - 真正还需反转的模式集中在：**evidence-failure-as-block**（`evidence-store` 非支付 `assertCapacity` 热门删除 → debt 不 block，B4；`effect-commit-protocol` 的 `EXPLICIT_RECEIPT_EVIDENCE_UNAVAILABLE` 在非支付下应 debt 而非 block）、**legacy pending migration**（见下 §8.4 item 2）、以及各 app adapter/operator 脚本里残留的 blanket approval 假设（B5/B6）。这些需配合源码改动，逐文件读源+测试协同，浅做会破坏 427 绿或弱化支付测试（§8.2 NO-GO：禁简单删 blocked、禁手写 DB、禁旧任务重复发送、禁回滚只能恢复 blanket approval）。
 - ❌ §8.1 item 3 legacy pending migration：waiting→queued_migrated 事务化 + 旧行 superseded_by、有 dispatch 痕迹只 reconciliation 不重发、payment-like 重新观察进新 PHC。需服务代码完成，禁手工 SQL。
 - ❌ §8.1 item 6 两仓 secret scan（token/key 扫描）。
 
-> 当前 nonpayment_v1 默认 legacy、未 active；模式解析 + liveness + policyDocDebt 已就位，为逐文件反转提供安全网（反转后跑 nonpayment-liveness + 全套验证）。续做建议：一次一个测试/源对，每对一个 commit，跑全套确认不回退。
+> 当前 nonpayment_v1 默认 legacy、未 active；**live dispatch 路径已就绪**（policy.mjs 短路 + control-plane.mjs 6 调用点透传 policyMode）、模式解析 + liveness + policyDocDebt 已就位，为逐文件反转提供安全网（反转后跑 nonpayment-liveness + 全套验证）。续做建议：一次一个测试/源对，每对一个 commit，跑全套确认不回退。剩余反转先按 §8.4 三类区分（非支付审批锁反转 / 合法 scope-mission-safety 闸保留 / payment-PHC 保留增强），再动 evidence-failure-as-block 与各 adapter/operator blanket 假设。
 
 ## 9. Phase 6：Windows 暗部署
 
