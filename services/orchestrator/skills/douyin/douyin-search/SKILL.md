@@ -9,14 +9,8 @@ verified:
   - date: 2026-07-31
     device: "01"
     result: pass
+    mode: real
     note: "真机：DOUYIN_SEARCH=ok / TABS=综合,团购,视频,用户,图文,直播 / COUNT=6 / BACK_HOME=yes / exit=0"
-changelog:
-  - version: "1.0"
-    date: 2026-07-31
-    change: "01 真机验收通过（搜索→结果页→back 回壳），升 v1.0"
-  - version: "0.1"
-    date: 2026-07-31
-    change: "首个抖音业务脚本，对齐 01 烟测 SMOKE=ok"
 depends:
   - device-tap
   - device-dump
