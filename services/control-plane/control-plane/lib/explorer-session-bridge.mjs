@@ -52,4 +52,11 @@ export class ExplorerSessionBridge {
   async _close(handle) {
     return { closed: true, sessionId: handle.sessionId, sequence: handle.sequence };
   }
+
+  // L0 read-only：控制面不可用时，无 lease 直读（dump/focus/screenshot），不 acquire、
+  // 不 preflight、不走 session 互斥。仅限只读 primitive（§6.3 item 8 / §7.2 L0）。
+  static async l0Observe({ transport, primitive }) {
+    if (typeof transport !== "function") throw new Error("l0Observe: transport function required");
+    return transport({ handle: { sessionId: null, leaseId: null, l0: true, sequence: 0 }, primitive, sequence: 0 });
+  }
 }
