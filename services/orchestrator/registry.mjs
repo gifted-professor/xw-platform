@@ -23,7 +23,7 @@
  * 注意（Windows bridge exec 约束）：本脚本禁止 console.error，一律 console.log。
  */
 import http from "node:http";
-import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, createPrivateKey, randomBytes, sign as cryptoSign, timingSafeEqual } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import fs from "node:fs";
 import path from "node:path";
@@ -53,6 +53,12 @@ const TRUST_LOOPBACK = argOf("trust-loopback", "true") !== "false";
 // 只读观察者 / 受控代提交者凭证（abtop 远程通道）：observer 只读；operator 仅能调 /api/operator/*。
 const OBSERVER_TOKEN = argOf("observer-token", "");
 const OPERATOR_TOKEN = argOf("operator-token", "");
+// REX Phase 2 收尾: 资金最终提交人类确认面。signer 私钥只能从受限文件读取，绝不来自
+// argv 值/URL/日志/HTML/DB/仓库/fixture——argv 只接受文件路径。文件缺失或不可读 = signer
+// unavailable：approve 必须明确 503，绝不退化成 unsigned approve；deny 仍可用。确认短语与
+// 旧审批 APPROVE 区分，避免把非支付任务和资金最终提交混在一个按钮上。
+const PAYMENT_SIGNER_KEYS_FILE = argOf("payment-signer-keys-file", "");
+const PAYMENT_CONFIRM_PHRASE = argOf("payment-confirm-phrase", "APPROVE_PAYMENT");
 // 角色 token 去重：鉴权按 human→agent→observer→operator 顺序匹配，任意两个非空角色 token
 // 相同会让低权限凭证被解析成更高权限角色（如 observer==human 时 observer 命中 human）。
 // 启动期即拒绝，避免静默提权。
@@ -915,6 +921,126 @@ async function proxyApprovalDecision(jobId, decision, actor, reason) {
   return { status: res.status, data };
 }
 
+// ---------- REX Phase 2 收尾: 资金最终提交人类确认面 ----------
+// Registry 是签名 oracle：持有人类 Ed25519 私钥（受限文件），对控制面原样提供的 binding
+// 签 xhs.payment-approval.v1。浏览器只点按钮 + 输确认短语 + CSRF，不能改 amount/payee/
+// target/snapshot——approve 的 binding 一律取自控制面 list，不取自 body。这与 B 仓
+// payment-approval-verifier 的 canonicalPaymentApprovalBytes 逐字节一致（递归排序键后 JSON）。
+function canonicalize(value) {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.keys(value).sort().map((k) => [k, canonicalize(value[k])]));
+  }
+  return value;
+}
+function canonicalJson(value) { return JSON.stringify(canonicalize(value)); }
+
+// 签名器私钥缓存：只在首次 approve 时懒加载，加载失败永不退化 unsigned。私钥明文绝不进日志。
+let paymentSignerCache = undefined; // undefined=未尝试, null=不可用, object=已加载
+function loadPaymentSigner() {
+  if (paymentSignerCache !== undefined) return paymentSignerCache;
+  paymentSignerCache = null;
+  if (!PAYMENT_SIGNER_KEYS_FILE) return null;
+  try {
+    const raw = fs.readFileSync(PAYMENT_SIGNER_KEYS_FILE, "utf8");
+    const cfg = JSON.parse(raw);
+    if (!cfg || typeof cfg.keyId !== "string" || typeof cfg.subject !== "string"
+      || typeof cfg.privateKeyPem !== "string" || !Number.isInteger(cfg.allowlistVersion)) {
+      console.log("[registry] payment signer keys file malformed; approve will 503");
+      return null;
+    }
+    paymentSignerCache = {
+      keyId: cfg.keyId,
+      subject: cfg.subject,
+      allowlistVersion: cfg.allowlistVersion,
+      privateKey: createPrivateKey(cfg.privateKeyPem),
+    };
+    return paymentSignerCache;
+  } catch (e) {
+    console.log(`[registry] payment signer unavailable; approve will 503: ${e.message}`);
+    return null;
+  }
+}
+
+// 用控制面原样提供的 binding 构造并签名一份一次性支付批准。binding 字段逐项取自控制面，
+// 调用方不得传入来自浏览器的 amount/payee/target/snapshot。
+function signPaymentApproval(binding) {
+  const signer = loadPaymentSigner();
+  if (!signer) return { ok: false, code: "PAYMENT_SIGNER_UNAVAILABLE" };
+  const unsigned = {
+    schemaId: "xhs.payment-approval.v1",
+    schemaVersion: 1,
+    commitId: binding.commitId,
+    runId: binding.runId,
+    effectId: binding.effectId,
+    app: binding.app,
+    accountRef: binding.accountRef,
+    payeeRef: binding.payeeRef,
+    amount: binding.amount,
+    currency: binding.currency,
+    targetControlFingerprint: binding.targetControlFingerprint,
+    snapshotHash: binding.snapshotHash,
+    deviceId: binding.deviceId,
+    createdAt: binding.createdAt,
+    expiresAt: binding.expiresAt,
+    purpose: "financial_commit",
+    issuer: { subject: signer.subject, role: "human", keyId: signer.keyId, allowlistVersion: signer.allowlistVersion },
+  };
+  const signature = cryptoSign(null, Buffer.from(canonicalJson(unsigned)), signer.privateKey).toString("base64");
+  return { ok: true, approval: { ...unsigned, signature } };
+}
+
+// 只读控制面 payment-commits list（已脱敏）。控制面不可达时降级为空列表 + sourceOk:false，绝不 500。
+async function listPaymentCommitsFromControl() {
+  try {
+    const res = await fetch(`${CONTROL}/control/v1/payment-commits`, { signal: AbortSignal.timeout(CONTROL_TIMEOUT_MS) });
+    if (!res.ok) return { ok: false, paymentCommits: [], sourceOk: false };
+    const data = await res.json();
+    return { ok: true, paymentCommits: Array.isArray(data.paymentCommits) ? data.paymentCommits : [], sourceOk: true };
+  } catch (e) {
+    console.log(`[registry] payment-commits list degraded (control plane unreachable): ${e.message}`);
+    return { ok: false, paymentCommits: [], sourceOk: false };
+  }
+}
+
+async function proxyPaymentCommitDecision(commitId, body) {
+  let res;
+  try {
+    res = await fetch(`${CONTROL}/control/v1/payment-commits/${encodeURIComponent(commitId)}/decide`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(CONTROL_TIMEOUT_MS + 2000),
+    });
+  } catch (e) {
+    return { status: 502, data: { ok: false, error: `控制面不可达: ${e.message}` } };
+  }
+  let data = {};
+  try { data = await res.json(); } catch { /* keep {} */ }
+  return { status: res.status, data };
+}
+
+// 执行一次资金最终提交决定。approve 的 binding 强制取自控制面 list（按 commitId 查），
+// 不接受 body 自报的金额/收款方/目标——浏览器改不动。返回 {status, data} 供路由层透传。
+async function decidePaymentCommit(commitId, decision, { confirm, reason, actorId }) {
+  if (decision === "approve") {
+    if (confirm !== PAYMENT_CONFIRM_PHRASE) {
+      return { status: 400, data: { ok: false, error: `approve requires body {"confirm":"${PAYMENT_CONFIRM_PHRASE}"}` } };
+    }
+    const list = await listPaymentCommitsFromControl();
+    if (!list.sourceOk) return { status: 502, data: { ok: false, error: "控制面不可达，无法读取支付 binding" } };
+    const row = list.paymentCommits.find((c) => c.commitId === commitId);
+    if (!row || !row.approvalBinding) {
+      return { status: 404, data: { ok: false, error: "payment commit not found or already decided" } };
+    }
+    const signed = signPaymentApproval({ ...row.approvalBinding, commitId: row.commitId });
+    if (!signed.ok) return { status: 503, data: { ok: false, error: "payment signer unavailable; cannot approve" } };
+    return proxyPaymentCommitDecision(commitId, { decision: "approve", approval: signed.approval, actorId, reason: reason ?? null });
+  }
+  // deny 不需要 signer，也不需要确认短语。
+  return proxyPaymentCommitDecision(commitId, { decision: "deny", actorId, reason: reason ?? null });
+}
+
 // 审批审计：registry 侧独立留痕（控制面自己也落库，这里记「谁经由 registry 按了钮」）。
 // 审计写失败绝不影响审批请求本身。
 function recordApprovalAudit({ jobId, decision, actor, actorSource, reason, channel, remoteAddr, proxiedStatus, proxiedOk }) {
@@ -1208,6 +1334,24 @@ function renderControlTower(entry, { csrfToken = "", pendingApprovals = [], noti
 
 function renderStatusPage(status, title, message) {
   return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)}</title><style>body{font-family:"Avenir Next Condensed","PingFang SC",sans-serif;background:#f0efe9;color:#15191c;margin:0;padding:32px}.box{max-width:680px;margin:auto;background:#fbfaf5;border-top:8px solid #b7372d;padding:24px}a{color:#1e5f86}</style></head><body><main class="box"><small>HTTP ${esc(status)}</small><h1>${esc(title)}</h1><p>${esc(message)}</p><a href="/">返回控制台</a></main></body></html>`;
+}
+
+// 资金最终提交人类确认页：只列 payment commits，绝不混入普通非支付任务。表单只回填
+// commitId + 只读 binding 摘要；金额/收款方/目标由控制面提供，浏览器没有可改的输入框。
+function renderPaymentConfirmPage({ csrfToken = "", paymentCommits = [], sourceOk = true, phrase = "APPROVE_PAYMENT", notice = null } = {}) {
+  const noticeBanner = notice ? `<div class="approval-warning">结果：${esc(notice)}</div>` : "";
+  const cards = paymentCommits.length ? paymentCommits.map((c) => {
+    const b = c.approvalBinding || {};
+    return `<article class="approval-card"><div class="approval-head"><span>付款</span><h3>${esc(c.commitId)}</h3></div>
+      <p>${esc(b.app || "?")} · ${esc(b.accountRef || "?")} → ${esc(b.payeeRef || "?")} · ${esc(b.amount || "?")} ${esc(b.currency || "")}</p>
+      <p>目标指纹 <code>${esc(b.targetControlFingerprint || "")}</code> · 设备 ${esc(b.deviceId || "?")} · 快照 ${esc((b.snapshotHash || "").slice(0,12))}</p>
+      <p>有效期至 ${esc(b.expiresAt || "?")}</p>
+      <div class="approval-actions"><form method="post" action="/ui/payment-commits/${encodeURIComponent(c.commitId)}/approve"><input type="hidden" name="csrf" value="${esc(csrfToken)}"><input name="reason" placeholder="批准理由（可选）" aria-label="批准理由"><input name="confirmation" required pattern="${esc(phrase)}" placeholder="输入 ${esc(phrase)}" aria-label="确认支付"><button class="approve" type="submit">确认支付</button></form>
+      <form method="post" action="/ui/payment-commits/${encodeURIComponent(c.commitId)}/deny"><input type="hidden" name="csrf" value="${esc(csrfToken)}"><input name="reason" placeholder="拒绝理由（可选）" aria-label="拒绝理由"><button class="deny" type="submit">拒绝支付</button></form></div></article>`;
+  }).join("") : `<div class="empty-panel">没有待确认的资金最终提交。${sourceOk ? "" : "（控制面不可达，已降级为空列表）"}</div>`;
+  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>资金最终提交确认</title><style>body{font-family:"Avenir Next Condensed","PingFang SC",sans-serif;background:#f0efe9;color:#15191c;margin:0;padding:32px}.shell{max-width:880px;margin:auto}h1{font-size:40px;margin:0 0 4px}h2{font-size:22px;margin:18px 0 8px}.section-head{display:flex;gap:14px;align-items:baseline;border-bottom:3px solid #15191c;padding-bottom:8px;margin-bottom:14px}.section-kicker{font:bold 11px ui-monospace,monospace;color:#b7372d;letter-spacing:.12em;text-transform:uppercase}a{color:#1e5f86}.approval-warning{background:#fff1d8;border:1px solid #e2b667;padding:12px;margin-bottom:10px;font-size:13px}.approval-card{background:#fbfaf5;border:1px solid #d8d4c4;padding:16px;margin-bottom:10px}.approval-head{display:flex;gap:10px;align-items:center}.approval-head span{background:#b7372d;color:white;padding:5px 8px;font:bold 11px ui-monospace,monospace}.approval-head h3{margin:0;font:12px ui-monospace,monospace}.approval-card p{font:11px ui-monospace,monospace;color:#555;margin:6px 0;overflow-wrap:anywhere}.approval-card code{font:10px ui-monospace,monospace}.approval-actions{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}.approval-actions form{display:grid;gap:7px}.approval-actions input{width:100%;border:1px solid #d8d4c4;background:white;padding:9px;font:12px ui-monospace,monospace}.approval-actions button{border:0;color:white;padding:10px;font-weight:800;cursor:pointer}.approve{background:#2e7d32}.deny{background:#b7372d}.empty-panel{padding:20px;background:#fbfaf5;border:1px dashed #d8d4c4;color:#777}footer{border-top:3px solid #15191c;margin-top:24px;padding:12px 0;font:10px ui-monospace,monospace;color:#777}</style></head><body><main class="shell"><a href="/">← 返回控制台</a><h1>资金最终提交确认</h1>
+  <div class="section-head"><div><span class="section-kicker">硬闸</span><h2>待人类确认的资金最终提交</h2></div></div>
+  <div class="approval-warning">这是唯一的硬闸。确认支付会触发真实资金动作；只有人可以操作，且必须手工输入 ${esc(phrase)}。金额/收款方/目标由控制面提供，浏览器无法修改。</div>${noticeBanner}${cards}<footer>仅显示资金最终提交；普通非支付任务不在此页。</footer></main></body></html>`;
 }
 
 // ---------- Auth ----------
@@ -1771,6 +1915,71 @@ ${reports.length > 1 ? '<h2 style="font-size:14px;margin-top:16px">历史报告<
       });
       const notice = proxied.status >= 200 && proxied.status < 300 ? (km[2] === "approve" ? "approved" : "denied") : "failed";
       res.writeHead(303, { location: `/?notice=${notice}`, "cache-control": "no-store" });
+      return res.end();
+    }
+    // ---------- 资金最终提交人类确认面（REX Phase 2 收尾）----------
+    // list 只读控制面脱敏 binding；agent/operator/observer/loopback 都可读（控制面已剥密）。
+    if (req.method === "GET" && url.pathname === "/api/payment-commits") {
+      const list = await listPaymentCommitsFromControl();
+      return sendJson(res, 200, { ok: list.ok, paymentCommits: list.paymentCommits, sourceOk: list.sourceOk }, { "cache-control": "no-store" });
+    }
+    // decide 只能由 human 触发；approve 的 binding 取自控制面，浏览器改不动金额/收款方/目标。
+    km = url.pathname.match(/^\/api\/payment-commits\/([^/]+)\/decide$/);
+    if (req.method === "POST" && km) {
+      if (role !== "human") {
+        return sendJson(res, 403, { ok: false, error: "payment commits require the human token; agent/operator/observer/loopback cannot decide" });
+      }
+      const body = await readBody(req);
+      const decision = body.decision === "approve" || body.decision === "deny" ? body.decision : null;
+      if (!decision) return sendJson(res, 400, { ok: false, error: 'body must include {"decision":"approve"|"deny"}' });
+      const actor = `human:${HUMAN_ACTOR}`.slice(0, 60);
+      const reason = typeof body.reason === "string" && body.reason.trim() ? body.reason.trim().slice(0, 500) : null;
+      const commitId = decodeURIComponent(km[1]);
+      const result = await decidePaymentCommit(commitId, decision, { confirm: body.confirm, reason, actorId: actor });
+      recordApprovalAudit({
+        jobId: commitId, decision, actor, reason, channel: "payment-api",
+        actorSource: "human-token",
+        remoteAddr: req.socket?.remoteAddress || null,
+        proxiedStatus: result.status, proxiedOk: result.status >= 200 && result.status < 300,
+      });
+      return sendJson(res, result.status, result.data, { "cache-control": "no-store" });
+    }
+    // UI: 资金最终提交确认页——只列 payment commits，不混入普通非支付任务。
+    if (req.method === "GET" && url.pathname === "/payment") {
+      if (role !== "human") {
+        return sendText(res, 403, renderStatusPage(403, "权限不足", "资金确认页只能由持 human token 的人查看。"), "text/html; charset=utf-8", { "cache-control": "no-store" });
+      }
+      const sessionValue = parseCookies(req)[SESSION_COOKIE] || "";
+      const csrfToken = csrfFor(sessionValue, req);
+      const list = await listPaymentCommitsFromControl();
+      return sendText(res, 200, renderPaymentConfirmPage({ csrfToken, paymentCommits: list.paymentCommits, sourceOk: list.sourceOk, phrase: PAYMENT_CONFIRM_PHRASE }), "text/html; charset=utf-8", { "cache-control": "no-store" });
+    }
+    km = url.pathname.match(/^\/ui\/payment-commits\/([^/]+)\/(approve|deny)$/);
+    if (req.method === "POST" && km) {
+      if (role !== "human") {
+        return sendText(res, 403, renderStatusPage(403, "权限不足", "资金确认只能由持 human token 的人完成。"), "text/html; charset=utf-8", { "cache-control": "no-store" });
+      }
+      const form = await readForm(req);
+      const sessionValue = parseCookies(req)[SESSION_COOKIE] || "";
+      const expectedCsrf = csrfFor(sessionValue, req);
+      if (!expectedCsrf || !safeEqual(form.csrf || "", expectedCsrf)) {
+        return sendText(res, 403, renderStatusPage(403, "CSRF 校验失败", "资金确认未提交，commit 状态保持不变。"), "text/html; charset=utf-8", { "cache-control": "no-store" });
+      }
+      if (km[2] === "approve" && form.confirmation !== PAYMENT_CONFIRM_PHRASE) {
+        return sendText(res, 400, renderStatusPage(400, "确认短语不完整", `必须准确输入 ${PAYMENT_CONFIRM_PHRASE}，资金确认未提交。`), "text/html; charset=utf-8", { "cache-control": "no-store" });
+      }
+      const actor = `human:${HUMAN_ACTOR}`.slice(0, 60);
+      const reason = typeof form.reason === "string" && form.reason.trim() ? form.reason.trim().slice(0, 500) : null;
+      const commitId = decodeURIComponent(km[1]);
+      const result = await decidePaymentCommit(commitId, km[2], { confirm: form.confirmation, reason, actorId: actor });
+      recordApprovalAudit({
+        jobId: commitId, decision: km[2], actor, reason, channel: "payment-ui",
+        actorSource: "human-session",
+        remoteAddr: req.socket?.remoteAddress || null,
+        proxiedStatus: result.status, proxiedOk: result.status >= 200 && result.status < 300,
+      });
+      const notice = result.status >= 200 && result.status < 300 ? (km[2] === "approve" ? "payment-approved" : "payment-denied") : "payment-failed";
+      res.writeHead(303, { location: `/payment?notice=${notice}`, "cache-control": "no-store" });
       return res.end();
     }
     // ---------- Fleet / Screen / Operator API（abtop 远程通道）----------
