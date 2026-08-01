@@ -1,10 +1,29 @@
 /**
  * 视觉/语义共用安全闸（来自 visual-grounding-poc L1 02 机实证）
- * 硬编码：宁可不点，不可误点外发。
+ * REX Phase 5 §8.4 B6：禁词从「外发/社交一律禁止」收窄为「只保护资金最终控件 +
+ * §14 未勾选的删除/永久注销」。publish/send/order/buy/follow 等非支付动作不再是 label 级
+ * 硬禁——它们由 ECP/classifier 判定，不在这里被 blanket 卡死。
+ * 硬编码：宁可不点，不可误点资金最终控件。
  */
 
-/** 绝对禁止（外发/资金/社交动作） */
-export const FORBIDDEN_LABEL_RE = /发布|发送|支付|付款|删除|下单|购买|关注他|关注她|想要|聊一聊|提交|确认支付|立即购买|加入购物车|转发|分享到|卖闲置/;
+/** 资金最终控件（正向识别：真钱提交/扣款）——任何模式都不自动点 */
+export const FINANCIAL_COMMIT_LABEL_RE = /确认支付|立即购买|加入购物车|去支付|去付款|确认付款/;
+
+/** 资金动作 label 级 tripwire——支付/付款相关控件不自动点；观察/准备/提交由 classifier 定 */
+export const FINANCIAL_ACTION_LABEL_RE = /支付|付款|转账|充值|发红包/;
+
+/** §14 未勾选（2026-08-02）：内容/消息/草稿/文件删除与永久注销仍是单一全局 fail-closed */
+export const DESTRUCTIVE_LABEL_RE = /删除|注销|销户/;
+
+/** 绝对禁止（资金最终/资金动作 + §14 删除） */
+export const FORBIDDEN_LABEL_RE = new RegExp(
+  `${FINANCIAL_COMMIT_LABEL_RE.source}|${FINANCIAL_ACTION_LABEL_RE.source}|${DESTRUCTIVE_LABEL_RE.source}`,
+);
+
+/** 正向识别：label 是否直接命中资金最终控件（区别于 prepare/observe） */
+export function isFinancialCommitLabel(label) {
+  return FINANCIAL_COMMIT_LABEL_RE.test(String(label || ""));
+}
 
 /** 导航/关闭类白名单子串（非外发） */
 export const SAFE_NAV_LABELS = [
