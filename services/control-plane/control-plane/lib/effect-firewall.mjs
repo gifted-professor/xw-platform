@@ -22,6 +22,20 @@ const REVERSIBLE_SURFACES = new Set(["navigation", "observation"]);
 const REVERSIBLE_INTENTS = new Set(["screenshot", "dump", "launch", "back", "home", "navigate", "navigation", "observation"]);
 const STOP_SURFACES = new Set(["risk-control", "login", "captcha"]);
 
+// REX Phase 5 (P5a): financial signals used to decide whether an "unknown" surface sits
+// adjacent to a payment control. If so, unknown must stay fail-closed even under nonpayment_v1 —
+// never let "unknown" become a bypass around the payment gate.
+const FINANCIAL_SURFACE_RE = /pay|payment|wallet|checkout|recharge|transfer|deposit|redpacket|topup|付|支付|钱包|收款|转账|充值|红包|下单|购买/i;
+
+function paymentAdjacentToUnknown(snapshot, input) {
+  if (snapshot?.paymentContext === true || snapshot?.financialSignal === true) return true;
+  const text = [snapshot?.text, snapshot?.label, snapshot?.contentDesc, snapshot?.surface,
+    input?.declaredTarget, input?.observedTargetFingerprint, input?.target]
+    .filter((x) => typeof x === "string")
+    .join(" ");
+  return FINANCIAL_SURFACE_RE.test(text);
+}
+
 const DECLARED_INTENT_RISK = {
   screenshot: "R0", dump: "R0", launch: "R0", back: "R0", home: "R0",
   navigate: "R0", navigation: "R0", observation: "R0",
@@ -58,7 +72,11 @@ export class EffectFirewall {
     this.now = now;
   }
 
-  classify(input, mission, { profile = "production", now = this.now, maxAgeMs = this.maxAgeMs } = {}) {
+  classify(input, mission, { profile = "production", now = this.now, maxAgeMs = this.maxAgeMs, policyMode = null } = {}) {
+    // REX Phase 5 (P5a): nonpayment_v1 (policyMode.active) relaxes unknown / stale / intent-
+    // mismatch from hard block to automatic re-observe (debt). Default null = legacy, behavior
+    // byte-for-byte unchanged. payment / stop / publish / delete never relax.
+    const nonpayment = policyMode && policyMode.active === true;
     const declaredTarget = input?.declaredTarget ?? null;
     const observedTarget = input?.observedTargetFingerprint ?? null;
 
@@ -73,6 +91,7 @@ export class EffectFirewall {
 
     // 2. Snapshot freshness: both createdAt and observedAt must be present and within maxAgeMs.
     if (!snapshot || snapshot.createdAt === undefined || snapshot.observedAt === undefined) {
+      // Missing timestamp is a data-contract violation; it is NOT relaxed to debt under any mode.
       return { code: "SNAPSHOT_STALE", decision: "blocked", surface, reason: "SNAPSHOT_MISSING_TIMESTAMP" };
     }
     const createdMs = Date.parse(snapshot.createdAt);
@@ -81,25 +100,33 @@ export class EffectFirewall {
     const observedAge = now() - observedMs;
     if (!Number.isFinite(createdMs) || !Number.isFinite(observedMs)
       || createdAge > maxAgeMs || observedAge > maxAgeMs) {
-      return {
-        code: "SNAPSHOT_STALE",
-        decision: "blocked",
-        surface,
-        reason: (!Number.isFinite(createdMs) || createdAge > maxAgeMs) ? "CREATED_STALE" : "OBSERVED_STALE",
-      };
+      const reason = (!Number.isFinite(createdMs) || createdAge > maxAgeMs) ? "CREATED_STALE" : "OBSERVED_STALE";
+      // Only relax "has valid timestamps but stale". Malformed timestamps (NaN) stay fail-closed.
+      if (nonpayment && Number.isFinite(createdMs) && Number.isFinite(observedMs)) {
+        return { code: "SNAPSHOT_STALE", decision: "reobserve", surface, reason, risk: "R3", debt: true };
+      }
+      return { code: "SNAPSHOT_STALE", decision: "blocked", surface, reason };
     }
 
     // 3. Surface classification: unknown/unlisted surfaces fail closed in production.
     const info = SURFACE_INFO[surface];
     if (!info || surface === "unknown") {
+      // nonpayment_v1 re-observes an unknown surface UNLESS it sits adjacent to a payment control.
+      if (nonpayment && !paymentAdjacentToUnknown(snapshot, input)) {
+        return { code: "SURFACE_UNKNOWN", decision: "reobserve", surface, reason: "UNCLASSIFIED_SURFACE_REOBSERVE", risk: "R3", debt: true };
+      }
       return { code: "SURFACE_UNKNOWN", decision: "blocked", surface, reason: "UNCLASSIFIED_SURFACE" };
     }
 
     const declaredIntent = input?.declaredIntent ?? null;
 
     // 4. Intent/surface consistency: a declared reversible intent on a non-reversible surface
-    //    is an intent mismatch (e.g. "navigate" while the surface is publish).
+    //    is an intent mismatch (e.g. "navigate" while the surface is publish). nonpayment_v1
+    //    re-observes instead of blocking; the re-look itself still fail-closes on payment.
     if (declaredIntent && REVERSIBLE_INTENTS.has(declaredIntent) && !REVERSIBLE_SURFACES.has(surface)) {
+      if (nonpayment) {
+        return { code: "INTENT_MISMATCH", decision: "reobserve", surface, reason: "REVERSIBLE_INTENT_ON_EFFECT_SURFACE", risk: "R3", debt: true };
+      }
       return { code: "INTENT_MISMATCH", decision: "blocked", surface, reason: "REVERSIBLE_INTENT_ON_EFFECT_SURFACE" };
     }
 

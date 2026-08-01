@@ -898,7 +898,19 @@ export class ControlPlane {
     }
     const run = this.assertControlTuple(tuple);
     const mission = this.missions.requireActiveMission(tuple.missionId);
-    const verdict = this.firewall.classify(mergedEnvelope, mission);
+    const verdict = this.firewall.classify(mergedEnvelope, mission, { policyMode: this.policyMode });
+    // REX Phase 5 (P5a): a reobserve verdict under nonpayment_v1 records an evidence_debt entry
+    // (evidence failures / unclear state never block non-payment dispatch). legacy (debtOnLowDisk
+    // false) never records and never re-routes.
+    if (verdict.debt === true && this.debtOnLowDisk) {
+      this.evidenceDebt.push({
+        kind: "firewall_reobserve",
+        code: verdict.code,
+        surface: verdict.surface ?? null,
+        reason: verdict.reason,
+        createdAt: new Date().toISOString(),
+      });
+    }
     const release = await this.acquireTransportLock();
     try {
       const payload = {

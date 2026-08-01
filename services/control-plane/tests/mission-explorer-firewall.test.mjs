@@ -42,7 +42,7 @@ const missionInput = {
   policy: { publish: "allow_within_scope", delete: "confirm" },
 };
 
-function setupControl({ acquireTransportLock } = {}) {
+function setupControl({ acquireTransportLock, policyMode } = {}) {
   const root = mkdtempSync(join(tmpdir(), "explorer-"));
   const state = new StateStore({ dbPath: join(root, "control.db") });
   const evidence = new EvidenceStore({
@@ -61,6 +61,7 @@ function setupControl({ acquireTransportLock } = {}) {
     leaseTtlMs: 60000,
     leaseHeartbeatMs: 5000,
     acquireTransportLock: acquireTransportLock || (() => Promise.resolve(() => {})),
+    ...(policyMode ? { policyMode } : {}),
   });
   control.start();
   state.upsertNode({ nodeId: AUTHORITY, authority: true });
@@ -229,6 +230,127 @@ test("Explorer primitives do not require typed action IDs or a Workflow DSL", as
     assert.equal(result.verdict.decision, "auto");
     assert.equal(Object.hasOwn(result, "capabilityId"), false);
     assert.equal(Object.hasOwn(result, "actionId"), false);
+  } finally {
+    await fixture.close();
+  }
+});
+
+// ── REX Phase 5 §8.4 (P5a): effect-firewall 非支付松绑 ─────────────────────────────
+// nonpayment_v1 下 unknown / SNAPSHOT_STALE(有时间戳但过期) / INTENT_MISMATCH 从 hard
+// blocked 改为自动重观察（decision:"reobserve" + debt 标记）；legacy 仍 blocked；payment /
+// risk-control / login / captcha / publish / delete 仍 fail-closed；unknown 紧邻 payment 上下文
+// 仍 fail-closed；SNAPSHOT_MISSING_TIMESTAMP（数据契约违规）不归 debt。
+const NONPAY_POLICY = { active: true };
+const activeMission = () => ({
+  scope: missionInput.scope,
+  policy: { publish: "allow_within_scope", delete: "confirm", payment: "confirm" },
+  validity: missionInput.validity,
+  status: "active",
+});
+const BOUND = "target-hash-aaa";
+
+test("REX P5a: nonpayment_v1 reobserves unknown surface in non-payment context (debt, not block); legacy stays blocked", () => {
+  const firewall = new EffectFirewall();
+  const mission = activeMission();
+  const v = firewall.classify({
+    declaredIntent: "tap", snapshot: freshSurface("unknown"), observedTargetFingerprint: BOUND,
+  }, mission, { policyMode: NONPAY_POLICY });
+  assert.equal(v.decision, "reobserve");
+  assert.equal(v.debt, true);
+
+  // legacy (explicit null) still blocked
+  assert.equal(firewall.classify({
+    declaredIntent: "tap", snapshot: freshSurface("unknown"), observedTargetFingerprint: BOUND,
+  }, mission, { policyMode: null }).decision, "blocked");
+  // no policyMode option = legacy
+  assert.equal(firewall.classify({
+    declaredIntent: "tap", snapshot: freshSurface("unknown"), observedTargetFingerprint: BOUND,
+  }, mission).decision, "blocked");
+});
+
+test("REX P5a: unknown surface adjacent to payment stays fail-closed under nonpayment_v1", () => {
+  const firewall = new EffectFirewall();
+  const mission = activeMission();
+  // explicit payment-context signal on the snapshot
+  assert.equal(firewall.classify({
+    declaredIntent: "tap", snapshot: freshSurface("unknown", { paymentContext: true }), observedTargetFingerprint: BOUND,
+  }, mission, { policyMode: NONPAY_POLICY }).decision, "blocked");
+  // financial keyword in snapshot text near the unknown surface
+  assert.equal(firewall.classify({
+    declaredIntent: "tap", snapshot: freshSurface("unknown", { text: "立即支付 确认付款" }), observedTargetFingerprint: BOUND,
+  }, mission, { policyMode: NONPAY_POLICY }).decision, "blocked");
+  // financialSignal flag
+  assert.equal(firewall.classify({
+    declaredIntent: "tap", snapshot: freshSurface("unknown", { financialSignal: true }), observedTargetFingerprint: BOUND,
+  }, mission, { policyMode: NONPAY_POLICY }).decision, "blocked");
+});
+
+test("REX P5a: nonpayment_v1 reobserves stale (has timestamps) snapshot; missing-timestamp stays fail-closed", () => {
+  const firewall = new EffectFirewall();
+  const mission = activeMission();
+  // stale but has timestamps -> reobserve + debt
+  const vStale = firewall.classify({
+    declaredIntent: "follow", snapshot: staleSurface("social-effect"), target: BOUND,
+  }, mission, { policyMode: NONPAY_POLICY });
+  assert.equal(vStale.decision, "reobserve");
+  assert.equal(vStale.debt, true);
+
+  // missing timestamp -> still blocked even under nonpayment_v1 (data contract violation)
+  const vMissing = firewall.classify({
+    declaredIntent: "follow", snapshot: { surface: "social-effect" }, target: BOUND,
+  }, mission, { policyMode: NONPAY_POLICY });
+  assert.equal(vMissing.decision, "blocked");
+  assert.equal(vMissing.reason, "SNAPSHOT_MISSING_TIMESTAMP");
+
+  // legacy stale -> blocked
+  assert.equal(firewall.classify({
+    declaredIntent: "follow", snapshot: staleSurface("social-effect"), target: BOUND,
+  }, mission, { policyMode: null }).decision, "blocked");
+});
+
+test("REX P5a: nonpayment_v1 reobserves intent mismatch (debt, not block); legacy stays blocked", () => {
+  const firewall = new EffectFirewall();
+  const mission = activeMission();
+  const v = firewall.classify({
+    declaredIntent: "navigate", snapshot: freshSurface("publish"), target: BOUND,
+  }, mission, { policyMode: NONPAY_POLICY });
+  assert.equal(v.decision, "reobserve");
+  assert.equal(v.debt, true);
+
+  assert.equal(firewall.classify({
+    declaredIntent: "navigate", snapshot: freshSurface("publish"), target: BOUND,
+  }, mission, { policyMode: null }).decision, "blocked");
+});
+
+test("REX P5a: payment/risk-control/login/captcha/publish/delete stay fail-closed under nonpayment_v1", () => {
+  const firewall = new EffectFirewall();
+  const mission = activeMission();
+  assert.equal(firewall.classify({ declaredIntent: "tap", snapshot: freshSurface("payment"), observedTargetFingerprint: BOUND }, mission, { policyMode: NONPAY_POLICY }).decision, "phc");
+  assert.equal(firewall.classify({ declaredIntent: "tap", snapshot: freshSurface("publish"), observedTargetFingerprint: BOUND }, mission, { policyMode: NONPAY_POLICY }).decision, "ecp");
+  assert.equal(firewall.classify({ declaredIntent: "tap", snapshot: freshSurface("delete"), observedTargetFingerprint: BOUND }, mission, { policyMode: NONPAY_POLICY }).decision, "phc");
+  for (const s of ["risk-control", "login", "captcha"]) {
+    assert.equal(
+      firewall.classify({ declaredIntent: "tap", snapshot: freshSurface(s), observedTargetFingerprint: BOUND }, mission, { policyMode: NONPAY_POLICY }).decision,
+      "blocked",
+      `${s} must stay fail-closed under nonpayment_v1`,
+    );
+  }
+});
+
+test("REX P5a: ControlPlane records evidence debt when a primitive reobserves under nonpayment_v1", async () => {
+  const fixture = await setupControl({ policyMode: NONPAY_POLICY });
+  try {
+    const run = fixture.control.openDeviceRun({ missionId: fixture.mission.missionId, controllerAgent: "agent:runner" });
+    const result = await fixture.control.executeMissionPrimitive(run.tuple, {
+      primitive: "tap",
+      envelope: { declaredIntent: "tap", snapshot: freshSurface("unknown"), observedTargetFingerprint: BOUND },
+    });
+    assert.equal(result.verdict.decision, "reobserve");
+    assert.equal(result.verdict.debt, true);
+    assert.ok(fixture.control.evidenceDebt.length >= 1, "ControlPlane must record an evidence_debt entry for the reobserve");
+    const entry = fixture.control.evidenceDebt.at(-1);
+    assert.equal(entry.kind, "firewall_reobserve");
+    assert.ok(entry.code && entry.surface === "unknown");
   } finally {
     await fixture.close();
   }
