@@ -147,6 +147,8 @@ export class ControlPlane {
     discoveryAdrPath = DEFAULT_ADR_0010_PATH,
     receiptAuthorityAllowlist = [],
     effectIntentSchema = EFFECT_INTENT_SCHEMA,
+    paymentApprovalVerifier = null,
+    now = Date.now,
   }) {
     this.state = state;
     this.capabilities = capabilities;
@@ -193,6 +195,13 @@ export class ControlPlane {
     this.discoveryAdrAcceptedOverride = discoveryAdrAccepted;
     this.discoveryAdrPath = discoveryAdrPath;
     this.effectIntentSchema = effectIntentSchema;
+    // REX Phase 2 收尾: payment control surface. The live prepared handle for a financial commit
+    // lives in a ProtectedHumanCommit instance's in-process Map; this index maps commitId -> the
+    // instance that owns the live handle so the decide API can route to it. Only a live handle can
+    // decide; a restart wipes this Map, so durable pending rows become un-decidable (recovered).
+    this.paymentApprovalVerifier = paymentApprovalVerifier;
+    this.paymentCommitOwners = new Map();
+    this.now = now;
     this.receiptAuthorityAllowlist = new Set((Array.isArray(receiptAuthorityAllowlist) ? receiptAuthorityAllowlist : [])
       .filter((item) => item && typeof item.capabilityId === "string" && typeof item.adapterId === "string")
       .map((item) => `${item.capabilityId}:${item.adapterId}`));
@@ -912,6 +921,97 @@ export class ControlPlane {
     const job = this.state.decideApproval(jobId, input);
     if (job.status === "queued") queueMicrotask(() => void this.pump());
     return job;
+  }
+
+  // REX Phase 2 收尾: payment control surface. list/decide operate on durable protected_commits
+  // rows + the in-process live handle index. The DTO returns only the redacted human-confirmation
+  // binding; it never exposes control tokens, internal tuples, adapter params or private keys.
+  listPaymentCommits() {
+    return this.state.listProtectedCommits({ action: "payment", status: "waiting_authorization" })
+      .map((row) => this.#publicPaymentCommit(row));
+  }
+
+  // The execution path (or a test) calls this after a financial_commit tripwire hold to register
+  // the live PHC handle that owns commitId. Only a registered live handle can be decided.
+  registerPaymentCommitOwner(commitId, phc) {
+    if (!commitId || !phc) throw new TypeError("commitId and phc are required");
+    this.paymentCommitOwners.set(commitId, phc);
+  }
+
+  // Convenience for the execution path / tests: create a payment PHC with this plane's verifier
+  // and state, begin a commit, and register its live handle. Returns the PHC begin() result.
+  async beginPaymentCommit(input, { ecp } = {}) {
+    if (!ecp) throw new TypeError("beginPaymentCommit requires an ecp");
+    const phc = new ProtectedHumanCommit({
+      ecp,
+      state: this.state,
+      approvalVerifier: this.paymentApprovalVerifier,
+      now: this.now,
+      audit: (event) => {
+        if (event?.missionId) {
+          this.state.appendMissionEvent({
+            missionId: event.missionId,
+            type: event.type,
+            payload: { commitId: event.commitId, action: event.action, actorId: event.actorId || null },
+          });
+        }
+      },
+    });
+    const begun = await phc.begin(input);
+    if (begun?.commitId) this.registerPaymentCommitOwner(begun.commitId, phc);
+    return begun;
+  }
+
+  async decidePaymentCommit(commitId, { decision, approval = null, actorId = null } = {}) {
+    if (!commitId) throw new ControlPlaneError("PAYMENT_COMMIT_REQUIRED", "commitId is required", { status: 400 });
+    if (!["approve", "deny"].includes(decision)) {
+      throw new ControlPlaneError("PAYMENT_COMMIT_DECISION_INVALID", "decision must be approve or deny", { status: 400 });
+    }
+    const owner = this.paymentCommitOwners.get(commitId);
+    if (!owner) {
+      const row = this.state.getProtectedCommit(commitId);
+      if (!row) {
+        throw new ControlPlaneError("PAYMENT_COMMIT_NOT_FOUND", `unknown payment commit ${commitId}`, { status: 404 });
+      }
+      // A durable row without a live handle means control was lost (e.g. restart). The human must
+      // re-observe and begin a new commit; the old row stays as a terminal audit record.
+      throw new ControlPlaneError(
+        row.status === "waiting_authorization" ? "PAYMENT_COMMIT_NOT_LIVE" : "PAYMENT_COMMIT_ALREADY_DECIDED",
+        row.status === "waiting_authorization"
+          ? "payment commit lost its live handle; re-observe and begin a new commit"
+          : `payment commit already ${row.status}`,
+        { status: 409 },
+      );
+    }
+    const result = await owner.decide(commitId, { decision, approval, actorId });
+    // Terminal decisions release the live handle; the durable audit row is retained by the PHC.
+    if (result?.status !== "waiting_authorization") this.paymentCommitOwners.delete(commitId);
+    return result;
+  }
+
+  #publicPaymentCommit(row) {
+    const binding = row.approvalBinding || null;
+    return {
+      commitId: row.commitId,
+      status: row.status,
+      action: row.action,
+      effectId: row.effectId,
+      expiresAt: row.expiresAt,
+      approvalBinding: binding ? {
+        runId: binding.runId,
+        effectId: binding.effectId,
+        app: binding.app,
+        accountRef: binding.accountRef,
+        payeeRef: binding.payeeRef,
+        amount: binding.amount,
+        currency: binding.currency,
+        targetControlFingerprint: binding.targetControlFingerprint,
+        snapshotHash: binding.snapshotHash,
+        deviceId: binding.deviceId,
+        createdAt: binding.createdAt,
+        expiresAt: binding.expiresAt,
+      } : null,
+    };
   }
 
   cancelJob(jobId) {

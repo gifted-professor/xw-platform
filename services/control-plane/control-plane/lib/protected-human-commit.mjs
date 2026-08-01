@@ -94,6 +94,8 @@ export class ProtectedHumanCommit {
         action: input.action,
         targetHash: targetFingerprint(input.target) || String(input.target ?? ""),
         status: "waiting_authorization",
+        approvalBinding,
+        expiresAt,
       });
     }
     this.audit({ type: "protected_human_commit.waiting_authorization", commitId, missionId: pending.missionId, action: input.action });
@@ -113,7 +115,7 @@ export class ProtectedHumanCommit {
     }
     if (this.now() >= Date.parse(pending.expiresAt)) {
       this.pending.delete(commitId);
-      if (this.state) this.state.removeProtectedCommit(commitId);
+      if (this.state) this.state.setProtectedCommitStatus(commitId, "expired");
       const result = typeof this.ecp.cancelPrepared === "function"
         ? await this.ecp.cancelPrepared(pending.prepared)
         : (await this.ecp.restore(pending.prepared), { status: "cancelled" });
@@ -129,12 +131,13 @@ export class ProtectedHumanCommit {
       verifiedActorId = verified.subject;
     }
     this.pending.delete(commitId);
-    if (this.state) this.state.removeProtectedCommit(commitId);
     if (decision === "approve") {
+      if (this.state) this.state.setProtectedCommitStatus(commitId, "approved");
       const result = await this.ecp.executePrepared(pending.prepared);
       this.audit({ type: "protected_human_commit.approved", commitId, missionId: pending.missionId, actorId: verifiedActorId, action: pending.action });
       return result;
     }
+    if (this.state) this.state.setProtectedCommitStatus(commitId, "denied");
     const result = typeof this.ecp.cancelPrepared === "function"
       ? await this.ecp.cancelPrepared(pending.prepared)
       : (await this.ecp.restore(pending.prepared), { status: "cancelled" });

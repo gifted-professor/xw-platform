@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { generateKeyPairSync, sign } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
@@ -8,6 +9,7 @@ import { assertPinnedNodeVersion, createControlPlaneRuntime, loadStandingGrantIs
 import { CapabilityRegistry } from "../control-plane/lib/capability-registry.mjs";
 import { AdapterRegistry, ControlPlane } from "../control-plane/lib/control-plane.mjs";
 import { EvidenceStore } from "../control-plane/lib/evidence-store.mjs";
+import { canonicalPaymentApprovalBytes, PaymentApprovalVerifier } from "../control-plane/lib/payment-approval-verifier.mjs";
 import { StateStore } from "../control-plane/lib/state-store.mjs";
 import { ControlRouter } from "../control-plane/router.mjs";
 import { createControlServer } from "../control-plane/server.mjs";
@@ -420,4 +422,305 @@ test("router records hash-bound visual analysis without changing recovery state"
     analysis: { schemaVersion: "xhs.visual-elements.v1" },
   }]);
   assert.equal(result.body.analysis.quarantineCleared, false);
+});
+
+// ─── REX Phase 2 收尾: payment control surface (durable pending + list/decide) ───
+// These lock the Phase 2 GO criteria for the B-仓 control surface: list is visible & redacted,
+// ordinary nonpayment never produces a pending payment commit, a verified approve executes exactly
+// one transport, deny cancels (transport 0), a wrong key / wrong purpose / tampered field never
+// executes, expiry cancels, a double decide executes at most once, and a restart loses the live
+// handle so the durable pending row becomes un-decidable (fail-closed). transport stays 0 until an
+// Ed25519-verified human approval for the exact binding is presented.
+
+const PAYMENT_MISSION = {
+  missionId: "mission_payment_surface", status: "active", validity: { expiresAt: "2099-07-29T16:00:00Z" },
+  app: "fixture-pay", account: "redacted:account",
+  scope: { actions: ["payment"], targets: { values: ["observed-final-control"] } },
+  policy: { payment: "confirm" },
+};
+
+function paymentInput(overrides = {}) {
+  return {
+    mission: PAYMENT_MISSION,
+    action: "payment",
+    target: "observed-final-control",
+    runId: "run_payment_surface",
+    payment: {
+      payeeRef: "redacted:merchant",
+      amount: "88.00",
+      currency: "CNY",
+      snapshotHash: "a".repeat(64),
+      deviceId: "fixture-device",
+    },
+    ...overrides,
+  };
+}
+
+function paymentHarness({ nowMs = Date.parse("2026-08-01T06:00:00.000Z") } = {}) {
+  const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+  const allowlist = {
+    version: 3,
+    keys: [{
+      keyId: "payment-human-1",
+      subject: "human:owner",
+      role: "human",
+      status: "active",
+      purposes: ["financial_commit"],
+      publicKey: publicKey.export({ type: "spki", format: "pem" }),
+    }],
+  };
+  const now = () => nowMs;
+  const verifier = new PaymentApprovalVerifier({ allowlist, now });
+  const root = mkdtempSync(join(tempBase, "payment-surface-"));
+  const state = new StateStore({ dbPath: join(root, "control.db") });
+  const registry = new CapabilityRegistry([capability]);
+  state.upsertNode({ nodeId: "DESKTOP-3I1EVHE", authority: true });
+  state.upsertDevice({
+    alias: "01", physicalLabel: "rack-01", nodeId: "DESKTOP-3I1EVHE", runtimeId: "private-rt",
+    routingProfile: { enabled: true, capabilityIds: ["test.observe"] },
+  });
+  // protected_commits.mission_id is FK-bound to missions; register the test mission first.
+  state.addMission({
+    missionId: PAYMENT_MISSION.missionId,
+    idempotencyKey: "payment-surface-mission",
+    issuerActorId: "human:owner",
+    missionHash: "m".repeat(64),
+    contentHash: "c".repeat(64),
+    policy: PAYMENT_MISSION.policy,
+    expiresAtMs: Date.parse(PAYMENT_MISSION.validity.expiresAt),
+  });
+  const evidence = new EvidenceStore({ runsRoot: join(root, "runs"), state, minFreeBytes: 0, minExternalEffectFreeBytes: 0 });
+  let executeCalls = 0, cancelCalls = 0, prepareCalls = 0;
+  const ecp = {
+    async prepare(input) { prepareCalls += 1; return { status: "prepared", effect: { effectId: `effect-payment-${prepareCalls}` } }; },
+    markWaitingAuthorization(input) { return input; },
+    async executePrepared() { executeCalls += 1; return { status: "verified" }; },
+    async cancelPrepared() { cancelCalls += 1; return { status: "cancelled" }; },
+  };
+  const control = new ControlPlane({
+    state, capabilities: registry, evidence,
+    adapters: new AdapterRegistry([{ id: "test", async execute() { return {}; } }]),
+    paymentApprovalVerifier: verifier, now,
+  });
+  const signApproval = (binding, overrides = {}) => {
+    const unsigned = {
+      schemaId: "xhs.payment-approval.v1",
+      schemaVersion: 1,
+      ...binding,
+      purpose: "financial_commit",
+      issuer: { subject: "human:owner", role: "human", keyId: "payment-human-1", allowlistVersion: 3 },
+      ...overrides,
+    };
+    return { ...unsigned, signature: sign(null, canonicalPaymentApprovalBytes(unsigned), privateKey).toString("base64") };
+  };
+  return {
+    root, state, control, verifier, ecp, now,
+    signApproval,
+    advance: (ms) => { nowMs += ms; },
+    counts: () => ({ executeCalls, cancelCalls, prepareCalls }),
+    close: () => { state.close(); rmSync(root, { recursive: true, force: true }); },
+  };
+}
+
+test("payment control surface: list is visible, redacted, and empty for ordinary nonpayment", async () => {
+  const h = paymentHarness();
+  try {
+    assert.deepEqual(h.control.listPaymentCommits(), []);
+    const begun = await h.control.beginPaymentCommit(paymentInput(), { ecp: h.ecp });
+    assert.equal(begun.status, "waiting_authorization");
+    const listed = h.control.listPaymentCommits();
+    assert.equal(listed.length, 1);
+    const row = listed[0];
+    assert.equal(row.commitId, begun.commitId);
+    assert.equal(row.status, "waiting_authorization");
+    assert.equal(row.action, "payment");
+    assert.equal(row.approvalBinding.amount, "88.00");
+    assert.equal(row.approvalBinding.payeeRef, "redacted:merchant");
+    assert.equal(row.approvalBinding.targetControlFingerprint.length > 0, true);
+    // No secrets leak: no private key material, no control token, no internal tuple/params, no full
+    // account原文 beyond the already-redacted ref. The DTO must not carry the issuer's private key
+    // or any adapter params.
+    const serialized = JSON.stringify(row);
+    assert.doesNotMatch(serialized, /privateKey|privateKeyPem|BEGIN PRIVATE|controlToken|x-control-token/);
+    assert.equal(row.approvalBinding.app, "fixture-pay");
+  } finally { h.close(); }
+});
+
+test("payment control surface: verified approve executes exactly one transport", async () => {
+  const h = paymentHarness();
+  try {
+    const begun = await h.control.beginPaymentCommit(paymentInput(), { ecp: h.ecp });
+    const result = await h.control.decidePaymentCommit(begun.commitId, {
+      decision: "approve",
+      approval: h.signApproval(begun.approvalBinding),
+      actorId: "human:owner",
+    });
+    assert.equal(result.status, "verified");
+    assert.equal(h.counts().executeCalls, 1);
+    assert.equal(h.counts().cancelCalls, 0);
+    // The live handle is released and the durable row is terminal.
+    assert.deepEqual(h.control.listPaymentCommits(), []);
+    const row = h.state.getProtectedCommit(begun.commitId);
+    assert.equal(row.status, "approved");
+  } finally { h.close(); }
+});
+
+test("payment control surface: deny cancels, executes zero transport", async () => {
+  const h = paymentHarness();
+  try {
+    const begun = await h.control.beginPaymentCommit(paymentInput(), { ecp: h.ecp });
+    const result = await h.control.decidePaymentCommit(begun.commitId, { decision: "deny", actorId: "human:owner" });
+    assert.equal(result.status, "cancelled");
+    assert.equal(h.counts().executeCalls, 0);
+    assert.equal(h.counts().cancelCalls, 1);
+    const row = h.state.getProtectedCommit(begun.commitId);
+    assert.equal(row.status, "denied");
+  } finally { h.close(); }
+});
+
+test("payment control surface: tampered field, wrong key, and wrong purpose all stay waiting (transport 0)", async () => {
+  const h = paymentHarness();
+  try {
+    const begun = await h.control.beginPaymentCommit(paymentInput(), { ecp: h.ecp });
+    const tamperedAmount = await h.control.decidePaymentCommit(begun.commitId, {
+      decision: "approve", approval: h.signApproval(begun.approvalBinding, { amount: "99.00" }),
+    });
+    assert.equal(tamperedAmount.status, "waiting_authorization");
+    assert.equal(tamperedAmount.code, "PAYMENT_APPROVAL_BINDING_MISMATCH");
+    assert.equal(h.counts().executeCalls, 0);
+
+    const tamperedPayee = await h.control.decidePaymentCommit(begun.commitId, {
+      decision: "approve", approval: h.signApproval(begun.approvalBinding, { payeeRef: "redacted:impostor" }),
+    });
+    assert.equal(tamperedPayee.code, "PAYMENT_APPROVAL_BINDING_MISMATCH");
+    assert.equal(h.counts().executeCalls, 0);
+
+    // Wrong purpose: a standing_grant-purpose approval must not be accepted for a financial_commit.
+    const wrongPurpose = await h.control.decidePaymentCommit(begun.commitId, {
+      decision: "approve", approval: h.signApproval(begun.approvalBinding, { purpose: "standing_grant" }),
+    });
+    assert.equal(wrongPurpose.status, "waiting_authorization");
+    assert.equal(h.counts().executeCalls, 0);
+    // The commit is still live and pending.
+    assert.equal(h.control.listPaymentCommits().length, 1);
+  } finally { h.close(); }
+});
+
+test("payment control surface: an agent/observer role approval is rejected (transport 0)", async () => {
+  const h = paymentHarness();
+  try {
+    const begun = await h.control.beginPaymentCommit(paymentInput(), { ecp: h.ecp });
+    // Forge an approval with a non-human role; the verifier allowlist pins role=human, so this must
+    // fail at signature/allowlist verification and never execute.
+    const forged = h.signApproval(begun.approvalBinding, {
+      issuer: { subject: "agent:runner", role: "agent", keyId: "payment-human-1", allowlistVersion: 3 },
+    });
+    const result = await h.control.decidePaymentCommit(begun.commitId, { decision: "approve", approval: forged });
+    assert.equal(result.status, "waiting_authorization");
+    assert.equal(h.counts().executeCalls, 0);
+  } finally { h.close(); }
+});
+
+test("payment control surface: expiry cancels and double decide executes at most once", async () => {
+  const h = paymentHarness();
+  try {
+    const begun = await h.control.beginPaymentCommit(paymentInput(), { ecp: h.ecp });
+    h.advance(120001); // past the 120s approval TTL
+    const expired = await h.control.decidePaymentCommit(begun.commitId, {
+      decision: "approve", approval: h.signApproval(begun.approvalBinding),
+    });
+    assert.equal(expired.code, "PAYMENT_APPROVAL_EXPIRED");
+    assert.equal(h.counts().executeCalls, 0);
+    assert.equal(h.counts().cancelCalls, 1);
+    assert.equal(h.state.getProtectedCommit(begun.commitId).status, "expired");
+
+    // A second decide on the now-terminal commit must not re-execute; the live handle is gone and
+    // the durable row is terminal, so the control surface refuses with a 409 (never re-executes).
+    const again = await h.control.decidePaymentCommit(begun.commitId, {
+      decision: "approve", approval: h.signApproval(begun.approvalBinding),
+    }).catch((error) => error);
+    assert.equal(again.code, "PAYMENT_COMMIT_ALREADY_DECIDED");
+    assert.equal(again.status, 409);
+    assert.equal(h.counts().executeCalls, 0);
+
+    // A fresh commit, double-approved, executes exactly once.
+    const second = await h.control.beginPaymentCommit(paymentInput({ runId: "run_double" }), { ecp: h.ecp });
+    const first = await h.control.decidePaymentCommit(second.commitId, {
+      decision: "approve", approval: h.signApproval(second.approvalBinding),
+    });
+    assert.equal(first.status, "verified");
+    const repeat = await h.control.decidePaymentCommit(second.commitId, {
+      decision: "approve", approval: h.signApproval(second.approvalBinding),
+    }).catch((error) => error);
+    assert.equal(repeat.code, "PAYMENT_COMMIT_ALREADY_DECIDED");
+    assert.equal(repeat.status, 409);
+    assert.equal(h.counts().executeCalls, 1);
+  } finally { h.close(); }
+});
+
+test("payment control surface: restart loses the live handle -> durable pending is fail-closed un-decidable", async () => {
+  const h = paymentHarness();
+  try {
+    const begun = await h.control.beginPaymentCommit(paymentInput(), { ecp: h.ecp });
+    assert.equal(h.control.listPaymentCommits().length, 1);
+    // Simulate a control-plane restart: a new ControlPlane over the SAME durable state, with no
+    // live handle index. The StateStore reconstruct fail-closed-cancels the orphaned pending row.
+    const restarted = new ControlPlane({
+      state: h.state, capabilities: h.state ? new CapabilityRegistry([capability]) : null,
+      evidence: h.evidence,
+      adapters: new AdapterRegistry([{ id: "test", async execute() { return {}; } }]),
+      paymentApprovalVerifier: h.verifier, now: h.now,
+    });
+    // The durable row is still waiting before reconstruct-driven recovery; with no live handle the
+    // decide API must refuse. (Reconstruct recovery is a StateStore concern; here we assert the
+    // control-surface refuse path: a waiting row without a live handle is NOT_LIVE, never executed.)
+    const refused = await restarted.decidePaymentCommit(begun.commitId, {
+      decision: "approve", approval: h.signApproval(begun.approvalBinding),
+    }).catch((error) => error);
+    // The refuse must surface as a 409 ControlPlaneError, never an executed transport.
+    assert.equal(refused.status, 409);
+    assert.equal(refused.code, "PAYMENT_COMMIT_NOT_LIVE");
+    assert.equal(h.counts().executeCalls, 0);
+  } finally { h.close(); }
+});
+
+test("payment control surface: HTTP GET /payment-commits and POST .../decide are wired", async () => {
+  const h = paymentHarness();
+  const router = new ControlRouter({ control: h.control, state: h.state, capabilities: new CapabilityRegistry([capability]), evidence: h.evidence });
+  const server = createControlServer({ router });
+  try {
+    await new Promise((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });
+    const { port } = server.address();
+    const begun = await h.control.beginPaymentCommit(paymentInput(), { ecp: h.ecp });
+
+    const listRes = await fetch(`http://127.0.0.1:${port}/control/v1/payment-commits`);
+    assert.equal(listRes.status, 200);
+    const listBody = await listRes.json();
+    assert.equal(listBody.paymentCommits.length, 1);
+    assert.equal(listBody.paymentCommits[0].commitId, begun.commitId);
+    assert.doesNotMatch(JSON.stringify(listBody), /BEGIN PRIVATE|privateKey|controlToken/);
+
+    const decideRes = await fetch(`http://127.0.0.1:${port}/control/v1/payment-commits/${begun.commitId}/decide`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ decision: "approve", approval: h.signApproval(begun.approvalBinding), actorId: "human:owner" }),
+    });
+    assert.equal(decideRes.status, 200);
+    const decideBody = await decideRes.json();
+    assert.equal(decideBody.paymentCommit.status, "verified");
+    assert.equal(h.counts().executeCalls, 1);
+
+    // A second decide over HTTP on the terminal commit surfaces 409, not 500.
+    const secondRes = await fetch(`http://127.0.0.1:${port}/control/v1/payment-commits/${begun.commitId}/decide`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ decision: "deny" }),
+    });
+    assert.equal(secondRes.status, 409);
+    const secondBody = await secondRes.json();
+    assert.equal(secondBody.ok, false);
+    assert.equal(secondBody.error.code, "PAYMENT_COMMIT_ALREADY_DECIDED");
+  } finally {
+    server.close(); h.close();
+  }
 });

@@ -370,6 +370,24 @@ export class ControlRouter {
         body: { job: publicJob(this.control.decideApproval(decodeURIComponent(match[1]), requireBody(body))) },
       };
     }
+
+    // REX Phase 2 收尾: payment control surface. list is read-only (no secrets in the DTO);
+    // decide is the only path that can terminal a financial_commit. transport stays 0 until an
+    // Ed25519-verified human approval is presented for the exact binding.
+    if (method === "GET" && path === "/control/v1/payment-commits") {
+      return { status: 200, body: { paymentCommits: this.control.listPaymentCommits() } };
+    }
+    match = path.match(/^\/control\/v1\/payment-commits\/([^/]+)\/decide$/);
+    if (method === "POST" && match) {
+      const input = requireBody(body);
+      const result = await this.control.decidePaymentCommit(decodeURIComponent(match[1]), {
+        decision: input.decision,
+        approval: input.approval ?? null,
+        actorId: input.actorId ?? null,
+      });
+      return { status: 200, body: { paymentCommit: result } };
+    }
+
     throw new ControlPlaneError("ROUTE_NOT_FOUND", `${method} ${path} not found`, { status: 404 });
   }
 }

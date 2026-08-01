@@ -504,8 +504,14 @@ export class StateStore {
     this.#ensureColumn("explicit_observation_receipts", "source_run_id", "TEXT");
     this.#ensureColumn("explicit_observation_receipts", "source_adapter_id", "TEXT");
     this.#ensureColumn("explicit_observation_receipts", "source_capability_id", "TEXT");
+    // REX Phase 2 收尾: payment pending must be durable and retain its audit row across the
+    // terminal decision instead of being deleted. The binding is the redacted human-confirmation
+    // payload; expires_at is the INTEGER ms deadline used by restart recovery.
+    this.#ensureColumn("protected_commits", "approval_binding_json", "TEXT");
+    this.#ensureColumn("protected_commits", "expires_at", "INTEGER");
+    this.db.exec("CREATE INDEX IF NOT EXISTS protected_commits_action_idx ON protected_commits(action, status)");
     this.db.exec("CREATE INDEX IF NOT EXISTS missions_parent_grant_idx ON missions(parent_grant_id, status)");
-    this.db.exec("PRAGMA user_version = 11;");
+    this.db.exec("PRAGMA user_version = 12;");
   }
 
   #ensureColumn(table, column, definition) {
@@ -2011,15 +2017,21 @@ export class StateStore {
   // than living only in a process-local Map. Control-plane restart cannot resume a pending human
   // commit (the device control tuple was lost), so recovery cancels it fail-closed; the durable
   // row remains the audit record until then.
-  addProtectedCommit({ commitId, missionId, effectId, action, targetHash, status = "waiting_authorization" }) {
+  addProtectedCommit({
+    commitId, missionId, effectId, action, targetHash,
+    status = "waiting_authorization", approvalBinding = null, expiresAt = null,
+  }) {
     if (!commitId || !missionId || !effectId || !action || !targetHash) {
       throw new TypeError("commitId, missionId, effectId, action, targetHash are required");
     }
     const now = this.now();
+    const bindingJson = approvalBinding ? canonicalJson(approvalBinding) : null;
+    const expiresMs = expiresAt ? Date.parse(expiresAt) : null;
     this.db.prepare(`
-      INSERT INTO protected_commits (commit_id, mission_id, effect_id, action, target_hash, status, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(commitId, missionId, effectId, action, targetHash, status, now, now);
+      INSERT INTO protected_commits
+        (commit_id, mission_id, effect_id, action, target_hash, status, created_at, updated_at, approval_binding_json, expires_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(commitId, missionId, effectId, action, targetHash, status, now, now, bindingJson, expiresMs);
     return this.getProtectedCommit(commitId);
   }
 
@@ -2029,15 +2041,27 @@ export class StateStore {
     return this.#publicProtectedCommit(row);
   }
 
-  listProtectedCommits({ missionId = null, status = null } = {}) {
+  listProtectedCommits({ missionId = null, status = null, action = null } = {}) {
     let sql = "SELECT * FROM protected_commits";
     const conditions = [];
     const params = [];
     if (missionId) { conditions.push("mission_id=?"); params.push(missionId); }
     if (status) { conditions.push("status=?"); params.push(status); }
+    if (action) { conditions.push("action=?"); params.push(action); }
     if (conditions.length) sql += ` WHERE ${conditions.join(" AND ")}`;
     sql += " ORDER BY created_at";
     return this.db.prepare(sql).all(...params).map((row) => this.#publicProtectedCommit(row));
+  }
+
+  // REX Phase 2 收尾: terminal decisions retain the audit row instead of deleting it. The live
+  // prepared handle is gone either way; the durable row stays as the auditable record of the
+  // human's per-commit decision (approved/denied/expired/recovered_cancelled).
+  setProtectedCommitStatus(commitId, status) {
+    const now = this.now();
+    this.db.prepare(
+      "UPDATE protected_commits SET status=?, updated_at=? WHERE commit_id=?",
+    ).run(status, now, commitId);
+    return this.getProtectedCommit(commitId);
   }
 
   removeProtectedCommit(commitId) {
@@ -2054,6 +2078,8 @@ export class StateStore {
       status: row.status,
       createdAt: iso(row.created_at),
       updatedAt: iso(row.updated_at),
+      expiresAt: row.expires_at != null ? iso(row.expires_at) : null,
+      approvalBinding: parseJson(row.approval_binding_json, null),
     };
   }
 
