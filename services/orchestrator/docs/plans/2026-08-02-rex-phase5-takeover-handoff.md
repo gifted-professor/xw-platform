@@ -36,6 +36,8 @@ npm run check   # node --check 三个 .mjs
 
 | commit | 项 | 摘要 |
 |---|---|---|
+| `8ec7105` | §8.4 B3 | **mission-policy action/target 软预算**（P5b）：`evaluateMissionEffect` 加 `policyMode`，nonpayment_v1 下出 scope 非支付 action/target 从 scope_violation 改软 ecp+debt；firewall 传播 debt、ECP/ledger/state-store `softScope` 透传（soft 出 scope 成 durable 软预算预留不抛）；legacy 逐字节不变，payment 永 phc。红灯 3 测。 |
+| `16ce175` | §8.4 B3 | **ECP recordEvidence 失败→debt**（P5b）：`recordEvidence` 此前未 await 且无守卫（同步抛错覆盖 verified→ambiguous、异步 reject 变 unhandledRejection）。现在总是 await，`debtSink` 存在时记 `ecp_evidence_failed` debt 并保留 verified；无 debtSink rethrow（legacy 降级 ambiguous 不变）。红灯 2 测。 |
 | `afe3ca6` | §8.4 B5 | adapter `execute`/`verify`/`restore` + recoverJob restore + inspectRecovery 统一收到 `effect`/`payment`/`debt` context。`#adapterEffectContext(job,cap,financialCommit)` helper：`guardFinancialCommit` 结果（此前被丢弃）现注入 adapter。forward-compatible。红灯 2 测。 |
 | `4be2307` | §8.4 #1 深层 | `EvidenceStore.writeJson`/`attachFile` 写失败 → debt（nonpayment_v1）+ stub record `{debt:true,evidenceId:null,sha256:null,path:null,bytes:0}` 不抛；legacy rethrows fail-closed。**§8.4 #1 证据写链全覆盖**：appendEvent/initializeRun(manifest)/writeJson/attachFile 四类。红灯 4 + 1 集成。 |
 | `4c0c0a6` | §8.1 #4 | `ControlPlane.start` pump 前调 `migrateLegacyPending()`；`#isPaymentLikeJob`（`ambiguous_on_timeout` 或 cap id 命中 `/pay\|payment\|financial\|checkout\|recharge\|transfer\|wallet\|redpacket\|topup\|deposit/i`，歧义归 payment-like）；`onMigrated→#initializeMigratedRun` 为 fresh queued job 补建 evidence run 目录（不补建则 pump 派发时 writeJson ENOENT）。红灯 2 ControlPlane 集成。 |
@@ -74,14 +76,14 @@ A 仓提交：仅文档（`8abf108`/`6f3238d`/`b65bb45`/`5f03664`/`ded25da`/`1a8
 4. 一次一个 commit，message 写清红线保留点。
 5. 触支付相邻逻辑时，逐个确认 `payment-tripwire`/`effect-commit-protocol` 相关测试仍绿。
 
-**白名单**：`control-plane/lib/effect-firewall.mjs` + `tests/*` 在白名单内。若发现必须改白名单外文件（如 `mission-policy.mjs`、`capability-registry.mjs`），**立即停止，只提交计划增补给用户，不能偷偷扩大范围**。
+**白名单**：`mission-policy.mjs` / `state-store.mjs` / `effect-ledger.mjs` / `effect-firewall.mjs` / `effect-commit-protocol.mjs` / `control-plane.mjs` + `tests/*` 均在 B 白名单内（2026-08-02 已实改验证）。`capability-registry.mjs` / `mission-runtime.mjs` 也在白名单。真正白名单外的（如 `apps/*/capabilities.json` 的 effectClass、`delegation-grant` schema）仍不可改。
 
 ## 6. 其余 Phase 5 未完（按计划顺序，都在 §8.2 NO-GO 红区）
 
-- **B3-deep 余项**：
-  - `mission-policy.mjs`：action/target/count/frequency/expiry 从权限门降为上下文/软预算；payment 永远 PHC。
+- **B3-deep 余项（已做 2/4）**：
+  - ✅ `mission-policy.mjs`（B `8ec7105`）：action/target 从权限门降为软预算（nonpayment_v1 下出 scope 非支付 → 软 ecp+debt）；payment 永远 PHC。count/frequency/expiry 软预算（state-store BUDGET_* + requireActiveMission）尚未做，属后续 commit。
+  - ✅ `effect-commit-protocol.mjs`（B `16ce175`）：`recordEvidence` 已做 debt 化改造（debtSink 记 ecp_evidence_failed，legacy 降级 ambiguous 不变）。**注意——recordEvidence 在生产接线仍未传**（`control-plane.mjs` `createEffectCommitProtocol` 只传 state/ledger/deviceRuns/missions/evidence + handlers），是 test-only/前瞻路径；线 833「非支付证据写失败继续」要等真接进生产才有实际意义。现改造已保证未来接上即安全。
   - `delegation-grant-policy.mjs` / `delegation-grant-runtime.mjs`：grant 退热路径成可选 provenance/revocation metadata；parent grant 缺失/过期不阻断非支付，记 provenance debt。
-  - `effect-commit-protocol.mjs`：**注意——`recordEvidence` 当前在生产接线（`control-plane.mjs:789` 的 `createEffectCommitProtocol`）未传，是 test-only/前瞻路径**。线 833「非支付证据写失败继续」要等 recordEvidence 真接进生产才有意义；现在做价值低。接手时先确认是否已接进再决定。
   - `effect-firewall.mjs` surface 拆 financial observe/prepare/candidate/commit（refinement，`payment` surface 已存在）。
 - **B6**：`scripts/vision-safety.mjs` 删 publish/send/order/buy/follow blanket 禁词 → 目标控件级 financial-commit 正向识别（接 `classifyFinancialCommit`）；`prompts/xhs-page-classifier.txt` 四级 financial 类别；`scripts/gateway-operator.mjs`/`xiaowei-http-adapter.mjs`/`fast-operator.mjs`/`greenarrow-api.mjs`/`task-runner.mjs`/`xianyu-operator.mjs`/`xhs-watcher.mjs`/`xhs-watcher-launch.ps1` 统一 protected input + run/lease/effect context。
 - **B5 余**：5 个 `apps/*/adapter.mjs` 当前只解构既有字段，新 effect/payment/debt 字段已可用；若某 adapter 要用 effect/payment/debt 决策行为，再按需读。`apps/*/capabilities.json` 不能加 `effectClass` 字段（`capability-registry.mjs` 不在白名单，`ALLOWED_FIELDS` 会拒）。
