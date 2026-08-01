@@ -55,7 +55,7 @@ async function until(predicate, timeoutMs = 2000) {
   }
 }
 
-function fixture({ capabilities, adapter, policyMode = null }) {
+function fixture({ capabilities, adapter, policyMode = null, evidenceOpts = {} }) {
   const root = mkdtempSync(join(tempBase, "core-test-"));
   const state = new StateStore({ dbPath: join(root, "control.db") });
   const registry = new CapabilityRegistry(capabilities);
@@ -72,6 +72,7 @@ function fixture({ capabilities, adapter, policyMode = null }) {
     state,
     minFreeBytes: 0,
     minExternalEffectFreeBytes: 0,
+    ...evidenceOpts,
   });
   const control = new ControlPlane({
     state,
@@ -409,6 +410,87 @@ test("nonpayment_v1: non-payment external effect dispatches without approval", a
     assert.ok(executions >= 1, "nonpayment_v1: external effect executed without approval");
   } finally {
     await f.close();
+  }
+});
+
+// ─── REX Phase 5 §8.4：evidence 容量失败对非支付走 debt，不阻断派发 ───
+//
+// nonpayment_v1 active + 强制低盘（minFreeBytes=MAX_SAFE_INTEGER → freeBytes<required）。
+// submitJob 一个非支付 external-effect capability：必须进 queued、不抛 EVIDENCE_DISK_LOW、
+// adapter 自动执行（liveness），且 control.evidenceDebt 记录 EVIDENCE_DISK_LOW 债。
+// legacy（policyMode=null）下同样低盘仍 fail-closed 抛错（下方对照测试）。
+
+test("nonpayment_v1: non-payment submitJob records evidence debt instead of blocking on low disk", async () => {
+  let executions = 0;
+  const adapter = {
+    id: "test",
+    async execute() { executions += 1; return { vendorCode: 0 }; },
+    async verify() { return { ok: true, mode: "custom" }; },
+    async restore() { return { ok: true }; },
+  };
+  const external = manifest("test.external.debt", {
+    risk: "R2",
+    idempotency: "external_effect",
+    automationPolicy: { mode: "approval_required" },
+  });
+  const f = fixture({
+    capabilities: [external],
+    adapter,
+    policyMode: { active: true, mode: "nonpayment_v1", effectiveDecisionSource: "deployed-runtime" },
+    evidenceOpts: { minFreeBytes: Number.MAX_SAFE_INTEGER, minExternalEffectFreeBytes: Number.MAX_SAFE_INTEGER },
+  });
+  try {
+    const submitted = f.control.submitJob({
+      idempotencyKey: "external-debt",
+      actorId: "agent-a",
+      deviceId: f.devices[0].deviceId,
+      capabilityId: external.id,
+      params: {},
+    }).job;
+    assert.notEqual(submitted.status, "waiting_approval", "must not wait for approval");
+    assert.equal(submitted.status, "queued", "nonpayment_v1: low-disk non-payment job still queues (debt, not block)");
+    assert.ok(f.control.evidenceDebt.length >= 1, "evidenceDebt must record the low-disk debt");
+    assert.equal(f.control.evidenceDebt[0].code, "EVIDENCE_DISK_LOW");
+    assert.equal(f.control.evidenceDebt[0].externalEffect, true);
+    await f.control.waitForJob(submitted.jobId);
+    assert.ok(executions >= 1, "nonpayment_v1: low-disk non-payment job still dispatches (liveness)");
+  } finally {
+    await f.close();
+  }
+});
+
+test("legacy: low-disk submitJob stays fail-closed (EVIDENCE_DISK_LOW) — payment path preserved", () => {
+  const adapter = {
+    id: "test",
+    async execute() { return { vendorCode: 0 }; },
+    async verify() { return { ok: true, mode: "custom" }; },
+    async restore() { return { ok: true }; },
+  };
+  const external = manifest("test.external.legacydisk", {
+    risk: "R2",
+    idempotency: "external_effect",
+    automationPolicy: { mode: "approval_required" },
+  });
+  const f = fixture({
+    capabilities: [external],
+    adapter,
+    policyMode: null,
+    evidenceOpts: { minFreeBytes: Number.MAX_SAFE_INTEGER, minExternalEffectFreeBytes: Number.MAX_SAFE_INTEGER },
+  });
+  try {
+    assert.throws(
+      () => f.control.submitJob({
+        idempotencyKey: "legacy-disk",
+        actorId: "agent-a",
+        deviceId: f.devices[0].deviceId,
+        capabilityId: external.id,
+        params: {},
+      }),
+      { code: "EVIDENCE_DISK_LOW" },
+    );
+    assert.equal(f.control.evidenceDebt.length, 0, "legacy must not record debt on low disk");
+  } finally {
+    f.close();
   }
 });
 

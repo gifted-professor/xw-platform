@@ -161,6 +161,12 @@ export class ControlPlane {
     // 默认 null = legacy，旧行为全保留，既有测试不破。active（fake adapter）时，
     // evaluateCapabilityPolicy 对非支付 capability 不再 approvalRequired（非支付一律自由）。
     this.policyMode = policyMode;
+    // REX Phase 5 §8.4：非支付 evidence 容量失败走 debt 旁路。policyMode.active 时，
+    // assertCapacity 热路径传 debtOnLowDisk=true + debtSink 记录到 this.evidenceDebt；
+    // 资金最终提交走单独 PHC 流，不经此 submitJob 热路径，故 nonpayment_v1 下 submitJob
+    // 容量失败恒为 debt 而非 block。默认 null/legacy 时 debtOnLowDisk=false，fail-closed 不变。
+    this.evidenceDebt = [];
+    this.debtOnLowDisk = policyMode && policyMode.active === true;
     this.operatorControlUrl = operatorControlUrl;
     this.transportStatus = transportStatus;
     this.schedulerIntervalMs = schedulerIntervalMs;
@@ -230,6 +236,25 @@ export class ControlPlane {
       dispatchMode: "local",
     });
     state.syncCapabilities(capabilities);
+  }
+
+  // REX Phase 5 §8.4：构造 assertCapacity 选项。policyMode.active（nonpayment_v1，
+  // fake adapter）时传 debtOnLowDisk=true + debtSink 记 evidenceDebt；否则 legacy fail-closed。
+  // 资金最终提交走单独 PHC 流，不经 submitJob/session 热路径，故 nonpayment_v1 下容量失败
+  // 恒为 debt 而非 block。legacy（debtOnLowDisk=false）行为与旧版完全一致。
+  capacityOpts(externalEffect) {
+    return {
+      externalEffect,
+      debtOnLowDisk: this.debtOnLowDisk,
+      debtSink: this.debtOnLowDisk ? (entry) => this.evidenceDebt.push(entry) : null,
+    };
+  }
+
+  // 提交前预检：nonpayment_v1 下只解除 fail-closed 抛错（debtOnLowDisk 但无 debtSink，
+  // 不重复记 debt），由后续 initializeRun 做唯一一次 debt 记录。legacy 下 debtOnLowDisk=false，
+  // 仍 fail-closed 抛 EVIDENCE_DISK_LOW（与旧版一致）。
+  capacityBypassOpts(externalEffect) {
+    return { externalEffect, debtOnLowDisk: this.debtOnLowDisk, debtSink: null };
   }
 
   start() {
@@ -366,7 +391,7 @@ export class ControlPlane {
     if (this.activeJobs.has(session.deviceId)) {
       throw new ControlPlaneError("DEVICE_BUSY", "Discovery device already has an action in progress", { status: 423 });
     }
-    this.evidence.assertCapacity({ externalEffect: false });
+    this.evidence.assertCapacity(this.capacityBypassOpts(false));
     const created = this.state.createJob({
       idempotencyKey: `discovery:${reservationId}`,
       actorId: session.actorId,
@@ -383,7 +408,7 @@ export class ControlPlane {
     }
     this.state.bindDiscoveryReservationJob({ discoveryRunId, reservationId, tuple, job: created.job, gates: this.discoverySessions.gates() });
     const device = this.state.requireDevice(session.deviceId);
-    this.evidence.initializeRun({ job: created.job, device });
+    this.evidence.initializeRun({ job: created.job, device, ...this.capacityOpts(false) });
     let receipt = null;
     const promise = this.#runJob(created.job, {
       lease: { leaseId: session.leaseId, token }, releaseLease: false,
@@ -670,7 +695,7 @@ export class ControlPlane {
         deviceId: run.deviceId, placement: {}, capability: observeCapability, params: {}, canary: true,
         sessionId: run.sessionId, status: "queued", approvalRequired: false, externalEffect: false,
       });
-      if (!observeCreated.reused) this.evidence.initializeRun({ job: observeCreated.job, device });
+      if (!observeCreated.reused) this.evidence.initializeRun({ job: observeCreated.job, device, ...this.capacityOpts(false) });
       const observationJob = observeCreated.reused ? observeCreated.job : await this.#runJob(observeCreated.job, { lease: { leaseId: run.leaseId, token: run.token }, releaseLease: false });
       if (observationJob.status !== "succeeded") throw new ControlPlaneError("CANARY_OBSERVATION_FAILED", "in-Mission note re-observation failed", { status: 409 });
       const sealed = observationJob.result?.explicitObservationReceipt;
@@ -686,7 +711,7 @@ export class ControlPlane {
         deviceId: run.deviceId, placement: {}, capability: collectCapability, params, canary: true,
         sessionId: run.sessionId, status: "queued", approvalRequired: false, externalEffect: true,
       });
-      if (!collectCreated.reused) this.evidence.initializeRun({ job: collectCreated.job, device });
+      if (!collectCreated.reused) this.evidence.initializeRun({ job: collectCreated.job, device, ...this.capacityOpts(false) });
       this.state.bindStandingGrantCanary({ missionId: submission.mission.missionId, deviceRunId: run.deviceRunId, collectJobId: collectCreated.job.jobId });
       const ecp = this.createEffectCommitProtocol({
         recheck: async () => ({ readiness: { ready: true, source: "control-plane", fresh: true }, app: parent.grant.app, account: parent.grant.accountFingerprint, targetFingerprint: sealed.targetFingerprint, pageFingerprint: sealed.pageFingerprint, beforeState: "not_collected", control: true }),
@@ -843,7 +868,7 @@ export class ControlPlane {
   }) {
     const capability = this.capabilities.validateParams(capabilityId, params);
     const policy = evaluateCapabilityPolicy(capability, { canary, invocation: "job", policyMode: this.policyMode });
-    this.evidence.assertCapacity({ externalEffect: policy.externalEffect });
+    this.evidence.assertCapacity(this.capacityBypassOpts(policy.externalEffect));
     const created = this.state.createJob({
       idempotencyKey,
       actorId,
@@ -859,7 +884,7 @@ export class ControlPlane {
     });
     if (!created.reused) {
       const device = this.state.requireDevice(created.job.deviceId);
-      this.evidence.initializeRun({ job: created.job, device });
+      this.evidence.initializeRun({ job: created.job, device, ...this.capacityOpts(policy.externalEffect) });
       if (created.job.status === "queued") queueMicrotask(() => void this.pump());
     }
     return {
@@ -1726,7 +1751,7 @@ export class ControlPlane {
         { status: 423, details: { sessionId } },
       );
     }
-    this.evidence.assertCapacity({ externalEffect: false });
+    this.evidence.assertCapacity(this.capacityBypassOpts(false));
     const created = this.state.createJob({
       idempotencyKey,
       actorId: session.actorId,
@@ -1755,7 +1780,7 @@ export class ControlPlane {
       };
     }
     const device = this.state.requireDevice(session.deviceId);
-    this.evidence.initializeRun({ job: created.job, device });
+    this.evidence.initializeRun({ job: created.job, device, ...this.capacityOpts(false) });
     const promise = this.#runJob(created.job, {
       lease: { leaseId: session.leaseId, token },
       releaseLease: false,
