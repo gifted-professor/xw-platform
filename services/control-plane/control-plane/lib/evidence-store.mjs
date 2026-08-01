@@ -48,11 +48,16 @@ export class EvidenceStore {
     state,
     minFreeBytes = 128 * 1024 * 1024,
     minExternalEffectFreeBytes = 1024 * 1024 * 1024,
+    debtRecorder = null,
   }) {
     this.runsRoot = resolve(runsRoot);
     this.state = state;
     this.minFreeBytes = minFreeBytes;
     this.minExternalEffectFreeBytes = minExternalEffectFreeBytes;
+    // REX Phase 5 §8.4 #1：非支付 run 中证据写失败 → evidence_debt（不抛、不阻断派发）。
+    // debtRecorder 是 (entry) => void 回调；只在 nonpayment_v1 active 时由 ControlPlane
+    // 注入。缺省 null = legacy，写失败仍抛（fail-closed，与旧版一致）。
+    this.debtRecorder = typeof debtRecorder === "function" ? debtRecorder : null;
     mkdirSync(this.runsRoot, { recursive: true });
   }
 
@@ -133,10 +138,9 @@ export class EvidenceStore {
     return { evidenceId: record.evidenceId, jobId: record.jobId, runId: record.runId, kind: record.kind, sha256: record.sha256, bytes: record.bytes };
   }
 
-  initializeRun({ job, device, gitCommit = process.env.CONTROL_PLANE_GIT_COMMIT || "unknown" }) {
-    this.assertCapacity({ externalEffect: job.externalEffect });
+  initializeRun({ job, device, gitCommit = process.env.CONTROL_PLANE_GIT_COMMIT || "unknown", debtOnLowDisk = false, debtSink = null } = {}) {
+    this.assertCapacity({ externalEffect: job.externalEffect, debtOnLowDisk, debtSink });
     const directory = this.runDirectory(job.runId);
-    mkdirSync(join(directory, "evidence"), { recursive: true });
     const storage = this.storageForRun(job.runId);
     const manifest = {
       schemaVersion: 2,
@@ -155,7 +159,25 @@ export class EvidenceStore {
       storage,
       evidence: [],
     };
-    atomicWriteJson(join(directory, "manifest.json"), redactRuntimeData(manifest));
+    // REX Phase 5 §8.4 #1：run 初始化的 mkdirSync + manifest 写在 debtRecorder 注入时
+    // （nonpayment_v1）走 debt 旁路——manifest 缺失是 evidence debt，不阻断派发。appendEvent
+    // 已自带 debt 弹性。legacy（无 recorder）仍向上抛，保持旧 fail-closed。
+    try {
+      mkdirSync(join(directory, "evidence"), { recursive: true });
+      atomicWriteJson(join(directory, "manifest.json"), redactRuntimeData(manifest));
+    } catch (error) {
+      if (this.debtRecorder) {
+        this.debtRecorder({
+          code: "EVIDENCE_WRITE_FAILED",
+          runId: job.runId,
+          eventType: "manifest",
+          cause: error.code || String(error.message || error),
+          createdAt: new Date().toISOString(),
+        });
+      } else {
+        throw error;
+      }
+    }
     this.appendEvent(job.runId, {
       type: "route.assigned",
       jobId: job.jobId,
@@ -174,12 +196,30 @@ export class EvidenceStore {
 
   appendEvent(runId, event) {
     const directory = this.runDirectory(runId);
-    mkdirSync(directory, { recursive: true });
-    appendFileSync(
-      join(directory, "events.jsonl"),
-      `${canonicalJson(redactRuntimeData(event))}\n`,
-      { mode: 0o600 },
-    );
+    try {
+      mkdirSync(directory, { recursive: true });
+      appendFileSync(
+        join(directory, "events.jsonl"),
+        `${canonicalJson(redactRuntimeData(event))}\n`,
+        { mode: 0o600 },
+      );
+    } catch (error) {
+      // REX Phase 5 §8.4 #1：debtRecorder 注入时（nonpayment_v1 active），证据写失败
+      // 记 evidence_debt 并吞错——非支付 run 不因证据写失败而阻断派发。legacy（无
+      // recorder）仍向上抛，保持旧 fail-closed 语义。cause 取 err.code 优先（ENOSPC/
+      // ENOTDIR/EACCES 等），回落 message。
+      if (this.debtRecorder) {
+        this.debtRecorder({
+          code: "EVIDENCE_WRITE_FAILED",
+          runId,
+          eventType: event && typeof event === "object" && "type" in event ? event.type : null,
+          cause: error.code || String(error.message || error),
+          createdAt: new Date().toISOString(),
+        });
+        return;
+      }
+      throw error;
+    }
   }
 
   async attachFile({ job, sourcePath, kind, label }) {

@@ -494,6 +494,39 @@ test("legacy: low-disk submitJob stays fail-closed (EVIDENCE_DISK_LOW) — payme
   }
 });
 
+// ─── §8.4 #1：ControlPlane 把 debtRecorder 注入 EvidenceStore 仅在 nonpayment_v1 ───
+test("nonpayment_v1 wires evidence debtRecorder; legacy leaves it null", () => {
+  const adapter = {
+    id: "test",
+    async execute() { return { vendorCode: 0 }; },
+    async verify() { return { ok: true, mode: "custom" }; },
+    async restore() { return { ok: true }; },
+  };
+  const cap = manifest("test.cap.recorder", { risk: "R0", idempotency: "read_only", automationPolicy: { mode: "automatic" } });
+
+  const legacyF = fixture({ capabilities: [cap], adapter, policyMode: null });
+  try {
+    assert.ok(!legacyF.control.debtOnLowDisk, "legacy: debtOnLowDisk falsy (null/false)");
+    assert.equal(legacyF.control.evidence.debtRecorder, null, "legacy: EvidenceStore.debtRecorder must stay null (fail-closed)");
+    assert.ok(Array.isArray(legacyF.control.evidenceDebt), "legacy: evidenceDebt array exists");
+  } finally { legacyF.close(); }
+
+  const activeF = fixture({
+    capabilities: [cap],
+    adapter,
+    policyMode: { active: true, mode: "nonpayment_v1", effectiveDecisionSource: "deployed-runtime" },
+  });
+  try {
+    assert.equal(activeF.control.debtOnLowDisk, true, "nonpayment_v1: debtOnLowDisk true");
+    assert.equal(typeof activeF.control.evidence.debtRecorder, "function", "nonpayment_v1: EvidenceStore.debtRecorder wired");
+    // 触发一次 debt：手动调用 appendEvent 到一个被文件阻断的 run 目录
+    writeFileSync(join(activeF.evidence.runsRoot, "run-manual"), "blocker");
+    activeF.control.evidence.appendEvent("run-manual", { type: "manual.probe" });
+    assert.ok(activeF.control.evidenceDebt.length >= 1, "nonpayment_v1: debt recorded via wired recorder");
+    assert.equal(activeF.control.evidenceDebt[0].code, "EVIDENCE_WRITE_FAILED");
+  } finally { activeF.close(); }
+});
+
 test("sent failures become ambiguous without automatic retry", async () => {
   let executions = 0;
   const adapter = {

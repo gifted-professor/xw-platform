@@ -167,6 +167,12 @@ export class ControlPlane {
     // 容量失败恒为 debt 而非 block。默认 null/legacy 时 debtOnLowDisk=false，fail-closed 不变。
     this.evidenceDebt = [];
     this.debtOnLowDisk = policyMode && policyMode.active === true;
+    // §8.4 #1：nonpayment_v1 active 时给 EvidenceStore 注入 debtRecorder，使 run 进行中的
+    // 证据事件写失败（ENOSPC/ENOTDIR 等）记 evidence_debt 而非抛错——非支付不阻断派发。
+    // legacy（debtOnLowDisk=false）不注入，EvidenceStore 写失败仍抛（fail-closed 不变）。
+    if (this.debtOnLowDisk && this.evidence && typeof this.evidence.debtRecorder !== "undefined") {
+      this.evidence.debtRecorder = (entry) => this.evidenceDebt.push(entry);
+    }
     this.operatorControlUrl = operatorControlUrl;
     this.transportStatus = transportStatus;
     this.schedulerIntervalMs = schedulerIntervalMs;
