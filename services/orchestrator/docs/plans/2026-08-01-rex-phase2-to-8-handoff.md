@@ -425,9 +425,12 @@ L0 控制面不可用仍能只读观察
   - **审查结论（2026-08-02）**：逐文件扫了剩余 B9 候选（control-plane-state/placement/legacy/legacy-index/evidence/command-runner/transport 等），**无新的 `waiting_approval`/`approvalRequired:true` 非支付审批锁断言**（`placement:337` 仅 DB schema 列定义；`evidence-store` 的 `assertCapacity`/`EVIDENCE_DISK_LOW` 在所有测试里被 `min*Bytes:0` 关闭，无 block 断言可反转）。即 **B9「旧断言反转」子项对实际存在的断言已基本完成**；剩余 ~35 文件需的是**前置源码改动**（B3 effect/payment context、B4 evidence-debt 接 spool + 删非支付 assertCapacity 热门 + state migration、B5/B6 adapter/operator blanket approval 假设去除），不是旧断言反转。这些前置改动需配新红灯测试 + 逐文件源+测试协同，浅做会破坏 427 绿或弱化支付测试（§8.2 NO-GO：禁简单删 blocked、禁手写 DB、禁旧任务重复发送、禁回滚只能恢复 blanket approval）。
 - ❌ §8.1 item 3 legacy pending migration：waiting→queued_migrated 事务化 + 旧行 superseded_by、有 dispatch 痕迹只 reconciliation 不重发、payment-like 重新观察进新 PHC。需服务代码完成，禁手工 SQL。
 - ❌ §8.1 item 6 两仓 secret scan（token/key 扫描）。
-- ❌ 前置源码改动（B3/B4/B5/B6）：effect/payment context 注入、evidence-store 非支付 assertCapacity 热门接 spool/debt、state-store pending migration 字段、adapter/operator blanket approval 假设去除。每项配新红灯测试，逐文件源+测试协同。
+- ⚠️→✅(部分) 前置源码改动（B3/B4/B5/B6）：
+  - ✅ **B4 evidence-debt 接 live 热路径**（提交 B 741e550 + fa77081）：`evidence-store.assertCapacity({externalEffect, debtOnLowDisk, debtSink})` 加 debt 旁路（低盘+debtOnLowDisk → 记 debt entry 经 debtSink + 返回 `{debt:true,...}`，不抛；缺省/legacy 仍 fail-closed 抛 EVIDENCE_DISK_LOW）；`control-plane.mjs` 构造器 `policyMode.active` 时设 `this.debtOnLowDisk=true` + `this.evidenceDebt=[]`，`capacityOpts`(记一次 debt，initializeRun 用)/`capacityBypassOpts`(只解 throw，预检用) 双 helper，3 个 assertCapacity 预检 + 5 个 initializeRun 调用点全透传。红灯 6 测（evidence-store 4 + control-plane-core 2：nonpayment_v1 低盘非支付 submitJob → queued + evidenceDebt 记 EVIDENCE_DISK_LOW + adapter 执行 liveness；legacy 低盘仍 fail-closed 抛 + 不记 debt）。全套 435/433 pass/0 fail。
+  - ❌ B4 深层：run 进行中实际 evidence 写失败（ENOSPC 等）接 evidence-spool write-chain → debt（当前只覆盖提交前容量预检；run 中写失败仍可能抛，需 spool 集成）。
+  - ❌ B3 effect/payment context 注入 adapter、B4 state-store pending migration 字段、B5/B6 adapter/operator blanket approval 假设去除。每项配新红灯测试，逐文件源+测试协同。
 
-> 当前 nonpayment_v1 默认 legacy、未 active；**live dispatch 路径已就绪**（policy.mjs 短路 + control-plane.mjs 6 调用点透传 policyMode）、模式解析 + liveness + policyDocDebt 已就位。**B9 旧断言反转对实际存在的断言已基本完成**（4 个非支付审批锁全反转 + 全套 429/427 绿）；剩余 Phase 5 工作是前置源码改动 + legacy migration + secret scan，不是更多断言反转。续做建议：每项源改配红灯测试，一次一个 commit，跑全套确认不回退。
+> 当前 nonpayment_v1 默认 legacy、未 active；**live dispatch 路径已就绪**（policy.mjs 短路 + control-plane.mjs 6 调用点透传 policyMode + evidence-debt 旁路接入 submitJob 热路径）、模式解析 + liveness + policyDocDebt 已就位。**B9 旧断言反转对实际存在的断言已基本完成**（4 个非支付审批锁全反转）；**evidence 容量失败→debt 已在 submitJob 落地**（非支付低盘不 block，legacy/支付仍 fail-closed）。剩余 Phase 5：run 中写失败 spool 集成 + B3/B5/B6 前置源改 + legacy migration + secret scan。续做建议：每项源改配红灯测试，一次一个 commit，跑全套确认不回退。
 
 ## 9. Phase 6：Windows 暗部署
 
