@@ -38,6 +38,10 @@ ls tmp-know/ACCEPTANCE-*.md
 
 > adopt 显式列路径；**发现步骤只列候选，不自动拉回**（脚本无 `--confirm`、列了即写、不自动 diff，agent 自负其责）。读 Windows 文件用 base64（避免 GBK 乱码）。
 
+### 接盘第一轮（没人派工给你时）
+
+跑下面罗盘 + §4 定位 → 出一份「**现状 + 待收编候选 + 建议下一刀**」报告给人，**等人确认再收编**（不自动干）。对应 AGENTS.md「第二步：汇报再动手」——治理侧也守这条。
+
 ---
 
 ## 1. 你是谁 / 不是谁
@@ -100,14 +104,14 @@ ls tmp-know/ACCEPTANCE-*.md
 
 列 Windows 落盘 vs Mac，出**待收编表**（按 App 打阶段牌，不一刀切）：
 
-| App | 阶段 | tmp-know 证据 | 根路由 | App 级地图 | 治理动作 |
+| App | 阶段 | tmp-know 证据 | 根路由 | App 级地图 | 治理动作（快照 a4716d5） |
 |----|------|--------------|------|----------|---------|
 | xhs | 已入路由/维护 | 0 | ✅8 行 | 无（共用根 SKILL.md） | 偏维护，按需审核 |
-| douyin | 优先收编 | 8 ACCEPTANCE + 5 EXPLORE（最厚） | ❌ | 有 v0.1，Win 待 adopt | adopt 4 SKILL + pitfalls；地图保 v0.1 |
-| wechat | 保 v0.1 防丢 | 2 EXPLORE，无 ACCEPTANCE | ❌ | 有 v0.1，已 adopt 未 commit | commit 地图；op 表 stale 标待 Win 改 |
-| xianyu | 缺地图 | 0 .md（仅 png/xml） | ✅2 行 | ❌ 无 | 标「缺 App 级地图」待 Win 建 |
+| douyin | 已收编/待固化新 op | 8 ACCEPTANCE + 5 EXPLORE（最厚） | ❌ 待人加 | v0.1，4 SKILL+pitfalls 已 adopt | 地图保 v0.1；新 op（longpress/live-photo/live-comment/max-playbook/lyk-notes）待 Win 固化 ops+ACCEPTANCE |
+| wechat | 已入库/保 v0.1 | 2 EXPLORE，无 ACCEPTANCE | ❌ 待人加 | v0.1，已 commit | op 表 stale 待 Win 改（R2 已白名单发通但 op 表停 R1「未做」） |
+| xianyu | 缺地图 | 0 .md（仅 png/xml） | ✅2 行 | ❌ 无 | 待 Win 建 App 级地图；tmp 存量 dump=Win 债，下轮 explorer 先建地图 |
 
-> 定位只列候选，**不自动拉回**；含 xianyu「缺地图」状态。阶段牌决定评判尺度——别用抖音的验收密度一刀切闲鱼/微信。
+> **快照截至 a4716d5，会过时——每次接盘以 §0 实拉为准，别照本表定 scope。** 定位只列候选，不自动拉回；阶段牌决定评判尺度——别用抖音的验收密度一刀切闲鱼/微信。
 
 ---
 
