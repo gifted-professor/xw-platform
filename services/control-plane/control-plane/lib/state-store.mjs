@@ -82,6 +82,7 @@ function publicJob(row) {
     capability: parseJson(row.capability_json),
     placementRequest: parseJson(row.placement_request_json, {}),
     routeDecision: parseJson(row.placement_decision_json),
+    supersededBy: row.superseded_by ?? null,
   };
 }
 
@@ -511,7 +512,10 @@ export class StateStore {
     this.#ensureColumn("protected_commits", "expires_at", "INTEGER");
     this.db.exec("CREATE INDEX IF NOT EXISTS protected_commits_action_idx ON protected_commits(action, status)");
     this.db.exec("CREATE INDEX IF NOT EXISTS missions_parent_grant_idx ON missions(parent_grant_id, status)");
-    this.db.exec("PRAGMA user_version = 12;");
+    // REX Phase 5 §8.1 item 3：legacy pending migration。superseded_by 记录旧 waiting_approval
+    // job 被 fresh queued job 取代的链路（旧行→queued_migrated，superseded_by→新 job_id）。
+    this.#ensureColumn("jobs", "superseded_by", "TEXT");
+    this.db.exec("PRAGMA user_version = 13;");
   }
 
   #ensureColumn(table, column, definition) {
@@ -1128,6 +1132,88 @@ export class StateStore {
       });
     });
     return this.getJob(jobId);
+  }
+
+  // ─── REX Phase 5 §8.1 item 3：legacy pending migration ───
+  //
+  // nonpayment_v1 启动期迁移历史 waiting_approval job。保守、支付安全：
+  //   - payment-like（isPaymentLike 返回 true）→ 保持 waiting_approval，不迁移（保留人工闸）。
+  //   - 有 dispatch 痕迹（started_at 已设）→ queued_migrated + error_code=MIGRATED_RECONCILE，
+  //     不 spawn 新 job（只 reconcile，不重发，避免重复 effect）。
+  //   - 非支付无 trace → 旧行 queued_migrated + superseded_by→新 fresh queued job（approval-free，
+  //     idempotency_key=<old>:migrated），由 pump 重新派发。
+  // isPaymentLike 由 ControlPlane 注入（financial-commit-classifier on capability），state-store
+  // 保持通用、不内嵌支付分类逻辑。返回 {total, migrated, reconciled, paymentLike} 报告。
+  migrateNonpaymentWaitingApprovals({ isPaymentLike = () => false } = {}) {
+    const rows = this.db.prepare("SELECT * FROM jobs WHERE status='waiting_approval'").all();
+    const report = { total: rows.length, migrated: 0, reconciled: 0, paymentLike: 0 };
+    for (const row of rows) {
+      const job = publicJob(row);
+      if (isPaymentLike(job)) {
+        report.paymentLike += 1;
+        continue;
+      }
+      const now = this.now();
+      if (row.started_at !== null) {
+        // 有 dispatch 痕迹：只 reconcile，不重发。
+        this.transaction(() => {
+          this.db.prepare(
+            "UPDATE jobs SET status='queued_migrated', error_code='MIGRATED_RECONCILE', updated_at=? WHERE job_id=?",
+          ).run(now, row.job_id);
+          this.#insertEvent({
+            jobId: row.job_id,
+            runId: row.run_id,
+            type: "job.queued_migrated",
+            payload: { reason: "reconcile_only", hadDispatchTrace: true },
+            createdAt: now,
+          });
+        });
+        report.reconciled += 1;
+        continue;
+      }
+      // 非支付无 trace：spawn fresh queued job + 旧行 superseded_by。
+      const freshJobId = newId("job");
+      const freshRunId = newId("run");
+      const freshIdempotencyKey = `${row.idempotency_key}:migrated`;
+      this.transaction(() => {
+        this.db.prepare(`
+          INSERT INTO jobs (
+            job_id, run_id, idempotency_key, request_fingerprint, actor_id, device_id,
+            capability_id, capability_json, params_json, canary, session_id, status,
+            approval_required, external_effect, created_at, updated_at, placement_request_json, placement_decision_json
+          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,'queued',0,?,?,?,?,?)
+        `).run(
+          freshJobId,
+          freshRunId,
+          freshIdempotencyKey,
+          row.request_fingerprint,
+          row.actor_id,
+          row.device_id,
+          row.capability_id,
+          row.capability_json,
+          row.params_json,
+          row.canary,
+          row.session_id,
+          Boolean(row.external_effect) ? 1 : 0,
+          now,
+          now,
+          row.placement_request_json || "{}",
+          row.placement_decision_json || "{}",
+        );
+        this.db.prepare(
+          "UPDATE jobs SET status='queued_migrated', superseded_by=?, updated_at=? WHERE job_id=?",
+        ).run(freshJobId, now, row.job_id);
+        this.#insertEvent({
+          jobId: row.job_id,
+          runId: row.run_id,
+          type: "job.queued_migrated",
+          payload: { reason: "migrated_to_queued", supersededBy: freshJobId },
+          createdAt: now,
+        });
+      });
+      report.migrated += 1;
+    }
+    return report;
   }
 
   cleanupExpiredLeases() {
