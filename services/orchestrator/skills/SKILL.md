@@ -78,6 +78,16 @@ triggers:
 | 私信用户 | `skills/xhs/xhs-dm` | ⚠️ 需审批 |
 | 闲鱼发布 | `skills/xianyu/xianyu-publish` | ✅ dry-run 自主 |
 | 闲鱼快照 | `skills/xianyu/xianyu-snapshot` | ✅ 自主 |
+| 抖音搜索 | `skills/douyin/douyin-search` | ✅ 自主（真机 exit=0 / biz ok） |
+| 抖音点赞 | `skills/douyin/douyin-like` | ✅ 自主（dry-run exit=0；真赞 dump 校验待定） |
+| 抖音点赞集合 | `skills/douyin/douyin-like-set` | ✅ 自主（dry-run @01,02） |
+| 抖音收藏 | `skills/douyin/douyin-collect` | ✅ 自主（dry-run exit=0；真藏@02 dump 翻转确认，@01 偶发 dump-fail） |
+| 抖音收藏集合 | `skills/douyin/douyin-collect-set` | ✅ 自主（dry-run @01,02；04 未登录排除） |
+| 抖音关注 | `skills/douyin/douyin-follow` | ✅ 自主（dry-run exit=0；真关注未验） |
+| 抖音关注集合 | `skills/douyin/douyin-follow-set` | ✅ 自主（dry-run @01,02） |
+| 抖音右侧栏三连 | `skills/douyin/douyin-rail-set` | ✅ 自主（dry-run @01,02 PASS=6） |
+| 抖音能力地图 | `skills/douyin/SKILL.md` | v0.1 探索态 |
+| 微信能力地图 | `skills/wechat/SKILL.md` | ⚠️ v0.1 / vision-only（op 表 stale 待 Win 改） |
 | 点击屏幕 | `skills/device/device-tap` | ✅ 自主 |
 | UI dump | `skills/device/device-dump` | ✅ 自主 |
 | 输入中文 | `skills/device/device-input` | ✅ 自主 |
