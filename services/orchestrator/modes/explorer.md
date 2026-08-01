@@ -173,6 +173,10 @@ Explorer 产出 recipe 默认 **`verifyMode=human`**，content 可带 `[explorer
 
 **收编**：Windows 先行落地的文件，Mac 一条命令拉回——`node scripts/adopt-from-windows.mjs <相对路径...>`（显式列文件，base64 拉回，不自动 diff）。
 
+### Windows 写契约（让 Mac 能评判）
+
+同轮探索结束：短报（`EXPLORE/ACCEPTANCE`）+ 地图元信息 + op 表**三处同改**；改不完 op 表时标 `stale-as-of <date>`，勿让地图落后于真机又不留痕（否则 Mac 评判会看到「短报新、op 表旧」的矛盾，如 wechat R2 已发但 op 表停 R1）。**本轮若有待 Mac adopt 的文件 → 追加/刷新 `skills/.SYNCED-FROM.md` 清单**，否则后半夜探索会丢发现信号（如 douyin `.SYNCED-FROM` 停在 00:45，只点名 like/collect 四文件，滞后于 01:00 后的 longpress/live-photo/live-comment/max-playbook/lyk-notes）。
+
 ---
 
 ## 10. 派工模板（复制即用）
@@ -183,7 +187,7 @@ Explorer 产出 recipe 默认 **`verifyMode=human`**，content 可带 `[explorer
 输入:
   mode: explorer
   actor: mimo-explore-YYYYMMDD
-  app: <xianyu|xhs|wechat|…>
+  app: <xianyu|xhs|wechat|douyin|…>
   scope: <一句范围>
   goal: map | verify-flow
   depth: E0 | E1

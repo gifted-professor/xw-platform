@@ -16,7 +16,7 @@ verified:
     device: "01,02,04"
     result: partial
     mode: dry-run
-    note: "04 FAIL dump_feed（青少年/空层）"
+    note: "04 FAIL dump_feed——根因未登录（见地图元信息表）；已废弃「青少年/空层」归因；默认勿加 04"
 depends:
   - douyin-collect
   - shared/preflight

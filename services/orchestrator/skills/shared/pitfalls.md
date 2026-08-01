@@ -142,9 +142,9 @@
 
 ### pitfall-douyin-collect-tap-kills-a11y-dump-20260731
 
-**问题**：推荐 Feed 点收藏后，真藏成功（黄星 + toast「收藏成功」），但随后长时间 `dump missing hierarchy` / `uiautomator could not get idle state`，脚本无法用 dump 做 desc 翻转校验。force-stop 可恢复 dump，但 Feed 已换条，无法回验同一视频。
+**问题**：推荐 Feed 点收藏后，偶发真藏成功（黄星 + toast）但随后 `dump missing hierarchy` / idle 超时，无法做 desc 翻转校验（2026-07-31 @01）。同脚本 2026-08-01 @02 可正常 dump 到「已选中」并 `DOUYIN_COLLECT=ok`——**机台/时序相关，非必现**。force-stop 可恢复 dump，但 Feed 已换条。
 
-**规则**：`douyin-collect` **以 dry-run 定位为 v1.0 主验收**；真藏 dump 校验未稳前勿把「真藏 ok」当自动门槛。点后若需确认，优先截图看黄星/toast。点后 dump 死锁 → force-stop 恢复，勿空转重试过久。
+**规则**：`douyin-collect` **以 dry-run 定位为 v1.0 主验收**；真藏优先走 dump 翻转（脚本已有 4 次 settle 重试）。点后 dump 死 → 立刻截图看黄星/toast 作证据，再 force-stop 恢复，勿空转重试过久。
 
 ### pitfall-douyin-teen-mode-blocks-feed-dump-20260731
 
@@ -163,6 +163,26 @@
 **问题**：`douyin-rail-set` 同机 like→collect→follow 若后续 op 带 `--no-force-stop`，01 易连环 `dump_feed`。
 
 **规则**：rail-set **每个 op 都 force-stop**（默认）；不要为省时间省掉。
+
+### pitfall-douyin-share-row-scroll-coords-stale-20260801
+
+**问题**：分享面板底栏动作横滑后，旧 x 坐标会点到别的项（本轮用「保存本地」旧坐标点进了「举报」→ `视频举报`）。
+
+**规则**：每次横滑后 **重新 dump，按 text 找当前坐标再 tap**；误进举报立刻 `back`，勿点「下一步」。
+
+### pitfall-douyin-save-local-often-disabled-20260801
+
+**问题**：分享底栏「保存本地」视觉常灰（作者禁下），但 a11y 仍可能 `enabled=true`；点了无明确成功反馈。长按菜单**没有**下载项。
+
+**规则**：不要把「保存本地」当稳定自动化门槛。要落盘图片走「生成图片 → 保存至相册」（卡片/帧图，非原视频）。真下视频需另找作者允许的样本 + toast/文件侧证。
+
+### pitfall-douyin-deleted-chat-needs-id-verify-20260801
+
+**问题**：设置→聊天与通话→「最近删除的聊天记录」会进 **身份验证**（短信/刷脸），`BulletContainerActivity`；dump 停在验证页。
+
+**规则**：探索遇到立刻 `back` / force-stop，**不点**短信或刷脸。全量历史靠会话内上滑 dump；官方「迁移聊天记录」是机机迁移（约数 MB），不是给 PC 导出。
+
+**来源**：`tmp-know/EXPLORE-DOUYIN-MAX-PLAYBOOK-20260801.md`
 
 ---
 
