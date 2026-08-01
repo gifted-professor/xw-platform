@@ -9,6 +9,7 @@ import { CapabilityRegistry } from "../control-plane/lib/capability-registry.mjs
 import { DeviceRunRuntime } from "../control-plane/lib/device-run.mjs";
 import { EffectLedger } from "../control-plane/lib/effect-ledger.mjs";
 import { EvidenceStore } from "../control-plane/lib/evidence-store.mjs";
+import { evaluateMissionEffect } from "../control-plane/lib/mission-policy.mjs";
 import { MissionRuntime } from "../control-plane/lib/mission-runtime.mjs";
 import { StateStore } from "../control-plane/lib/state-store.mjs";
 
@@ -295,6 +296,47 @@ test("PHC policy and legacy non-Mission R2 gate retain their independent authori
     assert.equal(control.missions.evaluateMissionEffect(mission, { action: "delete", target: "target-a" }).decision, "phc");
     assert.equal(control.missions.evaluateMissionEffect(mission, { action: "publish", target: "target-a" }).decision, "ecp");
     assert.equal(control.missions.evaluateMissionEffect(mission, { action: "follow", target: "outside" }).decision, "scope_violation");
+  } finally {
+    state.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// ── REX Phase 5 §8.4 (P5b): mission-policy action/target 软预算（非支付自由，payment 永 PHC）──
+// plan B3 line 824：action/target 从权限门降为上下文/软预算。nonpayment_v1 下出 scope 的非支付
+// action/target 不再 scope_violation，改为软 ecp + debt 标记；legacy 保持 scope_violation 逐字节不变；
+// payment 任何模式都 phc。
+test("REX P5b: nonpayment_v1 relaxes out-of-scope action/target to soft ecp+debt; legacy stays scope_violation", () => {
+  const root = mkdtempSync(join(tmpdir(), "freedom-scope-soft-"));
+  const state = new StateStore({ dbPath: join(root, "control.db") });
+  const NONPAY = { active: true };
+  try {
+    state.upsertNode({ nodeId: AUTHORITY, authority: true });
+    state.upsertDevice({ alias: "01", physicalLabel: "scope-soft-device", nodeId: AUTHORITY, runtimeId: "private-runtime", routingProfile: { enabled: true, tags: [], capabilityIds: [] } });
+    const missions = new MissionRuntime({ state });
+    const mission = missions.createMission({ issuer: { actorId: "human:operator" }, idempotencyKey: "acceptance-scope-soft",
+      app: "xhs", account: "alias", parallelism: 1, controllers: ["agent:runner"],
+      scope: { actions: ["follow"], targets: { kind: "fingerprint", values: ["target-a"] }, totalCount: 2, perTargetCount: 2, frequency: { count: 2, windowSeconds: 3600 } },
+      validity: { expiresAt: "2099-07-29T16:00:00Z" } }).mission;
+
+    // nonpayment: out-of-scope action relaxes to soft ecp + debt
+    const actionSoft = evaluateMissionEffect(mission, { action: "dm", target: "target-a" }, { policyMode: NONPAY });
+    assert.equal(actionSoft.decision, "ecp");
+    assert.equal(actionSoft.debt, true);
+    // nonpayment: out-of-scope target relaxes to soft ecp + debt
+    const targetSoft = evaluateMissionEffect(mission, { action: "follow", target: "outside-target" }, { policyMode: NONPAY });
+    assert.equal(targetSoft.decision, "ecp");
+    assert.equal(targetSoft.debt, true);
+    // in-scope stays plain ecp without debt
+    const inScope = evaluateMissionEffect(mission, { action: "follow", target: "target-a" }, { policyMode: NONPAY });
+    assert.equal(inScope.decision, "ecp");
+    assert.equal(inScope.debt, undefined);
+    // payment stays phc under nonpayment — the one hard gate never relaxes
+    assert.equal(evaluateMissionEffect(mission, { action: "payment", target: "target-a" }, { policyMode: NONPAY }).decision, "phc");
+    // legacy (default null and explicit null) unchanged
+    assert.equal(evaluateMissionEffect(mission, { action: "dm", target: "target-a" }).decision, "scope_violation");
+    assert.equal(evaluateMissionEffect(mission, { action: "follow", target: "outside-target" }).decision, "scope_violation");
+    assert.equal(evaluateMissionEffect(mission, { action: "dm", target: "target-a" }, { policyMode: null }).decision, "scope_violation");
   } finally {
     state.close();
     rmSync(root, { recursive: true, force: true });

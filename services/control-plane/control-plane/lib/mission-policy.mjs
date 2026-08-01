@@ -270,13 +270,18 @@ export function targetFingerprint(target) {
 // Pure classification: authorization (scope/policy) only. Never inspects typed action IDs.
 // Returns { decision, reason } where decision ∈ { ecp, phc, scope_violation, blocked }.
 // Budget, readiness, lease, and page correctness are handled later by the ECP, not here.
-export function evaluateMissionEffect(mission, { action, target }, { now = Date.now } = {}) {
+// REX Phase 5 §8.4 (P5b): policyMode.active (nonpayment_v1) relaxes non-payment action/target
+// scope from a hard permission gate to a soft context/budget — out-of-scope becomes soft ecp +
+// debt instead of scope_violation. Default null = legacy, byte-for-byte unchanged. payment /
+// publish / delete (governed by their release flags) never relax; MISSION_REVOKED stays blocked.
+export function evaluateMissionEffect(mission, { action, target }, { now = Date.now, policyMode = null } = {}) {
   if (!isObject(mission)) {
     throw new ControlPlaneError("MISSION_POLICY_INVALID", "mission must be an object", { status: 400 });
   }
   if (typeof action !== "string" || action.trim() === "") {
     throw new ControlPlaneError("MISSION_POLICY_INVALID", "action is required", { status: 400 });
   }
+  const nonpayment = policyMode && policyMode.active === true;
   if (mission.status === "revoked") {
     return { decision: "blocked", reason: "MISSION_REVOKED" };
   }
@@ -303,9 +308,22 @@ export function evaluateMissionEffect(mission, { action, target }, { now = Date.
     return { decision: "phc", reason: "DELETE_HUMAN_COMMIT" };
   }
 
-  // social effects (follow/like/collect/comment/dm) and any other declared action
+  // social effects (follow/like/collect/comment/dm) and any other declared action.
+  // nonpayment_v1: the declared action list is soft context, not a license — an out-of-scope
+  // non-payment action proceeds as ECP with a soft-budget debt flag.
   if (!Array.isArray(mission.scope?.actions) || !mission.scope.actions.includes(action)) {
+    if (nonpayment) {
+      return { decision: "ecp", reason: "ACTION_OUT_OF_SCOPE", debt: true };
+    }
     return { decision: "scope_violation", reason: "ACTION_OUT_OF_SCOPE" };
+  }
+  if (nonpayment) {
+    // target binding stays authoritative when present; an out-of-scope fingerprint is soft budget.
+    const fp = targetFingerprint(target);
+    if (fp !== null && !mission.scope.targets.values.includes(fp)) {
+      return { decision: "ecp", reason: "TARGET_OUT_OF_SCOPE", debt: true };
+    }
+    return { decision: "ecp", reason: "IN_SCOPE_SOCIAL_EFFECT" };
   }
   return scopeOrTargetViolation(mission, action, target) ?? { decision: "ecp", reason: "IN_SCOPE_SOCIAL_EFFECT" };
 }

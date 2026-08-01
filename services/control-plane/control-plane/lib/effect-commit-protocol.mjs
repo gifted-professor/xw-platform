@@ -33,7 +33,7 @@ function verifyExplicitReceiptEvidence(state, evidence, input) {
 }
 
 export class EffectCommitProtocol {
-  constructor({ state, ledger, deviceRuns, missions = null, evidence = null, recheck, execute, verify, restore, recordEvidence = null, debtSink = null } = {}) {
+  constructor({ state, ledger, deviceRuns, missions = null, evidence = null, recheck, execute, verify, restore, recordEvidence = null, debtSink = null, policyMode = null } = {}) {
     if (!state || !ledger || !deviceRuns) throw new TypeError("ECP requires state, ledger, and deviceRuns");
     if (typeof recheck !== "function" || typeof execute !== "function" || typeof verify !== "function" || typeof restore !== "function") {
       throw new TypeError("ECP requires recheck, execute, verify, and restore handlers");
@@ -51,6 +51,9 @@ export class EffectCommitProtocol {
     // REX Phase 5 §8.4 (P5b): nonpayment_v1 sinks evidence-write failures into evidence_debt
     // instead of letting them degrade a verified outcome to ambiguous. Null = legacy fail-closed.
     this.debtSink = debtSink;
+    // REX Phase 5 §8.4 (P5b): nonpayment_v1 relaxes non-payment scope (action/target) to soft
+    // budget via evaluateMissionEffect. Default null = legacy, byte-for-byte unchanged.
+    this.policyMode = policyMode;
   }
 
   // REX Phase 5 §8.4 (P5b): recordEvidence is wired but was neither awaited nor guarded — a sync
@@ -83,7 +86,7 @@ export class EffectCommitProtocol {
     if (parent && !parent.ok) return blocked(parent.code);
     const discovery = this.missions?.verifyAuthoritativeDiscovery(input.mission);
     if (discovery && !discovery.ok) return blocked(discovery.code);
-    const policy = evaluateMissionEffect(input.mission, { action: input.action, target: input.target });
+    const policy = evaluateMissionEffect(input.mission, { action: input.action, target: input.target }, { policyMode: this.policyMode });
     if (policy.decision === "scope_violation") return blocked("SCOPE_VIOLATION");
     if (policy.decision === "blocked") return blocked(policy.reason);
     this.deviceRuns.assertControlTuple(input.tuple);
@@ -95,6 +98,7 @@ export class EffectCommitProtocol {
       deviceRunId: input.tuple.deviceRunId,
       intent: input.intent || {},
       allowProtected: input.allowProtected === true,
+      policyMode: this.policyMode,
     });
     return { status: "prepared", effect, rechecked, policy };
   }
@@ -180,7 +184,7 @@ export class EffectCommitProtocol {
       || effect.targetFingerprint !== targetFingerprint(target)) {
       return blocked("EFFECT_BINDING_MISMATCH");
     }
-    const policy = evaluateMissionEffect(mission, { action, target });
+    const policy = evaluateMissionEffect(mission, { action, target }, { policyMode: this.policyMode });
     if (policy.decision === "scope_violation") return blocked("SCOPE_VIOLATION");
     if (policy.decision === "blocked") return blocked(policy.reason);
     const rechecked = await this.recheck(input);

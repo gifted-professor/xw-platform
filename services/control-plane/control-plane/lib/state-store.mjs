@@ -2225,7 +2225,7 @@ export class StateStore {
     ).all(missionId).map((row) => this.#publicMissionEffect(row));
   }
 
-  beginMissionEffect({ mission, deviceRunId, action, targetHash, intent = {}, idempotencyKey, status = "started" }) {
+  beginMissionEffect({ mission, deviceRunId, action, targetHash, intent = {}, idempotencyKey, status = "started", softScope = false }) {
     if (!mission?.missionId || !deviceRunId || !action || !targetHash || !idempotencyKey) {
       throw new TypeError("mission, deviceRunId, action, targetHash, and idempotencyKey are required");
     }
@@ -2244,7 +2244,13 @@ export class StateStore {
         });
       }
       if (!mission.scope?.actions?.includes(action) || !mission.scope?.targets?.values?.includes(targetHash)) {
-        throw new ControlPlaneError("SCOPE_VIOLATION", "effect action or target is outside Mission scope", { status: 409 });
+        // REX Phase 5 §8.4 (P5b): nonpayment_v1 soft-scope effects (out-of-scope action/target)
+        // become durable soft-budget reservations instead of scope violations. Default false =
+        // legacy fail-closed. Only the ledger's non-payment soft path sets softScope; payment is
+        // always PHC and never reaches here soft, so the financial gate is untouched.
+        if (!softScope) {
+          throw new ControlPlaneError("SCOPE_VIOLATION", "effect action or target is outside Mission scope", { status: 409 });
+        }
       }
       const live = this.db.prepare(`
         SELECT action, target_hash, created_at FROM mission_effects

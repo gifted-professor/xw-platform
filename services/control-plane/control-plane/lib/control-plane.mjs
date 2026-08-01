@@ -592,6 +592,9 @@ export class ControlPlane {
       deviceRuns: this.deviceRuns,
       missions: this.missions,
       evidence: this.evidence,
+      // REX Phase 5 §8.4 (P5b): thread nonpayment_v1 so ECP scope (action/target) relaxes to
+      // soft budget on the non-payment path; legacy (null) is byte-for-byte unchanged.
+      ...(this.policyMode ? { policyMode: this.policyMode } : {}),
       ...handlers,
     });
   }

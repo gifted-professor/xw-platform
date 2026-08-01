@@ -7,8 +7,11 @@ export class EffectLedger {
     this.state = state;
   }
 
-  beginEffect({ mission, deviceRunId, action, target, intent = {}, idempotencyKey, allowProtected = false }) {
-    const policy = evaluateMissionEffect(mission, { action, target });
+  beginEffect({ mission, deviceRunId, action, target, intent = {}, idempotencyKey, allowProtected = false, policyMode = null }) {
+    // REX Phase 5 §8.4 (P5b): policyMode threads the ECP's nonpayment_v1 scope soft-budget
+    // into beginEffect; legacy (null) keeps scope_violation fail-closed. PHC/allowProtected
+    // paths never pass policyMode, so payment scope is untouched.
+    const policy = evaluateMissionEffect(mission, { action, target }, { policyMode });
     if (policy.decision === "scope_violation") {
       throw new ControlPlaneError("SCOPE_VIOLATION", "effect action or target is outside Mission scope", { status: 409 });
     }
@@ -30,6 +33,9 @@ export class EffectLedger {
       // Reserving budget is not proof that a send began.  Only ECP marks `started` at the
       // final synchronous boundary immediately before calling an effect adapter.
       status: policy.decision === "phc" ? "pending_authorization" : "not_sent",
+      // REX Phase 5 §8.4 (P5b): only the soft out-of-scope path (policy.debt) relaxes the
+      // durable scope gate; in-scope and payment/protected effects keep softScope=false.
+      softScope: Boolean(policy.debt),
     });
     return { ...result.effect, reused: result.reused };
   }

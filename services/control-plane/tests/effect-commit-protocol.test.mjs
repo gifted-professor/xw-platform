@@ -418,3 +418,42 @@ test("REX P5b: legacy (no debtSink) recordEvidence throw still degrades to ambig
     rmSync(fixture.root, { recursive: true, force: true });
   }
 });
+
+// ── REX Phase 5 §8.4 (P5b): ECP 透传 policyMode → 非支付出 scope target 软预算 ──────────
+// plan B3 line 824：target 从权限门降为软预算。ECP 带 policyMode 时 out-of-scope 非支付 target
+// 走 verified（不再 SCOPE_VIOLATION blocked）；legacy（无 policyMode）仍 blocked。
+test("REX P5b: ECP policyMode commits out-of-scope target for nonpayment; legacy still blocks", async () => {
+  const fixture = setup();
+  let executeCount = 0;
+  try {
+    const nonpayEcp = new EffectCommitProtocol({
+      state: fixture.state, ledger: new EffectLedger({ state: fixture.state }), deviceRuns: fixture.runs,
+      policyMode: { active: true },
+      recheck: async () => correctState("outside-target"),
+      execute: async () => { executeCount += 1; return { httpStatus: 200 }; },
+      verify: async () => ({ ok: true, evidenceRefs: ["outside-verified"] }), restore: async () => ({ ok: true }),
+    });
+    const soft = await nonpayEcp.commit({
+      tuple: fixture.run.tuple, mission: fixture.mission, action: "follow", target: "outside-target",
+      intent: { surface: "social-effect" }, idempotencyKey: "ecp-soft-scope-target",
+    });
+    assert.equal(soft.status, "verified");
+    assert.equal(executeCount, 1);
+
+    const legacyEcp = new EffectCommitProtocol({
+      state: fixture.state, ledger: new EffectLedger({ state: fixture.state }), deviceRuns: fixture.runs,
+      recheck: async () => correctState("outside-target"),
+      execute: async () => { executeCount += 1; return {}; }, verify: async () => ({ ok: true }), restore: async () => ({ ok: true }),
+    });
+    const hard = await legacyEcp.commit({
+      tuple: fixture.run.tuple, mission: fixture.mission, action: "follow", target: "outside-target",
+      intent: { surface: "social-effect" }, idempotencyKey: "ecp-hard-scope-target",
+    });
+    assert.equal(hard.status, "blocked");
+    assert.equal(hard.code, "SCOPE_VIOLATION");
+    assert.equal(executeCount, 1, "legacy must not reach the adapter for an out-of-scope target");
+  } finally {
+    fixture.state.close();
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});

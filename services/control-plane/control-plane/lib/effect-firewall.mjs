@@ -146,9 +146,15 @@ export class EffectFirewall {
     // 7. Effect surfaces (social / publish / delete / payment): the Mission scope + policy
     //    decide ecp / phc / scope_violation / blocked via the shared evaluator.
     const action = effectActionFor(surface, input);
-    const effect = evaluateMissionEffect(mission, { action, target: boundTarget }, { now });
+    // REX Phase 5 §8.4 (P5b): thread policyMode so nonpayment_v1 can downgrade an out-of-scope
+    // non-payment action/target from scope_violation to soft ecp + debt; legacy (null) unchanged.
+    const effect = evaluateMissionEffect(mission, { action, target: boundTarget }, { now, policyMode });
     const code = mapEffectCode(surface, effect.decision);
-    return { code, decision: effect.decision, surface, reason: effect.reason, risk, ...(action ? { effectAction: action } : {}) };
+    return {
+      code, decision: effect.decision, surface, reason: effect.reason, risk,
+      ...(action ? { effectAction: action } : {}),
+      ...(effect.debt ? { debt: true } : {}),
+    };
   }
 
   // Pre-Mission Discovery is a no-effect R0 producer. It never inherits Mission ECP/PHC

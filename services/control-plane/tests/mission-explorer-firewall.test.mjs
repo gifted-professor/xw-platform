@@ -355,3 +355,42 @@ test("REX P5a: ControlPlane records evidence debt when a primitive reobserves un
     await fixture.close();
   }
 });
+
+// ── REX Phase 5 §8.4 (P5b): mission-policy 软预算经 firewall/ControlPlane 生效 ────────────
+// nonpayment_v1 下出 scope 的非支付 target 在 social-effect 面上 → 软 ecp（不 scope_violation），
+// ControlPlane 记 firewall_reobserve debt（reason=TARGET_OUT_OF_SCOPE）；legacy 仍 scope_violation
+// 且不记 debt。
+test("REX P5b: ControlPlane returns soft ecp + debt when out-of-scope target explored under nonpayment_v1", async () => {
+  const fixture = await setupControl({ policyMode: NONPAY_POLICY });
+  try {
+    const run = fixture.control.openDeviceRun({ missionId: fixture.mission.missionId, controllerAgent: "agent:runner" });
+    const result = await fixture.control.executeMissionPrimitive(run.tuple, {
+      primitive: "tap",
+      envelope: { declaredIntent: "tap", snapshot: freshSurface("social-effect", { effectAction: "follow" }), observedTargetFingerprint: "outside-target" },
+    });
+    assert.equal(result.verdict.decision, "ecp");
+    assert.equal(result.verdict.debt, true);
+    assert.equal(result.verdict.code, "ECP_AUTO");
+    const entry = fixture.control.evidenceDebt.at(-1);
+    assert.equal(entry.kind, "firewall_reobserve");
+    assert.equal(entry.reason, "TARGET_OUT_OF_SCOPE");
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("REX P5b: legacy ControlPlane still blocks out-of-scope target on social surface with no debt", async () => {
+  const fixture = await setupControl();
+  try {
+    const run = fixture.control.openDeviceRun({ missionId: fixture.mission.missionId, controllerAgent: "agent:runner" });
+    const result = await fixture.control.executeMissionPrimitive(run.tuple, {
+      primitive: "tap",
+      envelope: { declaredIntent: "tap", snapshot: freshSurface("social-effect", { effectAction: "follow" }), observedTargetFingerprint: "outside-target" },
+    });
+    assert.equal(result.verdict.decision, "scope_violation");
+    assert.equal(result.verdict.code, "SCOPE_VIOLATION");
+    assert.equal(fixture.control.evidenceDebt.length, 0, "legacy must not record evidence debt");
+  } finally {
+    await fixture.close();
+  }
+});
