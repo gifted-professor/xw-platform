@@ -36,6 +36,9 @@ npm run check   # node --check 三个 .mjs
 
 | commit | 项 | 摘要 |
 |---|---|---|
+| `3f4cf49` | §8.4 B6a | **scout/explorations 文档 + 脚本**：README/TEMPLATE 结构化 bundle 为事实源；post-finding sealed candidate + 写失败记 debt；list-recipes 输出 verifyMode/appliesTo，缺失 recipe 不映射 unsupported。 |
+| `2418c2b` | §8.4 B6 | **xhs-page-classifier 四级 financial 类别**：financial_none/observe/prepare/commit_candidate/commit；私信/发布/未知不再默认 stop；删除/永久注销服从 §14（未勾选→stop）。 |
+| `dbeb11d` | §8.4 B6 | **vision-safety 禁词收窄**：删 publish/send/order/buy/follow blanket 禁词；新增 FINANCIAL_COMMIT_LABEL_RE/isFinancialCommitLabel 正向识别 money-final；保留资金动作 tripwire + §14 删除/注销 fail-closed。红灯 9 测 → 9/9 绿，B 全套 476/474/0/2。 |
 | `640dfb6` | §8.4 B3 | **count/frequency/expiry 软预算**（P5b，B3-deep 4/4）：`isSoftBudgetAuthority` = PARENT_GRANT_* ∪ MISSION_EXPIRED；`evaluateMissionEffect` 过期非支付动作 → 软 ecp+debt，payment/publish/delete 过期仍 blocked；mission-runtime 对 MISSION_EXPIRED 软通过记 `budget_debt`；state-store `beginMissionEffect` 三预算门（BUDGET_EXCEEDED/PER_TARGET/THROTTLED）软化为 budget_debt、send 边界用 `isSoftBudgetAuthority`；ledger/control-plane 透传 policyMode+debtSink。红灯 3 测 → 474/472/0/2。 |
 | `c76c2b4` | §8.4 B3 | **delegation-grant 退热路径成可选 provenance**（P5b，B3-deep 3/4）：nonpayment_v1 soft-fence PARENT_GRANT_*（缺失/过期/hash 漂移 → `provenance_debt`，run-open/ECP/tuple 各边界软通过）；MISSION_REVOKED 任何模式硬。红灯 2 测。 |
 | `8ec7105` | §8.4 B3 | **mission-policy action/target 软预算**（P5b）：`evaluateMissionEffect` 加 `policyMode`，nonpayment_v1 下出 scope 非支付 action/target 从 scope_violation 改软 ecp+debt；firewall 传播 debt、ECP/ledger/state-store `softScope` 透传（soft 出 scope 成 durable 软预算预留不抛）；legacy 逐字节不变，payment 永 phc。红灯 3 测。 |
@@ -88,7 +91,11 @@ A 仓提交：仅文档（`8abf108`/`6f3238d`/`b65bb45`/`5f03664`/`ded25da`/`1a8
   - ✅ delegation-grant 退热路径（B `c76c2b4`）：parent grant 缺失/过期/hash 漂移在 nonpayment_v1 下成可选 provenance（`provenance_debt`），run-open/ECP/tuple 各边界软通过；MISSION_REVOKED 任何模式硬。
   - ✅ count/frequency/expiry 软预算（B `640dfb6`）：BUDGET_* 三门 + MISSION_EXPIRED 在 nonpayment_v1 下软化为 `budget_debt`；payment/publish/delete 过期仍 blocked。
   - `effect-firewall.mjs` surface 拆 financial observe/prepare/candidate/commit（refinement，`payment` surface 已存在）。
-- **B6**：`scripts/vision-safety.mjs` 删 publish/send/order/buy/follow blanket 禁词 → 目标控件级 financial-commit 正向识别（接 `classifyFinancialCommit`）；`prompts/xhs-page-classifier.txt` 四级 financial 类别；`scripts/gateway-operator.mjs`/`xiaowei-http-adapter.mjs`/`fast-operator.mjs`/`greenarrow-api.mjs`/`task-runner.mjs`/`xianyu-operator.mjs`/`xhs-watcher.mjs`/`xhs-watcher-launch.ps1` 统一 protected input + run/lease/effect context。
+- **B6（进行中，2026-08-02）**：
+  - ✅ `scripts/vision-safety.mjs`（B `dbeb11d`）：禁词收窄为只保资金最终控件 + §14 删除/注销；新增 `FINANCIAL_COMMIT_LABEL_RE`/`isFinancialCommitLabel` 正向识别；publish/send/order/buy/follow 非支付自由。
+  - ✅ `prompts/xhs-page-classifier.txt`（B `2418c2b`）：四级 financial_class（none/observe/prepare/commit_candidate/commit）；私信/发布/未知不再默认 stop；删除/永久注销服从 §14 单一全局决定（未勾选→stop）。
+  - ✅ B6a scout/文档（B `3f4cf49`）：explorations README/TEMPLATE 结构化 bundle 为事实源；post-finding sealed candidate + 写失败记 debt；list-recipes 输出版本/字段，缺失 recipe 不映射 unsupported。
+  - 待办：operator 脚本统一 protected input + run/lease/effect context（`gateway-operator`/`task-runner`/`xianyu-operator`/`xhs-watcher` 等）；scout.mjs 接统一 Explorer runtime/v1 outbox 属 Phase 6/7 前瞻（现无 outbox 可接，scout 已满足「recipe 缺失继续探索、maturity 不作授权」）。
 - **B5 余**：5 个 `apps/*/adapter.mjs` 当前只解构既有字段，新 effect/payment/debt 字段已可用；若某 adapter 要用 effect/payment/debt 决策行为，再按需读。`apps/*/capabilities.json` 不能加 `effectClass` 字段（`capability-registry.mjs` 不在白名单，`ALLOWED_FIELDS` 会拒）。
 
 ## 7. Phase 6/7（已授权，但 gated）
