@@ -4,7 +4,7 @@
 
 ## 0. 一句话状态
 
-REX-FREEDOM-V1（Review × Explorer：**非支付全自由，唯一硬闸是真金支付 final commit**）Phase 5 离线源码已推进到 **evidence 写链 debt 全覆盖 + legacy pending migration + adapter effect/payment/debt context 注入**；两仓测试全绿，支付/PHC fail-closed 未弱化。**下一步：`effect-firewall.mjs` 非支付松绑**（用户已选定）。
+REX-FREEDOM-V1（Review × Explorer：**非支付全自由，唯一硬闸是真金支付 final commit**）**Phase 5 source 全部完成（2026-08-02）**：effect-firewall 非支付松绑 + B3-deep 5/5 + evidence 写链 debt 全覆盖 + legacy pending migration + adapter effect/payment/debt context + B6 生产入口统一 protected input + 视觉规则四级 financial + B6a scout + effect-firewall surface 四级拆分。两仓测试全绿（A 96/96、B 479/477/0/2），支付/PHC fail-closed 未弱化。**下一步：Phase 5 GO 门验收 → Phase 6 Windows 暗部署（需用户确认 go）**。
 
 ## 1. 仓库与分支
 
@@ -36,6 +36,7 @@ npm run check   # node --check 三个 .mjs
 
 | commit | 项 | 摘要 |
 |---|---|---|
+| `7ad28f2` | §8.4 B3 | **effect-firewall surface 拆 financial observe/prepare/candidate/commit**（§8.4 最后一项源码）：四级 financial surface 按计划 §2.1——observe/prepare → reversible auto（不动钱）、commit_candidate → 只暂停候选手势 + reobserve+debt、financial_commit → 唯一 PHC（PHC_PAYMENT/transport=0，与 legacy payment 同语义，nonpayment 下也不松）；schema enum 加四值。红灯 1 测 → 479/477/0/2。 |
 | `e4c3359` | §8.4 B6 | **gateway-operator 接入 shared payment tripwire**：默认网关传输（`--transport gateway`）tap 边界加 `guardFinancialCommit`（镜像 FastOperator.tap），financial_commit 即拒 transport=0、坐标 tap 零成本放行。**§5.3 五条生产输入路径全闭**：greenarrow-api/xiaowei-http-adapter/fast-operator/gateway-operator 直接守卫 + task-runner 经 FastOperator 传递守卫 + dashboard 经 guardLegacyUiRoute 423 默认挡。红灯 2 测 → 478/476/0/2。 |
 | `3f4cf49` | §8.4 B6a | **scout/explorations 文档 + 脚本**：README/TEMPLATE 结构化 bundle 为事实源；post-finding sealed candidate + 写失败记 debt；list-recipes 输出 verifyMode/appliesTo，缺失 recipe 不映射 unsupported。 |
 | `2418c2b` | §8.4 B6 | **xhs-page-classifier 四级 financial 类别**：financial_none/observe/prepare/commit_candidate/commit；私信/发布/未知不再默认 stop；删除/永久注销服从 §14（未勾选→stop）。 |
@@ -84,15 +85,15 @@ A 仓提交：仅文档（`8abf108`/`6f3238d`/`b65bb45`/`5f03664`/`ded25da`/`1a8
 
 **白名单**：`mission-policy.mjs` / `state-store.mjs` / `effect-ledger.mjs` / `effect-firewall.mjs` / `effect-commit-protocol.mjs` / `control-plane.mjs` + `tests/*` 均在 B 白名单内（2026-08-02 已实改验证）。`capability-registry.mjs` / `mission-runtime.mjs` 也在白名单。真正白名单外的（如 `apps/*/capabilities.json` 的 effectClass、`delegation-grant` schema）仍不可改。
 
-## 6. 其余 Phase 5 未完（按计划顺序，都在 §8.2 NO-GO 红区）
+## 6. Phase 5 source 状态（2026-08-02 全部完成，仅余 Phase 6/7 前瞻项）
 
-- **B3-deep 余项（已做 4/4）**：
+- **B3-deep 余项（5/5 全清）**：
   - ✅ `mission-policy.mjs`（B `8ec7105`）：action/target 从权限门降为软预算（nonpayment_v1 下出 scope 非支付 → 软 ecp+debt）；payment 永远 PHC。
   - ✅ `effect-commit-protocol.mjs`（B `16ce175`）：`recordEvidence` 已做 debt 化改造（debtSink 记 ecp_evidence_failed，legacy 降级 ambiguous 不变）。**注意——recordEvidence 在生产接线仍未传**（`control-plane.mjs` `createEffectCommitProtocol` 只传 state/ledger/deviceRuns/missions/evidence + handlers），是 test-only/前瞻路径；线 833「非支付证据写失败继续」要等真接进生产才有实际意义。现改造已保证未来接上即安全。
   - ✅ delegation-grant 退热路径（B `c76c2b4`）：parent grant 缺失/过期/hash 漂移在 nonpayment_v1 下成可选 provenance（`provenance_debt`），run-open/ECP/tuple 各边界软通过；MISSION_REVOKED 任何模式硬。
   - ✅ count/frequency/expiry 软预算（B `640dfb6`）：BUDGET_* 三门 + MISSION_EXPIRED 在 nonpayment_v1 下软化为 `budget_debt`；payment/publish/delete 过期仍 blocked。
-  - `effect-firewall.mjs` surface 拆 financial observe/prepare/candidate/commit（refinement，`payment` surface 已存在）。
-- **B6（进行中，2026-08-02）**：
+  - ✅ `effect-firewall.mjs` surface 拆 financial observe/prepare/candidate/commit（B `7ad28f2`）：四级 financial surface 按计划 §2.1 落地——observe/prepare → reversible auto（不动钱，任何模式放行）、commit_candidate → 只暂停候选手势 + reobserve+debt、financial_commit → 唯一 PHC（PHC_PAYMENT/transport=0，与 legacy payment 同语义，nonpayment 下也不松）；schema enum 加四值。红灯 1 测 → B 全套 479/477/0/2。
+- **B6（已完成，2026-08-02）**：
   - ✅ `scripts/vision-safety.mjs`（B `dbeb11d`）：禁词收窄为只保资金最终控件 + §14 删除/注销；新增 `FINANCIAL_COMMIT_LABEL_RE`/`isFinancialCommitLabel` 正向识别；publish/send/order/buy/follow 非支付自由。
   - ✅ `prompts/xhs-page-classifier.txt`（B `2418c2b`）：四级 financial_class（none/observe/prepare/commit_candidate/commit）；私信/发布/未知不再默认 stop；删除/永久注销服从 §14 单一全局决定（未勾选→stop）。
   - ✅ B6a scout/文档（B `3f4cf49`）：explorations README/TEMPLATE 结构化 bundle 为事实源；post-finding sealed candidate + 写失败记 debt；list-recipes 输出版本/字段，缺失 recipe 不映射 unsupported。
