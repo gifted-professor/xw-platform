@@ -58,7 +58,7 @@ HEAD:   7e7696ea1d31ff6dd2ea345c419ca0be7d394c4a
 | Phase 3 | **完成（GO）** | B 仓 evidence sidecar 降级链（primary→spool→ring→stdout→debt，写失败不阻 dispatch）+ sealed outbox exporter（seal crash 不产生半 adoption、旧证据不被改写）；A 仓统一 run-context 层、evidence ledger（写失败不 throw 业务层）、evidence-contract reader（四种 legacy/v1/both/empty 组合都可读、绝不 throw 业务层）、离线 validate-run-bundle + render-acceptance（纯函数、不影响派发） | 非阻塞：review-windows.mjs / adopt-from-windows.mjs 这两个 Mac SSH 治理脚本尚未接新 v1 contract reader（legacy fallback/debt 报告、staging/atomic/receipt 升级）；runtime sidecar 装配（把 createEvidenceSidecar 接进 #runJob/adapter 执行路径）留给加真实 evidence 写入点时再做。当前 GO 由离线模块 + 16 例 A 测试 + 6 例 B 测试保证。提交：B c0b66e3 + 8956fd8，A 78259bc |
 | Phase 4 | **完成（GO）** | nonpayment-autonomy-policy.mjs（evaluateNonpaymentAutonomy：非支付一律自由，唯一硬闸 financial_commit；ambiguous→reconcile_effect；默认 shadow）+ explorer-session-bridge.mjs（ExplorerSessionBridge：session acquire 一次、preflight 一次、连续 primitive 走热传输、普通 primitive 零同步观测）+ shadowCompare 入口 | 非阻塞：§6.3 item 2-6/8 的 router/control-plane/mission-policy 接线（把新策略接进 live dispatch、unknown→Explorer 路由、lease busy queue/reroute、mission/grant/budget 降 context、L0 lease-free dump）留给 Phase 5/8 切流——Phase 4 GO 明确要求「新策略仍未 active」，故接线不在本阶段。当前 GO 由两模块 + 4 例红灯转绿保证。提交：B fa578b4 |
 | Phase 4.5 | **完成（GO）** | explorer-hotpath-parity 离线 perf 门 6 例全绿：steady-state 结构性硬门（acquire=1/preflight=1/同步观测=0/重复 preflight=0/重复 lease=0）、steady p95<=direct+budget、30-step<=baseline*1.10+2s、payment candidate 一次额外观察、L0 lease-free 只读、acquire p95<=2s。bridge 加 l0Observe 静态 L0 只读路径 | 无 Windows 部署、未碰真机；fake 延迟 transport 离线模拟，真实端到端延迟留 Phase 7 真机 pilot。提交：B dcde809 |
-| Phase 5 | 未开始 | 无 | nonpayment_v1 离线 active、旧断言反转、legacy migration、policyDocDebt 全未做 |
+| Phase 5 | **部分完成** | nonpayment_v1 模式解析（resolvePolicyMode：legacy/shadow/nonpayment_v1，§8.1 item 1「只在 fake adapter 上 active」，真适配器降级 shadow）+ liveness 证明（tests/nonpayment-liveness.test.mjs 7 例：非支付无 waiting/blocked/approval、payment 仅 financial_commit hold、普通 classifier 同步 vision/dump/cloud=0、ambiguous reconcile 不重发、payment 未弱化）+ generatePolicyDocDebt（§8.1 item 5 逐文件 debt） | **剩余**：§8.2 B9 逐文件旧断言反转（~39 个测试/源对，每个反转加对应 liveness，紧密耦合，不可简单删 blocked）、§8.1 item 3 legacy pending migration（waiting→queued_migrated + superseded_by、有 dispatch 痕迹只 reconciliation、payment-like 重新观察进 PHC）、§8.1 item 6 两仓 secret scan。模式/契约/liveness 已锁，默认 legacy 不破坏既有 425 绿。提交：B 3020886 |
 | Phase 6 | 未授权/未开始 | 无 | Windows 暗部署需要第二次用户授权 |
 | Phase 7 | 未授权/未开始 | 无 | alias 01 真机 pilot 需要第三次用户授权；支付最后一步永不做真钱 |
 | Phase 8 | 未开始 | 无 | 01/02 扩容、Review/adopt 切换、Skill/文档收口、关闭旧非支付 approval 路径全未做 |
@@ -392,15 +392,23 @@ L0 控制面不可用仍能只读观察
 6. 两仓全量测试、check、secret scan、scope diff。
 7. rollback 必须回到自由 Explorer/旧 lab，不得回到 blanket approval。
 
-### 8.2 Phase 5 GO
+### 8.2 Phase 5 GO — 部分满足（模式/liveness/契约层）
 
-- 两仓测试矩阵全绿，包括 Phase 1 的四个红灯；
-- payment tests 未删未弱化；
-- 非支付 liveness 证明无新 waiting approval；
-- 旧任务不会重复 effect；
-- 普通 classifier 同步视觉调用为 0；
-- 计划外文件为 0；
-- 仍不需要 Windows/真机。
+- ✅ 两仓测试矩阵全绿（B 427 例 425 绿 0 红 2 skip；A 96 例全绿）；Phase 1 四个红灯已在前序阶段绿；
+- ✅ payment tests 未删未弱化（nonpayment-liveness「payment 未弱化」断言 + protected-human-commit 测试保留）；
+- ✅ 非支付 liveness 证明无新 waiting approval（遍历全部非支付 actionClass × ambiguous，无 approval/waiting/blocked）；
+- ✅ 旧任务不会重复 effect（ambiguous → reconcile_effect，dispatch 计数 0，重复求解仍 reconcile）；
+- ✅ 普通 classifier 同步视觉调用为 0（policy 求解零同步 vision/dump/cloud）；
+- ✅ 计划外文件为 0（A nonpayment-liveness scope guard 持续绿，所有新文件在白名单）；
+- ✅ 仍不需要 Windows/真机（全离线 fake adapter）。
+
+### 8.3 Phase 5 剩余（不满足完整 GO，留待续做）
+
+- ❌ §8.2 B9 逐文件旧断言反转：~39 个测试/源对（capability-registry、control-plane-core/server/mission/state/placement/evidence/command-runner/transport/legacy、mission-runtime/explorer-firewall/freedom-acceptance、effect-commit-protocol、effect-ledger、protected-human-commit、delegation-grant-policy/runtime、discovery-session/state、device-run、recovery-inspection、operator-access、devicectl、standing-grant、xhs-collect、explicit-observation-receipt、xhs-explore、vision-safety、gateway-operator、fast-operator-*、xiaowei-http-adapter、scout-exploreFresh、xianyu-*）。每个反转必须加对应 liveness，不是简单删 blocked assertion；且必须区分 payment-approval（保留）与非 payment-approval（反转），紧密耦合，需逐文件读源+测试协同改，浅做会破坏 425 绿或弱化支付测试（§8.2 NO-GO）。
+- ❌ §8.1 item 3 legacy pending migration：waiting→queued_migrated 事务化 + 旧行 superseded_by、有 dispatch 痕迹只 reconciliation 不重发、payment-like 重新观察进新 PHC。需服务代码完成，禁手工 SQL。
+- ❌ §8.1 item 6 两仓 secret scan（token/key 扫描）。
+
+> 当前 nonpayment_v1 默认 legacy、未 active；模式解析 + liveness + policyDocDebt 已就位，为逐文件反转提供安全网（反转后跑 nonpayment-liveness + 全套验证）。续做建议：一次一个测试/源对，每对一个 commit，跑全套确认不回退。
 
 ## 9. Phase 6：Windows 暗部署
 
