@@ -57,7 +57,7 @@ HEAD:   7e7696ea1d31ff6dd2ea345c419ca0be7d394c4a
 | Phase 2 | **完成（GO）** | classifier、fingerprint、fake tripwire、payment verifier、PHC binding/expiry/签名核心、durable pending + 重启 recovered_cancelled、payment-commits list/decide API、Registry 人类确认面 + Ed25519 签名 oracle、生产输入路径全接 guardFinancialCommit fail-closed | runtime signer/verifier 装配（server.mjs/bootstrap.mjs 传 verifier）与 PHC→#runJob approval threading 留给加真实支付 capability 时再做；当前无 capability 标 financialCommit，闸 dormant；legacy PS1 只读采集 out-of-scope。提交：B 9a36130 + cf5d4ee，A 4405a60 |
 | Phase 3 | **完成（GO）** | B 仓 evidence sidecar 降级链（primary→spool→ring→stdout→debt，写失败不阻 dispatch）+ sealed outbox exporter（seal crash 不产生半 adoption、旧证据不被改写）；A 仓统一 run-context 层、evidence ledger（写失败不 throw 业务层）、evidence-contract reader（四种 legacy/v1/both/empty 组合都可读、绝不 throw 业务层）、离线 validate-run-bundle + render-acceptance（纯函数、不影响派发） | 非阻塞：review-windows.mjs / adopt-from-windows.mjs 这两个 Mac SSH 治理脚本尚未接新 v1 contract reader（legacy fallback/debt 报告、staging/atomic/receipt 升级）；runtime sidecar 装配（把 createEvidenceSidecar 接进 #runJob/adapter 执行路径）留给加真实 evidence 写入点时再做。当前 GO 由离线模块 + 16 例 A 测试 + 6 例 B 测试保证。提交：B c0b66e3 + 8956fd8，A 78259bc |
 | Phase 4 | **完成（GO）** | nonpayment-autonomy-policy.mjs（evaluateNonpaymentAutonomy：非支付一律自由，唯一硬闸 financial_commit；ambiguous→reconcile_effect；默认 shadow）+ explorer-session-bridge.mjs（ExplorerSessionBridge：session acquire 一次、preflight 一次、连续 primitive 走热传输、普通 primitive 零同步观测）+ shadowCompare 入口 | 非阻塞：§6.3 item 2-6/8 的 router/control-plane/mission-policy 接线（把新策略接进 live dispatch、unknown→Explorer 路由、lease busy queue/reroute、mission/grant/budget 降 context、L0 lease-free dump）留给 Phase 5/8 切流——Phase 4 GO 明确要求「新策略仍未 active」，故接线不在本阶段。当前 GO 由两模块 + 4 例红灯转绿保证。提交：B fa578b4 |
-| Phase 4.5 | 未开始 | 仅有 sequence fixture | 基线、candidate 回放、p50/p95、30-step/100-step 性能门全未跑 |
+| Phase 4.5 | **完成（GO）** | explorer-hotpath-parity 离线 perf 门 6 例全绿：steady-state 结构性硬门（acquire=1/preflight=1/同步观测=0/重复 preflight=0/重复 lease=0）、steady p95<=direct+budget、30-step<=baseline*1.10+2s、payment candidate 一次额外观察、L0 lease-free 只读、acquire p95<=2s。bridge 加 l0Observe 静态 L0 只读路径 | 无 Windows 部署、未碰真机；fake 延迟 transport 离线模拟，真实端到端延迟留 Phase 7 真机 pilot。提交：B dcde809 |
 | Phase 5 | 未开始 | 无 | nonpayment_v1 离线 active、旧断言反转、legacy migration、policyDocDebt 全未做 |
 | Phase 6 | 未授权/未开始 | 无 | Windows 暗部署需要第二次用户授权 |
 | Phase 7 | 未授权/未开始 | 无 | alias 01 真机 pilot 需要第三次用户授权；支付最后一步永不做真钱 |
@@ -372,6 +372,10 @@ L0 控制面不可用仍能只读观察
 ```
 
 任何一项不过：保留旧 lab，Broker 不进入 active。禁止为了过延迟测试绕过 payment guard。
+
+### 7.3 Phase 4.5 GO — 完成
+
+`tests/explorer-hotpath-parity.test.mjs` 6 例全绿（B dcde809），离线 fake-延迟 transport（不碰真机/Windows）覆盖 §7.2 全部硬门：steady-state acquire=1/preflight=1/同步观测=0/重复 preflight=0/重复 lease=0；steady p95 <= direct REPL p95 + max(100ms,10%)；30-step <= baseline*1.10+2s；payment candidate 一次额外观察单独统计；L0 控制面不可用仍能 lease-free 只读（`ExplorerSessionBridge.l0Observe`）；free device acquire p95<=2s。bridge 不触 financial_commit 路径，未绕过 payment guard。B 全套 420 例 418 绿 0 红。
 
 ## 8. Phase 5：离线 active、旧断言反转与迁移
 
