@@ -3,6 +3,12 @@
 > 你是接手 xhs 多设备自动化系统的新 agent。你没有历史上下文，**不要靠猜**，
 > 按下面顺序读文件，30 分钟内你就能获得完整上下文。
 
+## 你属于哪一侧（先分流，再读对应规矩）
+
+进本目录的 agent 分两侧：
+- **Windows 碰机侧**（执行/探索/运维）：按本文「Agent 入口」「默认业务链路」干；碰机/job/lease 红线对你适用。
+- **Mac 治理侧**（收编/审核/顺势优化/不碰设备）：读 [`modes/governance.md`](modes/governance.md)；本文的碰机/job/lease 规矩对你**不适用**。
+
 ## Agent 入口（硬规矩，先于一切碰机）
 
 1. **正道 = 控制面**：只允许 `job submit` / `session acquire` 碰手机；lease 必须在 `GET /control/v1/leases` 或面板可见。
@@ -40,6 +46,7 @@
 | **Explorer** | 未知面/探路/写 recipe | **`modes/explorer.md`** → `ops/explore-preflight.mjs` → `ops/screenshot-and-analyze.mjs` |
 | **Runner** | 已知剧本回归 | `ops/conc2-full-dry-run.mjs` 等 |
 | **Fix** | 改代码/部署 | Grok/GLM；正道 devicectl + git main |
+| **Governance** | Mac 治理/收编/审核/顺势补约定 | **`modes/governance.md`** |
 
 自动派 cheap agent 探 App：**只派 Explorer**，把 `modes/explorer.md` 文末派工模板填好即可。
 
@@ -61,7 +68,7 @@
 
 ## 第一步：建立全局认知（必读，按序）
 
-1. 本文「Agent 入口」+ 上节「默认业务链路」+ live `agent-entry.md`
+1. 本文「Agent 入口」+ 上节「默认业务链路」+ live `agent-entry.md`（Mac 治理侧另读 [`modes/governance.md`](modes/governance.md)）
 2. `PROGRESS.md`（本目录）——系统总状态：架构、Phase 1-3、scout、路由规则、watchdog、已知问题
 3. 知识库路由表：`ssh xhs-windows 'cmd /c "curl.exe -s http://127.0.0.1:17930/api/knowledge"'` 里 id=`routing-table-v2` 的条目（v1 已废止）——任务该派给谁、升级纪律
 4. 按需深入（PROGRESS.md 里有全部指针）：

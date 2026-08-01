@@ -7,6 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `AGENTS.md` — 冷启动协议：接手顺序、设备红线、留痕契约、关键端点。
 - `PROGRESS.md` — 系统总状态、Phase 1-3、scout、路由规则、watchdog、已知问题。
 任何任务开工前先读这两份，本文件只补它们没写的「怎么跑代码」和「代码结构」。
+Mac 治理任务（收编/审核/顺势优化）先读 `modes/governance.md`。
 
 ## 仓库性质
 
