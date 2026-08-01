@@ -52,7 +52,7 @@ Windows agent 验收时常直接在部署副本写新 `ops/`/`skills/` 文件（
 node scripts/adopt-from-windows.mjs ops/douyin-like.mjs skills/douyin/douyin-like/SKILL.md
 ```
 
-显式列文件，**不自动 diff**（agent 责任，避免把落后副本当新增拉回覆盖）。固化轻量约定（verified 一行 note / op 表不回写 version / 输出示例标示例 / dry-run 即 v1.0）见 [`modes/explorer.md`](../modes/explorer.md) §9「固化轻量约定」。
+显式列文件，**不自动 diff**（agent 责任，避免把落后副本当新增拉回覆盖）。固化轻量约定（verified 一行 note / op 表不回写 version / 输出示例标示例 / dry-run 即 v1.0）见 [`modes/explorer.md`](../modes/explorer.md) §9「固化轻量约定」。治理侧（收编 / 审核 / 顺势补约定）入口见 [`modes/governance.md`](../modes/governance.md)；两侧分流见 [`AGENTS.md`](../AGENTS.md)「你属于哪一侧」。
 
 ## 非目标
 

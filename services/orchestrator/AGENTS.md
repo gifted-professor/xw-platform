@@ -9,6 +9,8 @@
 - **Windows 碰机侧**（执行/探索/运维）：按本文「Agent 入口」「默认业务链路」干；碰机/job/lease 红线对你适用。
 - **Mac 治理侧**（收编/审核/顺势优化/不碰设备）：读 [`modes/governance.md`](modes/governance.md)；本文的碰机/job/lease 规矩对你**不适用**。
 
+拿不准自己哪一侧？按 [`modes/governance.md`](modes/governance.md) §1 分流判据：派工明示 → 看主机（Windows 路径 = 碰机 / Mac 源仓 = 治理）→ 模糊先问，别默认跑 preflight / 写 PROGRESS。
+
 ## Agent 入口（硬规矩，先于一切碰机）
 
 1. **正道 = 控制面**：只允许 `job submit` / `session acquire` 碰手机；lease 必须在 `GET /control/v1/leases` 或面板可见。
