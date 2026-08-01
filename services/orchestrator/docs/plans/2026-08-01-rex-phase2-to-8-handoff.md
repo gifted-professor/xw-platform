@@ -420,13 +420,14 @@ L0 控制面不可用仍能只读观察
 - ⚠️ §8.2 B9 逐文件旧断言反转 **剩余 ~35 文件**（已做 4：adapters、mission-freedom-acceptance、control-plane-mission、control-plane-core）。
   - **关键澄清**：B9 列出的 39 文件是**逐文件审查候选**，不是「所有 blocked 断言都要反转」。每个文件须区分三类：
     - **非支付审批锁**（external_effect/approval_required → `approvalRequired:true`/`waiting_approval`）：反转（已建立安全模式：gate 源于 `policyMode.active`，保留 legacy fallback + nonpayment_v1 自由 + liveness）。代表已做 4 个；剩余 `waiting_approval` 命中已极少（`control-plane-mission:368` 是已覆盖的同一 R2 机制在不同 gate-denial 测试里的复用，无需重复反转）。
-    - **合法 scope/mission/safety 闸**（mission revoked、parent grant expired、target mismatch、captcha/risk-control surface、ADR_0008 denial、AUTHORITATIVE_OBSERVATION_REQUIRED、scope_violation）：**必须保留**，这些不是非支付审批锁。`effect-commit-protocol.test.mjs`、`mission-explorer-firewall.test.mjs`、`control-plane-mission.test.mjs` 大量 `blocked` 属此类。
+    - **合法 scope/mission/safety 闸**（mission revoked、parent grant expired、target mismatch、captcha/risk-control surface、ADR_0008 denial、AUTHORITATIVE_OBSERVATION_REQUIRED、scope_violation、forged observation receipt → `EXPLICIT_RECEIPT_EVIDENCE_UNAVAILABLE`）：**必须保留**，这些不是非支付审批锁（tampered-receipt = target-integrity 安全闸，不是 evidence-write-failure debt）。`effect-commit-protocol.test.mjs`、`mission-explorer-firewall.test.mjs`、`control-plane-mission.test.mjs` 大量 `blocked` 属此类。
     - **payment/PHC 断言**（financial_commit、protected-human-commit）：**保留并增强**（§8.2 line 991 + NO-GO）。
-  - 真正还需反转的模式集中在：**evidence-failure-as-block**（`evidence-store` 非支付 `assertCapacity` 热门删除 → debt 不 block，B4；`effect-commit-protocol` 的 `EXPLICIT_RECEIPT_EVIDENCE_UNAVAILABLE` 在非支付下应 debt 而非 block）、**legacy pending migration**（见下 §8.4 item 2）、以及各 app adapter/operator 脚本里残留的 blanket approval 假设（B5/B6）。这些需配合源码改动，逐文件读源+测试协同，浅做会破坏 427 绿或弱化支付测试（§8.2 NO-GO：禁简单删 blocked、禁手写 DB、禁旧任务重复发送、禁回滚只能恢复 blanket approval）。
+  - **审查结论（2026-08-02）**：逐文件扫了剩余 B9 候选（control-plane-state/placement/legacy/legacy-index/evidence/command-runner/transport 等），**无新的 `waiting_approval`/`approvalRequired:true` 非支付审批锁断言**（`placement:337` 仅 DB schema 列定义；`evidence-store` 的 `assertCapacity`/`EVIDENCE_DISK_LOW` 在所有测试里被 `min*Bytes:0` 关闭，无 block 断言可反转）。即 **B9「旧断言反转」子项对实际存在的断言已基本完成**；剩余 ~35 文件需的是**前置源码改动**（B3 effect/payment context、B4 evidence-debt 接 spool + 删非支付 assertCapacity 热门 + state migration、B5/B6 adapter/operator blanket approval 假设去除），不是旧断言反转。这些前置改动需配新红灯测试 + 逐文件源+测试协同，浅做会破坏 427 绿或弱化支付测试（§8.2 NO-GO：禁简单删 blocked、禁手写 DB、禁旧任务重复发送、禁回滚只能恢复 blanket approval）。
 - ❌ §8.1 item 3 legacy pending migration：waiting→queued_migrated 事务化 + 旧行 superseded_by、有 dispatch 痕迹只 reconciliation 不重发、payment-like 重新观察进新 PHC。需服务代码完成，禁手工 SQL。
 - ❌ §8.1 item 6 两仓 secret scan（token/key 扫描）。
+- ❌ 前置源码改动（B3/B4/B5/B6）：effect/payment context 注入、evidence-store 非支付 assertCapacity 热门接 spool/debt、state-store pending migration 字段、adapter/operator blanket approval 假设去除。每项配新红灯测试，逐文件源+测试协同。
 
-> 当前 nonpayment_v1 默认 legacy、未 active；**live dispatch 路径已就绪**（policy.mjs 短路 + control-plane.mjs 6 调用点透传 policyMode）、模式解析 + liveness + policyDocDebt 已就位，为逐文件反转提供安全网（反转后跑 nonpayment-liveness + 全套验证）。续做建议：一次一个测试/源对，每对一个 commit，跑全套确认不回退。剩余反转先按 §8.4 三类区分（非支付审批锁反转 / 合法 scope-mission-safety 闸保留 / payment-PHC 保留增强），再动 evidence-failure-as-block 与各 adapter/operator blanket 假设。
+> 当前 nonpayment_v1 默认 legacy、未 active；**live dispatch 路径已就绪**（policy.mjs 短路 + control-plane.mjs 6 调用点透传 policyMode）、模式解析 + liveness + policyDocDebt 已就位。**B9 旧断言反转对实际存在的断言已基本完成**（4 个非支付审批锁全反转 + 全套 429/427 绿）；剩余 Phase 5 工作是前置源码改动 + legacy migration + secret scan，不是更多断言反转。续做建议：每项源改配红灯测试，一次一个 commit，跑全套确认不回退。
 
 ## 9. Phase 6：Windows 暗部署
 
