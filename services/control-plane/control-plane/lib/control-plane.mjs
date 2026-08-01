@@ -15,6 +15,7 @@ import { EffectFirewall } from "./effect-firewall.mjs";
 import { EffectLedger } from "./effect-ledger.mjs";
 import { EffectCommitProtocol } from "./effect-commit-protocol.mjs";
 import { ProtectedHumanCommit } from "./protected-human-commit.mjs";
+import { guardFinancialCommit } from "./financial-commit-classifier.mjs";
 import { acquireTransportLock as defaultAcquireTransportLock } from "./xiaowei-transport.mjs";
 
 const moduleDir = dirname(fileURLToPath(import.meta.url));
@@ -1872,6 +1873,14 @@ export class ControlPlane {
     try {
       job = this.state.transitionJob(job.jobId, "running");
       this.evidence.appendEvent(job.runId, { type: "job.running", jobId: job.jobId, createdAt: new Date().toISOString() });
+      // REX Phase 2 收尾 §4.2.A：所有控制面派发效果（job/session/mission ECP）的唯一
+      // 共用 chokepoint。对 job.params 做一次轻量 classify——generic capability 被用来
+      // 点支付按钮（params 带 financial_commit target/context）即在此 fail-closed。
+      // 唯一放行路径是携带经 paymentApprovalVerifier 验证通过的人类签名批准（PHC 流）。
+      await guardFinancialCommit(
+        { ...job.params, app: capability.appId, deviceId: job.deviceId },
+        { verifyApproval: this.paymentApprovalVerifier },
+      );
       execution = await adapter.execute(authorizedContext);
       if (heartbeatError) throw heartbeatError;
 

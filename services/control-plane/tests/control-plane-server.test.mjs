@@ -724,3 +724,52 @@ test("payment control surface: HTTP GET /payment-commits and POST .../decide are
     server.close(); h.close();
   }
 });
+
+// ─── REX Phase 2 收尾 §4.2.A：#runJob chokepoint 端到端 fail-closed 证明 ───
+//
+// 证明：一个 generic capability（非 financial_commit，过准入闸）被用来点支付按钮
+// （params 带 financial_commit target/context）时，#runJob 的守卫在 adapter.execute
+// 之前 fail-closed，job 落 failed + errorCode=FINANCIAL_COMMIT_REQUIRES_HUMAN_GATE，
+// adapter.execute 零调用。这是所有控制面派发效果（job/session/mission ECP）的共用层。
+
+test("#runJob guard fail-closes a generic capability whose params target a financial_commit before adapter.execute", async () => {
+  const root = mkdtempSync(join(tempBase, "runjob-guard-"));
+  const state = new StateStore({ dbPath: join(root, "control.db") });
+  state.upsertNode({ nodeId: "DESKTOP-3I1EVHE", authority: true });
+  state.upsertDevice({
+    alias: "01", physicalLabel: "rack-01", nodeId: "DESKTOP-3I1EVHE", runtimeId: "private-rt",
+    routingProfile: { enabled: true, capabilityIds: ["test.tap"] },
+  });
+  const tapCap = {
+    ...capability, id: "test.tap",
+    inputSchema: { type: "object", additionalProperties: true },
+    implementation: { adapter: "test", action: "tap" },
+  };
+  const registry = new CapabilityRegistry([tapCap]);
+  let executeCalls = 0;
+  const evidence = new EvidenceStore({ runsRoot: join(root, "runs"), state, minFreeBytes: 0, minExternalEffectFreeBytes: 0 });
+  const control = new ControlPlane({
+    state, capabilities: registry, evidence,
+    adapters: new AdapterRegistry([{ id: "test", async execute() { executeCalls += 1; return {}; } }]),
+  });
+  try {
+    const financialParams = {
+      target: { text: "确认支付", verifiedFinalControl: true },
+      context: { stage: "final", amount: "88.00", currency: "CNY", payeeRef: "redacted:merchant" },
+    };
+    const created = control.submitJob({ idempotencyKey: "pay-tap", actorId: "agent-a", capabilityId: "test.tap", params: financialParams });
+    // 等 pump 跑完 #runJob（queueMicrotask + async restore + summary）。
+    for (let i = 0; i < 40; i += 1) {
+      const s = state.requireJob(created.job.jobId).status;
+      if (s === "failed" || s === "succeeded" || s === "ambiguous" || s === "recovery_required") break;
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    const job = state.requireJob(created.job.jobId);
+    assert.equal(job.status, "failed");
+    assert.equal(job.errorCode, "FINANCIAL_COMMIT_REQUIRES_HUMAN_GATE");
+    assert.equal(executeCalls, 0, "adapter.execute must not run for a financial_commit");
+  } finally {
+    state.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});

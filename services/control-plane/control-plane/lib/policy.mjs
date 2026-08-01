@@ -5,6 +5,18 @@ const EXTERNAL_RISK = new Set(["R2", "R3"]);
 const STANDING_GRANT_MISSION_ONLY = new Set(["xhs.collect.standing_grant"]);
 
 export function evaluateCapabilityPolicy(capability, { canary = false, invocation = "job" } = {}) {
+  // REX Phase 2 收尾 §4.2.A：资金最终提交 capability 不得自动派发（job/session/
+  // mission_effect 全拦）。唯一 sanctioned 路径是控制面 PHC 流（beginPaymentCommit→
+  // waiting_authorization→人类签名决定→ECP executePrepared→#runJob），该路径不经
+  // evaluateCapabilityPolicy，故此闸只挡自动派发入口。当前无 capability 标此位，
+  // 闸为 dormant 防线；未来加支付 capability 必须标 financialCommit 并走 PHC。
+  if (capability.financialCommit === true || capability.automationPolicy?.mode === "financial_commit") {
+    throw new ControlPlaneError(
+      "FINANCIAL_COMMIT_REQUIRES_HUMAN_GATE",
+      `${capability.id} is a financial final-commit capability and cannot be auto-dispatched; it must route through the protected human-commit flow`,
+      { status: 403 },
+    );
+  }
   if (STANDING_GRANT_MISSION_ONLY.has(capability.id) && invocation !== "mission_effect") {
     throw new ControlPlaneError(
       "STANDING_GRANT_MISSION_REQUIRED",

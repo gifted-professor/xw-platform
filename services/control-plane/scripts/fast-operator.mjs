@@ -23,6 +23,7 @@ import { createServer } from "node:http";
 import { createHash, randomUUID } from "node:crypto";
 import { acquireTransportLock } from "../control-plane/lib/xiaowei-transport.mjs";
 import { ControlPlaneError } from "../control-plane/lib/errors.mjs";
+import { guardFinancialCommit } from "../control-plane/lib/financial-commit-classifier.mjs";
 
 // 跨进程文件锁串行化小薇 WS 访问：xiaowei 单实例 WS accept 串行，多设备并发建连会持续 connection failed
 // （非瞬时，retry 无效）。4 个 task-runner 进程抢同一 lock 文件，O_EXCL 互斥，每次只 1 路连 22222。
@@ -452,7 +453,16 @@ export class FastOperator {
   async scrollDown(n = 1, label) { return this.scrollN({ n, down: true, label }); }
   async scrollUp(n = 1, label) { return this.scrollN({ n, down: false, label }); }
 
-  async tap(x, y) {
+  // REX Phase 2 收尾 §4.2.A：直运 adb-shell 入口 fail-closed。tap 是唯一可能命
+  // 中支付按钮的原语；调用方可传 semantic={target,context,...} 声明语义意图，命中
+  // financial_commit 即拒（transport=0，不发 adb input）。无 semantic 的坐标 tap
+  // 零成本放行——不把每个 tap 变 job/lease/preflight。
+  async assertNotFinancialCommit(semantic) {
+    return guardFinancialCommit(semantic);
+  }
+
+  async tap(x, y, semantic = null) {
+    await guardFinancialCommit(semantic);
     this.metrics.taps += 1;
     return this.session.exec(`input tap ${x} ${y}`, 8000);
   }

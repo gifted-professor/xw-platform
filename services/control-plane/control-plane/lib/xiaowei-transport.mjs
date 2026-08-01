@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 
 import { ControlPlaneError } from "./errors.mjs";
+import { guardFinancialCommit } from "./financial-commit-classifier.mjs";
 
 const DEFAULT_URL = "ws://127.0.0.1:22222/";
 const DEFAULT_LOCK_PATH = join(tmpdir(), "xw-ws-22222.lock");
@@ -130,6 +131,10 @@ export class XiaoweiTransport {
     if (typeof action !== "string" || action.trim() === "") {
       throw new ControlPlaneError("XIAOWEI_INVALID_ACTION", "Xiaowei action must be non-empty");
     }
+    // REX Phase 2 收尾 §4.2.A：直运 WS-22222 入口 fail-closed。无 verifier → 任何
+    // financial_commit 语义输入恒拒（transport=0，不连 WS）。无语义的 list/Screen 等
+    // 请求 extractFinancialInput 返回 null，零成本放行。
+    await guardFinancialCommit({ action, devices, data });
     if (typeof this.WebSocketImpl !== "function") {
       throw new ControlPlaneError("XIAOWEI_WEBSOCKET_UNAVAILABLE", "WebSocket is unavailable", { status: 503 });
     }

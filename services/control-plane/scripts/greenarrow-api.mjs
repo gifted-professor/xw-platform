@@ -1,9 +1,14 @@
 import { requireRecordedLabBypass } from "../control-plane/lib/operator-access.mjs";
+import { guardFinancialCommit } from "../control-plane/lib/financial-commit-classifier.mjs";
+import { pathToFileURL } from "node:url";
 
 const WS_URL = "ws://127.0.0.1:22222/";
 const DEFAULT_DEVICE = "";
 
-function send(request, timeoutMs = 8000) {
+export async function send(request, timeoutMs = 8000) {
+  // REX Phase 2 收尾 §4.2.A：greenarrow 走裸 WS、无 XiaoweiTransport/lock/lease，
+  // 必须自带 fail-closed 守卫，否则是支付 tripwire 的明面 bypass。
+  await guardFinancialCommit(request);
   return new Promise((resolve, reject) => {
     const socket = new WebSocket(WS_URL);
     const timer = setTimeout(() => {
@@ -28,7 +33,7 @@ function send(request, timeoutMs = 8000) {
   });
 }
 
-function request(action, devices, data) {
+export function request(action, devices, data) {
   const body = { action };
   if (devices) body.devices = devices;
   if (data !== undefined) body.data = data;
@@ -137,7 +142,10 @@ node 绿箭API控制器.mjs shell <adb shell 后面的命令>
   console.log(JSON.stringify(result, null, 2));
 }
 
-main().catch((error) => {
-  console.error(error.message);
-  process.exitCode = 1;
-});
+// REX Phase 2 收尾：仅当作为脚本入口时跑 main；被 import（测试）时不触发 CLI。
+if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
+  main().catch((error) => {
+    console.error(error.message);
+    process.exitCode = 1;
+  });
+}

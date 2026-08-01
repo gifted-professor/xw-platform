@@ -17,6 +17,7 @@ import { readFileSync, existsSync, renameSync, mkdirSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join, dirname } from "node:path";
 import { GatewayOperator } from "./gateway-operator.mjs";
+import { guardFinancialCommit } from "../control-plane/lib/financial-commit-classifier.mjs";
 
 const DEFAULT_HTTP = "http://127.0.0.1:17910";
 
@@ -228,6 +229,9 @@ export class XiaoweiHttpAdapter {
 
   // HTTP POST /device/v1/invoke，串行化；只对明确允许的幂等调用重试。
   async _httpInvoke(capability, body, timeoutMs = 15000, { maxAttempts = 3 } = {}) {
+    // REX Phase 2 收尾 §4.2.A：typed-HTTP 17910 入口 fail-closed。body.params 携带
+    // financial_commit 语义即拒，不 POST。无语义的 tap/capture/home/back 透传。
+    await guardFinancialCommit(body);
     const run = () => this._chain.then(async () => {
       await new Promise((r) => setTimeout(r, 200)); // 200ms 起搏
 
