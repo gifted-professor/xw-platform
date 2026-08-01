@@ -527,6 +527,68 @@ test("nonpayment_v1 wires evidence debtRecorder; legacy leaves it null", () => {
   } finally { activeF.close(); }
 });
 
+// ─── §8.1 item 3：ControlPlane.start 在 nonpayment_v1 迁移历史 waiting_approval ───
+test("nonpayment_v1: migrateLegacyPending frees a legacy waiting job and dispatches the fresh job", async () => {
+  let executions = 0;
+  const adapter = {
+    id: "test",
+    async execute() { executions += 1; return { vendorCode: 0 }; },
+    async verify() { return { ok: true, mode: "custom" }; },
+    async restore() { return { ok: true }; },
+  };
+  const external = manifest("test.external.legacy", {
+    risk: "R2",
+    idempotency: "external_effect",
+    automationPolicy: { mode: "approval_required" },
+  });
+  const f = fixture({
+    capabilities: [external],
+    adapter,
+    policyMode: { active: true, mode: "nonpayment_v1", effectiveDecisionSource: "deployed-runtime" },
+  });
+  try {
+    // 直接在 state 里种一个历史 waiting_approval job（submitJob 在 nonpayment_v1 不会产生 waiting）
+    const legacy = f.state.createJob({
+      idempotencyKey: "legacy-waiting-dispatch", actorId: "agent-a", authorityNodeId: "DESKTOP-3I1EVHE",
+      deviceId: f.devices[0].deviceId, capability: external, params: {},
+      status: "waiting_approval", approvalRequired: true, externalEffect: true,
+    }).job;
+    const report = f.control.migrateLegacyPending();
+    assert.equal(report.migrated, 1, "non-payment waiting job migrated");
+    assert.equal(report.paymentLike, 0);
+    const oldRow = f.state.getJob(legacy.jobId);
+    assert.equal(oldRow.status, "queued_migrated");
+    assert.ok(oldRow.supersededBy);
+    const fresh = f.state.getJob(oldRow.supersededBy);
+    assert.equal(fresh.status === "queued" || fresh.status === "running" || fresh.status === "succeeded", true);
+    // liveness：fresh job 被 pump 派发，adapter 执行
+    await f.control.waitForJob(fresh.jobId);
+    assert.ok(executions >= 1, "migrated fresh job dispatches (liveness)");
+    assert.equal(f.state.getJob(fresh.jobId).status, "succeeded");
+  } finally {
+    await f.close();
+  }
+});
+
+test("legacy ControlPlane.migrateLegacyPending is a no-op (preserves waiting_approval)", () => {
+  const adapter = {
+    id: "test", async execute() { return { vendorCode: 0 }; },
+    async verify() { return { ok: true, mode: "custom" }; }, async restore() { return { ok: true }; },
+  };
+  const cap = manifest("test.cap.legacymig", { risk: "R2", idempotency: "external_effect", automationPolicy: { mode: "approval_required" } });
+  const f = fixture({ capabilities: [cap], adapter, policyMode: null });
+  try {
+    const legacy = f.state.createJob({
+      idempotencyKey: "legacy-waiting-nomigrate", actorId: "agent-a", authorityNodeId: "DESKTOP-3I1EVHE",
+      deviceId: f.devices[0].deviceId, capability: cap, params: {},
+      status: "waiting_approval", approvalRequired: true, externalEffect: true,
+    }).job;
+    const report = f.control.migrateLegacyPending();
+    assert.equal(report, null, "legacy: migration must not run");
+    assert.equal(f.state.getJob(legacy.jobId).status, "waiting_approval", "legacy: waiting job preserved");
+  } finally { f.close(); }
+});
+
 test("sent failures become ambiguous without automatic retry", async () => {
   let executions = 0;
   const adapter = {

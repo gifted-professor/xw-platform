@@ -1144,9 +1144,10 @@ export class StateStore {
   //     idempotency_key=<old>:migrated），由 pump 重新派发。
   // isPaymentLike 由 ControlPlane 注入（financial-commit-classifier on capability），state-store
   // 保持通用、不内嵌支付分类逻辑。返回 {total, migrated, reconciled, paymentLike} 报告。
-  migrateNonpaymentWaitingApprovals({ isPaymentLike = () => false } = {}) {
+  migrateNonpaymentWaitingApprovals({ isPaymentLike = () => false, onMigrated = null } = {}) {
     const rows = this.db.prepare("SELECT * FROM jobs WHERE status='waiting_approval'").all();
     const report = { total: rows.length, migrated: 0, reconciled: 0, paymentLike: 0 };
+    const onMigratedCb = typeof onMigrated === "function" ? onMigrated : null;
     for (const row of rows) {
       const job = publicJob(row);
       if (isPaymentLike(job)) {
@@ -1212,6 +1213,12 @@ export class StateStore {
         });
       });
       report.migrated += 1;
+      if (onMigratedCb) {
+        // 通知 ControlPlane 为 fresh job 初始化 evidence run 目录——pump 派发 queued
+        // job 时不调 initializeRun（依赖 submitJob 期已建），migration 绕过 submitJob
+        // 故在此补建，否则 runJob 末尾 writeJson 落 evidence/result-*.json 会 ENOENT。
+        try { onMigratedCb(this.getJob(freshJobId)); } catch {}
+      }
     }
     return report;
   }

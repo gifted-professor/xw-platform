@@ -266,11 +266,54 @@ export class ControlPlane {
   start() {
     if (this.started) return;
     this.started = true;
+    // REX Phase 5 §8.1 item 3：nonpayment_v1 启动期迁移历史 waiting_approval job。
+    // legacy（policyMode 未 active）不迁移，保留所有 waiting_approval 人工闸。迁移在
+    // pump 启动前做，确保 fresh queued job 立即被首轮 pump 派发。
+    this.migrateLegacyPending();
     this.scheduler = setInterval(() => this.pump().catch(() => {}), this.schedulerIntervalMs);
     this.scheduler.unref?.();
     // Defense-in-depth: never let the initial pump become an unhandled rejection
     // (e.g. quarantined/offline devices with leftover queued jobs after restart).
     void this.pump().catch(() => {});
+  }
+
+  // 迁移历史 waiting_approval job。nonpayment_v1 active 时返回 {total,migrated,
+  // reconciled,paymentLike} 报告并存 this.legacyMigrationReport；legacy 返回 null（不迁移）。
+  // 幂等：已 queued_migrated 的旧行不再命中 waiting_approval 扫描，重复调用安全。
+  migrateLegacyPending() {
+    if (!this.debtOnLowDisk || !this.state || typeof this.state.migrateNonpaymentWaitingApprovals !== "function") {
+      this.legacyMigrationReport = null;
+      return null;
+    }
+    this.legacyMigrationReport = this.state.migrateNonpaymentWaitingApprovals({
+      isPaymentLike: (job) => this.#isPaymentLikeJob(job),
+      onMigrated: (freshJob) => this.#initializeMigratedRun(freshJob),
+    });
+    return this.legacyMigrationReport;
+  }
+
+  // 为 migration spawn 出的 fresh queued job 补建 evidence run 目录。submitJob 路径在
+  // 派发前已 initializeRun，但 migration 绕过 submitJob 直接 INSERT queued job，pump 派发
+  // 时 #runJob 不调 initializeRun，故在此补建，否则末尾 writeJson 落 result-*.json ENOENT。
+  // low-disk/debt 情形由 initializeRun 内部 debt 旁路处理；此处失败不阻断 migration。
+  #initializeMigratedRun(freshJob) {
+    if (!freshJob) return;
+    try {
+      const device = this.state.requireDevice(freshJob.deviceId, { includeRuntime: true });
+      this.evidence.initializeRun({ job: freshJob, device, ...this.capacityOpts(false) });
+    } catch {}
+  }
+
+  // 保守、fail-safe 的 job 级支付分类（无 target/context，用 capability 启发式）：
+  // ambiguous_on_timeout 幂等性 或 capability id 命中金融关键词 → payment-like（保持
+  // waiting_approval，不迁移）；其余 → 非支付（可迁移）。歧义一律归 payment-like，
+  // 保留人工闸，绝不误放支付。
+  #isPaymentLikeJob(job) {
+    if (!job) return false;
+    const cap = job.capability || (job.capabilityId ? { id: job.capabilityId } : null);
+    if (cap && cap.idempotency === "ambiguous_on_timeout") return true;
+    const id = (cap && cap.id) || job.capabilityId || "";
+    return /pay|payment|financial|checkout|recharge|transfer|wallet|redpacket|topup|deposit/i.test(id);
   }
 
   async stop() {
