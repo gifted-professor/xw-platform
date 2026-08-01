@@ -55,7 +55,7 @@ async function until(predicate, timeoutMs = 2000) {
   }
 }
 
-function fixture({ capabilities, adapter }) {
+function fixture({ capabilities, adapter, policyMode = null }) {
   const root = mkdtempSync(join(tempBase, "core-test-"));
   const state = new StateStore({ dbPath: join(root, "control.db") });
   const registry = new CapabilityRegistry(capabilities);
@@ -81,6 +81,7 @@ function fixture({ capabilities, adapter }) {
     schedulerIntervalMs: 5,
     leaseTtlMs: 1000,
     leaseHeartbeatMs: 20,
+    policyMode,
   });
   control.start();
   return {
@@ -367,6 +368,45 @@ test("external effects wait for approval before entering the queue", async () =>
     });
     assert.equal((await f.control.waitForJob(submitted.jobId)).status, "succeeded");
     assert.equal(executions, 1);
+  } finally {
+    await f.close();
+  }
+});
+
+// REX Phase 5 §8.2 B9 反转：nonpayment_v1 active 下，同一非支付 external effect 不再
+// 等审批——直接 dispatch。legacy 审批流保留上方测试作 fallback。liveness：无需
+// decideApproval，adapter 自动执行（executions>=1）。
+test("nonpayment_v1: non-payment external effect dispatches without approval", async () => {
+  let executions = 0;
+  const adapter = {
+    id: "test",
+    async execute() { executions += 1; return { vendorCode: 0 }; },
+    async verify() { return { ok: true, mode: "custom" }; },
+    async restore() { return { ok: true }; },
+  };
+  const external = manifest("test.external", {
+    risk: "R2",
+    idempotency: "external_effect",
+    automationPolicy: { mode: "approval_required" },
+  });
+  const f = fixture({
+    capabilities: [external],
+    adapter,
+    policyMode: { active: true, mode: "nonpayment_v1", effectiveDecisionSource: "deployed-runtime" },
+  });
+  try {
+    const submitted = f.control.submitJob({
+      idempotencyKey: "external-freedom",
+      actorId: "agent-a",
+      deviceId: f.devices[0].deviceId,
+      capabilityId: external.id,
+      params: {},
+    }).job;
+    assert.equal(submitted.approvalRequired, false, "nonpayment_v1: non-payment external must not require approval");
+    assert.notEqual(submitted.status, "waiting_approval");
+    // liveness：无需 decideApproval，adapter 自动执行
+    await f.control.waitForJob(submitted.jobId);
+    assert.ok(executions >= 1, "nonpayment_v1: external effect executed without approval");
   } finally {
     await f.close();
   }
