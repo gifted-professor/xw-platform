@@ -305,3 +305,91 @@ test("initializeRun with debtRecorder records debt and does not throw on manifes
     assert.ok(debt.every((d) => d.runId === "run-init-debt"));
   } finally { state.close(); rmSync(root, { recursive: true, force: true }); }
 });
+
+// ─── §8.4 #1 深层：writeJson / attachFile 写失败 → debt（run 中证据落盘失败不阻断非支付派发）───
+//
+// writeJson 落 evidence/result-*.json、attachFile 落 evidence/<label>-<hash>。<runDir>/evidence
+// 被一个同名文件占据时 writeFileSync → ENOTDIR。配 debtRecorder（nonpayment_v1）→ 记 debt +
+// 返回 stub record（evidenceId/sha256/path 为 null，debt:true）不抛；legacy（无 recorder）仍抛
+// 保持 fail-closed。stub record 让 runJob 末尾的 result 落盘与 explicit-receipt 路径不崩。
+
+function blockEvidenceSubdir(evidence, runId) {
+  // 在 <runDir>/evidence 占位一个文件，使写 <runDir>/evidence/<file> 时 ENOTDIR
+  const runDir = evidence.runDirectory(runId);
+  mkdirSync(runDir, { recursive: true });
+  writeFileSync(join(runDir, "evidence"), "blocker");
+}
+
+test("writeJson legacy throws on write failure (no debtRecorder = fail-closed)", () => {
+  const root = mkdtempSync(join(tempBase, "wjson-legacy-"));
+  const state = new StateStore({ dbPath: join(root, "control.db") });
+  try {
+    const evidence = new EvidenceStore({ runsRoot: join(root, "runs"), state, minFreeBytes: 0, minExternalEffectFreeBytes: 0 });
+    blockEvidenceSubdir(evidence, "run-wjson-legacy");
+    assert.throws(
+      () => evidence.writeJson({ job: fakeJob("run-wjson-legacy"), kind: "result", label: "result", value: { ok: true } }),
+      (err) => err.code === "ENOTDIR" || err.code === "EEXIST",
+    );
+  } finally { state.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test("writeJson with debtRecorder records debt and returns a stub record (no throw)", () => {
+  const root = mkdtempSync(join(tempBase, "wjson-debt-"));
+  const state = new StateStore({ dbPath: join(root, "control.db") });
+  try {
+    const debt = [];
+    const evidence = new EvidenceStore({
+      runsRoot: join(root, "runs"), state, minFreeBytes: 0, minExternalEffectFreeBytes: 0,
+      debtRecorder: (entry) => debt.push(entry),
+    });
+    blockEvidenceSubdir(evidence, "run-wjson-debt");
+    const record = evidence.writeJson({ job: fakeJob("run-wjson-debt"), kind: "result", label: "result", value: { ok: true } });
+    assert.equal(record.debt, true, "stub record flagged as debt");
+    assert.equal(record.evidenceId, null);
+    assert.equal(record.sha256, null);
+    assert.equal(record.path, null);
+    assert.equal(debt.length, 1);
+    assert.equal(debt[0].code, "EVIDENCE_WRITE_FAILED");
+    assert.equal(debt[0].runId, "run-wjson-debt");
+    assert.equal(debt[0].eventType, "writeJson");
+  } finally { state.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test("attachFile legacy throws on write failure (no debtRecorder = fail-closed)", async () => {
+  const root = mkdtempSync(join(tempBase, "afile-legacy-"));
+  const state = new StateStore({ dbPath: join(root, "control.db") });
+  try {
+    const evidence = new EvidenceStore({ runsRoot: join(root, "runs"), state, minFreeBytes: 0, minExternalEffectFreeBytes: 0 });
+    blockEvidenceSubdir(evidence, "run-afile-legacy");
+    const source = join(root, "source.png");
+    writeFileSync(source, Buffer.from([1, 2, 3, 4]));
+    await assert.rejects(
+      evidence.attachFile({ job: fakeJob("run-afile-legacy"), sourcePath: source, kind: "screenshot", label: "screen" }),
+      (err) => err.code === "ENOTDIR" || err.code === "EEXIST",
+    );
+  } finally { state.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test("attachFile with debtRecorder records debt and returns a stub record (no throw)", async () => {
+  const root = mkdtempSync(join(tempBase, "afile-debt-"));
+  const state = new StateStore({ dbPath: join(root, "control.db") });
+  try {
+    const debt = [];
+    const evidence = new EvidenceStore({
+      runsRoot: join(root, "runs"), state, minFreeBytes: 0, minExternalEffectFreeBytes: 0,
+      debtRecorder: (entry) => debt.push(entry),
+    });
+    blockEvidenceSubdir(evidence, "run-afile-debt");
+    const source = join(root, "source.png");
+    writeFileSync(source, Buffer.from([1, 2, 3, 4]));
+    const record = await evidence.attachFile({ job: fakeJob("run-afile-debt"), sourcePath: source, kind: "screenshot", label: "screen" });
+    assert.equal(record.debt, true, "stub record flagged as debt");
+    assert.equal(record.evidenceId, null);
+    assert.equal(record.sha256, null);
+    assert.equal(record.path, null);
+    assert.equal(debt.length, 1);
+    assert.equal(debt[0].code, "EVIDENCE_WRITE_FAILED");
+    assert.equal(debt[0].runId, "run-afile-debt");
+    assert.equal(debt[0].eventType, "attachFile");
+  } finally { state.close(); rmSync(root, { recursive: true, force: true }); }
+});

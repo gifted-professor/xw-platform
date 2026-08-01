@@ -240,17 +240,34 @@ export class EvidenceStore {
     const safeLabel = String(label || basename(sourcePath)).replace(/[^A-Za-z0-9._-]+/g, "_");
     const relativePath = join("evidence", `${safeLabel}-${hash.slice(0, 12)}${basename(sourcePath).includes(".") ? `.${basename(sourcePath).split(".").pop()}` : ""}`);
     const targetPath = join(this.runDirectory(job.runId), relativePath);
-    writeFileSync(targetPath, readFileSync(sourcePath), { mode: 0o600 });
-    const record = this.state.recordEvidence({
-      jobId: job.jobId,
-      runId: job.runId,
-      kind,
-      path: relativePath,
-      sha256: hash,
-      bytes: stats.size,
-    });
-    this.#refreshManifest(job.runId);
-    return record;
+    // REX Phase 5 §8.4 #1 深层：证据文件落盘失败，debtRecorder 注入时（nonpayment_v1）记
+    // evidence_debt + 返回 stub record，非支付 run 不因证据写失败阻断派发。source 缺失/空
+    // 仍是 adapter 契约违规（上方抛 EVIDENCE_FILE_*），不归 debt。legacy（无 recorder）抛错。
+    try {
+      writeFileSync(targetPath, readFileSync(sourcePath), { mode: 0o600 });
+      const record = this.state.recordEvidence({
+        jobId: job.jobId,
+        runId: job.runId,
+        kind,
+        path: relativePath,
+        sha256: hash,
+        bytes: stats.size,
+      });
+      this.#refreshManifest(job.runId);
+      return record;
+    } catch (error) {
+      if (this.debtRecorder) {
+        this.debtRecorder({
+          code: "EVIDENCE_WRITE_FAILED",
+          runId: job.runId,
+          eventType: "attachFile",
+          cause: error.code || String(error.message || error),
+          createdAt: new Date().toISOString(),
+        });
+        return { debt: true, evidenceId: null, sha256: null, path: null, bytes: 0 };
+      }
+      throw error;
+    }
   }
 
   writeJson({ job, kind, label, value }) {
@@ -260,17 +277,35 @@ export class EvidenceStore {
     const hash = createHash("sha256").update(content).digest("hex");
     const relativePath = join("evidence", `${safeLabel}-${hash.slice(0, 12)}.json`);
     const targetPath = join(this.runDirectory(job.runId), relativePath);
-    writeFileSync(targetPath, content, { mode: 0o600 });
-    const record = this.state.recordEvidence({
-      jobId: job.jobId,
-      runId: job.runId,
-      kind,
-      path: relativePath,
-      sha256: hash,
-      bytes: Buffer.byteLength(content),
-    });
-    this.#refreshManifest(job.runId);
-    return record;
+    // REX Phase 5 §8.4 #1 深层：result/explicit-receipt 等证据 JSON 落盘失败，debtRecorder
+    // 注入时（nonpayment_v1）记 evidence_debt + 返回 stub record（sha256/evidenceId/path=null，
+    // debt=true），runJob 末尾 result 落盘与 explicit-receipt 路径不崩；legacy（无 recorder）抛错
+    // 保持 fail-closed。explicit-receipt 拿到 stub 时 evidenceHash=null，receipt 退化为 best-effort。
+    try {
+      writeFileSync(targetPath, content, { mode: 0o600 });
+      const record = this.state.recordEvidence({
+        jobId: job.jobId,
+        runId: job.runId,
+        kind,
+        path: relativePath,
+        sha256: hash,
+        bytes: Buffer.byteLength(content),
+      });
+      this.#refreshManifest(job.runId);
+      return record;
+    } catch (error) {
+      if (this.debtRecorder) {
+        this.debtRecorder({
+          code: "EVIDENCE_WRITE_FAILED",
+          runId: job.runId,
+          eventType: "writeJson",
+          cause: error.code || String(error.message || error),
+          createdAt: new Date().toISOString(),
+        });
+        return { debt: true, evidenceId: null, sha256: null, path: null, bytes: 0 };
+      }
+      throw error;
+    }
   }
 
   // Discovery has no generic Capability job: its immutable reservation is the only

@@ -527,6 +527,43 @@ test("nonpayment_v1 wires evidence debtRecorder; legacy leaves it null", () => {
   } finally { activeF.close(); }
 });
 
+// ─── §8.4 #1 深层：run 进行中 evidence 落盘失败（ENOSPC/ENOTDIR）→ debt，非支付 job 仍 succeeded ───
+test("nonpayment_v1: mid-run evidence write failure becomes debt and the non-payment job still succeeds", async () => {
+  const adapter = {
+    id: "test",
+    async execute(ctx) {
+      // 在 execute 期间破坏 evidence 子目录：删 dir + 占位同名文件 → 末尾 writeJson(result) ENOTDIR
+      const { rmSync } = await import("node:fs");
+      try { rmSync(ctx.evidenceDirectory, { recursive: true, force: true }); } catch {}
+      const { writeFileSync } = await import("node:fs");
+      try { writeFileSync(ctx.evidenceDirectory, "blocker"); } catch {}
+      return { vendorCode: 0 };
+    },
+    async verify() { return { ok: true, mode: "custom" }; },
+    async restore() { return { ok: true }; },
+  };
+  const cap = manifest("test.external.midrunwrite", {
+    risk: "R2",
+    idempotency: "external_effect",
+    automationPolicy: { mode: "approval_required" },
+  });
+  const f = fixture({
+    capabilities: [cap],
+    adapter,
+    policyMode: { active: true, mode: "nonpayment_v1", effectiveDecisionSource: "deployed-runtime" },
+  });
+  try {
+    const submitted = f.control.submitJob({
+      idempotencyKey: "midrun-write-fail", actorId: "agent-a", authorityNodeId: "DESKTOP-3I1EVHE",
+      capabilityId: cap.id, params: {},
+    }).job;
+    const finished = await f.control.waitForJob(submitted.jobId);
+    assert.equal(finished.status, "succeeded", "non-payment job must succeed despite evidence write failure");
+    const writeJsonDebt = f.control.evidenceDebt.filter((d) => d.code === "EVIDENCE_WRITE_FAILED" && d.eventType === "writeJson");
+    assert.ok(writeJsonDebt.length >= 1, "mid-run result writeJson failure recorded as debt");
+  } finally { await f.close(); }
+});
+
 // ─── §8.1 item 3：ControlPlane.start 在 nonpayment_v1 迁移历史 waiting_approval ───
 test("nonpayment_v1: migrateLegacyPending frees a legacy waiting job and dispatches the fresh job", async () => {
   let executions = 0;
