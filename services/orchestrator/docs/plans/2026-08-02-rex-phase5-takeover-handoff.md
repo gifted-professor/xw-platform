@@ -36,6 +36,7 @@ npm run check   # node --check 三个 .mjs
 
 | commit | 项 | 摘要 |
 |---|---|---|
+| `e4c3359` | §8.4 B6 | **gateway-operator 接入 shared payment tripwire**：默认网关传输（`--transport gateway`）tap 边界加 `guardFinancialCommit`（镜像 FastOperator.tap），financial_commit 即拒 transport=0、坐标 tap 零成本放行。**§5.3 五条生产输入路径全闭**：greenarrow-api/xiaowei-http-adapter/fast-operator/gateway-operator 直接守卫 + task-runner 经 FastOperator 传递守卫 + dashboard 经 guardLegacyUiRoute 423 默认挡。红灯 2 测 → 478/476/0/2。 |
 | `3f4cf49` | §8.4 B6a | **scout/explorations 文档 + 脚本**：README/TEMPLATE 结构化 bundle 为事实源；post-finding sealed candidate + 写失败记 debt；list-recipes 输出 verifyMode/appliesTo，缺失 recipe 不映射 unsupported。 |
 | `2418c2b` | §8.4 B6 | **xhs-page-classifier 四级 financial 类别**：financial_none/observe/prepare/commit_candidate/commit；私信/发布/未知不再默认 stop；删除/永久注销服从 §14（未勾选→stop）。 |
 | `dbeb11d` | §8.4 B6 | **vision-safety 禁词收窄**：删 publish/send/order/buy/follow blanket 禁词；新增 FINANCIAL_COMMIT_LABEL_RE/isFinancialCommitLabel 正向识别 money-final；保留资金动作 tripwire + §14 删除/注销 fail-closed。红灯 9 测 → 9/9 绿，B 全套 476/474/0/2。 |
@@ -95,7 +96,8 @@ A 仓提交：仅文档（`8abf108`/`6f3238d`/`b65bb45`/`5f03664`/`ded25da`/`1a8
   - ✅ `scripts/vision-safety.mjs`（B `dbeb11d`）：禁词收窄为只保资金最终控件 + §14 删除/注销；新增 `FINANCIAL_COMMIT_LABEL_RE`/`isFinancialCommitLabel` 正向识别；publish/send/order/buy/follow 非支付自由。
   - ✅ `prompts/xhs-page-classifier.txt`（B `2418c2b`）：四级 financial_class（none/observe/prepare/commit_candidate/commit）；私信/发布/未知不再默认 stop；删除/永久注销服从 §14 单一全局决定（未勾选→stop）。
   - ✅ B6a scout/文档（B `3f4cf49`）：explorations README/TEMPLATE 结构化 bundle 为事实源；post-finding sealed candidate + 写失败记 debt；list-recipes 输出版本/字段，缺失 recipe 不映射 unsupported。
-  - 待办：operator 脚本统一 protected input + run/lease/effect context（`gateway-operator`/`task-runner`/`xianyu-operator`/`xhs-watcher` 等）；scout.mjs 接统一 Explorer runtime/v1 outbox 属 Phase 6/7 前瞻（现无 outbox 可接，scout 已满足「recipe 缺失继续探索、maturity 不作授权」）。
+  - ✅ operator 脚本统一 protected input（B `e4c3359`）：`gateway-operator` tap 边界接入 `guardFinancialCommit`，与 fast-operator/xiaowei-http-adapter/greenarrow-api 同一守卫；task-runner 经 FastOperator 传递守卫；dashboard 经 guardLegacyUiRoute（423 默认挡）。**§5.3 全闭，无暗留旁路**。run/lease/effect context 注入已由 B5 adapter context（`afe3ca6`）+ effect-firewall（`221e340`）承接。
+  - 前瞻（Phase 6/7）：scout.mjs 接统一 Explorer runtime/v1 outbox 属后续（现无 outbox 可接，scout 已满足「recipe 缺失继续探索、maturity 不作授权」）。
 - **B5 余**：5 个 `apps/*/adapter.mjs` 当前只解构既有字段，新 effect/payment/debt 字段已可用；若某 adapter 要用 effect/payment/debt 决策行为，再按需读。`apps/*/capabilities.json` 不能加 `effectClass` 字段（`capability-registry.mjs` 不在白名单，`ALLOWED_FIELDS` 会拒）。
 
 ## 7. Phase 6/7（已授权，但 gated）
