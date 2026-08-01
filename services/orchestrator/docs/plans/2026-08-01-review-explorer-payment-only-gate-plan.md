@@ -1,11 +1,11 @@
 # Review × Explorer：仅资金提交硬闸、非支付自由探索严谨化实施计划
 
-> **状态**：`REVIEWED_PASS_NO_IMPLEMENTATION_AUTH`（过目通过；删除/销户与隐私保留仍待签字；不授权实施）
+> **状态**：`SOURCE_IMPLEMENTATION_PAUSED_HANDOFF`（Phase 1 与 Phase 2 核心已实施；未部署；payment control surface 延后 Phase 8 交接）
 > **计划编号**：`REX-FREEDOM-V1`
-> **版本**：`0.3.0`
+> **版本**：`0.3.1`
 > **日期**：2026-08-01
-> **0.3 过目结论**：资金唯一硬闸方向、session 热路径、延迟门、governance 先行已通过；内容删除与永久销户保持分项未勾；补普通 primitive 零同步视觉门和迁移期文档债契约。
-> **本轮唯一变更**：新增本计划文档；未改业务代码、未部署、未提交任务、未取得 lease、未碰手机。
+> **0.3.1 实施调整**：Phase 1 与 Phase 2 tripwire 核心已落源码；`payment pending/list/decide API + Registry 人类确认页` 经用户要求延后到 Phase 8，详见 `docs/plans/2026-08-01-rex-phase8-payment-control-handoff.md`。
+> **部署事实**：未部署、未提交任务、未取得 lease、未碰手机。
 > **实施授权**：只有用户明确回复“批准实施本计划/某一阶段”后，对应阶段才可开始。
 > **首要目标**：保证所有手机 App 内的非资金提交任务都能被接收、派发、探索和继续；落盘、Review、Skill 成熟度、路由、证据与资源协调只能帮助运行，不能重新成为派发锁。
 
@@ -1060,10 +1060,10 @@ NO-GO：测试需要真机；红灯原因不明确；新增测试靠删旧断言
 1. 四级 financial classifier 与 target-bound fingerprint。
 2. protected input wrapper 覆盖高级 capability 与 raw tap/input/shell 入口。
 3. PHC 一次性 binding、过期、重观察、签名/人类角色验证。
-4. payment pending/list/decide API 与 registry payment-only UI 的离线测试。
+4. payment pending/list/decide API 与 registry payment-only UI 的离线测试延后到 Phase 8 的 `8.0 Payment control surface`；Phase 2 只冻结接口、签名和安全边界，详见交接文件。
 5. 大量支付负例防误锁；支付正例 spy 断言 transport=0。
 
-GO：所有支付正例 hold，所有 observe/prepare/非支付负例不 hold；raw 和 typed 结果一致。
+GO：所有支付正例 hold，所有 observe/prepare/非支付负例不 hold；raw 和 typed 结果一致。此 GO 只代表 tripwire core，不代表支付决定流程或 Registry UI 已可用。
 
 NO-GO：用页面关键词 blanket 阻止；unknown 一律 payment；任何路径可绕过；agent token 可批准。
 
@@ -1219,17 +1219,18 @@ NO-GO：candidate 明显慢于当前 lab、每 primitive 重复 preflight/lease�
 
 顺序固定：
 
-1. alias 01；
-2. alias 01/02 并发；
-3. 03/04 只有在各自 ready/资源恢复后加入，不能为赶进度旁路；
-4. `REVIEW_MODE shadow → v1`；
-5. `ADOPT_MODE stage → atomic`；
-6. 同步 AGENTS/CLAUDE/Skill/PROGRESS 的真实完成状态；
-7. 再关闭旧非支付 approval 创建路径。
+1. 先完成 `8.0 Payment control surface`：durable pending、control list/decide、Registry human-only proxy/UI、signer 隔离与全套离线测试；具体交接见 `docs/plans/2026-08-01-rex-phase8-payment-control-handoff.md`；
+2. alias 01；
+3. alias 01/02 并发；
+4. 03/04 只有在各自 ready/资源恢复后加入，不能为赶进度旁路；
+5. `REVIEW_MODE shadow → v1`；
+6. `ADOPT_MODE stage → atomic`；
+7. 同步 AGENTS/CLAUDE/Skill/PROGRESS 的真实完成状态；
+8. payment control surface 全部 GO 后，再关闭旧非支付 approval 创建路径。
 
-GO：同机自动串行、跨机可并行；Mac 离线不影响 Windows；Review 与人工抽查一致；adopt 幂等、冲突零半写；指标满足 §3。
+GO：payment pending/list/decide durable 且仅人类签名可决定、agent/operator/observer 不可决定；同机自动串行、跨机可并行；Mac 离线不影响 Windows；Review 与人工抽查一致；adopt 幂等、冲突零半写；指标满足 §3。
 
-NO-GO：以“严谨”为由恢复白名单；Review 变成下一个任务前置；计划外文档夹带。
+NO-GO：未完成 payment control surface 就关闭旧门；以 Registry 登录代替支付签名；以“严谨”为由恢复白名单；Review 变成下一个任务前置；计划外文档夹带。
 
 ### Phase 9：结束双写（不属于首轮实施）
 
