@@ -89,3 +89,57 @@ test("GatewayOperator rejects an unrecorded bypass", async () => {
   });
   await assert.rejects(op.start(), { code: "CONTROL_BYPASS_REASON_REQUIRED", status: 403 });
 });
+
+test("GatewayOperator rejects a financial-commit tap before touching transport (shared payment tripwire)", async () => {
+  const transportCalls = [];
+  const originalError = console.error;
+  const audit = [];
+  console.error = (value) => audit.push(JSON.parse(value));
+  const op = new GatewayOperator({
+    serial: "runtime-01",
+    leaseAuthorization: {},
+    allowBypass: true,
+    bypassReason: "bounded offline transport test",
+    fetchImpl: async () => { throw new Error("authorization should be skipped"); },
+    transportClient: readyTransport("runtime-01", transportCalls),
+  });
+  try {
+    await op.start();
+    const before = transportCalls.length;
+    await assert.rejects(
+      op.tap(100, 200, {
+        target: { text: "确认支付", verifiedFinalControl: true },
+        context: { stage: "final", amount: "1", currency: "CNY", payeeRef: "acct-01" },
+      }),
+      { code: "FINANCIAL_COMMIT_REQUIRES_HUMAN_GATE", status: 403 },
+    );
+    assert.equal(transportCalls.length, before, "financial tap 不得到达 transport（transport=0）");
+  } finally {
+    console.error = originalError;
+  }
+});
+
+test("GatewayOperator lets a bare coordinate tap pass free (no semantic = no guard)", async () => {
+  const transportCalls = [];
+  const originalError = console.error;
+  const audit = [];
+  console.error = (value) => audit.push(JSON.parse(value));
+  const op = new GatewayOperator({
+    serial: "runtime-01",
+    leaseAuthorization: {},
+    allowBypass: true,
+    bypassReason: "bounded offline transport test",
+    fetchImpl: async () => { throw new Error("authorization should be skipped"); },
+    transportClient: readyTransport("runtime-01", transportCalls),
+  });
+  try {
+    await op.start();
+    await op.tap(100, 200);
+    assert.ok(
+      transportCalls.some((c) => c.action === "adb_shell" && String(c.data?.command || "").includes("input tap 100 200")),
+      "coordinate tap 应放行到 transport",
+    );
+  } finally {
+    console.error = originalError;
+  }
+});

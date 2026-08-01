@@ -18,6 +18,7 @@ import { join, dirname } from "node:path";
 
 import { ControlPlaneError } from "../control-plane/lib/errors.mjs";
 import { XiaoweiTransport } from "../control-plane/lib/xiaowei-transport.mjs";
+import { guardFinancialCommit } from "../control-plane/lib/financial-commit-classifier.mjs";
 
 const DEFAULT_WS = "ws://127.0.0.1:22222/";
 const BRIDGE_IME = "com.android.xwkeyboard/.XwIME";
@@ -180,7 +181,11 @@ export class GatewayOperator {
     return out == null ? "" : String(out);
   }
 
-  async tap(x, y) {
+  // REX Phase 5 B6: 与 FastOperator.tap 共用同一 protected input wrapper。financial_commit
+  // 即拒（transport=0，不发 input tap）；无 semantic 的坐标 tap 零成本放行——不把每个
+  // tap 变 job/lease/preflight。默认网关传输（--transport gateway）不再留支付旁路。
+  async tap(x, y, semantic = null) {
+    await guardFinancialCommit(semantic);
     this.metrics.taps += 1;
     return this.shellExec(`input tap ${Math.round(x)} ${Math.round(y)}`, 8000);
   }
