@@ -124,6 +124,37 @@ test("Effect Firewall classifies reversible, social, payment, and stop surfaces"
   assert.equal(firewall.classify({ declaredIntent: "tap", snapshot: freshSurface("social-effect", { effectAction: "follow" }), observedTargetFingerprint: "other" }, mission).code, "SCOPE_VIOLATION");
 });
 
+test("Effect Firewall splits the four financial surfaces (REX Phase 5 B3 refinement)", () => {
+  const firewall = new EffectFirewall();
+  const mission = { scope: missionInput.scope, policy: { publish: "allow_within_scope", delete: "confirm", payment: "confirm" }, validity: missionInput.validity, status: "active" };
+  const boundTarget = "target-hash-aaa";
+
+  // observe/prepare never move money → reversible auto in every mode
+  assert.equal(firewall.classify({ declaredIntent: "tap", snapshot: freshSurface("financial_observe"), observedTargetFingerprint: boundTarget }, mission).decision, "auto");
+  assert.equal(firewall.classify({ declaredIntent: "tap", snapshot: freshSurface("financial_prepare"), observedTargetFingerprint: boundTarget }, mission).decision, "auto");
+
+  // commit_candidate pauses only that gesture and re-observes (debt), never PHC
+  const candidate = firewall.classify({ declaredIntent: "tap", snapshot: freshSurface("financial_commit_candidate"), observedTargetFingerprint: boundTarget }, mission);
+  assert.equal(candidate.decision, "reobserve");
+  assert.equal(candidate.debt, true);
+
+  // financial_commit is the sole PHC — identical fail-closed to legacy payment (transport stays 0)
+  const commit = firewall.classify({ declaredIntent: "tap", snapshot: freshSurface("financial_commit"), observedTargetFingerprint: boundTarget }, mission);
+  assert.equal(commit.decision, "phc");
+  assert.equal(commit.code, "PHC_PAYMENT");
+
+  // legacy coarse payment surface stays unchanged
+  assert.equal(firewall.classify({ declaredIntent: "tap", snapshot: freshSurface("payment"), observedTargetFingerprint: boundTarget }, mission).decision, "phc");
+
+  // nonpayment_v1 mode keeps financial_commit fail-closed too (never relaxes to reobserve)
+  const nonpayment = firewall.classify(
+    { declaredIntent: "tap", snapshot: freshSurface("financial_commit"), observedTargetFingerprint: boundTarget },
+    mission,
+    { policyMode: { active: true } },
+  );
+  assert.equal(nonpayment.decision, "phc");
+});
+
 test("Discovery Firewall is strictly observed-surface R0 and never falls through to Mission decisions", () => {
   const firewall = new EffectFirewall();
   for (const surface of ["social-effect", "publish", "delete", "payment", "profile", "settings", "unknown", "risk-control", "login", "captcha"]) {

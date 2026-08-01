@@ -8,6 +8,13 @@ export const SNAPSHOT_MAX_AGE_MS = 5000;
 const SURFACE_INFO = {
   navigation: { risk: "R0", kind: "reversible" },
   observation: { risk: "R0", kind: "reversible" },
+  // REX Phase 5 B3 refinement: the four financial surfaces from the page classifier (plan §2.1).
+  // observe/prepare never move money → reversible. commit_candidate pauses only the gesture.
+  // financial_commit is the sole PHC — identical to the legacy coarse payment surface.
+  financial_observe: { risk: "R0", kind: "reversible" },
+  financial_prepare: { risk: "R1", kind: "reversible" },
+  financial_commit_candidate: { risk: "R2", kind: "payment-candidate" },
+  financial_commit: { risk: "R3", kind: "payment" },
   "social-effect": { risk: "R2", kind: "social" },
   publish: { risk: "R3", kind: "protected" },
   delete: { risk: "R3", kind: "protected" },
@@ -56,7 +63,7 @@ function maxRisk(a, b) {
 
 function effectActionFor(surface, input) {
   if (surface === "social-effect") return input.snapshot?.effectAction || input.declaredIntent || null;
-  if (surface === "payment") return "payment";
+  if (surface === "payment" || surface === "financial_commit") return "payment";
   if (surface === "publish") return "publish";
   if (surface === "delete") return "delete";
   return null;
@@ -133,18 +140,28 @@ export class EffectFirewall {
     const boundTarget = observedTarget ?? targetFingerprint(input?.target);
     const risk = maxRisk(DECLARED_INTENT_RISK[declaredIntent], info.risk);
 
-    // 5. Reversible navigation/observation runs automatically.
+    // 5. REX Phase 5 B3 refinement: financial observe/prepare never move money → reversible
+    //    auto in EVERY mode (they are observation/preparation, not commit). commit_candidate
+    //    pauses only that candidate gesture and re-observes — it is NOT the PHC gate.
+    if (surface === "financial_observe" || surface === "financial_prepare") {
+      return { code: "FINANCIAL_RECON_REVERSIBLE", decision: "auto", surface, reason: "FINANCIAL_OBSERVE_OR_PREPARE", risk };
+    }
+    if (surface === "financial_commit_candidate") {
+      return { code: "FINANCIAL_CANDIDATE_REOBSERVE", decision: "reobserve", surface, reason: "FINANCIAL_COMMIT_CANDIDATE_NEEDS_OBSERVATION", risk, debt: true };
+    }
+
+    // 6. Reversible navigation/observation runs automatically.
     if (REVERSIBLE_SURFACES.has(surface)) {
       return { code: "REVERSIBLE_AUTO", decision: "auto", surface, reason: "REVERSIBLE_NAVIGATION", risk };
     }
 
-    // 6. Stop conditions (risk-control / login / captcha) block, never approve.
+    // 7. Stop conditions (risk-control / login / captcha) block, never approve.
     if (STOP_SURFACES.has(surface)) {
       return { code: "STOP_CONDITION", decision: "blocked", surface, reason: "STOP_CONDITION", risk };
     }
 
-    // 7. Effect surfaces (social / publish / delete / payment): the Mission scope + policy
-    //    decide ecp / phc / scope_violation / blocked via the shared evaluator.
+    // 8. Effect surfaces (social / publish / delete / payment / financial_commit): the Mission
+    //    scope + policy decide ecp / phc / scope_violation / blocked via the shared evaluator.
     const action = effectActionFor(surface, input);
     // REX Phase 5 §8.4 (P5b): thread policyMode so nonpayment_v1 can downgrade an out-of-scope
     // non-payment action/target from scope_violation to soft ecp + debt; legacy (null) unchanged.
@@ -172,8 +189,8 @@ export class EffectFirewall {
 }
 
 function mapEffectCode(surface, decision) {
-  if (decision === "ecp") return surface === "payment" ? "PHC_PAYMENT" : "ECP_AUTO";
-  if (decision === "phc") return surface === "payment" ? "PHC_PAYMENT" : "PHC_PROTECTED";
+  if (decision === "ecp") return (surface === "payment" || surface === "financial_commit") ? "PHC_PAYMENT" : "ECP_AUTO";
+  if (decision === "phc") return (surface === "payment" || surface === "financial_commit") ? "PHC_PAYMENT" : "PHC_PROTECTED";
   if (decision === "scope_violation") return "SCOPE_VIOLATION";
   return "MISSION_BLOCKED";
 }

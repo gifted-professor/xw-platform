@@ -22,7 +22,7 @@
       "required": ["surface", "createdAt", "observedAt"],
       "properties": {
         "surface": {
-          "enum": ["navigation", "observation", "social-effect", "publish", "delete", "payment", "risk-control", "login", "captcha", "unknown"]
+          "enum": ["navigation", "observation", "financial_observe", "financial_prepare", "financial_commit_candidate", "financial_commit", "social-effect", "publish", "delete", "payment", "risk-control", "login", "captcha", "unknown"]
         },
         "createdAt": { "type": "string", "format": "date-time" },
         "observedAt": { "type": "string", "format": "date-time" },
