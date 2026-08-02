@@ -57,6 +57,22 @@ test("operator opens the requested visible feed card and returns only a trusted 
   });
 });
 
+test("navigation card opening uses a one-shot tap and leaves the persistent shell untouched", async () => {
+  const operator = Object.create(FastOperator.prototype);
+  const calls = [];
+  operator.metrics = { taps: 0 };
+  operator.session = {
+    oneShotShell: async (command) => { calls.push(`oneShot:${command}`); return ""; },
+    exec: async () => { calls.push("persistent"); throw new Error("persistent navigation tap must not run"); },
+  };
+  operator.currentFocus = async () => ({ package: "com.xingin.xhs", activity: "NoteDetailActivity" });
+
+  const result = await operator.openCard({ cover: { center: [120, 340] } });
+  assert.deepEqual(result, { opened: true, activity: "NoteDetailActivity" });
+  assert.equal(operator.metrics.taps, 1);
+  assert.deepEqual(calls, ["oneShot:input tap 120 340"]);
+});
+
 test("operator fails before navigation when no selectable card exists", async () => {
   const operator = Object.create(FastOperator.prototype);
   operator.ensureXhsFeed = async () => ({ ok: true, activity: "com.xingin.xhs.index.v2.IndexActivityV2" });

@@ -506,6 +506,23 @@ export class FastOperator {
     return this.session.exec(`input tap ${x} ${y}`, 8000);
   }
 
+  // Navigation-only gestures run through a fresh one-shot shell on the Windows
+  // Xiaowei build.  Keep the ordinary tap primitive unchanged because callers
+  // that compose interactive flows may rely on the persistent channel; the
+  // feed-to-note path only needs a bounded tap/back sequence.
+  async navigationShell(command, timeoutMs = 8000) {
+    if (typeof this.session.oneShotShell === "function") {
+      try { return await this.session.oneShotShell(command, timeoutMs); } catch {}
+    }
+    return this.session.exec(command, timeoutMs);
+  }
+
+  async navigationTap(x, y) {
+    await guardFinancialCommit(null);
+    this.metrics.taps += 1;
+    return this.navigationShell(`input tap ${x} ${y}`, 8000);
+  }
+
   // 从 feed document 提取可见卡片。按结构 + 坐标解析，不依赖中文文本（dump 为
   // GBK 乱码时仍稳）。返回每张卡的封面（进详情）、点赞按钮（不进正文点赞）、
   // 头像/作者区（进主页）。bounds 与 center 已预算。
@@ -574,7 +591,7 @@ export class FastOperator {
   // uiautomator "could not get idle state"，此处 tap 屏幕中心暂停视频（仅对 DetailFeed 触发，图笔记 NoteDetail 不动）。
   async openCard(card) {
     if (!card?.cover?.center) throw new Error("card cover not resolved");
-    await this.tap(card.cover.center[0], card.cover.center[1]);
+    await this.navigationTap(card.cover.center[0], card.cover.center[1]);
     await new Promise((r) => setTimeout(r, 900));
     const f = await this.currentFocus();
     const act = f.activity || "";
@@ -665,11 +682,11 @@ export class FastOperator {
 
   // 暂停视频笔记的自动播放：tap 屏幕中心切换播放/暂停。若 tap 偏到别的 activity（理论上不会），BACK 回 NoteDetail。
   async pauseIfVideoNote() {
-    await this.tap(540, 960);
+    await this.navigationTap(540, 960);
     await new Promise((r) => setTimeout(r, 600));
     const f = await this.currentFocus();
     if (!/NoteDetail|DetailFeed/.test(f.activity || "")) {
-      await this.session.exec("input keyevent KEYCODE_BACK", 6000);
+      await this.navigationShell("input keyevent KEYCODE_BACK", 6000);
       await new Promise((r) => setTimeout(r, 500));
     }
     return { paused: true, activity: (await this.currentFocus()).activity };
@@ -701,7 +718,7 @@ export class FastOperator {
   // 返回 feed：BACK 直到回到 IndexActivityV2，最多 maxBack 次。
   async backToFeed(maxBack = 3) {
     for (let i = 0; i < maxBack; i += 1) {
-      await this.session.exec("input keyevent KEYCODE_BACK", 5000);
+      await this.navigationShell("input keyevent KEYCODE_BACK", 5000);
       await new Promise((r) => setTimeout(r, 700));
       const f = await this.currentFocus();
       if ((f.activity || "").includes("IndexActivityV2")) return { back: i + 1, activity: f.activity };
