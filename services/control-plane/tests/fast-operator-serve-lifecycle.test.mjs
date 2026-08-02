@@ -24,6 +24,7 @@ test("install pins each worker launch and atomically generates the compatibility
   assert.match(task, /-Action Restart -Alias/);
   assert.match(task, /WriteAllText\(\$wrapperTemp/);
   assert.match(task, /Move-Item[^\n]+\$wrapperTemp[^\n]+\$wrapperPath[^\n]+-Force/);
+  assert.match(task, /-DontStopOnIdleEnd/);
 });
 
 test("worker fails closed on revision drift and launches FastOperator from that same repository", () => {
