@@ -115,7 +115,26 @@ test("read-only focus prefers one-shot shell before persistent fallback", async 
     activity: "com.xingin.xhs.index.v2.IndexActivityV2",
     raw: "mCurrentFocus=Window{42 u0 com.xingin.xhs/com.xingin.xhs.index.v2.IndexActivityV2}",
   });
-  assert.deepEqual(calls, ["oneShot:dumpsys window 2>/dev/null | grep -E mCurrentFocus"]);
+  assert.deepEqual(calls, ["oneShot:dumpsys window"]);
+});
+
+test("read-only focus prefers exec-out dumpsys window when available", async () => {
+  const operator = Object.create(FastOperator.prototype);
+  const calls = [];
+  operator.session = {
+    execOut: async (args) => {
+      calls.push(args);
+      return Buffer.from("mCurrentFocus=Window{42 u0 com.xingin.xhs/com.xingin.xhs.index.v2.IndexActivityV2}");
+    },
+    oneShotShell: async () => { throw new Error("one-shot focus fallback must not run"); },
+    exec: async () => { throw new Error("persistent focus fallback must not run"); },
+  };
+  assert.deepEqual(await operator.currentFocus(), {
+    package: "com.xingin.xhs",
+    activity: "com.xingin.xhs.index.v2.IndexActivityV2",
+    raw: "mCurrentFocus=Window{42 u0 com.xingin.xhs/com.xingin.xhs.index.v2.IndexActivityV2}",
+  });
+  assert.deepEqual(calls, [["dumpsys", "window"]]);
 });
 
 test("operator formally launches XHS from the desktop before reading the feed", async () => {
@@ -199,7 +218,6 @@ test("operator converts a desktop launcher runtime throw into a retryable no-eff
     message: "adb shell timeout while launching XHS",
   });
   assert.deepEqual(commands, [
-    "dumpsys window 2>/dev/null | grep -E mCurrentFocus",
     "monkey -p com.xingin.xhs -c android.intent.category.LAUNCHER 1",
   ]);
 });

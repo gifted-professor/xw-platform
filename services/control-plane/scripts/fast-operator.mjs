@@ -305,13 +305,19 @@ export class FastOperator {
 
   async currentFocus() {
     const focusCommand = "dumpsys window 2>/dev/null | grep -E mCurrentFocus";
-    // Focus is a read-only probe. Prefer a one-shot shell so a flaky persistent
-    // ADB channel cannot take the long-lived serve down before we can report a
-    // bounded failure. Older test doubles retain the persistent fallback.
-    let out = typeof this.session.oneShotShell === "function"
-      ? await this.session.oneShotShell(focusCommand, 8000).catch(() => null)
-      : null;
-    if (out == null || out === "") {
+    // Focus is a read-only probe.  Do not attach a remote grep pipeline: the
+    // Windows Xiaowei build can terminate the task host when a pipeline is
+    // attached to dumpsys.  Fetch the bounded command output directly and
+    // filter the focus line locally. Older test doubles retain the persistent
+    // fallback.
+    let out = "";
+    if (typeof this.session.execOut === "function") {
+      try { out = (await this.session.execOut(["dumpsys", "window"], 8000)).toString("utf8"); } catch {}
+    }
+    if (!out && typeof this.session.oneShotShell === "function") {
+      out = await this.session.oneShotShell("dumpsys window", 8000).catch(() => "");
+    }
+    if (!out && typeof this.session.execOut !== "function" && typeof this.session.oneShotShell !== "function") {
       out = await this.session.exec(focusCommand, 10000).catch(() => "");
     }
     const m = out.match(/mCurrentFocus=Window\{[^}]+ ([^/}\s]+)\/([^}\s]+)/);
