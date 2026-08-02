@@ -343,40 +343,52 @@ export class FastOperator {
     // Keep the top-activity read one-shot all the way down.  The Windows
     // Xiaowei build can terminate the task host when a shell pipeline (`grep`
     // / `head`) is attached to dumpsys, and the full activity-history dump is
-    // unnecessarily broad for this receipt.  Use the Android activity-shell
-    // top view, fetch its bounded output directly, and filter locally. exec-out is preferred
-    // because it bypasses the remote shell entirely; the simple one-shot shell
-    // is the compatibility fallback.  A persistent fallback is retained only
-    // for old test doubles that expose neither one-shot method.
+    // unnecessarily broad for this receipt.  Prefer `dumpsys activity top`
+    // (exec-out, no pipeline): field evidence showed `cmd activity top` often
+    // returns a tiny unstructured blob on this transport.  one-shot shell is
+    // the compatibility fallback.  A persistent fallback is retained only for
+    // old test doubles that expose neither one-shot method.
     let raw = "";
-    let execOutTimedOut = false;
+    let stopCascade = false;
     const probeAttempts = [];
+    const recordProbe = (transport, outcome) => {
+      probeAttempts.push({ transport, outcome });
+    };
+    const takeText = (value) => String(value == null ? "" : value.toString("utf8"));
     if (typeof this.session.execOut === "function") {
-      try {
-        raw = (await this.session.execOut(["cmd", "activity", "top"], 10000)).toString("utf8");
-        probeAttempts.push({ transport: "exec-out", outcome: raw ? "nonempty" : "empty" });
-      } catch (error) {
-        execOutTimedOut = /exec-out timeout/i.test(String(error?.message || error));
-        probeAttempts.push({ transport: "exec-out", outcome: execOutTimedOut ? "timeout" : "error" });
+      for (const args of [["dumpsys", "activity", "top"], ["cmd", "activity", "top"]]) {
+        if (raw || stopCascade) break;
+        const transport = `exec-out:${args.join(" ")}`;
+        try {
+          raw = takeText(await this.session.execOut(args, 10000));
+          recordProbe(transport, raw ? "nonempty" : "empty");
+        } catch (error) {
+          stopCascade = /exec-out timeout/i.test(String(error?.message || error));
+          recordProbe(transport, stopCascade ? "timeout" : "error");
+        }
       }
     }
-    if (!raw && !execOutTimedOut && typeof this.session.oneShotShell === "function") {
-      try {
-        raw = await this.session.oneShotShell("cmd activity top", 10000);
-        probeAttempts.push({ transport: "one-shot", outcome: raw ? "nonempty" : "empty" });
-      } catch {
-        probeAttempts.push({ transport: "one-shot", outcome: "error" });
+    if (!raw && !stopCascade && typeof this.session.oneShotShell === "function") {
+      for (const command of ["dumpsys activity top", "cmd activity top"]) {
+        if (raw) break;
+        const transport = `one-shot:${command}`;
+        try {
+          raw = takeText(await this.session.oneShotShell(command, 10000));
+          recordProbe(transport, raw ? "nonempty" : "empty");
+        } catch {
+          recordProbe(transport, "error");
+        }
       }
     }
     if (!raw && typeof this.session.execOut !== "function" && typeof this.session.oneShotShell !== "function") {
       try {
-        raw = await this.session.exec(
-          "cmd activity top 2>/dev/null | grep -E 'mResumedActivity|ACTIVITY|Hist #[0-9]+:|Intent \\{|intent=\\{|dat=|clip=|mReferrer=|extras=|note_?[Ii]d' | head -160",
+        raw = takeText(await this.session.exec(
+          "dumpsys activity top 2>/dev/null | grep -E 'mResumedActivity|ACTIVITY|Hist #[0-9]+:|Intent \\{|intent=\\{|dat=|clip=|mReferrer=|extras=|note_?[Ii]d' | head -160",
           10000,
-        );
-        probeAttempts.push({ transport: "legacy-persistent", outcome: raw ? "nonempty" : "empty" });
+        ));
+        recordProbe("legacy-persistent", raw ? "nonempty" : "empty");
       } catch {
-        probeAttempts.push({ transport: "legacy-persistent", outcome: "error" });
+        recordProbe("legacy-persistent", "error");
       }
     }
     const lines = String(raw).split(/\r?\n/);
@@ -389,8 +401,13 @@ export class FastOperator {
       ? `${focus.package}${focus.activity}`
       : focus.activity;
     const isCurrentActivity = (line) => normalizedActivity(line) === normalizedFocusActivity;
+    const isActivityBoundary = (line) =>
+      /\bHist #[0-9]+:/.test(line) || /^\s*ACTIVITY\s/.test(line) || /\bmResumedActivity\b/.test(line);
     let start = lines.findIndex((line) => /\bHist #0:/.test(line) && isCurrentActivity(line));
     if (start < 0) start = lines.findIndex((line) => /^\s*ACTIVITY\s/.test(line) && isCurrentActivity(line));
+    // dumpsys activity top often exposes the resumed record as mResumedActivity
+    // without a Hist #0 / ACTIVITY header; that line is still the current block.
+    if (start < 0) start = lines.findIndex((line) => /\bmResumedActivity\b/.test(line) && isCurrentActivity(line));
     const allowedActivity = /NoteDetailActivity$/.test(focus.activity || "")
       ? "NoteDetailActivity"
       : "DetailFeedActivity";
@@ -436,7 +453,7 @@ export class FastOperator {
       const probeShape = {
         event: "fast-operator.locator-probe-shape",
         activity: allowedActivity,
-        attempts: probeAttempts.slice(0, 2),
+        attempts: probeAttempts.slice(0, 3),
         output: {
           byteBucket: sizeBucket(Buffer.byteLength(String(raw), "utf8")),
           lineBucket: lineBucket(lines.length),
@@ -457,7 +474,7 @@ export class FastOperator {
     }
     let end = lines.length;
     for (let index = start + 1; index < lines.length; index += 1) {
-      if (/\bHist #[0-9]+:/.test(lines[index]) || /^\s*ACTIVITY\s/.test(lines[index])) {
+      if (isActivityBoundary(lines[index])) {
         end = index;
         break;
       }
