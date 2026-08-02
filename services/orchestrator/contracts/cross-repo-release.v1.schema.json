@@ -32,6 +32,15 @@
     "evidenceMode": { "enum": ["legacy", "dual", "v1"] },
     "runtimePolicyVersion": { "const": "xhs.nonpayment-autonomy.v1" },
     "effectiveDecisionSource": { "enum": ["deployed-runtime", "shadow"] },
+    "pilotActors": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "pilotAliases": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "pilotConfigured": { "type": "boolean" },
     "policyDocDebt": {
       "type": "array",
       "items": {
