@@ -1181,6 +1181,8 @@ GO：Windows B 仓为 main、HEAD/task-launch/service report 全 40 SHA 一致�
 
 NO-GO：手改 Windows 源文件；服务 mode 与 release 不一致；部署触发手机动作；访问无关 C 盘。
 
+> **完成实证（2026-08-02，P6-D + P6-R）**：暗部署已落地，GO 门全过。Windows B 仓 main @ `42600e7`、task-launch `gitCommit=42600e7`、manifest 四 SHA（registry=`38bde47`/deviceAgent=`42600e7`/windowsRegistry=`38bde47`/taskLaunch=`42600e7`）全 40 位一致；health 暴露 `policyMode`（shadow/active=false）+`runtimePolicyVersion`+`releaseId`；registry `/api/agent-entry` release 块 present=true、`/agent-entry.md` 有 Release/runtime policy 节；重启前后 0 lease/0 active job/无非终态 job；approvals/devices/面板回归 200。**文档偏差**：上方 manifest 示例写 `effectiveDecisionSource=deployed-runtime`，实际 shadow 模式落 `shadow`——与 `resolvePolicyMode`（shadow 返回 `"shadow"`）及 health/测试断言一致，避免 manifest↔health 不一致；非payment_v1 才落 `deployed-runtime`。**回滚点**：Windows registry.mjs 旧 SHA `5194f262…` = A 仓 commit `4faed268`；控制面回滚 = B checkout `git checkout <旧SHA>` + task-launch gitCommit 同步。
+
 ### Phase 7：alias 01 单机 pilot（需要第三次授权）
 
 先只开放指定 actor + alias 01；现有自由 Explorer 入口保留，不能先拆。
