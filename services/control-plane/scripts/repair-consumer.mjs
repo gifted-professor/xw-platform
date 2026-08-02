@@ -7,11 +7,12 @@
  *
  * Live / production claim-cycle MUST supply --checkpoint <real.json>.
  * --offline-demo-checkpoint is fixture/test only and never used on live paths.
+ * --live-knowledge combined with --offline-demo-checkpoint fails closed before any writes.
  *
  * Does NOT deploy, submit jobs, touch devices, or POST live registry unless
  * --endpoint is explicitly provided with --live-knowledge (still never deploys).
  */
-import { readFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { readFileSync, mkdirSync, writeFileSync, existsSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
 
@@ -100,7 +101,7 @@ function buildSummary({
     device_job: false,
     replay: false,
     self_approve: false,
-    live_claim_to_production_registry: liveKnowledge,
+    live_claim_to_production_registry: liveKnowledge && actionsPerformed.includes("claim"),
   };
   const actionsNotPerformed = Object.entries(knownSideEffects)
     .filter(([, performed]) => !performed)
@@ -109,20 +110,26 @@ function buildSummary({
     ok,
     status,
     reason,
-    proposalId: proposal.proposalId,
-    proposalSha256: proposalSha256(proposal),
-    attempt: consumer.projection?.attempt ?? 0,
-    lockRef: claim?.lockRef || consumer.projection?.claim?.lockRef || null,
-    lockSha256: claim?.lockSha256 || consumer.projection?.claim?.lockSha256 || null,
+    proposalId: proposal?.proposalId ?? null,
+    proposalSha256: proposal ? proposalSha256(proposal) : null,
+    attempt: consumer?.projection?.attempt ?? 0,
+    lockRef: claim?.lockRef || consumer?.projection?.claim?.lockRef || null,
+    lockSha256: claim?.lockSha256 || consumer?.projection?.claim?.lockSha256 || null,
     resumed: Boolean(claim?.resumed),
     sourceCheckpoint: sealed
       ? { outboxRef: sealed.checkpoint.outboxRef, bundleSha256: sealed.checkpoint.bundleSha256 }
       : null,
-    evidenceDebt: consumer.evidenceDebt,
+    evidenceDebt: consumer?.evidenceDebt || [],
     waitingFor: stop?.waitingFor || null,
     actionsPerformed,
     actionsNotPerformed,
   };
+}
+
+function countOutboxEvents(outbox, proposal) {
+  const dir = join(resolve(outbox), proposal.transport.outboxNamespace, "events");
+  if (!existsSync(dir)) return 0;
+  return readdirSync(dir).filter((name) => name.endsWith(".json")).length;
 }
 
 async function main(argv = process.argv.slice(2)) {
@@ -160,9 +167,36 @@ async function main(argv = process.argv.slice(2)) {
     const outbox = option(argv, "--outbox");
     const actor = option(argv, "--actor", "windows-repair-consumer");
     if (!fixture || !outbox) throw new Error("--fixture and --outbox required");
+
+    const liveKnowledge = flag(argv, "--live-knowledge");
+    const offlineDemo = flag(argv, "--offline-demo-checkpoint");
+    // Fail closed before discovery/claim/outbox writes or knowledge POSTs.
+    if (liveKnowledge && offlineDemo) {
+      const summary = {
+        ok: false,
+        reason: "OFFLINE_DEMO_FORBIDDEN_WITH_LIVE_KNOWLEDGE",
+        actionsPerformed: [],
+        actionsNotPerformed: [
+          "discover",
+          "claim",
+          "heartbeat",
+          "start_fixing",
+          "source_checkpoint",
+          "offline_demo_checkpoint",
+          "knowledge_post",
+          "deploy",
+          "device_job",
+          "replay",
+          "self_approve",
+        ],
+      };
+      process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
+      process.exitCode = 2;
+      return;
+    }
+
     mkdirSync(outbox, { recursive: true });
     const proposal = loadFixture(fixture);
-    const liveKnowledge = flag(argv, "--live-knowledge");
     const knowledgeClient = liveKnowledge
       ? createKnowledgeClient({ endpoint: option(argv, "--endpoint", "http://127.0.0.1:17930") })
       : {
@@ -240,6 +274,7 @@ async function main(argv = process.argv.slice(2)) {
       stop,
       liveKnowledge,
     });
+    summary.eventCount = countOutboxEvents(outbox, proposal);
     const summaryPath = join(resolve(outbox), proposal.transport.outboxNamespace, "consumer-summary.json");
     mkdirSync(dirname(summaryPath), { recursive: true });
     writeFileSync(summaryPath, `${JSON.stringify(summary, null, 2)}\n`);

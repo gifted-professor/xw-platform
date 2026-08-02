@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {
   mkdirSync,
   mkdtempSync,
+  existsSync,
   readFileSync,
   readdirSync,
   rmSync,
@@ -170,8 +171,8 @@ test("second claimant loses exclusive lock without mutating projection", async (
   try {
     const a = createRepairConsumer({ outboxRoot: root, actorId: "win-a" });
     const b = createRepairConsumer({ outboxRoot: root, actorId: "win-b" });
-    a.loadProposal(FIRST_PROPOSAL);
-    b.loadProposal(FIRST_PROPOSAL);
+    await a.loadProposal(FIRST_PROPOSAL);
+    await b.loadProposal(FIRST_PROPOSAL);
     const first = await a.tryClaim({ at: new Date("2026-08-02T12:00:00.000Z") });
     const second = await b.tryClaim({ at: new Date("2026-08-02T12:00:00.000Z") });
     assert.equal(first.ok, true);
@@ -216,7 +217,7 @@ test("same eventId different content is rejected by reducer", async () => {
   const root = mkdtempSync(join(tmpdir(), "repair-reducer-idem-"));
   try {
     const consumer = createRepairConsumer({ outboxRoot: root, actorId: "win-idem" });
-    consumer.loadProposal(FIRST_PROPOSAL);
+    await consumer.loadProposal(FIRST_PROPOSAL);
     const claim = await consumer.tryClaim({ at: new Date("2026-08-02T12:00:00.000Z") });
     assert.equal(claim.ok, true);
     const again = applyRepairEvent(FIRST_PROPOSAL, consumer.projection, claim.event, consumer.verifiers);
@@ -238,7 +239,7 @@ test("Windows cannot self-approve, modify verdict, or emit Mac-only events", asy
   const root = mkdtempSync(join(tmpdir(), "repair-self-approve-"));
   try {
     const consumer = createRepairConsumer({ outboxRoot: root, actorId: "win-bad" });
-    consumer.loadProposal(FIRST_PROPOSAL);
+    await consumer.loadProposal(FIRST_PROPOSAL);
     await consumer.tryClaim({ at: new Date("2026-08-02T12:00:00.000Z") });
     await consumer.startFixing({ at: new Date("2026-08-02T12:01:00.000Z") });
     await consumer.sealSourceCheckpoint(checkpointFor(FIRST_PROPOSAL, "win-bad"), { at: new Date("2026-08-02T12:02:00.000Z") });
@@ -296,7 +297,7 @@ test("claim expiry and attempt failure drive circuit breaker via consumer events
   const root = mkdtempSync(join(tmpdir(), "repair-breaker-"));
   try {
     const consumer = createRepairConsumer({ outboxRoot: root, actorId: "win-break" });
-    consumer.loadProposal(FIRST_PROPOSAL);
+    await consumer.loadProposal(FIRST_PROPOSAL);
     assert.equal((await consumer.tryClaim({ at: new Date("2026-08-02T12:00:00.000Z") })).ok, true);
     await consumer.expireClaim({ at: new Date("2026-08-02T12:16:00.000Z") });
     assert.equal(consumer.projection.status, "proposed");
@@ -314,7 +315,7 @@ test("forbidden path and max diff rejected at source checkpoint seal", async () 
   const root = mkdtempSync(join(tmpdir(), "repair-scope-"));
   try {
     const consumer = createRepairConsumer({ outboxRoot: root, actorId: "win-scope" });
-    consumer.loadProposal(FIRST_PROPOSAL);
+    await consumer.loadProposal(FIRST_PROPOSAL);
     await consumer.tryClaim({ at: new Date("2026-08-02T12:00:00.000Z") });
     await consumer.startFixing({ at: new Date("2026-08-02T12:01:00.000Z") });
     const bad = checkpointFor(FIRST_PROPOSAL, "win-scope");
@@ -349,7 +350,7 @@ test("knowledge client discovery parses registry envelopes offline", async () =>
   assert.equal(list[0].proposalId, FIRST_PROPOSAL.proposalId);
 });
 
-test("unauthorized deploy/replay paths remain rejected without trusted keys", () => {
+test("unauthorized deploy/replay paths remain rejected without trusted keys", async () => {
   const root = mkdtempSync(join(tmpdir(), "repair-noreplay-"));
   try {
     const consumer = createRepairConsumer({
@@ -357,7 +358,7 @@ test("unauthorized deploy/replay paths remain rejected without trusted keys", ()
       actorId: "win-noreplay",
       replayAuthorizationPublicKeys: {},
     });
-    consumer.loadProposal(FIRST_PROPOSAL);
+    await consumer.loadProposal(FIRST_PROPOSAL);
     assert.equal(
       consumer.verifiers.verifyReplayAuthorization({
         proposal: FIRST_PROPOSAL,
@@ -386,13 +387,13 @@ test("restart recovery resumes same-actor claim and continues heartbeat/fixing",
   const root = mkdtempSync(join(tmpdir(), "repair-restart-"));
   try {
     const first = createRepairConsumer({ outboxRoot: root, actorId: "win-restart" });
-    first.loadProposal(FIRST_PROPOSAL);
+    await first.loadProposal(FIRST_PROPOSAL);
     const claim = await first.tryClaim({ at: new Date("2026-08-02T12:00:00.000Z") });
     assert.equal(claim.ok, true);
     await first.heartbeat({ at: new Date("2026-08-02T12:01:00.000Z") });
 
     const restarted = createRepairConsumer({ outboxRoot: root, actorId: "win-restart" });
-    restarted.loadProposal(FIRST_PROPOSAL);
+    await restarted.loadProposal(FIRST_PROPOSAL);
     assert.equal(restarted.projection.status, "claimed");
     assert.equal(restarted.projection.claim.holder, "win-restart");
     assert.equal(restarted.projection.attempt, 1);
@@ -411,11 +412,11 @@ test("restart after expired claim writes claim_expired then claims next attempt"
   const root = mkdtempSync(join(tmpdir(), "repair-expired-restart-"));
   try {
     const first = createRepairConsumer({ outboxRoot: root, actorId: "win-exp" });
-    first.loadProposal(FIRST_PROPOSAL);
+    await first.loadProposal(FIRST_PROPOSAL);
     assert.equal((await first.tryClaim({ at: new Date("2026-08-02T12:00:00.000Z") })).ok, true);
 
     const restarted = createRepairConsumer({ outboxRoot: root, actorId: "win-exp" });
-    restarted.loadProposal(FIRST_PROPOSAL);
+    await restarted.loadProposal(FIRST_PROPOSAL);
     const next = await restarted.ensureClaim({ at: new Date("2026-08-02T12:16:00.000Z") });
     assert.equal(next.ok, true);
     assert.equal(restarted.projection.attempt, 2);
@@ -432,7 +433,7 @@ test("duplicate events and event collisions are handled on recovery", async () =
   const root = mkdtempSync(join(tmpdir(), "repair-dup-events-"));
   try {
     const consumer = createRepairConsumer({ outboxRoot: root, actorId: "win-dup" });
-    consumer.loadProposal(FIRST_PROPOSAL);
+    await consumer.loadProposal(FIRST_PROPOSAL);
     const claim = await consumer.tryClaim({ at: new Date("2026-08-02T12:00:00.000Z") });
     writeAppendOnlyEvent(root, FIRST_PROPOSAL, claim.event); // idempotent re-append
     const reduced = reduceOutboxEvents(FIRST_PROPOSAL, listOutboxEvents(root, FIRST_PROPOSAL), consumer.verifiers);
@@ -466,7 +467,7 @@ test("orphan claim.lock after event write failure is cleared on restart", async 
         return writeAppendOnlyEvent(outboxRoot, proposal, event);
       },
     });
-    consumer.loadProposal(FIRST_PROPOSAL);
+    await consumer.loadProposal(FIRST_PROPOSAL);
     const failed = await consumer.tryClaim({ at: new Date("2026-08-02T12:00:00.000Z") });
     assert.equal(failed.ok, false);
     assert.equal(failed.orphanLock, true);
@@ -475,7 +476,7 @@ test("orphan claim.lock after event write failure is cleared on restart", async 
 
     failWrite = false;
     const restarted = createRepairConsumer({ outboxRoot: root, actorId: "win-orphan" });
-    restarted.loadProposal(FIRST_PROPOSAL);
+    await restarted.loadProposal(FIRST_PROPOSAL);
     const claimed = await restarted.tryClaim({ at: new Date("2026-08-02T12:01:00.000Z") });
     assert.equal(claimed.ok, true);
     assert.equal(restarted.projection.status, "claimed");
@@ -495,7 +496,7 @@ test("event write failure does not advance in-memory projection", async () => {
         throw new Error("disk full");
       },
     });
-    consumer.loadProposal(FIRST_PROPOSAL);
+    await consumer.loadProposal(FIRST_PROPOSAL);
     const before = structuredClone(consumer.projection);
     const result = await consumer.tryClaim({ at: new Date("2026-08-02T12:00:00.000Z") });
     assert.equal(result.ok, false);
@@ -611,36 +612,183 @@ test("live CLI refuses fake demo checkpoint without --offline-demo-checkpoint", 
   rmSync(root, { recursive: true, force: true });
 });
 
-test("scope guard allowlist rejects a 17th unauthorized file in the union set", async () => {
+test("live-knowledge + offline-demo-checkpoint fails closed with zero posts/events", async () => {
+  const http = await import("node:http");
+  const root = mkdtempSync(join(tmpdir(), "repair-live-demo-forbid-"));
+  const fixture = join(root, "proposal.json");
+  const outbox = join(root, "outbox");
+  writeFileSync(fixture, `${JSON.stringify(FIRST_PROPOSAL)}\n`);
+  mkdirSync(outbox, { recursive: true });
+
+  let posts = 0;
+  let gets = 0;
+  const server = http.createServer((req, res) => {
+    if (req.method === "GET") gets += 1;
+    if (req.method === "POST") posts += 1;
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ knowledge: [] }));
+  });
+  await new Promise((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
+  const { port } = server.address();
+  try {
+    const { main } = await import("../scripts/repair-consumer.mjs");
+    await main([
+      "claim-cycle",
+      "--fixture", fixture,
+      "--outbox", outbox,
+      "--actor", "win-live-demo",
+      "--live-knowledge",
+      "--offline-demo-checkpoint",
+      "--endpoint", `http://127.0.0.1:${port}`,
+    ]);
+    assert.equal(process.exitCode, 2);
+    process.exitCode = 0;
+    const ns = join(outbox, FIRST_PROPOSAL.transport.outboxNamespace);
+    assert.equal(existsSync(join(ns, "events")), false);
+    assert.equal(posts, 0);
+    assert.equal(gets, 0);
+    const files = existsSync(outbox) ? readdirSync(outbox) : [];
+    assert.ok(!files.some((name) => name.includes("source-checkpoint")));
+  } finally {
+    await new Promise((resolveClose) => server.close(resolveClose));
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("same now claim→heartbeat→start_fixing survives restart reduce as fixing", async () => {
+  const root = mkdtempSync(join(tmpdir(), "repair-same-now-"));
+  try {
+    const frozen = new Date("2026-08-02T12:00:00.000Z");
+    const first = createRepairConsumer({
+      outboxRoot: root,
+      actorId: "win-same-now",
+      now: () => frozen,
+    });
+    await first.loadProposal(FIRST_PROPOSAL);
+    assert.equal((await first.tryClaim({ at: frozen })).ok, true);
+    await first.heartbeat({ at: frozen });
+    await first.startFixing({ at: frozen });
+    assert.equal(first.projection.status, "fixing");
+    const events = first.listEvents();
+    assert.equal(events.length, 3);
+    assert.ok(Date.parse(events[0].occurredAt) < Date.parse(events[1].occurredAt));
+    assert.ok(Date.parse(events[1].occurredAt) < Date.parse(events[2].occurredAt));
+    assert.ok(events.every((e) => e.occurredAt.includes(".00"))); // ms present, not truncated away incorrectly
+    // Explicitly ensure not all truncated to identical whole-second stamps.
+    assert.equal(new Set(events.map((e) => e.occurredAt)).size, 3);
+
+    const restarted = createRepairConsumer({ outboxRoot: root, actorId: "win-same-now" });
+    await restarted.loadProposal(FIRST_PROPOSAL);
+    assert.equal(restarted.projection.status, "fixing");
+    assert.equal(restarted.projection.attempt, 1);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("crash before mirror leaves durable debt and restarts retry successfully", async () => {
+  const root = mkdtempSync(join(tmpdir(), "repair-crash-mirror-"));
+  try {
+    let crash = true;
+    const posts = [];
+    const knowledgeClient = {
+      async listRepairProposals() { return [FIRST_PROPOSAL]; },
+      async postKnowledge(envelope) {
+        posts.push(envelope.id);
+        return { ok: true, debt: false, id: envelope.id };
+      },
+    };
+    const first = createRepairConsumer({
+      outboxRoot: root,
+      actorId: "win-crash-mirror",
+      knowledgeClient,
+      afterEventPersist: async () => {
+        if (crash) throw new Error("simulated crash before mirror");
+      },
+    });
+    await first.loadProposal(FIRST_PROPOSAL);
+    const claim = await first.tryClaim({ at: new Date("2026-08-02T12:00:00.000Z") });
+    assert.equal(claim.ok, false);
+    assert.equal(first.projection.status, "claimed"); // event persisted + memory advanced before crash hook
+    assert.equal(posts.length, 0);
+    assert.equal(first.listEvents().length, 1);
+
+    crash = false;
+    const restarted = createRepairConsumer({
+      outboxRoot: root,
+      actorId: "win-crash-mirror",
+      knowledgeClient,
+    });
+    await restarted.loadProposal(FIRST_PROPOSAL);
+    assert.equal(restarted.projection.status, "claimed");
+    assert.equal(posts.length, 1);
+    assert.equal(restarted.evidenceDebt.length, 0);
+    const receiptDir = join(root, FIRST_PROPOSAL.transport.outboxNamespace, "knowledge-mirrors");
+    assert.equal(readdirSync(receiptDir).length, 1);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("knowledge mirror failure persists debt and thrown postKnowledge becomes debt", async () => {
+  const root = mkdtempSync(join(tmpdir(), "repair-debt-persist-"));
+  try {
+    let mode = "fail";
+    const knowledgeClient = {
+      async listRepairProposals() { return [FIRST_PROPOSAL]; },
+      async postKnowledge(envelope) {
+        if (mode === "fail") return { ok: false, debt: true, status: 500, code: "DOWN" };
+        if (mode === "throw") throw new Error("boom");
+        return { ok: true, debt: false, id: envelope.id };
+      },
+    };
+    const consumer = createRepairConsumer({ outboxRoot: root, actorId: "win-debt-persist", knowledgeClient });
+    await consumer.discoverAndSelect({ expectedProposalId: FIRST_PROPOSAL.proposalId, expectedProposalSha256: EXPECTED_SHA });
+    const claim = await consumer.tryClaim({ at: new Date("2026-08-02T12:00:00.000Z") });
+    assert.equal(claim.ok, true);
+    assert.equal(consumer.projection.status, "claimed");
+    assert.equal(consumer.evidenceDebt[0].code, "KNOWLEDGE_MIRROR_FAILED");
+    const debtDir = join(root, FIRST_PROPOSAL.transport.outboxNamespace, "evidence-debt");
+    assert.equal(readdirSync(debtDir).length, 1);
+
+    const restarted = createRepairConsumer({ outboxRoot: root, actorId: "win-debt-persist", knowledgeClient });
+    mode = "throw";
+    await restarted.loadProposal(FIRST_PROPOSAL);
+    assert.ok(restarted.evidenceDebt.length >= 1);
+    assert.equal(restarted.projection.status, "claimed");
+
+    mode = "ok";
+    await restarted.retryPendingMirrors();
+    assert.equal(restarted.evidenceDebt.length, 0);
+    assert.equal(readdirSync(join(root, FIRST_PROPOSAL.transport.outboxNamespace, "knowledge-mirrors")).length, 1);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("scope guard exact allowlist rejects repair-extra and invalid baseline", async () => {
   const {
     REPAIR_CONSUMER_ALLOWED_PATHS,
     evaluateScopeGuard,
+    collectTouchedFiles,
   } = await import("../scripts/repair-consumer-scope-guard.mjs");
-  const authorized = [
-    "contracts/repair-completion.v1.schema.json",
-    "contracts/repair-event.v1.schema.json",
-    "contracts/repair-proposal.v1.schema.json",
-    "contracts/repair-replay-authorization.v1.schema.json",
-    "contracts/repair-review-authority.v1.schema.json",
-    "contracts/repair-source-checkpoint.v1.schema.json",
-    "docs/handoffs/2026-08-02-windows-repair-consumer-contract.md",
-    "docs/handoffs/2026-08-02-xhs-observe-feed-repair-proposal.v1.json",
-    "scripts/create-repair-proposal.mjs",
-    "scripts/lib/repair-authority-verifiers.mjs",
-    "scripts/lib/repair-consumer.mjs",
-    "scripts/lib/repair-proposal.mjs",
-    "scripts/repair-consumer-scope-guard.mjs",
-    "scripts/repair-consumer.mjs",
-    "tests/repair-consumer.test.mjs",
-    "tests/repair-proposal.test.mjs",
-  ];
-  assert.equal(authorized.length, 16);
+  assert.equal(REPAIR_CONSUMER_ALLOWED_PATHS.size, 16);
+  assert.equal(REPAIR_CONSUMER_ALLOWED_PATHS instanceof Set, true);
+  const authorized = [...REPAIR_CONSUMER_ALLOWED_PATHS];
   assert.equal(evaluateScopeGuard(authorized).ok, true);
-  const withSeventeenth = [...authorized, "unauthorized/extra-17.md"];
-  const rejected = evaluateScopeGuard(withSeventeenth);
-  assert.equal(rejected.ok, false);
-  assert.deepEqual(rejected.unauthorized, ["unauthorized/extra-17.md"]);
-  assert.equal(REPAIR_CONSUMER_ALLOWED_PATHS.some((p) => p.test("skills/SKILL.md")), false);
+  assert.equal(
+    evaluateScopeGuard([...authorized, "contracts/repair-extra.v1.schema.json"]).ok,
+    false,
+  );
+  assert.deepEqual(
+    evaluateScopeGuard([...authorized, "contracts/repair-extra.v1.schema.json"]).unauthorized,
+    ["contracts/repair-extra.v1.schema.json"],
+  );
+
+  assert.throws(
+    () => collectTouchedFiles("definitely-not-a-valid-git-ref-zzzz"),
+    /failed|unknown|invalid|Needed a single revision/i,
+  );
 
   const live = spawnSync(process.execPath, [
     resolve("scripts/repair-consumer-scope-guard.mjs"),
@@ -648,4 +796,13 @@ test("scope guard allowlist rejects a 17th unauthorized file in the union set", 
   ], { cwd: resolve("."), encoding: "utf8" });
   assert.equal(live.status, 0, live.stdout + live.stderr);
   assert.equal(JSON.parse(live.stdout).ok, true);
+
+  const badBase = spawnSync(process.execPath, [
+    resolve("scripts/repair-consumer-scope-guard.mjs"),
+    "not-a-real-baseline-ref",
+  ], { cwd: resolve("."), encoding: "utf8" });
+  assert.notEqual(badBase.status, 0);
+  const body = JSON.parse(badBase.stdout);
+  assert.equal(body.ok, false);
+  assert.ok(body.error);
 });

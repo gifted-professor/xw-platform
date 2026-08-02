@@ -348,6 +348,7 @@ export function createRepairConsumer({
   completionRoot = null,
   replayAuthorizationPublicKeys = {},
   writeEventImpl = writeAppendOnlyEvent,
+  afterEventPersist = null,
   now = () => new Date(),
 } = {}) {
   if (!outboxRoot) throw new Error("outboxRoot required");
@@ -369,19 +370,81 @@ export function createRepairConsumer({
     mirroredEventIds: new Set(),
   };
 
-  function iso(at = now()) {
+  function toIsoMs(at = now()) {
     const date = at instanceof Date ? at : new Date(at);
-    return `${date.toISOString().slice(0, 19)}.000Z`;
+    if (Number.isNaN(date.getTime())) throw new Error(`invalid time: ${at}`);
+    return date.toISOString();
+  }
+
+  /** Strictly after projection.lastOccurredAt; bumps at least +1ms when caller time stalls or goes backward. */
+  function nextOccurredAt(at = now()) {
+    let ms = Date.parse(toIsoMs(at));
+    const last = state.projection?.lastOccurredAt
+      ? Date.parse(state.projection.lastOccurredAt)
+      : Number.NaN;
+    if (!Number.isNaN(last) && ms <= last) ms = last + 1;
+    return new Date(ms).toISOString();
+  }
+
+  function mirrorReceiptRef(eventId) {
+    return `${state.proposal.transport.outboxNamespace}/knowledge-mirrors/${eventId}.json`;
+  }
+
+  function debtRef(eventId) {
+    return `${state.proposal.transport.outboxNamespace}/evidence-debt/${eventId}.json`;
+  }
+
+  function persistMirrorDebt(eventId, cause) {
+    const debt = {
+      schemaId: "xhs.repair-evidence-debt.v1",
+      schemaVersion: 1,
+      layer: "repair-transport",
+      code: "KNOWLEDGE_MIRROR_FAILED",
+      cause,
+      at: toIsoMs(),
+      businessResultUnchanged: true,
+      envelopeId: eventId,
+    };
+    atomicReplaceJson(outboxRoot, debtRef(eventId), debt);
+    const without = state.evidenceDebt.filter((item) => item.envelopeId !== eventId);
+    without.push(debt);
+    state.evidenceDebt = without;
+    return debt;
+  }
+
+  function hydrateMirrorStateFromOutbox() {
+    if (!state.proposal) return;
+    const ns = state.proposal.transport.outboxNamespace;
+    const mirrorsDir = join(outboxRoot, ...`${ns}/knowledge-mirrors`.split("/"));
+    state.mirroredEventIds = new Set();
+    if (existsSync(mirrorsDir)) {
+      for (const name of readdirSync(mirrorsDir)) {
+        if (!name.endsWith(".json")) continue;
+        state.mirroredEventIds.add(name.replace(/\.json$/, ""));
+      }
+    }
+    const debtDir = join(outboxRoot, ...`${ns}/evidence-debt`.split("/"));
+    state.evidenceDebt = [];
+    if (existsSync(debtDir)) {
+      for (const name of readdirSync(debtDir).sort()) {
+        if (!name.endsWith(".json")) continue;
+        const full = join(debtDir, name);
+        assertNotSymlink(full, "evidence debt");
+        state.evidenceDebt.push(JSON.parse(readFileSync(full, "utf8")));
+      }
+    }
   }
 
   function recoverProjection(proposal) {
     return reduceOutboxEvents(proposal, listOutboxEvents(outboxRoot, proposal), verifiers);
   }
 
-  function loadOrInit(proposal) {
+  async function loadOrInit(proposal) {
     assertProposalReadyForClaim(proposal);
     state.proposal = proposal;
     state.projection = recoverProjection(proposal);
+    hydrateMirrorStateFromOutbox();
+    await retryPendingMirrors();
     return state.projection;
   }
 
@@ -389,18 +452,37 @@ export function createRepairConsumer({
     if (!knowledgeClient) {
       return { ok: false, debt: true, skipped: true, code: "KNOWLEDGE_CLIENT_ABSENT" };
     }
-    const result = await knowledgeClient.postKnowledge(envelope);
-    if (result.debt) {
-      state.evidenceDebt.push({
-        layer: "repair-transport",
-        code: "KNOWLEDGE_MIRROR_FAILED",
-        cause: result.error || result.code || `status ${result.status}`,
-        at: iso(),
-        businessResultUnchanged: true,
-        envelopeId: envelope?.id || null,
-      });
+    try {
+      const result = await knowledgeClient.postKnowledge(envelope);
+      if (result?.debt) {
+        if (!result.skipped && envelope?.id) {
+          persistMirrorDebt(envelope.id, result.error || result.code || `status ${result.status}`);
+        } else {
+          state.evidenceDebt.push({
+            layer: "repair-transport",
+            code: "KNOWLEDGE_MIRROR_FAILED",
+            cause: result.error || result.code || `status ${result.status}`,
+            at: toIsoMs(),
+            businessResultUnchanged: true,
+            envelopeId: envelope?.id || null,
+          });
+        }
+      }
+      return result;
+    } catch (error) {
+      if (envelope?.id) persistMirrorDebt(envelope.id, error.message || "postKnowledge threw");
+      else {
+        state.evidenceDebt.push({
+          layer: "repair-transport",
+          code: "KNOWLEDGE_MIRROR_FAILED",
+          cause: error.message || "postKnowledge threw",
+          at: toIsoMs(),
+          businessResultUnchanged: true,
+          envelopeId: null,
+        });
+      }
+      return { ok: false, debt: true, error: error.message || String(error) };
     }
-    return result;
   }
 
   async function mirrorEventAfterPersist(event) {
@@ -408,25 +490,57 @@ export function createRepairConsumer({
       return { ok: true, debt: false, idempotent: true, id: event.eventId };
     }
     const result = await mirrorKnowledge(repairEventKnowledgeEnvelope(event));
-    if (result.ok) state.mirroredEventIds.add(event.eventId);
+    if (result.ok) {
+      const written = exclusiveWriteJson(outboxRoot, mirrorReceiptRef(event.eventId), {
+        schemaId: "xhs.repair-knowledge-mirror-receipt.v1",
+        schemaVersion: 1,
+        eventId: event.eventId,
+        mirroredAt: toIsoMs(),
+        knowledgeId: result.id || event.eventId,
+      });
+      if (!written.ok && written.reason !== "EEXIST") {
+        persistMirrorDebt(event.eventId, `mirror receipt write failed: ${written.reason}`);
+        return result;
+      }
+      state.mirroredEventIds.add(event.eventId);
+      const debtPath = join(outboxRoot, ...debtRef(event.eventId).split("/"));
+      if (existsSync(debtPath)) {
+        try { unlinkSync(debtPath); } catch { /* ignore */ }
+        state.evidenceDebt = state.evidenceDebt.filter((item) => item.envelopeId !== event.eventId);
+      }
+    }
     return result;
+  }
+
+  async function retryPendingMirrors() {
+    if (!state.proposal || !knowledgeClient) return [];
+    const results = [];
+    for (const event of listOutboxEvents(outboxRoot, state.proposal)) {
+      if (state.mirroredEventIds.has(event.eventId)) continue;
+      results.push(await mirrorEventAfterPersist(event));
+    }
+    return results;
   }
 
   async function appendEvent(eventType, payload = {}, at = now()) {
     if (!state.proposal || !state.projection) throw new Error("consumer has no active proposal");
     rejectUnauthorizedWindowsEvent(eventType);
+    const occurredAt = nextOccurredAt(at);
     const event = createRepairEvent(state.proposal, state.projection, {
       eventType,
       actor: { role: "windows_consumer", id: actorId },
-      occurredAt: iso(at),
+      occurredAt,
       payload,
     });
     // Pure reducer first — memory projection advances only after durable append succeeds.
     const nextProjection = applyRepairEvent(state.proposal, state.projection, event, verifiers);
     const eventPath = writeEventImpl(outboxRoot, state.proposal, event);
     state.projection = nextProjection;
+    if (typeof afterEventPersist === "function") {
+      await afterEventPersist({ event, eventPath, projection: state.projection });
+    }
     const mirror = await mirrorEventAfterPersist(event);
-    return { event, projection: state.projection, eventPath, mirror };
+    return { event, projection: state.projection, eventPath, mirror, occurredAt };
   }
 
   function clearOrphanClaimLock(lockRef, lockPath, at) {
@@ -436,7 +550,7 @@ export function createRepairConsumer({
     if (orphan.attempt !== state.projection.attempt + 1) return false;
     // Lock without a matching claim event (projection still proposed) is an orphan.
     if (state.projection.status !== "proposed") return false;
-    const expired = !orphan.expiresAt || Date.parse(iso(at)) >= Date.parse(orphan.expiresAt);
+    const expired = !orphan.expiresAt || Date.parse(toIsoMs(at)) >= Date.parse(orphan.expiresAt);
     if (orphan.actorId !== actorId && !expired) return false;
     assertSafeOutboxRef(lockRef);
     const resolved = resolveWritableOutboxPath(outboxRoot, lockRef);
@@ -449,7 +563,7 @@ export function createRepairConsumer({
     if (!state.proposal) throw new Error("load proposal before claim");
     if (ACTIVE_CLAIM.has(state.projection.status) && state.projection.claim?.holder === actorId) {
       const expired = state.projection.claim.expiresAt
-        && Date.parse(iso(at)) >= Date.parse(state.projection.claim.expiresAt);
+        && Date.parse(toIsoMs(at)) >= Date.parse(state.projection.claim.expiresAt);
       if (!expired) {
         return {
           ok: true,
@@ -463,9 +577,9 @@ export function createRepairConsumer({
     }
 
     const attempt = state.projection.attempt + 1;
-    const claimedAt = iso(at);
+    const claimedAt = nextOccurredAt(at);
     const ttlSeconds = state.proposal.policy.heartbeat.claimTtlSeconds;
-    const expiresAt = iso(new Date(Date.parse(claimedAt) + ttlSeconds * 1000));
+    const expiresAt = new Date(Date.parse(claimedAt) + ttlSeconds * 1000).toISOString();
     const lock = {
       schemaId: "xhs.repair-claim-lock.v1",
       schemaVersion: 1,
@@ -494,7 +608,7 @@ export function createRepairConsumer({
         expiresAt,
         lockRef,
         lockSha256: acquired.sha256,
-      }, at);
+      }, claimedAt);
       return {
         ok: true,
         resumed: false,
@@ -533,9 +647,11 @@ export function createRepairConsumer({
     },
     verifiers,
     loadProposal: loadOrInit,
+    retryPendingMirrors,
     recoverFromOutbox() {
       if (!state.proposal) throw new Error("load proposal before recover");
       state.projection = recoverProjection(state.proposal);
+      hydrateMirrorStateFromOutbox();
       return state.projection;
     },
     listEvents() {
@@ -565,16 +681,16 @@ export function createRepairConsumer({
       if (
         ACTIVE_CLAIM.has(state.projection.status)
         && state.projection.claim?.expiresAt
-        && Date.parse(iso(at)) >= Date.parse(state.projection.claim.expiresAt)
+        && Date.parse(toIsoMs(at)) >= Date.parse(state.projection.claim.expiresAt)
       ) {
         await appendEvent("claim_expired", {}, at);
       }
       return tryClaim({ at });
     },
     async heartbeat({ at = now() } = {}) {
-      const heartbeatAt = iso(at);
+      const heartbeatAt = nextOccurredAt(at);
       const ttlSeconds = state.proposal.policy.heartbeat.claimTtlSeconds;
-      const expiresAt = iso(new Date(Date.parse(heartbeatAt) + ttlSeconds * 1000));
+      const expiresAt = new Date(Date.parse(heartbeatAt) + ttlSeconds * 1000).toISOString();
       const receiptRef = `${state.proposal.transport.outboxNamespace}/attempt-${state.projection.attempt}/heartbeat.json`;
       atomicReplaceJson(outboxRoot, receiptRef, {
         schemaId: "xhs.repair-heartbeat.v1",
@@ -589,7 +705,7 @@ export function createRepairConsumer({
       return appendEvent("heartbeat", {
         expiresAt,
         lockSha256: state.projection.claim.lockSha256,
-      }, at);
+      }, heartbeatAt);
     },
     async startFixing({ at = now() } = {}) {
       return appendEvent("start_fixing", {}, at);
