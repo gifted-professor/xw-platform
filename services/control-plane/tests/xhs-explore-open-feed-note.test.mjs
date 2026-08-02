@@ -69,6 +69,24 @@ test("operator fails before navigation when no selectable card exists", async ()
   });
 });
 
+test("dump uses a one-shot shell before the persistent-shell fallback", async () => {
+  const operator = Object.create(FastOperator.prototype);
+  operator.metrics = { dumps: 0, totalDumpMs: 0 };
+  operator.session = {
+    execOut: async () => { throw new Error("exec-out unavailable"); },
+    oneShotShell: async () => (
+      '<hierarchy rotation="0"><node class="android.widget.FrameLayout" '
+      + 'bounds="[0,0][1080,2400]" clickable="false" /></hierarchy>'
+    ),
+    exec: async () => { throw new Error("persistent shell must not be used"); },
+  };
+
+  const doc = await operator.dump({ label: "one-shot-fallback", retries: 0 });
+  assert.equal(doc.nodes.length, 1);
+  assert.equal(doc._label, "one-shot-fallback");
+  assert.equal(operator.metrics.dumps, 1);
+});
+
 test("operator formally launches XHS from the desktop before reading the feed", async () => {
   const operator = Object.create(FastOperator.prototype);
   const trace = [];

@@ -406,10 +406,18 @@ export class FastOperator {
       try {
         buf = await this.session.execOut(["uiautomator", "dump", "/dev/tty"], 15000);
       } catch (e) {
-        // 退路：写到 /sdcard 再 cat
-        await this.session.exec("uiautomator dump /sdcard/fo-dump.xml 2>/dev/null", 15000);
-        try { buf = await this.session.execOut(["cat", "/sdcard/fo-dump.xml"], 10000); }
-        catch (e2) { lastErr = e2; if (attempt < retries) { await new Promise((r) => setTimeout(r, 600)); continue; } throw e2; }
+        // 某些设备上 exec-out 会瞬时失败，而持久 shell 随后也会立刻退出。
+        // 先用一次性 shell 取同一份只读 hierarchy，避免把已中毒的持久会话
+        // 当作唯一退路；正常路径与授权边界均不变。
+        try {
+          const oneShot = await this.session.oneShotShell("uiautomator dump /dev/tty 2>/dev/null", 15000);
+          buf = Buffer.from(oneShot, "utf8");
+        } catch (oneShotError) {
+          // 最后保留原有的 /sdcard + cat 退路（例如设备只接受文件输出）。
+          await this.session.exec("uiautomator dump /sdcard/fo-dump.xml 2>/dev/null", 15000);
+          try { buf = await this.session.execOut(["cat", "/sdcard/fo-dump.xml"], 10000); }
+          catch (e2) { lastErr = e2; if (attempt < retries) { await new Promise((r) => setTimeout(r, 600)); continue; } throw e2; }
+        }
       }
       const xml = buf ? buf.toString("utf8") : "";
       // uiautomator "could not get idle state" 偶发把错误文本混进 stdout 或只产截断 XML——
