@@ -23,6 +23,7 @@ export const REPAIR_CONSUMER_ALLOWED_PATHS = new Set([
   "scripts/lib/repair-proposal.mjs",
   "scripts/repair-consumer-scope-guard.mjs",
   "scripts/repair-consumer.mjs",
+  "tests/repair-consumer-matrix.test.mjs",
   "tests/repair-consumer.test.mjs",
   "tests/repair-proposal.test.mjs",
 ]);

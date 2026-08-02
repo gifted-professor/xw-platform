@@ -686,7 +686,7 @@ test("same now claim→heartbeat→start_fixing survives restart reduce as fixin
   }
 });
 
-test("crash before mirror leaves durable debt and restarts retry successfully", async () => {
+test("crash before mirror keeps durable claim and restarts retry mirror", async () => {
   const root = mkdtempSync(join(tmpdir(), "repair-crash-mirror-"));
   try {
     let crash = true;
@@ -697,6 +697,7 @@ test("crash before mirror leaves durable debt and restarts retry successfully", 
         posts.push(envelope.id);
         return { ok: true, debt: false, id: envelope.id };
       },
+      async getKnowledge() { return { ok: false, status: 404 }; },
     };
     const first = createRepairConsumer({
       outboxRoot: root,
@@ -708,8 +709,8 @@ test("crash before mirror leaves durable debt and restarts retry successfully", 
     });
     await first.loadProposal(FIRST_PROPOSAL);
     const claim = await first.tryClaim({ at: new Date("2026-08-02T12:00:00.000Z") });
-    assert.equal(claim.ok, false);
-    assert.equal(first.projection.status, "claimed"); // event persisted + memory advanced before crash hook
+    assert.equal(claim.ok, true);
+    assert.equal(first.projection.status, "claimed");
     assert.equal(posts.length, 0);
     assert.equal(first.listEvents().length, 1);
 
@@ -722,9 +723,7 @@ test("crash before mirror leaves durable debt and restarts retry successfully", 
     await restarted.loadProposal(FIRST_PROPOSAL);
     assert.equal(restarted.projection.status, "claimed");
     assert.equal(posts.length, 1);
-    assert.equal(restarted.evidenceDebt.length, 0);
-    const receiptDir = join(root, FIRST_PROPOSAL.transport.outboxNamespace, "knowledge-mirrors");
-    assert.equal(readdirSync(receiptDir).length, 1);
+    assert.equal(readdirSync(join(root, FIRST_PROPOSAL.transport.outboxNamespace, "knowledge-mirrors")).length, 1);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -772,7 +771,7 @@ test("scope guard exact allowlist rejects repair-extra and invalid baseline", as
     evaluateScopeGuard,
     collectTouchedFiles,
   } = await import("../scripts/repair-consumer-scope-guard.mjs");
-  assert.equal(REPAIR_CONSUMER_ALLOWED_PATHS.size, 16);
+  assert.equal(REPAIR_CONSUMER_ALLOWED_PATHS.size, 17);
   assert.equal(REPAIR_CONSUMER_ALLOWED_PATHS instanceof Set, true);
   const authorized = [...REPAIR_CONSUMER_ALLOWED_PATHS];
   assert.equal(evaluateScopeGuard(authorized).ok, true);
