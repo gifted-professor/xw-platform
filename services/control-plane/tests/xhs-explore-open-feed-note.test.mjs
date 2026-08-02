@@ -214,6 +214,32 @@ test("adapter dispatches and seals the combined navigation observation", async (
   assert.equal(adapter.buildExplicitObservationReceipt({ capability, execution }).targetFingerprint, "b".repeat(64));
 });
 
+test("note locator observation prefers a one-shot activity dump over the persistent shell", async () => {
+  const operator = Object.create(FastOperator.prototype);
+  const calls = [];
+  operator.currentFocus = async () => ({
+    package: "com.xingin.xhs",
+    activity: "com.xingin.xhs.note.NoteDetailActivity",
+  });
+  operator.session = {
+    oneShotShell: async (command) => {
+      calls.push(`oneShot:${command}`);
+      return "Hist #0: ActivityRecord{ com.xingin.xhs/.note.NoteDetailActivity }\\n"
+        + "  Intent { dat=xhsdiscover://item/0123456789abcdef01234567 }";
+    },
+    exec: async () => {
+      calls.push("persistent");
+      throw new Error("persistent locator fallback must not run");
+    },
+  };
+
+  const result = await operator.observeOpenNoteDetail();
+  assert.equal(result.ok, true);
+  assert.equal(result.targetFingerprint.length, 64);
+  assert.equal(calls.length, 1);
+  assert.match(calls[0], /^oneShot:dumpsys activity activities/);
+});
+
 test("real serve switch exposes only the bounded openFeedNote method", async (t) => {
   const calls = [];
   const server = serve(0, {

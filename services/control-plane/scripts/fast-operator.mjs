@@ -326,10 +326,18 @@ export class FastOperator {
     if (focus.package !== "com.xingin.xhs" || !/(?:NoteDetailActivity|DetailFeedActivity)$/.test(focus.activity || "")) {
       return { ok: false, notSent: true, step: "notOnExactNoteDetail" };
     }
-    const raw = await this.session.exec(
-      "dumpsys activity activities 2>/dev/null | grep -E 'mResumedActivity|ACTIVITY|Hist #[0-9]+:|Intent \\{|intent=\\{|dat=|clip=|mReferrer=|extras=|note_?[Ii]d' | head -160",
-      10000,
-    ).catch(() => "");
+    const locatorCommand =
+      "dumpsys activity activities 2>/dev/null | grep -E 'mResumedActivity|ACTIVITY|Hist #[0-9]+:|Intent \\{|intent=\\{|dat=|clip=|mReferrer=|extras=|note_?[Ii]d' | head -160";
+    // The locator read is still read-only, but it runs immediately after a tap and
+    // is the first operation that needs the activity history.  Prefer a fresh
+    // one-shot shell here just as we do for focus/hierarchy: on the Windows
+    // Xiaowei ADB build, a persistent shell can be terminated by dumpsys and the
+    // task host may take the long-lived serve down with it.  Keep the persistent
+    // fallback for older test doubles/devices that do not expose oneShotShell.
+    let raw = typeof this.session.oneShotShell === "function"
+      ? await this.session.oneShotShell(locatorCommand, 10000).catch(() => "")
+      : "";
+    if (!raw) raw = await this.session.exec(locatorCommand, 10000).catch(() => "");
     const lines = String(raw).split(/\r?\n/);
     const normalizedActivity = (line) => {
       const parsed = String(line).match(/\bcom\.xingin\.xhs\/([A-Za-z0-9_.$]+)/);
