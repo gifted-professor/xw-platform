@@ -13,6 +13,7 @@ import { AdapterRegistry, ControlPlane } from "./lib/control-plane.mjs";
 import { EvidenceStore } from "./lib/evidence-store.mjs";
 import { ControlPlaneError } from "./lib/errors.mjs";
 import { DelegationGrantRuntime } from "./lib/delegation-grant-runtime.mjs";
+import { resolvePolicyMode } from "./lib/nonpayment-autonomy-policy.mjs";
 import { StateStore } from "./lib/state-store.mjs";
 import { TrustedHumanIssuer } from "./lib/trusted-human-issuer.mjs";
 
@@ -101,6 +102,7 @@ export function createControlPlaneRuntime({
   standingGrantAdrAccepted = null,
   standingGrantAdrPath,
   discoveryCapabilityForPrimitive = {},
+  policyMode = null,
 } = {}) {
   const defaults = defaultRuntimePaths();
   const resolvedDbPath = dbPath || process.env.CONTROL_PLANE_DB || defaults.dbPath;
@@ -136,6 +138,14 @@ export function createControlPlaneRuntime({
       createXiaoweiAdapter(),
       createVisionAdapter(),
     ]);
+  // REX Phase 5 B7: production policy mode from env. shadow computes but does not apply
+  // (active=false); nonpayment_v1 only activates on fake adapters — resolvePolicyMode
+  // downgrades real adapters to shadow, so production is never taken over. legacy (unset
+  // env) stays null → byte-for-byte old behavior.
+  const autonomyMode = process.env.AUTONOMY_POLICY_MODE || "legacy";
+  const resolvedPolicyMode = policyMode ?? (
+    autonomyMode === "legacy" ? null : resolvePolicyMode({ env: process.env, adapterKind: "real" })
+  );
   const control = new ControlPlane({
     state: runtimeState,
     capabilities: registry,
@@ -151,6 +161,7 @@ export function createControlPlaneRuntime({
     adrPath,
     standingGrantAdrAccepted,
     standingGrantAdrPath,
+    policyMode: resolvedPolicyMode,
     receiptAuthorityAllowlist: [
       { capabilityId: "xhs.observe.note_detail", adapterId: "xhs" },
       { capabilityId: "xhs.explore.open_feed_note", adapterId: "xhs" },
@@ -169,5 +180,6 @@ export function createControlPlaneRuntime({
     runsRoot: resolvedRunsRoot,
     deviceConfigPath,
     nodeId,
+    policyMode: resolvedPolicyMode,
   };
 }

@@ -53,6 +53,76 @@ test("production bootstrap installs the control-plane-owned Discovery producer",
   } finally { state.close(); rmSync(root, { recursive: true, force: true }); }
 });
 
+test("production bootstrap derives shadow policy mode from env but never activates it on real adapters (B7)", () => {
+  const root = mkdtempSync(join(tempBase, "policy-shadow-"));
+  const state = new StateStore({ dbPath: join(root, "control.db") });
+  const previous = process.env.AUTONOMY_POLICY_MODE;
+  process.env.AUTONOMY_POLICY_MODE = "shadow";
+  try {
+    const runtime = createControlPlaneRuntime({
+      state,
+      capabilities: new CapabilityRegistry([capability]),
+      adapters: new AdapterRegistry([{ id: "test", async execute() { return {}; } }]),
+      evidence: new EvidenceStore({ runsRoot: join(root, "runs"), state, minFreeBytes: 0, minExternalEffectFreeBytes: 0 }),
+      deviceConfigPath: join(root, "missing-devices.json"),
+    });
+    assert.deepEqual(runtime.control.policyMode, {
+      mode: "shadow", active: false, consulted: true, effectiveDecisionSource: "shadow", adapterKind: "real",
+    });
+    assert.equal(runtime.control.debtOnLowDisk, false, "shadow 不 active：生产永不被新策略接管");
+    assert.equal(runtime.policyMode.mode, "shadow", "runtime 暴露 policyMode 供 health 展示");
+  } finally {
+    if (previous === undefined) delete process.env.AUTONOMY_POLICY_MODE; else process.env.AUTONOMY_POLICY_MODE = previous;
+    state.close(); rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("production bootstrap keeps legacy (null policyMode) when env is unset (B7)", () => {
+  const root = mkdtempSync(join(tempBase, "policy-legacy-"));
+  const state = new StateStore({ dbPath: join(root, "control.db") });
+  const previous = process.env.AUTONOMY_POLICY_MODE;
+  delete process.env.AUTONOMY_POLICY_MODE;
+  try {
+    const runtime = createControlPlaneRuntime({
+      state,
+      capabilities: new CapabilityRegistry([capability]),
+      adapters: new AdapterRegistry([{ id: "test", async execute() { return {}; } }]),
+      evidence: new EvidenceStore({ runsRoot: join(root, "runs"), state, minFreeBytes: 0, minExternalEffectFreeBytes: 0 }),
+      deviceConfigPath: join(root, "missing-devices.json"),
+    });
+    assert.equal(runtime.control.policyMode, null, "legacy 部署保持 null，逐字节旧行为");
+  } finally {
+    if (previous === undefined) delete process.env.AUTONOMY_POLICY_MODE; else process.env.AUTONOMY_POLICY_MODE = previous;
+    state.close(); rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("health exposes the runtime policy mode and release id (B7)", async () => {
+  const root = mkdtempSync(join(tempBase, "health-policy-"));
+  const state = new StateStore({ dbPath: join(root, "control.db") });
+  const evidence = new EvidenceStore({ runsRoot: join(root, "runs"), state, minFreeBytes: 0, minExternalEffectFreeBytes: 0 });
+  const registry = new CapabilityRegistry([capability]);
+  const previous = process.env.CONTROL_PLANE_RELEASE_ID;
+  process.env.CONTROL_PLANE_RELEASE_ID = "release-shadow-test-01";
+  try {
+    const control = new ControlPlane({
+      state,
+      capabilities: registry,
+      adapters: new AdapterRegistry([{ id: "test", async execute() { return {}; } }]),
+      evidence,
+      policyMode: { mode: "shadow", active: false, consulted: true, effectiveDecisionSource: "shadow", adapterKind: "real" },
+    });
+    const router = new ControlRouter({ control, state, capabilities: registry, evidence });
+    const result = await router.handle({ method: "GET", path: "/control/v1/health" });
+    assert.equal(result.status, 200);
+    assert.deepEqual(result.body.policyMode, { mode: "shadow", active: false, consulted: true, effectiveDecisionSource: "shadow", adapterKind: "real" });
+    assert.equal(result.body.releaseId, "release-shadow-test-01");
+  } finally {
+    if (previous === undefined) delete process.env.CONTROL_PLANE_RELEASE_ID; else process.env.CONTROL_PLANE_RELEASE_ID = previous;
+    state.close(); rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("bootstrap producer reuses the owned session job runner and records a trusted receipt", async () => {
   const root = mkdtempSync(join(tempBase, "discovery-bootstrap-job-"));
   const state = new StateStore({ dbPath: join(root, "control.db") });

@@ -133,6 +133,9 @@ export class ControlRouter {
           activeLeases: this.state.listLeases().length,
           evidenceFreeBytes: freeBytes,
           externalEffectsBlockedForLowDisk: freeBytes < this.evidence.minExternalEffectFreeBytes,
+          // REX Phase 5 B7: 暴露运行时策略模式与 release id（部署时由 worker 从 launch config 注入）。
+          policyMode: this.control?.policyMode ?? null,
+          ...(process.env.CONTROL_PLANE_RELEASE_ID ? { releaseId: process.env.CONTROL_PLANE_RELEASE_ID } : {}),
         },
       };
     }
