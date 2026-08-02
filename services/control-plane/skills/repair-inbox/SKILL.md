@@ -54,15 +54,18 @@ node scripts/repair-inbox.mjs discover --expect-id repair_ff7fc51b35aec35227cf5e
 ## 显式领取（默认关闭）
 
 ```powershell
+# live（无 --fixture）必须带真实 checkpoint；缺 checkpoint 在任何写入前 fail closed
 node scripts/repair-inbox.mjs claim `
   --proposal-id <id> `
   --outbox <dir> `
   --actor <actor> `
   --i-understand-claim `
-  [--checkpoint <real-checkpoint.json>]
+  --checkpoint <real-checkpoint.json>
 ```
 
 - **没有 `--i-understand-claim` → 拒绝 claim**（`CLAIM_NOT_AUTHORIZED`）
+- **无 `--fixture` = live**（不依赖可选 `--live-knowledge` 自报）
+- live 缺 `--checkpoint` → 在 mkdir / outbox / claim / knowledge 写入之前返回；失败摘要只打 stdout
 - 领取后只允许：heartbeat、修源码、密封 source checkpoint / completion bundle
 - **停在 `source_review`**；等待 Mac 独立复核
 - 不得：自批、改 Mac verdict、`mark_deployable`、部署、replay、job/session、操作手机

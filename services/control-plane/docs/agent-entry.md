@@ -164,8 +164,11 @@ Skill binding, allowlist/forbidden paths, and secret scan, then may hand off to 
 existing repair consumer.
 
 - Default = read-only `list` / `discover` (no claim, no outbox write, no phone/job).
-- Claim requires explicit `--i-understand-claim`. After claim: heartbeat, source fix,
-  source checkpoint / completion bundle only; stop at `source_review`.
+- Claim requires explicit `--i-understand-claim`. **No `--fixture` means live** (optional
+  `--live-knowledge` is not the gate). Live claim requires `--checkpoint` and fails closed
+  before mkdir / outbox / claim / knowledge writes; failure summaries are stdout-only.
+- After a successful claim: heartbeat, source fix, source checkpoint / completion bundle
+  only; stop at `source_review`.
 - Windows must not self-approve, modify Mac verdict, mark deployable, deploy, replay,
   submit job/session, or operate phones.
 

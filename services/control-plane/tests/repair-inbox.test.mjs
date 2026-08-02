@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import {
+  existsSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -27,7 +30,7 @@ import {
   proposalSha256,
   scanForSecrets,
 } from "../scripts/lib/repair-proposal.mjs";
-import { main as inboxMain } from "../scripts/repair-inbox.mjs";
+import { main as inboxMain, isLiveClaimMode } from "../scripts/repair-inbox.mjs";
 
 const FIRST_PROPOSAL = JSON.parse(
   readFileSync(new URL("../docs/handoffs/2026-08-02-xhs-observe-feed-repair-proposal.v1.json", import.meta.url), "utf8"),
@@ -313,6 +316,102 @@ test("secret scan rejects credential material in proposal payload", () => {
 test("rejectUnauthorizedWindowsEvent blocks self-approve path from inbox lane", () => {
   assert.throws(() => rejectUnauthorizedWindowsEvent("review_approved"), /Mac independent review/);
   assert.throws(() => rejectUnauthorizedWindowsEvent("mark_deployable"), /Mac independent review/);
+});
+
+function countFilesRecursive(root) {
+  if (!existsSync(root)) return 0;
+  let count = 0;
+  for (const name of readdirSync(root, { withFileTypes: true })) {
+    const path = join(root, name.name);
+    if (name.isDirectory()) count += countFilesRecursive(path);
+    else count += 1;
+  }
+  return count;
+}
+
+test("isLiveClaimMode is true without fixture regardless of --live-knowledge flag", () => {
+  assert.equal(isLiveClaimMode(["claim", "--proposal-id", "x", "--outbox", "y"]), true);
+  assert.equal(isLiveClaimMode(["claim", "--live-knowledge", "--proposal-id", "x", "--outbox", "y"]), true);
+  assert.equal(isLiveClaimMode(["claim", "--fixture", "f.json", "--proposal-id", "x"]), false);
+});
+
+test("CLI live claim without fixture/checkpoint: registry POST=0 outbox=0 claim=0", async () => {
+  const stats = { get: 0, post: 0 };
+  const server = createServer((req, res) => {
+    if (req.method === "GET") stats.get += 1;
+    if (req.method === "POST") stats.post += 1;
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      ok: true,
+      knowledge: [envelope()],
+    }));
+  });
+  await new Promise((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
+  const { port } = server.address();
+  const outbox = mkdtempSync(join(tmpdir(), "repair-inbox-live-gate-"));
+  try {
+    // Deliberately omit --live-knowledge and --fixture and --checkpoint.
+    const run = spawnSync(process.execPath, [
+      resolve("scripts/repair-inbox.mjs"),
+      "claim",
+      "--endpoint", `http://127.0.0.1:${port}`,
+      "--proposal-id", EXPECTED_ID,
+      "--outbox", outbox,
+      "--actor", "win-live-gate",
+      "--i-understand-claim",
+    ], { cwd: resolve("."), encoding: "utf8" });
+    assert.equal(run.status, 2, run.stdout + run.stderr);
+    const body = JSON.parse(run.stdout);
+    assert.equal(body.ok, false);
+    assert.equal(body.reason, "SOURCE_CHECKPOINT_REQUIRED");
+    assert.equal(body.liveKnowledge, true);
+    assert.deepEqual(body.actionsPerformed, []);
+    assert.ok(body.actionsNotPerformed.includes("claim"));
+    assert.ok(body.actionsNotPerformed.includes("knowledge_post"));
+    assert.ok(body.actionsNotPerformed.includes("mkdir_outbox"));
+    assert.equal(stats.post, 0, "registry POST must stay 0");
+    assert.equal(stats.get, 0, "registry GET must stay 0 before checkpoint gate");
+    assert.equal(countFilesRecursive(outbox), 0, "outbox must stay empty");
+    assert.equal(existsSync(join(outbox, `repair/${EXPECTED_ID}`)), false);
+  } finally {
+    await new Promise((resolveClose) => server.close(resolveClose));
+    rmSync(outbox, { recursive: true, force: true });
+  }
+});
+
+test("CLI live claim with --live-knowledge but no checkpoint still writes nothing", async () => {
+  const stats = { get: 0, post: 0 };
+  const server = createServer((req, res) => {
+    if (req.method === "GET") stats.get += 1;
+    if (req.method === "POST") stats.post += 1;
+    res.writeHead(500);
+    res.end("{}");
+  });
+  await new Promise((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
+  const { port } = server.address();
+  const outbox = mkdtempSync(join(tmpdir(), "repair-inbox-live-flag-"));
+  try {
+    const run = spawnSync(process.execPath, [
+      resolve("scripts/repair-inbox.mjs"),
+      "claim",
+      "--live-knowledge",
+      "--endpoint", `http://127.0.0.1:${port}`,
+      "--proposal-id", EXPECTED_ID,
+      "--outbox", outbox,
+      "--actor", "win-live-flag",
+      "--i-understand-claim",
+    ], { cwd: resolve("."), encoding: "utf8" });
+    assert.equal(run.status, 2);
+    const body = JSON.parse(run.stdout);
+    assert.equal(body.reason, "SOURCE_CHECKPOINT_REQUIRED");
+    assert.equal(stats.post, 0);
+    assert.equal(stats.get, 0);
+    assert.equal(countFilesRecursive(outbox), 0);
+    assert.equal(existsSync(join(outbox, `repair/${EXPECTED_ID}/inbox-summary.json`)), false);
+  } finally {
+    await new Promise((resolveClose) => server.close(resolveClose));
+    rmSync(outbox, { recursive: true, force: true });
+  }
 });
 
 test("CLI list is read-only default; claim without flag denied", async () => {

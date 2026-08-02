@@ -256,7 +256,11 @@ export async function discoverRepairInbox({
 
 /**
  * Explicit claim path. Hands off to existing repair consumer after inbox validation.
- * Stops at source_review when a real checkpoint is provided; otherwise claims+heartbeat+fixing only.
+ * Live callers (no fixture / liveKnowledge=true) must supply checkpoint before any
+ * outbox or knowledge mutation; the CLI enforces this before mkdirSync as well.
+ * Offline fixture may omit checkpoint only for lock/restart unit tests — those
+ * paths return ok:false with SOURCE_CHECKPOINT_REQUIRED after fixing and never
+ * pretend source_review readiness.
  */
 export async function claimRepairInbox({
   knowledgeClient,

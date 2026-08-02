@@ -4,11 +4,14 @@
  *
  *   node scripts/repair-inbox.mjs list
  *   node scripts/repair-inbox.mjs discover [--expect-id <proposalId>]
- *   node scripts/repair-inbox.mjs claim --proposal-id <id> --outbox <dir> --actor <id> --i-understand-claim
+ *   node scripts/repair-inbox.mjs claim --proposal-id <id> --outbox <dir> --actor <id> --i-understand-claim --checkpoint <file>
+ *
+ * Live vs offline is decided by presence of --fixture, NOT by optional --live-knowledge:
+ *   - no --fixture  => live (real registry); claim requires --checkpoint before any writes
+ *   - --fixture     => offline; may use fixture knowledge only
  *
  * Default is list/discover (no claim, no outbox writes, no device/job).
- * Claim requires --i-understand-claim. This round must not claim live proposals
- * unless a human explicitly opts in.
+ * Claim requires --i-understand-claim. Failure summaries go to stdout only (never sealed outbox).
  *
  * Does NOT: self-approve, mark deployable, deploy, replay, submit job/session, operate phones.
  */
@@ -20,7 +23,6 @@ import { createKnowledgeClient, parseKnowledgeProposal } from "./lib/repair-cons
 import { proposalKnowledgeEnvelope } from "./lib/repair-proposal.mjs";
 import {
   claimRepairInbox,
-  createRepairInbox,
   discoverRepairInbox,
   WINDOWS_CANNOT,
 } from "./lib/repair-inbox.mjs";
@@ -33,14 +35,20 @@ function flag(argv, name) {
   return argv.includes(name);
 }
 
+/** Live = no fixture. Optional --live-knowledge must not be what decides the gate. */
+function isLiveClaimMode(argv) {
+  return !option(argv, "--fixture");
+}
+
 function printHelp() {
   console.log(`用法:
   node scripts/repair-inbox.mjs list|discover [--endpoint <url>] [--expect-id <proposalId>] [--fixture <knowledge-or-proposal.json>] [--skills-root <dir>]
-  node scripts/repair-inbox.mjs claim --proposal-id <id> --outbox <dir> --actor <id> --i-understand-claim [--checkpoint <file>] [--endpoint <url>] [--fixture <file>] [--live-knowledge]
+  node scripts/repair-inbox.mjs claim --proposal-id <id> --outbox <dir> --actor <id> --i-understand-claim --checkpoint <file> [--endpoint <url>]
+  node scripts/repair-inbox.mjs claim --fixture <file> --proposal-id <id> --outbox <dir> --actor <id> --i-understand-claim [--checkpoint <file>]
 
-默认只读。普通 Skill 说明能力怎么跑；Repair Inbox 决定现在修什么。
-禁止把动态 proposalId 硬编码进普通 capability Skill。
-领取后只能 heartbeat / 修源码 / source checkpoint（停在 source_review）；不得自批、mark deployable、部署、replay、job/session、碰手机。
+无 --fixture = live（真实 registry）。live claim 必须带 --checkpoint，且在 mkdir/outbox/claim/knowledge 写入之前校验。
+--live-knowledge 只是明示 live 的别名文档位，不能用来绕过「无 fixture ⇒ live」判定。
+失败摘要只写 stdout，不写 sealed outbox。
 `);
 }
 
@@ -48,11 +56,38 @@ function loadFixtureItems(path) {
   const raw = JSON.parse(readFileSync(path, "utf8"));
   if (Array.isArray(raw)) return raw;
   if (raw.knowledge && Array.isArray(raw.knowledge)) return raw.knowledge;
-  // Bare proposal → wrap as knowledge envelope so needsEngineer/lifecycle gates apply.
   const proposal = parseKnowledgeProposal(raw) || (raw.schemaId === "xhs.repair-proposal.v1" ? raw : null);
   if (proposal) return [proposalKnowledgeEnvelope(proposal)];
   if (raw.needsEngineer != null && raw.lifecycle != null) return [raw];
   throw new Error("fixture must be knowledge item(s) or xhs.repair-proposal.v1");
+}
+
+function writeStdout(result) {
+  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+}
+
+function writeSuccessSummary(outbox, proposalId, result) {
+  const summaryPath = join(resolve(outbox), `repair/${proposalId}`, "inbox-summary.json");
+  mkdirSync(dirname(summaryPath), { recursive: true });
+  writeFileSync(summaryPath, `${JSON.stringify(result, null, 2)}\n`);
+}
+
+function createOfflineKnowledgeClient(fixtureItems) {
+  return {
+    async listRepairKnowledgeItems() {
+      return fixtureItems.filter((item) => item?.needsEngineer === true && item?.lifecycle === "backlog");
+    },
+    async listRepairProposals() {
+      const items = await this.listRepairKnowledgeItems();
+      return items.map((item) => parseKnowledgeProposal(item)).filter(Boolean);
+    },
+    async postKnowledge() {
+      return { ok: false, debt: true, skipped: true };
+    },
+    async getKnowledge() {
+      return { ok: false, status: 404, knowledge: null };
+    },
+  };
 }
 
 async function main(argv = process.argv.slice(2)) {
@@ -69,26 +104,12 @@ async function main(argv = process.argv.slice(2)) {
   const expectId = option(argv, "--expect-id") || option(argv, "--proposal-id");
   const expectSha = option(argv, "--expect-sha256");
   const expectBase = option(argv, "--expect-base");
-
-  const knowledgeClient = fixtureItems
-    ? {
-      async listRepairKnowledgeItems() {
-        return fixtureItems.filter((item) => item?.needsEngineer === true && item?.lifecycle === "backlog");
-      },
-      async listRepairProposals() {
-        const items = await this.listRepairKnowledgeItems();
-        return items.map((item) => parseKnowledgeProposal(item)).filter(Boolean);
-      },
-      async postKnowledge() {
-        return { ok: false, debt: true, skipped: true };
-      },
-      async getKnowledge() {
-        return { ok: false, status: 404, knowledge: null };
-      },
-    }
-    : createKnowledgeClient({ endpoint });
+  const liveMode = isLiveClaimMode(argv);
 
   if (command === "list" || command === "discover") {
+    const knowledgeClient = fixtureItems
+      ? createOfflineKnowledgeClient(fixtureItems)
+      : createKnowledgeClient({ endpoint });
     const result = await discoverRepairInbox({
       knowledgeClient,
       expectedProposalId: expectId || null,
@@ -97,7 +118,7 @@ async function main(argv = process.argv.slice(2)) {
       skillsRoot,
       fixtureItems,
     });
-    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    writeStdout(result);
     process.exitCode = result.ok ? 0 : 2;
     return;
   }
@@ -107,44 +128,43 @@ async function main(argv = process.argv.slice(2)) {
     const outbox = option(argv, "--outbox");
     const actor = option(argv, "--actor", "windows-repair-inbox");
     const claimAuthorized = flag(argv, "--i-understand-claim");
-    const liveKnowledge = flag(argv, "--live-knowledge");
     const checkpointPath = option(argv, "--checkpoint");
 
     if (!claimAuthorized) {
-      const denied = {
+      writeStdout({
         schemaId: "xhs.repair-inbox.v1",
         mode: "claim",
         ok: false,
         reason: "CLAIM_NOT_AUTHORIZED",
+        liveKnowledge: liveMode,
         hint: "Default is read-only. Re-run with --i-understand-claim to claim. This entry never auto-claims.",
         actionsPerformed: [],
         actionsNotPerformed: ["claim", "heartbeat", "start_fixing", "source_checkpoint", ...WINDOWS_CANNOT],
-      };
-      process.stdout.write(`${JSON.stringify(denied, null, 2)}\n`);
+      });
       process.exitCode = 2;
       return;
     }
 
-    if (liveKnowledge && fixturePath) {
-      const denied = {
+    if (flag(argv, "--live-knowledge") && fixturePath) {
+      writeStdout({
         ok: false,
         reason: "LIVE_KNOWLEDGE_AND_FIXTURE_CONFLICT",
-        hint: "Use either --live-knowledge (registry) or --fixture (offline), not both.",
+        liveKnowledge: true,
+        hint: "Use either live (no --fixture) or --fixture (offline), not both.",
         actionsPerformed: [],
         actionsNotPerformed: ["claim", ...WINDOWS_CANNOT],
-      };
-      process.stdout.write(`${JSON.stringify(denied, null, 2)}\n`);
+      });
       process.exitCode = 2;
       return;
     }
-    if (liveKnowledge && flag(argv, "--offline-demo-checkpoint")) {
-      const denied = {
+    if (liveMode && flag(argv, "--offline-demo-checkpoint")) {
+      writeStdout({
         ok: false,
         reason: "OFFLINE_DEMO_FORBIDDEN_WITH_LIVE_KNOWLEDGE",
+        liveKnowledge: true,
         actionsPerformed: [],
         actionsNotPerformed: ["claim", ...WINDOWS_CANNOT],
-      };
-      process.stdout.write(`${JSON.stringify(denied, null, 2)}\n`);
+      });
       process.exitCode = 2;
       return;
     }
@@ -153,17 +173,44 @@ async function main(argv = process.argv.slice(2)) {
       throw new Error("--proposal-id and --outbox required for claim");
     }
 
-    mkdirSync(outbox, { recursive: true });
     const checkpoint = checkpointPath
       ? JSON.parse(readFileSync(checkpointPath, "utf8"))
       : null;
 
-    const client = liveKnowledge
-      ? createKnowledgeClient({ endpoint })
-      : knowledgeClient;
+    // Live (no fixture): require checkpoint BEFORE mkdir / summary / claim / knowledge writes.
+    if (liveMode && !checkpoint) {
+      writeStdout({
+        schemaId: "xhs.repair-inbox.v1",
+        mode: "claim",
+        ok: false,
+        reason: "SOURCE_CHECKPOINT_REQUIRED",
+        liveKnowledge: true,
+        proposalId,
+        hint: "No --fixture ⇒ live. Provide --checkpoint <real.json> before any outbox/registry writes.",
+        actionsPerformed: [],
+        actionsNotPerformed: [
+          "mkdir_outbox",
+          "discover",
+          "claim",
+          "heartbeat",
+          "start_fixing",
+          "source_checkpoint",
+          "knowledge_post",
+          "inbox_summary_write",
+          ...WINDOWS_CANNOT,
+        ],
+      });
+      process.exitCode = 2;
+      return;
+    }
 
+    const knowledgeClient = fixtureItems
+      ? createOfflineKnowledgeClient(fixtureItems)
+      : createKnowledgeClient({ endpoint });
+
+    mkdirSync(outbox, { recursive: true });
     const result = await claimRepairInbox({
-      knowledgeClient: client,
+      knowledgeClient,
       outboxRoot: resolve(outbox),
       actorId: actor,
       proposalId,
@@ -172,16 +219,15 @@ async function main(argv = process.argv.slice(2)) {
       expectedBaseCommit: expectBase || null,
       skillsRoot,
       checkpoint,
-      fixtureItems: liveKnowledge ? null : fixtureItems,
-      liveKnowledge,
+      fixtureItems,
+      liveKnowledge: liveMode,
     });
 
-    if (outbox && proposalId) {
-      const summaryPath = join(resolve(outbox), `repair/${proposalId}`, "inbox-summary.json");
-      mkdirSync(dirname(summaryPath), { recursive: true });
-      writeFileSync(summaryPath, `${JSON.stringify(result, null, 2)}\n`);
+    // Failures: stdout only. Never write sealed-outbox summary on failure.
+    if (result.ok) {
+      writeSuccessSummary(outbox, proposalId, result);
     }
-    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    writeStdout(result);
     process.exitCode = result.ok ? 0 : 2;
     return;
   }
@@ -195,13 +241,13 @@ const invoked = process.argv[1]
   : null;
 if (invoked === fileURLToPath(import.meta.url)) {
   main().catch((error) => {
-    console.log(JSON.stringify({
+    writeStdout({
       ok: false,
       error: error.message,
       actionsNotPerformed: ["claim", ...WINDOWS_CANNOT],
-    }));
+    });
     process.exitCode = 1;
   });
 }
 
-export { loadFixtureItems, main };
+export { isLiveClaimMode, loadFixtureItems, main, writeSuccessSummary };
