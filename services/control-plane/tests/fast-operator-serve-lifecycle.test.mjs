@@ -63,6 +63,8 @@ test("worker pins the authoritative Xiaowei ADB server without exposing runtime 
 });
 
 test("worker records a secret-free lifecycle event after the Node process exits", () => {
+  assert.match(worker, /phase\s*=\s*"worker-start"/);
+  assert.match(worker, /Add-Content\s+-LiteralPath\s+\$stderr[\s\S]*?\$arguments\s*=/);
   assert.match(worker, /\$nodeExitCode\s*=\s*\$LASTEXITCODE/);
   assert.match(worker, /timestamp\s*=\s*\(Get-Date\)/);
   assert.match(worker, /alias\s*=\s*\$alias/);

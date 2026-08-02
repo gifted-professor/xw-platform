@@ -60,6 +60,17 @@ $env:NODE_NO_WARNINGS = "1"
 
 $stdout = Join-Path $stateRoot "serve-${alias}.stdout.log"
 $stderr = Join-Path $stateRoot "serve-${alias}.stderr.log"
+$startRecord = [ordered]@{
+    timestamp = (Get-Date).ToUniversalTime().ToString("o")
+    alias = $alias
+    phase = "worker-start"
+    expectedCommit = $expectedCommit
+}
+try {
+    Add-Content -LiteralPath $stderr -Value ($startRecord | ConvertTo-Json -Compress)
+} catch {
+    # Lifecycle logging must never change the FastOperator start result.
+}
 $arguments = @(
     $operator,
     "--adb", $adbPath,
