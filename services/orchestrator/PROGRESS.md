@@ -1,6 +1,6 @@
 # xhs-registry 进度
 
-> 最后更新：2026-08-02 REX Phase 7 只读前置复核完成（shadow/dual；7A 未通过，7B/支付未启动）
+> 最后更新：2026-08-02 REX Phase 7 只读重放仍被 locator/serve 生命周期阻断（shadow/dual；7A 未通过，7B/支付未启动）
 
 ## 一句话现状（北极星，所有 agent 必读）
 
@@ -23,6 +23,8 @@
 **2026-08-02 REX Phase 7 pilot 尝试与安全回滚**：B 仓 pilot selector 已快进 `main` 并 push @ **`fb3d3ef`**；A 仓 Phase 7 packet/hash/状态记录已快进 `main` 并 push @ **`1844a3e`**。Windows 曾按正式任务安装器短时部署 `rel-pilot-2026-08-02`（`policyMode=nonpayment_v1`、actor=`codex:rex-phase7`、alias=`01`），随后因 7A 前置失败回滚到 `rel-shadow-2026-08-02-p7-no-go`（B HEAD/task-launch=`fb3d3ef4b6820afdef31ae2492e6ea426d9ddc1b`，pilot 为空，`effectiveDecisionSource=shadow`）。正式 session/job 的 lease 均可见且最终释放；只读 `xianyu.observe.snapshot` 成功，但 `xhs.observe.feed` 先报 `ADAPTER_HTTP_UNAVAILABLE`（01 `17895` 未监听），修复 01 FastOperator launch config 到当前 HEAD 后重启仍报 `ADAPTER_REJECTED / OPERATOR_ERROR: adb shell poisoned (process.exit)`，随后 serve 再次退出。**未进入 7B，未发生真实 effect 或支付传输**；Standing Grant 列表为空，payment final commit 仍由 PHC 硬闸保护。7A/7B 与 Phase 8 保持 NO-GO，待 01 XHS FastOperator/ADB 执行链恢复后重跑。
 
 **2026-08-02 REX Phase 7 只读收口复核（当前）**：B 仓已将只读探针改为 one-shot ADB 优先并推到 `main` **`2b5652f9f1b909560f54a5dbb2bb601441ba0afd`**；A 仓本记录在 `main` **`625a5b7d7e26d17f3da9bb034506145c1b8bbc95`**。Windows 当前 release=`rel-shadow-2026-08-02-p7-readonly-probes`、`policyMode=shadow`、`effectiveDecisionSource=shadow`、`evidenceMode=dual`、pilot 为空；`MISSION_AUTO_APPROVAL_ENABLED`/`STANDING_GRANT_ENABLED` 未开启。B 仓完整回归 **493 tests / 491 pass / 0 fail / 2 skipped**，`npm run check`（104 files + secret scan）通过。正式控制面复核：`xianyu.observe.snapshot` alias 01 的 `job_7bd03187-ffff-480f-b7d8-26501145f35f` 成功、`xhs.observe.metrics` 的 `job_4a50df4b-8718-415e-af74-de325062c58b` 成功；但 `xhs.observe.feed` 的 `job_4f96050e-0c24-4d21-9f14-7cbc2074ee5e` 仍以 `ADAPTER_REJECTED`（内层 `OPERATOR_ERROR / hierarchy dump incomplete`）失败。失败后 01 官方 `XhsFastOperator01Live` 任务回到 Ready、`:17895` 无监听，stderr 无 worker lifecycle/uncaught 记录；窄范围任务配置核查显示 `StopOnIdleEnd=false`、`ExecutionTimeLimit=PT0S`，未发现 TaskScheduler/Application 事件，故当前实证阻断是 **XHS hierarchy dump 失败后 serve 进程/任务生命周期异常退出，外部终止来源未定位**。7A 对照尚未成立，**没有进入 7B 收藏/闲鱼草稿 effect，没有真实支付传输**；leases/running jobs/pending approvals 终态归零，Phase 8 继续 NO-GO。
+
+**2026-08-02 REX Phase 7 只读重放与二次阻断（当前仍 NO-GO）**：B `main` 依次部署 `5498220`（worker-start 生命周期记录）、`021baa2`（note locator one-shot）、`589f7a6`（feed 导航 tap/back one-shot）、`f9c596c`（activity history 改为 `adb exec-out`，去掉 shell pipeline）；每版均通过完整回归，最终 **495 tests / 493 pass / 0 fail / 2 skipped**，`npm run check` 通过。正式 job：`xhs.observe.feed` 重放 `job_fdbd7744-b85c-4672-81b3-78db6a05f31d` 成功（证明 feedCards 只读路径可用）；但 `xhs.observe.note_detail` 单独重放 `job_470b5b6c-658f-4a5a-bef7-1fe379d28790`、`job_0dbfbf71-f050-4160-95fe-73259fba72f8`，以及 `xhs.explore.open_feed_note` `job_ec402ed1-6ae6-437f-8408-7ee85851f4cb` 均以 `ADAPTER_ACTION_REJECTED / STABLE_NOTE_LOCATOR_UNAVAILABLE` 失败；每次失败后官方任务回到 Ready、17895 无监听，stderr 仍只有 worker-start 无 end/uncaught。随后官方重启 + `xhs.observe.metrics` `job_9184b7ae-2e49-45b6-85f4-e3e0ae40daa5` 成功，01 恢复 ready=yes、lease=free。结论：稳定 locator 四字段（dat/clip/mReferrer/extrasNoteId）现场均缺失，且活动定位探针会触发未定位的任务宿主终止；必须继续 fail-closed，不能编造 target fingerprint。7A page-drift/receipt gate 未通过，7B XHS 收藏、闲鱼保存草稿均未启动，Standing Grant 为空，payment transport=0；新增知识卡 `pitfall-xhs-note-locator-probe-serve-exit-20260802`。
 
 ### Agent 统一入口与占用控制台（2026-07-26 20:39 CST）
 
