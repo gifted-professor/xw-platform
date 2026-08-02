@@ -282,7 +282,7 @@ test("note locator observation prefers a one-shot activity dump over the persist
   assert.equal(result.ok, true);
   assert.equal(result.targetFingerprint.length, 64);
   assert.equal(calls.length, 1);
-  assert.match(calls[0], /^oneShot:dumpsys activity top/);
+  assert.match(calls[0], /^oneShot:cmd activity top/);
 });
 
 test("note locator observation prefers exec-out top activity dump when available", async () => {
@@ -304,7 +304,7 @@ test("note locator observation prefers exec-out top activity dump when available
 
   const result = await operator.observeOpenNoteDetail();
   assert.equal(result.ok, true);
-  assert.deepEqual(calls, [["dumpsys", "activity", "top"]]);
+  assert.deepEqual(calls, [["cmd", "activity", "top"]]);
 });
 
 test("real serve switch exposes only the bounded openFeedNote method", async (t) => {

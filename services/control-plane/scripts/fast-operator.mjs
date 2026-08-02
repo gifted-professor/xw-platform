@@ -342,8 +342,8 @@ export class FastOperator {
     // Keep the top-activity read one-shot all the way down.  The Windows
     // Xiaowei build can terminate the task host when a shell pipeline (`grep`
     // / `head`) is attached to dumpsys, and the full activity-history dump is
-    // unnecessarily broad for this receipt.  Fetch the bounded top-only
-    // command output directly and filter locally.  exec-out is preferred
+    // unnecessarily broad for this receipt.  Use the Android activity-shell
+    // top view, fetch its bounded output directly, and filter locally. exec-out is preferred
     // because it bypasses the remote shell entirely; the simple one-shot shell
     // is the compatibility fallback.  A persistent fallback is retained only
     // for old test doubles that expose neither one-shot method.
@@ -351,17 +351,17 @@ export class FastOperator {
     let execOutTimedOut = false;
     if (typeof this.session.execOut === "function") {
       try {
-        raw = (await this.session.execOut(["dumpsys", "activity", "top"], 10000)).toString("utf8");
+        raw = (await this.session.execOut(["cmd", "activity", "top"], 10000)).toString("utf8");
       } catch (error) {
         execOutTimedOut = /exec-out timeout/i.test(String(error?.message || error));
       }
     }
     if (!raw && !execOutTimedOut && typeof this.session.oneShotShell === "function") {
-      raw = await this.session.oneShotShell("dumpsys activity top", 10000).catch(() => "");
+      raw = await this.session.oneShotShell("cmd activity top", 10000).catch(() => "");
     }
     if (!raw && typeof this.session.execOut !== "function" && typeof this.session.oneShotShell !== "function") {
       raw = await this.session.exec(
-        "dumpsys activity top 2>/dev/null | grep -E 'mResumedActivity|ACTIVITY|Hist #[0-9]+:|Intent \\{|intent=\\{|dat=|clip=|mReferrer=|extras=|note_?[Ii]d' | head -160",
+        "cmd activity top 2>/dev/null | grep -E 'mResumedActivity|ACTIVITY|Hist #[0-9]+:|Intent \\{|intent=\\{|dat=|clip=|mReferrer=|extras=|note_?[Ii]d' | head -160",
         10000,
       ).catch(() => "");
     }
