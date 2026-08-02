@@ -304,11 +304,15 @@ export class FastOperator {
   async close() { await this.session.close(); }
 
   async currentFocus() {
-    let out = await this.session.exec("dumpsys window 2>/dev/null | grep -E mCurrentFocus", 10000).catch(() => null);
-    if (out == null) {
-      // 持久 shell 超时(已在 exec 内自愈,下条会用全新 shell),本次用 one-shot 兜底再试一次,
-      // 避免一次慢 dumpsys 让 focus 直接失败——focus 是最常调的探针,要 dump 级稳。
-      out = await this.session.oneShotShell("dumpsys window 2>/dev/null | grep -E mCurrentFocus", 8000).catch(() => "");
+    const focusCommand = "dumpsys window 2>/dev/null | grep -E mCurrentFocus";
+    // Focus is a read-only probe. Prefer a one-shot shell so a flaky persistent
+    // ADB channel cannot take the long-lived serve down before we can report a
+    // bounded failure. Older test doubles retain the persistent fallback.
+    let out = typeof this.session.oneShotShell === "function"
+      ? await this.session.oneShotShell(focusCommand, 8000).catch(() => null)
+      : null;
+    if (out == null || out === "") {
+      out = await this.session.exec(focusCommand, 10000).catch(() => "");
     }
     const m = out.match(/mCurrentFocus=Window\{[^}]+ ([^/}\s]+)\/([^}\s]+)/);
     return m ? { package: m[1], activity: m[2], raw: out } : { package: null, activity: null, raw: out };
@@ -419,20 +423,39 @@ export class FastOperator {
           catch (e2) { lastErr = e2; if (attempt < retries) { await new Promise((r) => setTimeout(r, 600)); continue; } throw e2; }
         }
       }
-      const xml = buf ? buf.toString("utf8") : "";
+      let xml = buf ? buf.toString("utf8") : "";
       // uiautomator "could not get idle state" 偶发把错误文本混进 stdout 或只产截断 XML——
       // 检测到 idle 失败信号且无完整 hierarchy 时视为不完整重试（视频自动播放/动画 settle 期常见）。
-      const idleFail = /could not get idle state|UiAutomator.*[Ee]rror|AndroidRuntime/i.test(xml) && xml.indexOf("<hierarchy") < 0;
-      const start = xml.indexOf("<hierarchy");
-      const end = xml.indexOf("</hierarchy>", start);
-      if (start >= 0 && end >= 0 && !idleFail) {
-        const doc = parseUiAutomatorXml(xml.slice(start, end + "</hierarchy>".length));
+      const complete = (value) => {
+        const idleFail = /could not get idle state|UiAutomator.*[Ee]rror|AndroidRuntime/i.test(value)
+          && value.indexOf("<hierarchy") < 0;
+        const start = value.indexOf("<hierarchy");
+        const end = value.indexOf("</hierarchy>", start);
+        return start >= 0 && end >= 0 && !idleFail
+          ? value.slice(start, end + "</hierarchy>".length)
+          : null;
+      };
+      // ADB exec-out can return a truncated/empty stream on the Windows
+      // Xiaowei build. Retry the same read through one-shot `adb shell` before
+      // considering a persistent-shell fallback or reporting an incomplete UI.
+      let slice = complete(xml);
+      if (!slice && typeof this.session.oneShotShell === "function") {
+        try {
+          const oneShot = await this.session.oneShotShell("uiautomator dump /dev/tty 2>/dev/null", 15000);
+          xml = String(oneShot || "");
+          slice = complete(xml);
+        } catch {}
+      }
+      if (slice) {
+        const doc = parseUiAutomatorXml(slice);
         this.metrics.dumps += 1;
         this.metrics.totalDumpMs += Date.now() - t0;
         doc._dumpMs = Date.now() - t0;
         doc._label = label;
         return doc;
       }
+      const idleFail = /could not get idle state|UiAutomator.*[Ee]rror|AndroidRuntime/i.test(xml)
+        && xml.indexOf("<hierarchy") < 0;
       lastErr = new Error(idleFail ? "uiautomator idle state failed" : "hierarchy dump incomplete");
       if (attempt < retries) await new Promise((r) => setTimeout(r, 600)); // uiautomator 瞬时截断/idle 失败，加长重试间隔常恢复
     }
@@ -654,7 +677,13 @@ export class FastOperator {
         // dump 成功但没卡：滚一下再试
       } catch (e) { /* idle/incomplete，下面滚一下再试 */ }
       if (i < retries) {
-        await this.session.exec("input swipe 540 1500 540 1100 300", 4000);
+        const swipe = "input swipe 540 1500 540 1100 300";
+        if (typeof this.session.oneShotShell === "function") {
+          try { await this.session.oneShotShell(swipe, 4000); }
+          catch { await this.session.exec(swipe, 4000); }
+        } else {
+          await this.session.exec(swipe, 4000);
+        }
         await new Promise((r) => setTimeout(r, 600));
       }
     }
@@ -1755,7 +1784,7 @@ export function serve(port, options = {}) {
         case "scrollUp": out = await op.scrollUp(q.n ?? 1, q.label); break;
         case "scrollN": out = await op.scrollN({ n: q.n ?? 1, down: q.down !== false, label: q.label }); break;
         case "tap": out = await op.tap(q.x, q.y); break;
-        case "feedCards": { const d = await op.dump({ label: q.label }); out = { cards: op.feedCards(d), dumpMs: d._dumpMs }; break; }
+        case "feedCards": { const d = await op.feedDump({ label: q.label }); out = { cards: op.feedCards(d), dumpMs: d._dumpMs }; break; }
         case "observeOpenNoteDetail": out = await op.observeOpenNoteDetail(); break;
         case "openFeedNote": out = await op.openFeedNote({ selector: q.selector ?? "any", index: q.index }); break;
         case "openCard": { const d = await op.dump({ label: "open" }); const cards = op.feedCards(d); const c = cards[q.idx ?? 0]; out = await op.openCard(c); break; }

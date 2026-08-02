@@ -87,6 +87,21 @@ test("dump uses a one-shot shell before the persistent-shell fallback", async ()
   assert.equal(operator.metrics.dumps, 1);
 });
 
+test("read-only focus prefers one-shot shell before persistent fallback", async () => {
+  const operator = Object.create(FastOperator.prototype);
+  const calls = [];
+  operator.session = {
+    oneShotShell: async (command) => { calls.push(`oneShot:${command}`); return "mCurrentFocus=Window{42 u0 com.xingin.xhs/com.xingin.xhs.index.v2.IndexActivityV2}"; },
+    exec: async () => { throw new Error("persistent focus fallback must not run"); },
+  };
+  assert.deepEqual(await operator.currentFocus(), {
+    package: "com.xingin.xhs",
+    activity: "com.xingin.xhs.index.v2.IndexActivityV2",
+    raw: "mCurrentFocus=Window{42 u0 com.xingin.xhs/com.xingin.xhs.index.v2.IndexActivityV2}",
+  });
+  assert.deepEqual(calls, ["oneShot:dumpsys window 2>/dev/null | grep -E mCurrentFocus"]);
+});
+
 test("operator formally launches XHS from the desktop before reading the feed", async () => {
   const operator = Object.create(FastOperator.prototype);
   const trace = [];
