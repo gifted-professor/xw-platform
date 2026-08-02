@@ -4,6 +4,6 @@
   "type": "module",
   "scripts": {
     "test": "node --test tests/*.test.mjs",
-    "check": "node --check registry.mjs && node --check sync-feishu.mjs && node --check import-knowledge.mjs && node --check ops/feishu-to-xianyu.mjs && node --check ops/feishu-to-xianyu-lib.mjs"
+    "check": "node --check registry.mjs && node --check sync-feishu.mjs && node --check import-knowledge.mjs && node --check scripts/review-run-bundle.mjs && node --check scripts/create-repair-proposal.mjs && node --check scripts/lib/repair-proposal.mjs && node --check scripts/lib/repair-authority-verifiers.mjs && node --check ops/feishu-to-xianyu.mjs && node --check ops/feishu-to-xianyu-lib.mjs"
   }
 }

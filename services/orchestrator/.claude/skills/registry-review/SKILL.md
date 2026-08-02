@@ -13,6 +13,7 @@ description: 评审 Windows 落盘的验收证据，对照 Mac 已固化子 skil
 
 1. **采集事实**：按输入类型选择只读入口——
    - 收到显式 sealed run bundle：先跑 `node scripts/review-run-bundle.mjs <bundleDir>`，核对 seal、manifest、runId、producer commit、事件绑定和 candidate path/hash，生成绑定 exact bundle 的 `xhs.review-receipt.v1` JSON。
+   - 需要把可修 finding 交给 Windows consumer 时：跑 `node scripts/review-run-bundle.mjs <bundleDir> --repair-proposals`。aggregate bundle 如需绑定已收编 Skill，另带 `--skill-path/--skill-version/--skill-sha256`。它额外输出不可变 `xhs.repair-proposal.v1` 与现有 registry knowledge 信封；只生成 JSON，不 POST、不 claim、不部署。proposal 的后续 claim/heartbeat/source checkpoint/completion 必须走 `contracts/repair-*.v1.schema.json` + append-only sealed outbox。
    - 只有 legacy Windows 停车场证据：跑 `node scripts/review-windows.mjs`。它 SSH Windows 拉 `tmp-know/ACCEPTANCE-*.md` + `EXPLORE-*.md`，本地遍历 `skills/<app>/*/SKILL.md` frontmatter（version/verified），对照 exit 码，输出 markdown 事实表到 stdout。
    - 两个脚本都只列机械事实，**不做主观评判、不触发 adopt、不碰设备**；bundle review 失败只阻止收编，不反写 Windows 业务结果。
 
@@ -23,6 +24,8 @@ description: 评审 Windows 落盘的验收证据，对照 Mac 已固化子 skil
 
 3. **出提案**：产「可贴路由行清单」——每行附 exit 码背书 + 自由度 + 备注（如 dump-fail、未验真动作）；另列「筛掉」项及原因（如未固化成子 skill 目录、无 ACCEPTANCE 落盘、op 表 ✅ 仅探索态非已固化）。
 
+   对属于第一版自动修 allowlist 的 evidence/观测缺口，同时输出机器 repair proposal。proposal 必须绑定 exact bundle/run/manifest hash/producer commit/review receipt/finding，且带 allowed paths、forbidden paths、文件/diff/attempt 上限、heartbeat、supersession、熔断与验收条件。evidence debt 只影响证据完整性，不反写非支付业务结果。
+
 4. **贴路由前必须问用户**——根 [`skills/SKILL.md`](../../skills/SKILL.md) 是权限层（§2「不碰根」，agent 只能写提案）。用户确认才代贴（破例留痕，见 memory `scp-windows-after-auth-change`）；用户点头前不碰根 SKILL.md 的路由表与 frontmatter。
 
 5. **代贴后**：`git commit` + `push origin main` → scp 根 `skills/SKILL.md` 到 Windows `C:\Users\Public\xhs-registry\skills\SKILL.md` + 刷新 `skills/.SYNCED-FROM.md` 锚点（守用户偏好：代改权限层后咨询确认即默认 scp，不等单向 sync 拖着忘）。
@@ -30,6 +33,8 @@ description: 评审 Windows 落盘的验收证据，对照 Mac 已固化子 skil
 ## 边界
 
 - **不碰设备**：不跑业务脚本、不提交 job、不 SSH 推部署、不替 Windows 改 op 表/建地图/补探索内容（坐标/真动作标注/04 占位）。
+- **repair 权限分离**：Windows 只可 claim/heartbeat/fix/source checkpoint/completion，不能自批、写 Mac 或改 review verdict；`approved/request_changes/deployable/cancelled` 必须绑定可信 Mac commit 上的独立 receipt，不能只信 actor role。`replaying` 必须另带部署/重放授权引用/hash并由外部 verifier 核验，repair proposal 本身不是部署或手机授权。
+- **绝对禁止自动改**：根 `skills/SKILL.md`、治理权限语义、payment guard、approval/Standing Grant、密钥/认证、`control.db`、真实支付、不可逆 effect、Windows 部署配置。
 - **评判全自动、贴路由守确认**：步骤 1-3 自主做，步骤 4 必须人确认。
 - **stale 只标「待 Windows 改」**：地图落后真机时以真机为准，Mac 不替 Win 改 op 表，只标 `stale-as-of` / 待 Win 改。
 - **不自动扫库**：采集脚本显式列 `ACCEPTANCE-`/`EXPLORE-` 前缀文件，本地显式遍历 `skills/`。
@@ -43,3 +48,6 @@ description: 评审 Windows 落盘的验收证据，对照 Mac 已固化子 skil
 
 - `scripts/review-windows.mjs` — 采集脚本（零依赖、只读、`ADOPT_SSH` 覆盖 host、不进 `npm run check`）。
 - `scripts/review-run-bundle.mjs` — sealed bundle 离线核验与 `xhs.review-receipt.v1` 生成器（零依赖、只读、不 SSH、不 adopt）。
+- `scripts/create-repair-proposal.mjs` — 从 finding 生成/校验不可变 proposal 与 registry knowledge 信封（纯离线）。
+- `scripts/lib/repair-proposal.mjs` — idempotency、状态归约、scope/diff/secret guard、checkpoint/completion 校验。
+- `scripts/lib/repair-authority-verifiers.mjs` — 对可信 Mac Git receipt、outbox claim.lock、带独立人类 Ed25519 签名的 replay authorization 与 completion bundle 做实际 bytes/hash/binding 核验；consumer 不能用 `()=>true` 代替，也不能把 source push 权当 replay 权。

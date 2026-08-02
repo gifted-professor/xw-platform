@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:xhs:contract:repair-replay-authorization:v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaId", "schemaVersion", "proposalId", "proposalSha256", "deployableEventId", "resultCommit", "scope", "authorizedAt", "expiresAt", "issuer", "externalEffect", "paymentTransport", "signature"],
+  "properties": {
+    "schemaId": { "const": "xhs.repair-replay-authorization.v1" },
+    "schemaVersion": { "const": 1 },
+    "proposalId": { "type": "string", "pattern": "^repair_[0-9a-f]{24}$" },
+    "proposalSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "deployableEventId": { "type": "string", "pattern": "^repair_event_[0-9a-f]{24}$" },
+    "resultCommit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "scope": { "const": "windows_deploy_and_read_only_replay" },
+    "authorizedAt": { "type": "string", "format": "date-time" },
+    "expiresAt": { "type": "string", "format": "date-time" },
+    "issuer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["subject", "role", "keyId"],
+      "properties": { "subject": { "type": "string", "minLength": 1 }, "role": { "const": "human" }, "keyId": { "type": "string", "minLength": 1 } }
+    },
+    "externalEffect": { "const": false },
+    "paymentTransport": { "const": 0 },
+    "signature": { "type": "string", "minLength": 40 }
+  }
+}
