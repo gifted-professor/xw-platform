@@ -113,6 +113,39 @@ test("operator formally launches XHS from the desktop before reading the feed", 
   ]);
 });
 
+test("operator prefers a one-shot launcher so a Windows persistent shell cannot poison the serve", async () => {
+  const operator = Object.create(FastOperator.prototype);
+  const trace = [];
+  const focuses = [
+    { package: "com.android.launcher", activity: "com.android.launcher.Launcher" },
+    { package: "com.xingin.xhs", activity: "com.xingin.xhs.index.v2.IndexActivityV2" },
+  ];
+  operator.currentFocus = async () => { trace.push("focus"); return focuses.shift(); };
+  operator.session = {
+    oneShotShell: async (command) => { trace.push(`oneShot:${command}`); return "Events injected: 1"; },
+    exec: async () => { throw new Error("persistent launcher fallback must not run"); },
+  };
+  operator.feedDump = async () => { trace.push("feedDump"); return { nodes: [] }; };
+  operator.feedCards = () => [{ cover: { center: [100, 200] } }];
+  operator.openCard = async () => { trace.push("openCard"); return { opened: true, activity: "com.xingin.xhs.note.NoteDetailActivity" }; };
+  operator.observeOpenNoteDetail = async () => ({
+    ok: true,
+    pageFingerprint: "a".repeat(64),
+    targetFingerprint: "b".repeat(64),
+    observedAt: "2026-07-30T16:00:00.000Z",
+  });
+
+  const result = await operator.openFeedNote({ selector: "any" });
+  assert.equal(result.ok, true);
+  assert.deepEqual(trace, [
+    "focus",
+    "oneShot:monkey -p com.xingin.xhs -c android.intent.category.LAUNCHER 1",
+    "focus",
+    "feedDump",
+    "openCard",
+  ]);
+});
+
 test("operator converts a desktop launcher runtime throw into a retryable no-effect result", async () => {
   const operator = Object.create(FastOperator.prototype);
   const commands = [];
@@ -124,7 +157,7 @@ test("operator converts a desktop launcher runtime throw into a retryable no-eff
       }
       throw new Error("adb shell timeout while launching XHS");
     },
-    async oneShotShell() { return ""; },
+    async oneShotShell() { throw new Error("one-shot shell unavailable"); },
   };
 
   assert.deepEqual(await operator.openFeedNote({ selector: "any" }), {

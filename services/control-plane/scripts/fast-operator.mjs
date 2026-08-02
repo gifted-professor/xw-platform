@@ -594,7 +594,23 @@ export class FastOperator {
       }
     }
     try {
-      await this.session.exec("monkey -p com.xingin.xhs -c android.intent.category.LAUNCHER 1", 12000);
+      const launchCommand = "monkey -p com.xingin.xhs -c android.intent.category.LAUNCHER 1";
+      // Launching from a desktop is a one-shot shell operation. Some Windows
+      // ADB builds terminate a persistent `adb shell` immediately after the
+      // launcher command; using the one-shot path keeps the serve alive and
+      // lets the focus verification below decide whether launch succeeded.
+      if (typeof this.session.oneShotShell === "function") {
+        try {
+          await this.session.oneShotShell(launchCommand, 12000);
+        } catch {
+          // Older test doubles and devices without the one-shot path retain
+          // the original persistent-shell fallback, still behind this
+          // bounded launch error handler.
+          await this.session.exec(launchCommand, 12000);
+        }
+      } else {
+        await this.session.exec(launchCommand, 12000);
+      }
     } catch (error) {
       return operatorNotSent("xhsLaunchFailed", "XHS_LAUNCH_FAILED", error, this.serial);
     }
