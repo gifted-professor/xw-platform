@@ -13,7 +13,8 @@
 // 输出符合 control-plane/schema/nonpayment-autonomy.schema.json（schema 是真理之源）。
 
 const SCHEMA_ID = "xhs.nonpayment-autonomy.v1";
-const RUNTIME_POLICY_VERSION = "xhs.nonpayment-autonomy.v1";
+// REX Phase 6 B: 暴露给 health/manifest 的运行时策略版本（schema const 单一来源）。
+export const RUNTIME_POLICY_VERSION = "xhs.nonpayment-autonomy.v1";
 
 export function evaluateNonpaymentAutonomy(input = {}, options = {}) {
   const actionClass = input.actionClass ?? "unknown";

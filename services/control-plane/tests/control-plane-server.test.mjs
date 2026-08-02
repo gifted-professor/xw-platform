@@ -98,6 +98,46 @@ test("production bootstrap keeps legacy (null policyMode) when env is unset (B7)
   }
 });
 
+test("health exposes the runtime policy schema version when a policy mode is active (B7)", async () => {
+  const root = mkdtempSync(join(tempBase, "health-policy-schema-"));
+  const state = new StateStore({ dbPath: join(root, "control.db") });
+  const evidence = new EvidenceStore({ runsRoot: join(root, "runs"), state, minFreeBytes: 0, minExternalEffectFreeBytes: 0 });
+  const registry = new CapabilityRegistry([capability]);
+  try {
+    const control = new ControlPlane({
+      state,
+      capabilities: registry,
+      adapters: new AdapterRegistry([{ id: "test", async execute() { return {}; } }]),
+      evidence,
+      policyMode: { mode: "shadow", active: false, consulted: true, effectiveDecisionSource: "shadow", adapterKind: "real" },
+    });
+    const router = new ControlRouter({ control, state, capabilities: registry, evidence });
+    const result = await router.handle({ method: "GET", path: "/control/v1/health" });
+    assert.equal(result.status, 200);
+    assert.equal(result.body.policyMode?.mode, "shadow");
+    assert.equal(result.body.runtimePolicyVersion, "xhs.nonpayment-autonomy.v1");
+  } finally {
+    state.close(); rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("health does not claim a policy schema version under legacy (no policyMode)", async () => {
+  const root = mkdtempSync(join(tempBase, "health-legacy-schema-"));
+  const state = new StateStore({ dbPath: join(root, "control.db") });
+  const evidence = new EvidenceStore({ runsRoot: join(root, "runs"), state, minFreeBytes: 0, minExternalEffectFreeBytes: 0 });
+  const registry = new CapabilityRegistry([capability]);
+  try {
+    const control = new ControlPlane({ state, capabilities: registry, adapters: new AdapterRegistry([{ id: "test", async execute() { return {}; } }]), evidence });
+    const router = new ControlRouter({ control, state, capabilities: registry, evidence });
+    const result = await router.handle({ method: "GET", path: "/control/v1/health" });
+    assert.equal(result.status, 200);
+    assert.equal(result.body.policyMode, null);
+    assert.equal(result.body.runtimePolicyVersion, undefined);
+  } finally {
+    state.close(); rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("health exposes the runtime policy mode and release id (B7)", async () => {
   const root = mkdtempSync(join(tempBase, "health-policy-"));
   const state = new StateStore({ dbPath: join(root, "control.db") });

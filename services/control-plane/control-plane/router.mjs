@@ -1,4 +1,5 @@
 import { ControlPlaneError } from "./lib/errors.mjs";
+import { RUNTIME_POLICY_VERSION } from "./lib/nonpayment-autonomy-policy.mjs";
 
 function requireBody(body) {
   if (!body || typeof body !== "object" || Array.isArray(body)) {
@@ -134,7 +135,9 @@ export class ControlRouter {
           evidenceFreeBytes: freeBytes,
           externalEffectsBlockedForLowDisk: freeBytes < this.evidence.minExternalEffectFreeBytes,
           // REX Phase 5 B7: 暴露运行时策略模式与 release id（部署时由 worker 从 launch config 注入）。
+          // Phase 6 B: 有策略模式时同时暴露运行时策略 schema 版本（legacy 不声称非支付策略）。
           policyMode: this.control?.policyMode ?? null,
+          ...(this.control?.policyMode ? { runtimePolicyVersion: RUNTIME_POLICY_VERSION } : {}),
           ...(process.env.CONTROL_PLANE_RELEASE_ID ? { releaseId: process.env.CONTROL_PLANE_RELEASE_ID } : {}),
         },
       };
