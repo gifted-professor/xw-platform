@@ -142,3 +142,32 @@ AGENTS / modes / skills routing docs > not-yet-migrated app sub-skill Markdown.
   policy / task packet has superseded that rule, the release wins.
 - Neither this contract nor any stale sub-skill text may widen the one hard gate: a real
   money final commit waits for human confirmation with transport held at 0.
+
+## Repair Inbox (source-only; not a device front door)
+
+Ordinary capability Skills explain **how to run** a capability. The Repair Inbox
+decides **what to fix now**. Do not hardcode a dynamic `proposalId` into those
+capability Skills, and do not edit root `skills/SKILL.md` from this lane.
+
+Before any Windows source repair claim:
+
+```powershell
+cd C:\Users\Public\xhs-routing-v1-1
+node scripts/repair-inbox.mjs list
+node scripts/repair-inbox.mjs discover --expect-id repair_ff7fc51b35aec35227cf5eb6
+```
+
+Query surface (reused, no new service/DB/panel): registry
+`GET /api/knowledge?appliesTo=repair-proposal-v1&lifecycle=backlog` plus client-side
+`needsEngineer=true`. The inbox validates the full repair contract, canonical hash,
+Skill binding, allowlist/forbidden paths, and secret scan, then may hand off to the
+existing repair consumer.
+
+- Default = read-only `list` / `discover` (no claim, no outbox write, no phone/job).
+- Claim requires explicit `--i-understand-claim`. After claim: heartbeat, source fix,
+  source checkpoint / completion bundle only; stop at `source_review`.
+- Windows must not self-approve, modify Mac verdict, mark deployable, deploy, replay,
+  submit job/session, or operate phones.
+
+Skill contract: `skills/repair-inbox/SKILL.md`.
+Consumer contract: `docs/handoffs/2026-08-02-windows-repair-consumer-contract.md`.
