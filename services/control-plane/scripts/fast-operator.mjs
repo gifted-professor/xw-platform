@@ -119,7 +119,7 @@ class AdbShellSession {
     this.cmdSeq = 0;
   }
 
-  async start({ allowUnavailable = false } = {}) {
+  async start() {
     this.buf = "";
     this.waiters = [];
     const proc = spawn(this.adbPath, ["-s", this.serial, "shell"], { stdio: ["pipe", "pipe", "pipe"] });
@@ -148,19 +148,8 @@ class AdbShellSession {
     });
     proc.stderr.setEncoding("utf8");
     proc.stderr.on("data", () => {});
-    try {
-      await this.exec("echo fastop-ready"); // warm up
-      return true;
-    } catch (error) {
-      if (!allowUnavailable) throw error;
-      try {
-        this.diagnosticLogger({
-          event: "fast-operator.persistent-shell-unavailable",
-          errorCode: "ADB_SHELL_UNAVAILABLE",
-        });
-      } catch {}
-      return false;
-    }
+    await this.exec("echo fastop-ready"); // warm up
+    return this;
   }
 
   drain() {
@@ -220,8 +209,7 @@ class AdbShellSession {
   }
 
   async _restartAndExec(cmd, timeoutMs) {
-    const started = await this.start({ allowUnavailable: true });
-    if (!started) throw new Error("adb persistent shell unavailable");
+    await this.start();
     return this.exec(cmd, timeoutMs);
   }
 
@@ -312,7 +300,7 @@ export class FastOperator {
     return this.pacer.pace(bounds);
   }
 
-  async start() { await this.session.start({ allowUnavailable: true }); return this; }
+  async start() { await this.session.start(); return this; }
   async close() { await this.session.close(); }
 
   async currentFocus() {
@@ -1718,7 +1706,10 @@ export function serve(port, options = {}) {
   const authorize = options.authorize ?? authorizeServeRequest;
   const errorLogger = options.errorLogger ?? ((entry) => console.error(JSON.stringify({ ...entry, at: new Date().toISOString() })));
   const operatorFactory = options.operatorFactory
-    ?? (() => applyCommentFlags(new FastOperator({ adbPath: adb, serial, diagnosticLogger: errorLogger }).start()));
+    // Keep the first read-only request independent from the persistent shell.
+    // `dump`/`focus` have one-shot paths; interactive commands still start the
+    // persistent shell through session.exec and fail closed if it is unavailable.
+    ?? (() => applyCommentFlags(Promise.resolve(new FastOperator({ adbPath: adb, serial, diagnosticLogger: errorLogger }))));
   const getOp = () => {
     if (!opP) {
       opP = Promise.resolve()

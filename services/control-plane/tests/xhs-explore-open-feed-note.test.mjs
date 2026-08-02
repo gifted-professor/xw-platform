@@ -87,17 +87,6 @@ test("dump uses a one-shot shell before the persistent-shell fallback", async ()
   assert.equal(operator.metrics.dumps, 1);
 });
 
-test("operator start tolerates a missing persistent shell for read-only probes", async () => {
-  const operator = Object.create(FastOperator.prototype);
-  let startOptions = null;
-  operator.session = {
-    start: async (options) => { startOptions = options; return false; },
-  };
-
-  assert.equal(await operator.start(), operator);
-  assert.deepEqual(startOptions, { allowUnavailable: true });
-});
-
 test("operator formally launches XHS from the desktop before reading the feed", async () => {
   const operator = Object.create(FastOperator.prototype);
   const trace = [];
