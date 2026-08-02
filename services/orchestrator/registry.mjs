@@ -42,6 +42,12 @@ const CONTROL = argOf("control", "http://127.0.0.1:17920").replace(/\/+$/, "");
 const DB_PATH = argOf("db", path.join(__dirname, "registry.db"));
 const SEED_PATH = argOf("seed", path.join(__dirname, "identities.seed.json"));
 const CONTROL_DB_PATH = argOf("control-db", "C:\\Users\\Public\\xhs-agent-control\\control.db");
+// REX Phase 6 P6-A: cross-repo release manifest 所在目录（control-plane-task.ps1 安装时在
+// 同目录写 cross-repo-release.json）。Windows 上与 control-plane 同机；Mac 本地调试缺省走
+// runtime/（通常不存在 → release 块降级 present=false，绝不 500）。
+const CONTROL_PLANE_STATE_DIR = argOf("control-plane-state-dir",
+  process.env.CONTROL_PLANE_STATE_DIR
+  || (process.platform === "win32" ? "C:\\Users\\Public\\xhs-agent-control" : path.join(__dirname, "runtime")));
 const TOKEN = argOf("token", "");
 const AGENT_TOKEN = argOf("agent-token", TOKEN);
 const HUMAN_TOKEN = argOf("human-token", "");
@@ -433,6 +439,10 @@ async function aggregate() {
       nodeId: health?.nodeId ?? null,
       authority: health?.authority ?? null,
       activeLeases: health?.activeLeases ?? null,
+      // REX Phase 6 P6-A: 运行时策略/release 从 control-plane health 带出，供 agent-entry 显示。
+      policyMode: health?.policyMode ?? null,
+      releaseId: health?.releaseId ?? null,
+      runtimePolicyVersion: health?.runtimePolicyVersion ?? null,
     };
   } catch (e) {
     out.controlPlane.error = String(e.message || e);
@@ -1120,8 +1130,23 @@ function blockerOverview() {
   };
 }
 
+// REX Phase 6 P6-A: 读 control-plane 部署时写的 cross-repo release manifest。缺文件/schemaId
+// 不符一律返回 null（降级），绝不抛。registry 与 control-plane 同机，直接读文件；读不到时
+// agent-entry 仍以 health 上报的 policyMode/releaseId/runtimePolicyVersion 兜底。
+function readReleaseManifest() {
+  try {
+    const file = path.join(CONTROL_PLANE_STATE_DIR, "cross-repo-release.json");
+    if (!fs.existsSync(file)) return null;
+    const manifest = JSON.parse(fs.readFileSync(file, "utf8"));
+    return manifest && manifest.schemaId === "xhs.cross-repo-release.v1" ? manifest : null;
+  } catch (e) {
+    return null;
+  }
+}
+
 async function buildAgentEntry() {
   const devices = await aggregate();
+  const releaseManifest = readReleaseManifest();
   const jobs = listJobOverview(20);
   const deviceJobs = listDeviceJobStatus();
   const pending = listPendingApprovals();
@@ -1164,6 +1189,20 @@ async function buildAgentEntry() {
       reachable: Boolean(devices.controlPlane.reachable),
       nodeId: devices.controlPlane.nodeId ?? null,
       activeLeases: devices.controlPlane.activeLeases ?? null,
+    },
+    // REX Phase 6 P6-A: release/modes/schema + 完整 policyDocDebt（§5.5 最小执行契约明示）。
+    // 以 cross-repo release manifest 为准，health 兜底；policyDocDebt 只提醒旧 Markdown，
+    // 不阻止任何任务。
+    release: {
+      present: Boolean(releaseManifest),
+      releaseId: releaseManifest?.releaseId ?? devices.controlPlane.releaseId ?? null,
+      runtimePolicyVersion: releaseManifest?.runtimePolicyVersion ?? devices.controlPlane.runtimePolicyVersion ?? null,
+      effectiveDecisionSource: releaseManifest?.effectiveDecisionSource ?? devices.controlPlane.policyMode?.effectiveDecisionSource ?? null,
+      policyMode: releaseManifest?.policyMode ?? devices.controlPlane.policyMode?.mode ?? null,
+      evidenceMode: releaseManifest?.evidenceMode ?? null,
+      policyDocDebt: Array.isArray(releaseManifest?.policyDocDebt) ? releaseManifest.policyDocDebt : [],
+      policyDocDebtCount: Array.isArray(releaseManifest?.policyDocDebt) ? releaseManifest.policyDocDebt.length : 0,
+      policyDocDebtClean: Array.isArray(releaseManifest?.policyDocDebt) ? releaseManifest.policyDocDebt.length === 0 : true,
     },
     devices: devices.devices.map((device) => {
       const control = device.control;
@@ -1225,6 +1264,16 @@ function renderAgentEntryMarkdown(entry) {
     `- activeLeases: ${entry.controlPlane.activeLeases ?? "unknown"}`,
     `- runningJobs: ${entry.jobs.active.length}`,
     `- pendingApprovals: ${entry.approvals.pendingCount}`,
+    "",
+    "## Release / runtime policy",
+    "",
+    `- releaseId: ${entry.release.releaseId ?? "unknown"}${entry.release.present ? "" : " (no cross-repo-release.json)"}`,
+    `- runtimePolicyVersion: ${entry.release.runtimePolicyVersion ?? "unknown"}`,
+    `- effectiveDecisionSource: ${entry.release.effectiveDecisionSource ?? "unknown"}`,
+    `- policyMode: ${entry.release.policyMode ?? "unknown"}`,
+    `- evidenceMode: ${entry.release.evidenceMode ?? "unknown"}`,
+    `- policyDocDebt: ${entry.release.policyDocDebtCount} item(s)${entry.release.policyDocDebtClean ? " (clean)" : ""}`,
+    ...entry.release.policyDocDebt.map((item) => `  - ${item.path}: ${item.legacyRule || item.reason || "stale doc"} (supersededForRelease=${item.supersededForRelease || "?"})`),
     "",
     "## Current active blockers",
     "",
@@ -1327,7 +1376,7 @@ function renderControlTower(entry, { csrfToken = "", pendingApprovals = [], noti
 .split{display:grid;grid-template-columns:1fr 1fr;gap:14px}.timeline{list-style:none;margin:0;padding:0;background:var(--panel);border:1px solid var(--line)}.timeline li{display:grid;grid-template-columns:12px 1fr auto;gap:10px;padding:12px;border-bottom:1px solid var(--line);align-items:center}.timeline li:last-child{border:0}.timeline b,.timeline small{display:block}.timeline b{font-size:13px}.timeline small,.timeline time{font:10px ui-monospace,monospace;color:var(--muted)}.event-dot{width:9px;height:9px;border-radius:50%;background:var(--blue)}.event-good{background:var(--green)}.event-bad{background:var(--red)}.event-live{background:var(--amber)}.event-note{background:var(--blue)}.approval-warning{background:#fff1d8;border:1px solid #e2b667;padding:12px;margin-bottom:10px;font-size:13px}.approval-card{background:var(--panel);border:1px solid var(--line);padding:16px;margin-bottom:10px}.approval-head{display:flex;gap:10px;align-items:center}.approval-head span{background:var(--red);color:white;padding:5px 8px;font:bold 11px ui-monospace,monospace}.approval-head h3{margin:0}.approval-card p{font:11px ui-monospace,monospace;color:var(--muted);overflow-wrap:anywhere}.approval-actions{display:grid;grid-template-columns:1fr 1fr;gap:10px}.approval-actions form{display:grid;gap:7px}.approval-actions input{width:100%;border:1px solid var(--line);background:white;padding:9px;font:12px ui-monospace,monospace}.approval-actions button{border:0;color:white;padding:10px;font-weight:800;cursor:pointer}.approve{background:var(--green)}.deny{background:var(--red)}.empty-panel{padding:20px;background:var(--panel);border:1px dashed var(--line);color:var(--muted)}footer{border-top:3px solid var(--ink);margin-top:32px;padding:14px 0;font:10px ui-monospace,monospace;color:var(--muted)}@media(max-width:800px){.shell{padding:14px}.topbar{grid-template-columns:1fr}.topnav{margin-top:14px}.status-strip{grid-template-columns:1fr 1fr}.split,.approval-actions{grid-template-columns:1fr}.device-grid{grid-template-columns:1fr}h1{font-size:45px}}
 </style></head><body><main class="shell"><header class="topbar"><div><div class="eyebrow">XHS 多设备运营 / 实时快照</div><h1>Agent<br>控制塔</h1></div><nav class="topnav"><a href="/">刷新快照</a><a href="/agent-entry.md">Agent 入口</a><a href="/api/agent-entry">JSON</a><a href="/watchdog">巡检报告</a></nav></header>${noticeText ? `<div class="notice">${esc(noticeText)}</div>` : ""}
 <div class="section-head"><div><span class="section-kicker">已知卡点</span><h2>当前卡点（非审批项）</h2></div><p>知识库记录的已知问题，仅展示，不需在此操作</p></div><section class="blockers">${blockers}</section>
-<section class="status-strip"><div class="metric primary"><small>控制面</small><b>${esc(sourceState)}</b></div><div class="metric"><small>占用中</small><b>${esc(entry.controlPlane.activeLeases ?? "?")}</b></div><div class="metric"><small>在跑任务</small><b>${entry.jobs.active.length}</b></div><div class="metric"><small>待审批</small><b>${entry.approvals.pendingCount}</b></div><div class="metric"><small>快照时间</small><b>${esc(new Date(entry.generatedAt).toLocaleTimeString("zh-CN", { hour12: false }))}</b></div></section>
+<section class="status-strip"><div class="metric primary"><small>控制面</small><b>${esc(sourceState)}</b></div><div class="metric"><small>占用中</small><b>${esc(entry.controlPlane.activeLeases ?? "?")}</b></div><div class="metric"><small>在跑任务</small><b>${entry.jobs.active.length}</b></div><div class="metric"><small>release / 策略</small><b>${esc((entry.release.releaseId || entry.release.policyMode || "?").slice(0, 20))}</b></div><div class="metric"><small>待审批</small><b>${entry.approvals.pendingCount}</b></div><div class="metric"><small>快照时间</small><b>${esc(new Date(entry.generatedAt).toLocaleTimeString("zh-CN", { hour12: false }))}</b></div></section>
 <div class="section-head"><div><span class="section-kicker">设备占用</span><h2>设备控制权与运行态</h2></div><p>lease 和 job 分别取证，不互相推断</p></div><section class="device-grid">${deviceCards}</section><div class="section-head"><div><span class="section-kicker">事件流</span><h2>最近动态</h2></div><p>服务端生成 · 无 JavaScript</p></div><section class="split"><ol class="timeline">${recentJobs}</ol><ol class="timeline">${recentKnowledge}</ol></section>
 <div class="section-head"><div><span class="section-kicker">人工审批闸</span><h2>待人工审批</h2></div><p>Agent 禁止调用 approve / deny</p></div><div class="approval-warning">批准会触发真实外部效果。只有人可以操作；批准前必须手工输入 APPROVE。</div>${approvalCards}<footer>协议 ${esc(entry.schemaVersion)} · 生成于 ${esc(entry.generatedAt)} · 控制面库 ${entry.sources.controlDb.reachable ? "可读" : "降级"}</footer></main></body></html>`;
 }

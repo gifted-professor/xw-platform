@@ -131,7 +131,12 @@ function createControlServer() {
     },
   }];
   const server = http.createServer(async (req, res) => {
-    if (req.method === "GET" && req.url === "/control/v1/health") return json(res, 200, { nodeId: "test-node", authority: true, activeLeases: 1 });
+    if (req.method === "GET" && req.url === "/control/v1/health") return json(res, 200, {
+      nodeId: "test-node", authority: true, activeLeases: 1,
+      policyMode: { mode: "shadow", active: false, effectiveDecisionSource: "shadow", adapterKind: "real" },
+      releaseId: "health-release-fallback",
+      runtimePolicyVersion: "xhs.nonpayment-autonomy.v1",
+    });
     if (req.method === "GET" && req.url === "/control/v1/devices") return json(res, 200, { devices: [
       { deviceId: "dev-01", alias: "01", online: true, quarantined: false },
       { deviceId: "dev-03", alias: "03", online: true, quarantined: true, quarantineReason: "ADAPTER_FAILED" },
@@ -315,6 +320,75 @@ test("agent entry aggregates leases, jobs, blockers and omits private identity f
   const serialized = JSON.stringify(entry);
   assert.doesNotMatch(serialized, /private-account|private-note|secret parameter/);
   assert.doesNotMatch(serialized, /"accounts"|"notes"|"customer"/);
+});
+
+// REX Phase 6 P6-A: agent-entry must display runtime policy, releaseId and the full
+// policyDocDebt from the cross-repo release manifest (written by control-plane-task.ps1).
+test("agent-entry exposes the cross-repo release manifest (release/modes/schema/policyDocDebt)", async () => {
+  const releaseDir = path.join(tempRoot, "release-state-present");
+  await mkdir(releaseDir, { recursive: true });
+  const manifest = {
+    schemaId: "xhs.cross-repo-release.v1",
+    schemaVersion: 1,
+    releaseId: "rel-shadow-test-01",
+    registryCommit: "a".repeat(40),
+    deviceAgentCommit: "b".repeat(40),
+    windowsRegistryCommit: "c".repeat(40),
+    taskLaunchCommit: "d".repeat(40),
+    policyMode: "shadow",
+    evidenceMode: "dual",
+    runtimePolicyVersion: "xhs.nonpayment-autonomy.v1",
+    effectiveDecisionSource: "shadow",
+    policyDocDebt: [
+      { path: "skills/xhs/SKILL.md", legacyRule: "needs approval", supersededForRelease: "rel-shadow-test-01" },
+    ],
+    schemaContracts: [],
+    deployedAt: new Date().toISOString(),
+  };
+  await writeFile(path.join(releaseDir, "cross-repo-release.json"), JSON.stringify(manifest));
+  const reg = await startRegistry({ root: tempRoot, controlUrl: `http://127.0.0.1:${control.server.address().port}`,
+    extraArgs: ["--runs-root", runsRoot, "--payment-signer-keys-file", paymentSignerKeysFile],
+    env: { CONTROL_PLANE_STATE_DIR: releaseDir } });
+  try {
+    const response = await fetch(`${reg.base}/api/agent-entry`, { headers: { "x-registry-token": TOKEN } });
+    assert.equal(response.status, 200);
+    const entry = await response.json();
+    assert.equal(entry.release.present, true);
+    assert.equal(entry.release.releaseId, "rel-shadow-test-01");
+    assert.equal(entry.release.policyMode, "shadow");
+    assert.equal(entry.release.evidenceMode, "dual");
+    assert.equal(entry.release.runtimePolicyVersion, "xhs.nonpayment-autonomy.v1");
+    assert.equal(entry.release.effectiveDecisionSource, "shadow");
+    assert.deepEqual(entry.release.policyDocDebt, manifest.policyDocDebt);
+    assert.equal(entry.release.policyDocDebtCount, 1);
+    assert.equal(entry.release.policyDocDebtClean, false);
+  } finally {
+    await stopRegistry(reg.child);
+  }
+});
+
+test("agent-entry release block degrades (present=false, empty debt) without a release manifest", async () => {
+  const emptyDir = path.join(tempRoot, "release-state-absent");
+  await mkdir(emptyDir, { recursive: true });
+  const reg = await startRegistry({ root: tempRoot, controlUrl: `http://127.0.0.1:${control.server.address().port}`,
+    extraArgs: ["--runs-root", runsRoot, "--payment-signer-keys-file", paymentSignerKeysFile],
+    env: { CONTROL_PLANE_STATE_DIR: emptyDir } });
+  try {
+    const response = await fetch(`${reg.base}/api/agent-entry`, { headers: { "x-registry-token": TOKEN } });
+    assert.equal(response.status, 200);
+    const entry = await response.json();
+    assert.equal(entry.release.present, false);
+    // manifest 缺省时以 control-plane health 上报的 policy/release 兜底（不猜、不 500）。
+    assert.equal(entry.release.releaseId, "health-release-fallback");
+    assert.equal(entry.release.policyMode, "shadow");
+    assert.equal(entry.release.runtimePolicyVersion, "xhs.nonpayment-autonomy.v1");
+    assert.equal(entry.release.effectiveDecisionSource, "shadow");
+    assert.deepEqual(entry.release.policyDocDebt, []);
+    assert.equal(entry.release.policyDocDebtCount, 0);
+    assert.equal(entry.release.policyDocDebtClean, true);
+  } finally {
+    await stopRegistry(reg.child);
+  }
 });
 
 test("authenticated endpoints reject requests without credentials", async () => {
