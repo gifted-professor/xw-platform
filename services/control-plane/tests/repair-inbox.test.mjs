@@ -21,7 +21,9 @@ import {
 } from "../scripts/lib/repair-consumer.mjs";
 import {
   claimRepairInbox,
+  createFixtureKnowledgeClient,
   discoverRepairInbox,
+  resolveInboxKnowledgeClient,
   validateInboxCandidate,
   WINDOWS_CANNOT,
 } from "../scripts/lib/repair-inbox.mjs";
@@ -137,46 +139,74 @@ test("claim without explicit authorization fails closed", async () => {
   assert.deepEqual(result.actionsPerformed, []);
 });
 
+function withBrokenFetch(run) {
+  const original = globalThis.fetch;
+  globalThis.fetch = async () => {
+    throw new Error("fetch failed: isolation — live registry must not be contacted");
+  };
+  return Promise.resolve()
+    .then(run)
+    .finally(() => {
+      globalThis.fetch = original;
+    });
+}
+
+test("fixtureItems never falls back to live knowledge client", () => {
+  const client = resolveInboxKnowledgeClient({ fixtureItems: [envelope()] });
+  assert.equal(client.mode, "fixture-only");
+  assert.equal(createFixtureKnowledgeClient([envelope()]).mode, "fixture-only");
+  assert.throws(
+    () => resolveInboxKnowledgeClient({}),
+    /refusing implicit live registry client/i,
+  );
+});
+
 test("explicit claim with checkpoint stops at source_review; without checkpoint fails closed after fixing", async () => {
-  const root = mkdtempSync(join(tmpdir(), "repair-inbox-claim-"));
-  try {
-    const incomplete = await claimRepairInbox({
-      fixtureItems: [envelope()],
-      outboxRoot: root,
-      actorId: "win-inbox",
-      proposalId: EXPECTED_ID,
-      claimAuthorized: true,
-      at: new Date("2026-08-02T12:00:00.000Z"),
-    });
-    assert.equal(incomplete.ok, false);
-    assert.equal(incomplete.reason, "SOURCE_CHECKPOINT_REQUIRED");
-    assert.equal(incomplete.status, "fixing");
-    assert.ok(incomplete.actionsPerformed.includes("claim"));
+  await withBrokenFetch(async () => {
+    const root = mkdtempSync(join(tmpdir(), "repair-inbox-claim-"));
+    try {
+      const incomplete = await claimRepairInbox({
+        fixtureItems: [envelope()],
+        outboxRoot: root,
+        actorId: "win-inbox",
+        proposalId: EXPECTED_ID,
+        claimAuthorized: true,
+        at: new Date("2026-08-02T12:00:00.000Z"),
+      });
+      assert.equal(incomplete.ok, false);
+      assert.equal(incomplete.reason, "SOURCE_CHECKPOINT_REQUIRED");
+      assert.equal(incomplete.status, "fixing");
+      assert.ok(incomplete.actionsPerformed.includes("claim"));
 
-    const root2 = mkdtempSync(join(tmpdir(), "repair-inbox-claim2-"));
-    const first = await claimRepairInbox({
-      fixtureItems: [envelope()],
-      outboxRoot: root2,
-      actorId: "win-inbox",
-      proposalId: EXPECTED_ID,
-      claimAuthorized: true,
-      checkpoint: checkpointFor(FIRST_PROPOSAL, "win-inbox"),
-      at: new Date("2026-08-02T12:00:00.000Z"),
-    });
-    assert.equal(first.ok, true);
-    assert.equal(first.status, "source_review");
-    assert.equal(first.waitingFor, "mac_independent_review");
-    assert.ok(first.actionsPerformed.includes("source_checkpoint"));
-    for (const banned of WINDOWS_CANNOT) assert.ok(first.actionsNotPerformed.includes(banned));
+      const root2 = mkdtempSync(join(tmpdir(), "repair-inbox-claim2-"));
+      const first = await claimRepairInbox({
+        fixtureItems: [envelope()],
+        outboxRoot: root2,
+        actorId: "win-inbox",
+        proposalId: EXPECTED_ID,
+        claimAuthorized: true,
+        checkpoint: checkpointFor(FIRST_PROPOSAL, "win-inbox"),
+        at: new Date("2026-08-02T12:00:00.000Z"),
+      });
+      assert.equal(first.ok, true);
+      assert.equal(first.status, "source_review");
+      assert.equal(first.waitingFor, "mac_independent_review");
+      assert.ok(first.actionsPerformed.includes("source_checkpoint"));
+      for (const banned of WINDOWS_CANNOT) assert.ok(first.actionsNotPerformed.includes(banned));
 
-    const restarted = createRepairConsumer({ outboxRoot: root2, actorId: "win-inbox" });
-    restarted.loadProposal(FIRST_PROPOSAL);
-    assert.equal(restarted.projection.status, "source_review");
-    assert.equal(restarted.projection.attempt, 1);
-    rmSync(root2, { recursive: true, force: true });
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+      const restarted = createRepairConsumer({
+        outboxRoot: root2,
+        actorId: "win-inbox",
+        knowledgeClient: createFixtureKnowledgeClient([envelope()]),
+      });
+      restarted.loadProposal(FIRST_PROPOSAL);
+      assert.equal(restarted.projection.status, "source_review");
+      assert.equal(restarted.projection.attempt, 1);
+      rmSync(root2, { recursive: true, force: true });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 test("live claim without checkpoint refuses before outbox mutation", async () => {
@@ -211,63 +241,130 @@ test("skillsRoot requires binding file to exist", () => {
 });
 
 test("concurrent exclusive claim: exactly one inbox claimant acquires lock", async () => {
-  const root = mkdtempSync(join(tmpdir(), "repair-inbox-race-"));
-  try {
-    const a = claimRepairInbox({
-      fixtureItems: [envelope()],
-      outboxRoot: root,
-      actorId: "win-a",
-      proposalId: EXPECTED_ID,
-      claimAuthorized: true,
-      at: new Date("2026-08-02T12:00:00.000Z"),
-    });
-    const b = claimRepairInbox({
-      fixtureItems: [envelope()],
-      outboxRoot: root,
-      actorId: "win-b",
-      proposalId: EXPECTED_ID,
-      claimAuthorized: true,
-      at: new Date("2026-08-02T12:00:00.000Z"),
-    });
-    const [ra, rb] = await Promise.all([a, b]);
-    const claimed = [ra, rb].filter((r) => r.actionsPerformed?.includes("claim") || r.actionsPerformed?.includes("resume_claim"));
-    const lost = [ra, rb].filter((r) => r.reason && r.reason !== "SOURCE_CHECKPOINT_REQUIRED");
-    assert.equal(claimed.length, 1);
-    assert.equal(lost.length, 1);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  await withBrokenFetch(async () => {
+    const root = mkdtempSync(join(tmpdir(), "repair-inbox-race-"));
+    try {
+      const a = claimRepairInbox({
+        fixtureItems: [envelope()],
+        outboxRoot: root,
+        actorId: "win-a",
+        proposalId: EXPECTED_ID,
+        claimAuthorized: true,
+        at: new Date("2026-08-02T12:00:00.000Z"),
+      });
+      const b = claimRepairInbox({
+        fixtureItems: [envelope()],
+        outboxRoot: root,
+        actorId: "win-b",
+        proposalId: EXPECTED_ID,
+        claimAuthorized: true,
+        at: new Date("2026-08-02T12:00:00.000Z"),
+      });
+      const [ra, rb] = await Promise.all([a, b]);
+      const claimed = [ra, rb].filter((r) => r.actionsPerformed?.includes("claim") || r.actionsPerformed?.includes("resume_claim"));
+      const lost = [ra, rb].filter((r) => r.reason && r.reason !== "SOURCE_CHECKPOINT_REQUIRED");
+      assert.equal(claimed.length, 1);
+      assert.equal(lost.length, 1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 test("expired claim on restart rotates attempt via consumer ensureClaim", async () => {
-  const root = mkdtempSync(join(tmpdir(), "repair-inbox-exp-"));
-  try {
-    const first = await claimRepairInbox({
-      fixtureItems: [envelope()],
-      outboxRoot: root,
-      actorId: "win-exp",
-      proposalId: EXPECTED_ID,
-      claimAuthorized: true,
-      at: new Date("2026-08-02T12:00:00.000Z"),
-    });
-    assert.equal(first.reason, "SOURCE_CHECKPOINT_REQUIRED");
-    assert.equal(first.status, "fixing");
+  await withBrokenFetch(async () => {
+    const root = mkdtempSync(join(tmpdir(), "repair-inbox-exp-"));
+    try {
+      const first = await claimRepairInbox({
+        fixtureItems: [envelope()],
+        outboxRoot: root,
+        actorId: "win-exp",
+        proposalId: EXPECTED_ID,
+        claimAuthorized: true,
+        at: new Date("2026-08-02T12:00:00.000Z"),
+      });
+      assert.equal(first.reason, "SOURCE_CHECKPOINT_REQUIRED");
+      assert.equal(first.status, "fixing");
 
-    const restarted = createRepairConsumer({
-      outboxRoot: root,
-      actorId: "win-exp",
-      knowledgeClient: {
-        async listRepairProposals() { return [FIRST_PROPOSAL]; },
-        async postKnowledge() { return { ok: true, debt: false }; },
-      },
-    });
-    restarted.loadProposal(FIRST_PROPOSAL);
-    const next = await restarted.ensureClaim({ at: new Date("2026-08-02T13:00:00.000Z") });
-    assert.equal(next.ok, true);
-    assert.ok(restarted.projection.attempt >= 1);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+      const restarted = createRepairConsumer({
+        outboxRoot: root,
+        actorId: "win-exp",
+        knowledgeClient: createFixtureKnowledgeClient([envelope()]),
+      });
+      restarted.loadProposal(FIRST_PROPOSAL);
+      const next = await restarted.ensureClaim({ at: new Date("2026-08-02T13:00:00.000Z") });
+      assert.equal(next.ok, true);
+      assert.ok(restarted.projection.attempt >= 1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+test("offline fixture claim/restart/concurrency with default fetch throwing stays at zero network", async () => {
+  await withBrokenFetch(async () => {
+    const items = [envelope()];
+    const root = mkdtempSync(join(tmpdir(), "repair-inbox-iso-"));
+    try {
+      const sealed = await claimRepairInbox({
+        fixtureItems: items,
+        outboxRoot: root,
+        actorId: "win-iso",
+        proposalId: EXPECTED_ID,
+        claimAuthorized: true,
+        checkpoint: checkpointFor(FIRST_PROPOSAL, "win-iso"),
+        at: new Date("2026-08-02T12:00:00.000Z"),
+      });
+      assert.equal(sealed.ok, true);
+      assert.equal(sealed.status, "source_review");
+
+      const raceRoot = mkdtempSync(join(tmpdir(), "repair-inbox-iso-race-"));
+      const [ra, rb] = await Promise.all([
+        claimRepairInbox({
+          fixtureItems: items,
+          outboxRoot: raceRoot,
+          actorId: "win-iso-a",
+          proposalId: EXPECTED_ID,
+          claimAuthorized: true,
+          at: new Date("2026-08-02T12:00:00.000Z"),
+        }),
+        claimRepairInbox({
+          fixtureItems: items,
+          outboxRoot: raceRoot,
+          actorId: "win-iso-b",
+          proposalId: EXPECTED_ID,
+          claimAuthorized: true,
+          at: new Date("2026-08-02T12:00:00.000Z"),
+        }),
+      ]);
+      assert.equal(
+        [ra, rb].filter((r) => r.actionsPerformed?.includes("claim")).length,
+        1,
+      );
+      rmSync(raceRoot, { recursive: true, force: true });
+
+      const expRoot = mkdtempSync(join(tmpdir(), "repair-inbox-iso-exp-"));
+      const first = await claimRepairInbox({
+        fixtureItems: items,
+        outboxRoot: expRoot,
+        actorId: "win-iso-exp",
+        proposalId: EXPECTED_ID,
+        claimAuthorized: true,
+        at: new Date("2026-08-02T12:00:00.000Z"),
+      });
+      assert.equal(first.status, "fixing");
+      const restarted = createRepairConsumer({
+        outboxRoot: expRoot,
+        actorId: "win-iso-exp",
+        knowledgeClient: createFixtureKnowledgeClient(items),
+      });
+      restarted.loadProposal(FIRST_PROPOSAL);
+      assert.equal((await restarted.ensureClaim({ at: new Date("2026-08-02T13:00:00.000Z") })).ok, true);
+      rmSync(expRoot, { recursive: true, force: true });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 test("registry list failure surfaces to discover", async () => {

@@ -23,6 +23,7 @@ import { createKnowledgeClient, parseKnowledgeProposal } from "./lib/repair-cons
 import { proposalKnowledgeEnvelope } from "./lib/repair-proposal.mjs";
 import {
   claimRepairInbox,
+  createFixtureKnowledgeClient,
   discoverRepairInbox,
   WINDOWS_CANNOT,
 } from "./lib/repair-inbox.mjs";
@@ -73,21 +74,7 @@ function writeSuccessSummary(outbox, proposalId, result) {
 }
 
 function createOfflineKnowledgeClient(fixtureItems) {
-  return {
-    async listRepairKnowledgeItems() {
-      return fixtureItems.filter((item) => item?.needsEngineer === true && item?.lifecycle === "backlog");
-    },
-    async listRepairProposals() {
-      const items = await this.listRepairKnowledgeItems();
-      return items.map((item) => parseKnowledgeProposal(item)).filter(Boolean);
-    },
-    async postKnowledge() {
-      return { ok: false, debt: true, skipped: true };
-    },
-    async getKnowledge() {
-      return { ok: false, status: 404, knowledge: null };
-    },
-  };
+  return createFixtureKnowledgeClient(fixtureItems);
 }
 
 async function main(argv = process.argv.slice(2)) {

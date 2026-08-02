@@ -35,6 +35,61 @@ export const WINDOWS_CANNOT = Object.freeze([
   "operate_device",
 ]);
 
+/**
+ * Offline-only knowledge client. Never calls fetch / network.
+ * Used whenever fixtureItems are supplied so tests cannot leak into live registry.
+ */
+export function createFixtureKnowledgeClient(fixtureItems) {
+  if (!Array.isArray(fixtureItems)) throw new Error("fixtureItems array required");
+  const backlog = () => fixtureItems.filter((item) => item && item.needsEngineer === true && item.lifecycle === "backlog");
+  return {
+    mode: "fixture-only",
+    async listRepairKnowledgeItems() {
+      return backlog();
+    },
+    async listRepairProposals() {
+      return backlog().map((item) => parseKnowledgeProposal(item)).filter(Boolean);
+    },
+    async postKnowledge() {
+      return {
+        ok: false,
+        debt: true,
+        skipped: true,
+        code: "FIXTURE_ONLY_NO_NETWORK",
+      };
+    },
+    async getKnowledge(id) {
+      const hit = backlog().find((item) => {
+        if (item.id === id) return true;
+        const proposal = parseKnowledgeProposal(item);
+        return proposal?.proposalId === id;
+      });
+      if (!hit) return { ok: false, status: 404, knowledge: null };
+      return { ok: true, status: 200, knowledge: hit };
+    },
+  };
+}
+
+/**
+ * Resolve the knowledge client for inbox operations.
+ * fixtureItems ⇒ always fixture-only (never fall back to live registry).
+ * Otherwise require an explicit client or liveKnowledge opt-in.
+ */
+export function resolveInboxKnowledgeClient({
+  knowledgeClient = null,
+  fixtureItems = null,
+  liveKnowledge = false,
+  endpoint = "http://127.0.0.1:17930",
+  fetchImpl = globalThis.fetch,
+} = {}) {
+  if (Array.isArray(fixtureItems)) {
+    return createFixtureKnowledgeClient(fixtureItems);
+  }
+  if (knowledgeClient) return knowledgeClient;
+  if (liveKnowledge) return createKnowledgeClient({ endpoint, fetchImpl });
+  throw new Error("knowledgeClient or fixtureItems required (refusing implicit live registry client)");
+}
+
 function sha256Hex(bytesOrString) {
   return createHash("sha256").update(bytesOrString).digest("hex");
 }
@@ -306,8 +361,15 @@ export async function claimRepairInbox({
     };
   }
 
-  const discovered = await discoverRepairInbox({
+  // fixtureItems always win: never fall back to createKnowledgeClient() / live registry.
+  const resolvedClient = resolveInboxKnowledgeClient({
     knowledgeClient,
+    fixtureItems,
+    liveKnowledge,
+  });
+
+  const discovered = await discoverRepairInbox({
+    knowledgeClient: resolvedClient,
     expectedProposalId: proposalId,
     expectedProposalSha256,
     expectedBaseCommit,
@@ -330,7 +392,7 @@ export async function claimRepairInbox({
   const consumer = createRepairConsumer({
     outboxRoot,
     actorId,
-    knowledgeClient: knowledgeClient || createKnowledgeClient(),
+    knowledgeClient: resolvedClient,
   });
   const actionsPerformed = ["discover"];
   await consumer.discoverAndSelect({
@@ -416,15 +478,44 @@ export function createRepairInbox({
   endpoint = "http://127.0.0.1:17930",
   knowledgeClient = null,
   fetchImpl = globalThis.fetch,
+  fixtureItems = null,
 } = {}) {
-  const client = knowledgeClient || createKnowledgeClient({ endpoint, fetchImpl });
+  const client = resolveInboxKnowledgeClient({
+    knowledgeClient,
+    fixtureItems,
+    liveKnowledge: !fixtureItems,
+    endpoint,
+    fetchImpl,
+  });
   return {
     knowledgeClient: client,
     discover(opts = {}) {
-      return discoverRepairInbox({ knowledgeClient: client, ...opts });
+      const nextFixtures = opts.fixtureItems ?? fixtureItems;
+      return discoverRepairInbox({
+        knowledgeClient: resolveInboxKnowledgeClient({
+          knowledgeClient: opts.knowledgeClient || client,
+          fixtureItems: nextFixtures,
+          liveKnowledge: !nextFixtures,
+          endpoint,
+          fetchImpl,
+        }),
+        ...opts,
+        fixtureItems: nextFixtures,
+      });
     },
     claim(opts = {}) {
-      return claimRepairInbox({ knowledgeClient: client, ...opts });
+      const nextFixtures = opts.fixtureItems ?? fixtureItems;
+      return claimRepairInbox({
+        ...opts,
+        fixtureItems: nextFixtures,
+        knowledgeClient: resolveInboxKnowledgeClient({
+          knowledgeClient: opts.knowledgeClient || client,
+          fixtureItems: nextFixtures,
+          liveKnowledge: opts.liveKnowledge ?? !nextFixtures,
+          endpoint,
+          fetchImpl,
+        }),
+      });
     },
   };
 }
