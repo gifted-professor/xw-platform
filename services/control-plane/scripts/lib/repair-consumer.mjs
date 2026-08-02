@@ -521,7 +521,11 @@ export function createRepairConsumer({
     if (!SHA256_RE.test(receipt.receiptSha256 || "")) return { ok: false, reason: "receiptSha256" };
     const { receiptSha256, ...unsigned } = receipt;
     if (sha256(unsigned) !== receiptSha256) return { ok: false, reason: "receipt_integrity" };
-    if (event && sha256(event) !== receipt.eventSha256) return { ok: false, reason: "event_binding" };
+    if (event) {
+      if (sha256(event) !== receipt.eventSha256) return { ok: false, reason: "event_binding" };
+      const expectedEnvelope = sha256(repairEventKnowledgeEnvelope(event));
+      if (receipt.envelopeSha256 !== expectedEnvelope) return { ok: false, reason: "envelope_binding" };
+    }
     return { ok: true };
   }
 
@@ -708,6 +712,12 @@ export function createRepairConsumer({
             await inject("after_receipt_write", { event, receipt: existing, idempotent: true });
             return { ok: true, receipt: existing, idempotent: true };
           }
+          // Conflicting receipt bytes — remove unsafe file so hydrate cannot trust it.
+          try {
+            const path = resolveWritableOutboxPath(outboxRoot, mirrorReceiptRef(event.eventId)).target;
+            assertNotSymlink(path, "conflicting receipt");
+            unlinkSync(path);
+          } catch { /* ignore */ }
           return { ok: false, reason: "RECEIPT_CONFLICT" };
         }
         return { ok: false, reason: written.reason || "RECEIPT_WRITE_FAILED" };

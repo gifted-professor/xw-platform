@@ -2,7 +2,7 @@
 /**
  * Scope guard for windows-repair-consumer-v1 source commits.
  *
- * Exact 16-path allowlist (no glob/regex wildcards for contracts).
+ * Exact path allowlist (no glob/regex wildcards for contracts).
  * Always unions base...HEAD + staged + unstaged + untracked.
  * Any git command failure or invalid baseline => fail closed.
  */

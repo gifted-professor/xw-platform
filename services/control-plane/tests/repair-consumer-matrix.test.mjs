@@ -504,10 +504,11 @@ test("matrix: outbox corruption and symlink attacks are rejected safely", async 
     const mirrorsDir = join(root, ns, "knowledge-mirrors");
     mkdirSync(mirrorsDir, { recursive: true });
 
-    // empty / truncated / bad schema receipt
+    // empty / truncated / bad schema receipt + envelope forgery
     writeFileSync(join(mirrorsDir, "empty.json"), "");
     writeFileSync(join(mirrorsDir, "trunc.json"), "{\"schemaId\":");
-    writeFileSync(join(mirrorsDir, `${consumer.listEvents()[0].eventId}.json`), `${JSON.stringify({
+    const realEvent = consumer.listEvents()[0];
+    writeFileSync(join(mirrorsDir, `${realEvent.eventId}-wrongid.json`), `${JSON.stringify({
       schemaId: "xhs.repair-knowledge-mirror-receipt.v1",
       schemaVersion: 1,
       eventId: "repair_event_deadbeefdeadbeefdeadbeef",
@@ -518,11 +519,33 @@ test("matrix: outbox corruption and symlink attacks are rejected safely", async 
       receiptSha256: "3".repeat(64),
     })}\n`);
 
-    const restarted = createRepairConsumer({ outboxRoot: root, actorId: "win-attack", knowledgeClient: memoryStore() });
+    // Forged receipt: correct event binding, wrong envelope, self-consistent receiptSha256
+    const forgedUnsigned = {
+      schemaId: "xhs.repair-knowledge-mirror-receipt.v1",
+      schemaVersion: 1,
+      eventId: realEvent.eventId,
+      eventSha256: sha256(realEvent),
+      envelopeSha256: "a".repeat(64),
+      knowledgeId: realEvent.eventId,
+      mirroredAt: "2026-08-02T12:00:00.000Z",
+    };
+    const forged = { ...forgedUnsigned, receiptSha256: sha256(forgedUnsigned) };
+    writeFileSync(join(mirrorsDir, `${realEvent.eventId}.json`), `${JSON.stringify(forged)}\n`);
+
+    let posts = 0;
+    const retryStore = memoryStore();
+    const origPost = retryStore.postKnowledge.bind(retryStore);
+    retryStore.postKnowledge = async (envelope) => {
+      posts += 1;
+      return origPost(envelope);
+    };
+    const restarted = createRepairConsumer({ outboxRoot: root, actorId: "win-attack", knowledgeClient: retryStore });
     await restarted.loadProposal(FIRST_PROPOSAL);
     assert.equal(restarted.projection.status, "claimed");
-    // fake receipt with wrong eventId binding must not satisfy mirror set for real event
-    assert.ok(!existsSync(join(mirrorsDir, "empty.json")) || true);
+    assert.ok(posts >= 1, "forged envelope receipt must not skip re-mirror");
+    assert.equal(readdirSync(mirrorsDir).filter((n) => n === `${realEvent.eventId}.json`).length, 1);
+    const accepted = JSON.parse(readFileSync(join(mirrorsDir, `${realEvent.eventId}.json`), "utf8"));
+    assert.equal(accepted.envelopeSha256, sha256(repairEventKnowledgeEnvelope(realEvent)));
 
     // symlink final target escape
     const bait = join(outside, "escape-receipt.json");
@@ -543,6 +566,7 @@ test("matrix: outbox corruption and symlink attacks are rejected safely", async 
       { name: "empty-receipt", ok: true },
       { name: "truncated-receipt", ok: true },
       { name: "wrong-eventId-receipt", ok: true },
+      { name: "envelope-forgery-receipt", ok: true },
       { name: "symlink-receipt", ok: true },
       { name: "event-collision", ok: true },
     );

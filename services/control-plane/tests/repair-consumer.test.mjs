@@ -676,6 +676,9 @@ test("same now claim→heartbeat→start_fixing survives restart reduce as fixin
     assert.ok(events.every((e) => e.occurredAt.includes(".00"))); // ms present, not truncated away incorrectly
     // Explicitly ensure not all truncated to identical whole-second stamps.
     assert.equal(new Set(events.map((e) => e.occurredAt)).size, 3);
+    const lockPath = join(root, FIRST_PROPOSAL.transport.outboxNamespace, "attempt-1", "claim.lock");
+    const lock = JSON.parse(readFileSync(lockPath, "utf8"));
+    assert.equal(lock.claimedAt, events[0].occurredAt);
 
     const restarted = createRepairConsumer({ outboxRoot: root, actorId: "win-same-now" });
     await restarted.loadProposal(FIRST_PROPOSAL);
