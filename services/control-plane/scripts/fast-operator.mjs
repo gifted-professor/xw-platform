@@ -1731,10 +1731,14 @@ function safeOperatorCode(value, fallback = "OPERATOR_ERROR") {
   return /^[A-Z][A-Z0-9_]{0,63}$/.test(code) ? code : fallback;
 }
 
-function writeServeProcessLifecycle(entry) {
+function writeServeStdoutRecord(entry) {
   try {
-    writeSync(2, `${JSON.stringify({ event: "fast-operator.process-lifecycle", ...entry, at: new Date().toISOString() })}\n`);
+    writeSync(1, `${JSON.stringify({ ...entry, at: new Date().toISOString() })}\n`);
   } catch {}
+}
+
+function writeServeProcessLifecycle(entry) {
+  writeServeStdoutRecord({ event: "fast-operator.process-lifecycle", ...entry });
 }
 
 function installServeProcessLifecycle() {
@@ -1799,7 +1803,7 @@ export async function authorizeServeRequest({
   if (!leaseId || !token || !deviceId) {
     const bypassReason = String(env.XHS_BYPASS_REASON || "").trim();
     if (env.XHS_ALLOW_BYPASS === "1" && bypassReason) {
-      console.error(JSON.stringify({ event: "operator.lease-bypass", source: "fast-operator.serve", reason: bypassReason.slice(0, 200), at: new Date().toISOString() }));
+      writeServeStdoutRecord({ event: "operator.lease-bypass", source: "fast-operator.serve", reason: bypassReason.slice(0, 200) });
       return { authorized: true, bypass: true };
     }
     throw new ControlPlaneError("CONTROL_LEASE_REQUIRED", "fast-operator request requires an active control-plane lease", {
@@ -1868,7 +1872,10 @@ export function serve(port, options = {}) {
   // touch the device as a side effect of metrics/error reporting.
   let opP = null;
   const authorize = options.authorize ?? authorizeServeRequest;
-  const errorLogger = options.errorLogger ?? ((entry) => console.error(JSON.stringify({ ...entry, at: new Date().toISOString() })));
+  // PowerShell 5.1 turns redirected native stderr into NativeCommandError. The
+  // official worker intentionally uses ErrorActionPreference=Stop, so expected
+  // structured serve diagnostics must stay on stdout or they terminate the host.
+  const errorLogger = options.errorLogger ?? writeServeStdoutRecord;
   const operatorFactory = options.operatorFactory
     // Keep the first read-only request independent from the persistent shell.
     // `dump`/`focus` have one-shot paths; interactive commands still start the

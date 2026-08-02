@@ -1,10 +1,34 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { createServer } from "node:net";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 const task = readFileSync(new URL("../scripts/fast-operator-serve-task.ps1", import.meta.url), "utf8");
 const worker = readFileSync(new URL("../scripts/fast-operator-serve-worker.ps1", import.meta.url), "utf8");
 const operator = readFileSync(new URL("../scripts/fast-operator.mjs", import.meta.url), "utf8");
+const operatorPath = fileURLToPath(new URL("../scripts/fast-operator.mjs", import.meta.url));
+
+async function reservePort() {
+  const server = createServer();
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const { port } = server.address();
+  await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  return port;
+}
+
+async function waitFor(predicate, { timeoutMs = 5_000, intervalMs = 20 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  assert.fail("timed out waiting for child process output");
+}
 
 test("serve lifecycle owns all four aliases and resolves private runtime data from local config", () => {
   assert.match(task, /ValidateSet\("Install", "Start", "Stop", "Restart", "Status"\)/);
@@ -97,7 +121,44 @@ test("serve CLI records process lifecycle without changing imported test servers
   assert.match(operator, /uncaughtExceptionMonitor/);
   assert.match(operator, /phase:\s*"node-start"/);
   assert.match(operator, /phase:\s*"node-exit"/);
-  assert.match(operator, /writeSync\(2,/);
+  assert.match(operator, /writeSync\(1,/);
+  assert.doesNotMatch(operator, /writeSync\(2,/);
   assert.match(operator, /if \(cmd === "serve"\)[\s\S]*?installServeProcessLifecycle\(\)/);
   assert.doesNotMatch(operator, /phase:\s*"serving"[^\n]+serial/);
+});
+
+test("serve CLI keeps lifecycle and request diagnostics off stderr and remains listening", { timeout: 10_000 }, async (t) => {
+  const port = await reservePort();
+  const child = spawn(process.execPath, [
+    operatorPath,
+    "--adb", "synthetic-adb",
+    "--serial", "synthetic-runtime",
+    "serve", "--port", String(port),
+  ], {
+    env: { ...process.env, XHS_ALLOW_BYPASS: "0" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  child.stdout.on("data", (chunk) => { stdout += chunk; });
+  child.stderr.on("data", (chunk) => { stderr += chunk; });
+  t.after(() => {
+    if (child.exitCode === null && child.signalCode === null) child.kill();
+  });
+
+  await waitFor(() => stdout.includes('"phase":"serving"'));
+  const response = await fetch(`http://127.0.0.1:${port}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ action: "metrics" }),
+  });
+  assert.equal(response.status, 423);
+  await waitFor(() => stdout.includes('"event":"fast-operator.request-error"'));
+
+  assert.equal(stderr, "");
+  assert.doesNotMatch(stdout, /synthetic-runtime/);
+  assert.equal(child.exitCode, null);
+  assert.equal(child.signalCode, null);
 });
