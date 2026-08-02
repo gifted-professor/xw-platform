@@ -75,7 +75,8 @@ if ($Action -eq "Install") {
                 throw "Cross-repo release manifest requires full 40-char SHAs; got: $commit"
             }
         }
-        $effectiveDecisionSource = if ($AutonomyPolicyMode -eq "nonpayment_v1") { "deployed-runtime" } else { "shadow" }
+        $pilotConfigured = (@($PilotActors).Count -gt 0 -and @($PilotAliases).Count -gt 0)
+        $effectiveDecisionSource = if ($AutonomyPolicyMode -eq "nonpayment_v1" -and $pilotConfigured) { "deployed-runtime" } else { "shadow" }
         $release = [ordered]@{
             schemaId = "xhs.cross-repo-release.v1"
             schemaVersion = 1
@@ -88,6 +89,9 @@ if ($Action -eq "Install") {
             evidenceMode = $EvidenceMode
             runtimePolicyVersion = "xhs.nonpayment-autonomy.v1"
             effectiveDecisionSource = $effectiveDecisionSource
+            pilotActors = @($PilotActors)
+            pilotAliases = @($PilotAliases)
+            pilotConfigured = $pilotConfigured
             policyDocDebt = @()
             schemaContracts = @()
             deployedAt = (Get-Date).ToUniversalTime().ToString("o")

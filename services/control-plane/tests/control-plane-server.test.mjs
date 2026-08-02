@@ -69,6 +69,7 @@ test("production bootstrap derives shadow policy mode from env but never activat
     });
     assert.deepEqual(runtime.control.policyMode, {
       mode: "shadow", active: false, consulted: true, effectiveDecisionSource: "shadow", adapterKind: "real",
+      pilotOnly: false, pilotConfigured: false, pilotActors: [], pilotAliases: [],
     });
     assert.equal(runtime.control.debtOnLowDisk, false, "shadow 不 active：生产永不被新策略接管");
     assert.equal(runtime.policyMode.mode, "shadow", "runtime 暴露 policyMode 供 health 展示");
@@ -379,6 +380,8 @@ test("REX B7: control-plane worker reads fixed modes/release from launch config 
   assert.match(worker, /autonomyPolicyMode/);
   assert.match(worker, /evidenceMode/);
   assert.match(worker, /releaseId/);
+  assert.match(worker, /CONTROL_PLANE_PILOT_ACTORS/);
+  assert.match(worker, /CONTROL_PLANE_PILOT_ALIASES/);
   // The legacy UI route guard is separate and stays enforced regardless of autonomy mode.
   assert.match(worker, /CONTROL_PLANE_LEGACY_MODE\s*=\s*"enforce"/);
   // The launcher never echoes secrets or env values to stdout/stderr (Windows exec treats
@@ -400,6 +403,9 @@ test("REX B7: control-plane task installer writes the cross-repo release manifes
   assert.match(task, /autonomyPolicyMode/);
   assert.match(task, /evidenceMode/);
   assert.match(task, /releaseId/);
+  assert.match(task, /pilotActors/);
+  assert.match(task, /pilotAliases/);
+  assert.match(task, /pilotConfigured/);
   // All four commit fields must be recorded as the full 40-hex SHA, never an abbreviation.
   assert.match(task, /0-9a-f\]\{40\}/);
 });
@@ -418,6 +424,9 @@ test("REX B7: a task.ps1-produced cross-repo release manifest validates against 
     evidenceMode: "dual",
     runtimePolicyVersion: "xhs.nonpayment-autonomy.v1",
     effectiveDecisionSource: "shadow",
+    pilotActors: [],
+    pilotAliases: [],
+    pilotConfigured: false,
     policyDocDebt: [],
     schemaContracts: [],
     deployedAt: "2026-08-02T00:00:00Z",

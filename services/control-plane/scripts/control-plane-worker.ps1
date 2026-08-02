@@ -33,6 +33,11 @@ if ([string]::IsNullOrWhiteSpace($autonomyPolicyMode)) { $autonomyPolicyMode = "
 $evidenceMode = [string]$launch.evidenceMode
 if ([string]::IsNullOrWhiteSpace($evidenceMode)) { $evidenceMode = "legacy" }
 $releaseId = [string]$launch.releaseId
+# REX Phase 7: pilot selectors are data from the pinned launch config, never ad-hoc worker flags.
+# JSON keeps actor/alias values unambiguous and lets bootstrap reject malformed selectors before
+# the server starts. Empty arrays intentionally keep a real adapter in shadow.
+$pilotActors = @($launch.pilotActors) | ConvertTo-Json -Compress
+$pilotAliases = @($launch.pilotAliases) | ConvertTo-Json -Compress
 
 $env:CONTROL_PLANE_EXPECTED_HOST = "DESKTOP-3I1EVHE"
 $env:CONTROL_PLANE_NODE_ID = "DESKTOP-3I1EVHE"
@@ -41,6 +46,8 @@ $env:CONTROL_PLANE_GIT_COMMIT = $actualCommit
 $env:CONTROL_PLANE_DEVICES_FILE = $deviceConfig
 $env:AUTONOMY_POLICY_MODE = $autonomyPolicyMode
 $env:EVIDENCE_MODE = $evidenceMode
+$env:CONTROL_PLANE_PILOT_ACTORS = $pilotActors
+$env:CONTROL_PLANE_PILOT_ALIASES = $pilotAliases
 if (-not [string]::IsNullOrWhiteSpace($releaseId)) {
     $env:CONTROL_PLANE_RELEASE_ID = $releaseId
 }

@@ -43,7 +43,7 @@ export function evaluateCapabilityPolicy(capability, { canary = false, invocatio
   if (STANDING_GRANT_MISSION_ONLY.has(capability.id) && invocation === "mission_effect") {
     return { approvalRequired: false, externalEffect: true };
   }
-  // REX Phase 5 §8.2 B9 逐文件反转：nonpayment_v1 active（fake adapter）下，非支付
+  // REX Phase 5 §8.2 B9 逐文件反转：nonpayment_v1 active（fake adapter 或 real pilot）下，非支付
   // external_effect / approval_required 不再要求人工审批——非支付一律自由，唯一硬闸是
   // financial_commit（已在上方 throw）。externalEffect 仍作为事实返回（ECP/reconcile
   // 语义用），但不构成审批门。legacy/shadow（policyMode 未传或非 active）保留旧行为。

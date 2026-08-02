@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   evaluateNonpaymentAutonomy,
   resolvePolicyMode,
+  policyModeForRequest,
   generatePolicyDocDebt,
 } from "../control-plane/lib/nonpayment-autonomy-policy.mjs";
 
@@ -51,7 +52,7 @@ test("only financial_commit holds (human + paymentHold), regardless of mode acti
   }
 });
 
-// ─── §8.1 item 1：nonpayment_v1 只在 fake adapter 上 active，真 adapter 降级 ───
+// ─── §8.1 item 1：real adapter 只允许明确 selector pilot，未配置仍降级 ───
 
 test("nonpayment_v1 on real adapter is NOT active (degrades to shadow, never active on real device)", () => {
   const real = resolvePolicyMode({ env: { AUTONOMY_POLICY_MODE: "nonpayment_v1" }, adapterKind: "real" });
@@ -68,6 +69,46 @@ test("nonpayment_v1 on real adapter is NOT active (degrades to shadow, never act
   assert.equal(legacy.consulted, false, "legacy must not consult the new policy at all");
 
   assert.throws(() => resolvePolicyMode({ env: { AUTONOMY_POLICY_MODE: "aggressive" }, adapterKind: "fake" }));
+});
+
+test("real nonpayment_v1 pilot is scoped to the configured actor and alias", () => {
+  const mode = resolvePolicyMode({
+    env: { AUTONOMY_POLICY_MODE: "nonpayment_v1" },
+    adapterKind: "real",
+    pilotActors: [" pilot:rex ", "pilot:rex"],
+    pilotAliases: ["01"],
+  });
+  assert.equal(mode.active, true);
+  assert.equal(mode.pilotOnly, true);
+  assert.equal(mode.pilotConfigured, true);
+  assert.deepEqual(mode.pilotActors, ["pilot:rex"]);
+  assert.deepEqual(mode.pilotAliases, ["01"]);
+
+  const inScope = policyModeForRequest(mode, { actorId: "pilot:rex", deviceAlias: "01" });
+  assert.equal(inScope.active, true);
+  assert.equal(inScope.effectiveDecisionSource, "deployed-runtime");
+  assert.equal(inScope.pilotScope, "in_scope");
+
+  for (const context of [
+    { actorId: "other", deviceAlias: "01" },
+    { actorId: "pilot:rex", deviceAlias: "02" },
+    { actorId: "pilot:rex", physicalLabel: "slot-02" },
+  ]) {
+    const outOfScope = policyModeForRequest(mode, context);
+    assert.equal(outOfScope.active, false);
+    assert.equal(outOfScope.effectiveDecisionSource, "shadow");
+    assert.equal(outOfScope.pilotScope, "out_of_scope");
+  }
+});
+
+test("pilot selector environment values are strict JSON arrays", () => {
+  assert.throws(() => resolvePolicyMode({
+    env: {
+      AUTONOMY_POLICY_MODE: "nonpayment_v1",
+      CONTROL_PLANE_PILOT_ACTORS: "pilot:rex",
+    },
+    adapterKind: "real",
+  }), /CONTROL_PLANE_PILOT_ACTORS/);
 });
 
 // ─── §8.2 GO：普通 classifier 同步视觉调用为 0 ───

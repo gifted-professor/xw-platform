@@ -17,6 +17,7 @@ import { EffectCommitProtocol } from "./effect-commit-protocol.mjs";
 import { ProtectedHumanCommit } from "./protected-human-commit.mjs";
 import { guardFinancialCommit } from "./financial-commit-classifier.mjs";
 import { acquireTransportLock as defaultAcquireTransportLock } from "./xiaowei-transport.mjs";
+import { policyModeForRequest } from "./nonpayment-autonomy-policy.mjs";
 
 const moduleDir = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(moduleDir, "..", "..");
@@ -158,15 +159,22 @@ export class ControlPlane {
     this.evidence = evidence;
     this.authorityNodeId = authorityNodeId;
     // REX Phase 5 §8.1 item 1：nonpayment_v1 模式（resolvePolicyMode 解析结果）。
-    // 默认 null = legacy，旧行为全保留，既有测试不破。active（fake adapter）时，
-    // evaluateCapabilityPolicy 对非支付 capability 不再 approvalRequired（非支付一律自由）。
+    // 默认 null = legacy，旧行为全保留，既有测试不破。fake adapter 可用于离线证明；
+    // real adapter 只接受 launch-config 明确限定的 actor + alias pilot。
     this.policyMode = policyMode;
+    // A real-device pilot must not turn the mission/ECP/ledger control surfaces into a
+    // fleet-wide nonpayment bypass. Those surfaces remain shadow/legacy until their own
+    // governed Phase 7 path is explicitly opened; job/session requests derive a scoped mode
+    // through effectivePolicyMode().
+    this.runtimePolicyMode = policyMode?.pilotOnly === true
+      ? { ...policyMode, active: false, effectiveDecisionSource: "shadow", pilotScope: "out_of_scope" }
+      : policyMode;
     // REX Phase 5 §8.4：非支付 evidence 容量失败走 debt 旁路。policyMode.active 时，
     // assertCapacity 热路径传 debtOnLowDisk=true + debtSink 记录到 this.evidenceDebt；
     // 资金最终提交走单独 PHC 流，不经此 submitJob 热路径，故 nonpayment_v1 下 submitJob
     // 容量失败恒为 debt 而非 block。默认 null/legacy 时 debtOnLowDisk=false，fail-closed 不变。
     this.evidenceDebt = [];
-    this.debtOnLowDisk = policyMode && policyMode.active === true;
+    this.debtOnLowDisk = this.runtimePolicyMode && this.runtimePolicyMode.active === true;
     // §8.4 #1：nonpayment_v1 active 时给 EvidenceStore 注入 debtRecorder，使 run 进行中的
     // 证据事件写失败（ENOSPC/ENOTDIR 等）记 evidence_debt 而非抛错——非支付不阻断派发。
     // legacy（debtOnLowDisk=false）不注入，EvidenceStore 写失败仍抛（fail-closed 不变）。
@@ -194,7 +202,7 @@ export class ControlPlane {
       leaseHeartbeatMs,
       // REX Phase 5 §8.4 (P5b): nonpayment_v1 soft-passes a decayed parent grant at run-open
       // and sinks the provenance debt; legacy stays fail-closed.
-      ...(this.policyMode ? { policyMode: this.policyMode } : {}),
+      ...(this.runtimePolicyMode ? { policyMode: this.runtimePolicyMode } : {}),
       ...(this.debtOnLowDisk ? { debtSink: (entry) => this.evidenceDebt.push(entry) } : {}),
     });
     this.firewall = new EffectFirewall();
@@ -203,7 +211,7 @@ export class ControlPlane {
     // sink so an exhausted count/frequency budget soft-fences to budget_debt instead of throwing.
     this.effectLedger = new EffectLedger({
       state,
-      ...(this.policyMode ? { policyMode: this.policyMode } : {}),
+      ...(this.runtimePolicyMode ? { policyMode: this.runtimePolicyMode } : {}),
       ...(this.debtOnLowDisk ? { debtSink: (entry) => this.evidenceDebt.push(entry) } : {}),
     });
     this.acquireTransportLock = typeof acquireTransportLock === "function"
@@ -254,23 +262,57 @@ export class ControlPlane {
     state.syncCapabilities(capabilities);
   }
 
+  // Resolve the launch-level nonpayment mode against the exact actor/device request. A real
+  // adapter pilot is never a fleet-wide switch: only the configured actor and public alias (or
+  // physical label) receive deployed-runtime semantics; every other request remains shadow.
+  effectivePolicyMode({ actorId = null, deviceId = null, device = null } = {}) {
+    if (!this.policyMode) return null;
+    let selected = device;
+    if (!selected && deviceId) {
+      try { selected = this.state.requireDevice(deviceId, { includeRuntime: true }); } catch { selected = null; }
+    }
+    return policyModeForRequest(this.policyMode, {
+      actorId,
+      deviceAlias: selected?.alias,
+      physicalLabel: selected?.physicalLabel,
+    });
+  }
+
+  // When the launch config names an actor + alias pilot, an automatic request from that actor
+  // with no explicit device must be routed to the named device before policy is evaluated.
+  // Placement only has a physicalLabel selector, so alias selectors are resolved against the
+  // live registry here. Unknown selectors fail closed by leaving the caller's original route
+  // request untouched (which consequently remains shadow).
+  #pilotPlacement({ actorId = null, deviceId = null, placement = {} } = {}) {
+    if (!this.policyMode?.pilotOnly || !this.policyMode.pilotConfigured) return { deviceId, placement };
+    if (!this.policyMode.pilotActors.includes(String(actorId || "").trim())) return { deviceId, placement };
+    if (deviceId || placement?.physicalLabel) return { deviceId, placement };
+    if (typeof this.state?.listDevices !== "function") return { deviceId, placement };
+    const selectors = this.policyMode.pilotAliases;
+    const selected = this.state.listDevices({ includeRuntime: true })
+      .find((candidate) => selectors.includes(candidate.alias) || selectors.includes(candidate.physicalLabel));
+    if (!selected?.physicalLabel) return { deviceId, placement };
+    return { deviceId: null, placement: { ...placement, physicalLabel: selected.physicalLabel } };
+  }
+
   // REX Phase 5 §8.4：构造 assertCapacity 选项。policyMode.active（nonpayment_v1，
   // fake adapter）时传 debtOnLowDisk=true + debtSink 记 evidenceDebt；否则 legacy fail-closed。
   // 资金最终提交走单独 PHC 流，不经 submitJob/session 热路径，故 nonpayment_v1 下容量失败
   // 恒为 debt 而非 block。legacy（debtOnLowDisk=false）行为与旧版完全一致。
-  capacityOpts(externalEffect) {
+  capacityOpts(externalEffect, policyMode = this.runtimePolicyMode) {
+    const debtOnLowDisk = Boolean(policyMode?.active === true);
     return {
       externalEffect,
-      debtOnLowDisk: this.debtOnLowDisk,
-      debtSink: this.debtOnLowDisk ? (entry) => this.evidenceDebt.push(entry) : null,
+      debtOnLowDisk,
+      debtSink: debtOnLowDisk ? (entry) => this.evidenceDebt.push(entry) : null,
     };
   }
 
   // 提交前预检：nonpayment_v1 下只解除 fail-closed 抛错（debtOnLowDisk 但无 debtSink，
   // 不重复记 debt），由后续 initializeRun 做唯一一次 debt 记录。legacy 下 debtOnLowDisk=false，
   // 仍 fail-closed 抛 EVIDENCE_DISK_LOW（与旧版一致）。
-  capacityBypassOpts(externalEffect) {
-    return { externalEffect, debtOnLowDisk: this.debtOnLowDisk, debtSink: null };
+  capacityBypassOpts(externalEffect, policyMode = this.runtimePolicyMode) {
+    return { externalEffect, debtOnLowDisk: Boolean(policyMode?.active === true), debtSink: null };
   }
 
   start() {
@@ -291,7 +333,8 @@ export class ControlPlane {
   // reconciled,paymentLike} 报告并存 this.legacyMigrationReport；legacy 返回 null（不迁移）。
   // 幂等：已 queued_migrated 的旧行不再命中 waiting_approval 扫描，重复调用安全。
   migrateLegacyPending() {
-    if (!this.debtOnLowDisk || !this.state || typeof this.state.migrateNonpaymentWaitingApprovals !== "function") {
+    if (!this.debtOnLowDisk || this.policyMode?.pilotOnly === true
+      || !this.state || typeof this.state.migrateNonpaymentWaitingApprovals !== "function") {
       this.legacyMigrationReport = null;
       return null;
     }
@@ -330,7 +373,7 @@ export class ControlPlane {
   // guardFinancialCommit 结果（financialCommit）；recovery 路径不重跑 guard，传 null → payment
   // 退化为 unknown/recovery。effect = pre-execution 意图；payment = 金融分类；debt = evidence-debt
   // 模式。三处 adapter 调用（execute/verify/restore + recoverJob restore + inspectRecovery）统一可读。
-  #adapterEffectContext(job, capability, financialCommit = null) {
+  #adapterEffectContext(job, capability, financialCommit = null, policyMode = undefined) {
     const effect = {
       externalEffect: Boolean(job?.externalEffect),
       idempotency: capability?.idempotency,
@@ -346,7 +389,10 @@ export class ControlPlane {
           ...(financialCommit.approved ? { approved: true } : {}),
         }
       : { actionClass: "unknown", reasonCode: financialCommit === null ? "RECOVERY_PATH" : "NO_FINANCIAL_SEMANTICS", guarded: false };
-    const debt = { mode: this.debtOnLowDisk ? "nonpayment_v1" : "legacy" };
+    const effectiveMode = policyMode === undefined
+      ? this.effectivePolicyMode({ actorId: job?.actorId, deviceId: job?.deviceId })
+      : policyMode;
+    const debt = { mode: effectiveMode?.active === true ? "nonpayment_v1" : "legacy" };
     return { effect, payment, debt };
   }
 
@@ -467,14 +513,15 @@ export class ControlPlane {
     }
     const session = this.state.validateSession(run.sessionId, token);
     const capability = this.capabilities.validateParams(capabilityId, {});
-    const policy = evaluateCapabilityPolicy(capability, { canary: session.canary, invocation: "session", policyMode: this.policyMode });
+    const sessionPolicyMode = this.effectivePolicyMode({ actorId: session.actorId, deviceId: session.deviceId });
+    const policy = evaluateCapabilityPolicy(capability, { canary: session.canary, invocation: "session", policyMode: sessionPolicyMode });
     if (capability.risk !== "R0" || policy.approvalRequired || capability.idempotency !== "read_only") {
       throw new ControlPlaneError("DISCOVERY_PRODUCER_POLICY_INVALID", "Discovery producer must be an automatic read-only R0 capability", { status: 409 });
     }
     if (this.activeJobs.has(session.deviceId)) {
       throw new ControlPlaneError("DEVICE_BUSY", "Discovery device already has an action in progress", { status: 423 });
     }
-    this.evidence.assertCapacity(this.capacityBypassOpts(false));
+    this.evidence.assertCapacity(this.capacityBypassOpts(policy.externalEffect, sessionPolicyMode));
     const created = this.state.createJob({
       idempotencyKey: `discovery:${reservationId}`,
       actorId: session.actorId,
@@ -605,7 +652,7 @@ export class ControlPlane {
       // REX Phase 5 §8.4 (P5b): thread nonpayment_v1 so ECP scope (action/target) relaxes to
       // soft budget on the non-payment path; legacy (null) is byte-for-byte unchanged. The
       // debtSink carries ECP provenance/evidence debt into the shared evidenceDebt array.
-      ...(this.policyMode ? { policyMode: this.policyMode } : {}),
+      ...(this.runtimePolicyMode ? { policyMode: this.runtimePolicyMode } : {}),
       ...(this.debtOnLowDisk ? { debtSink: (entry) => this.evidenceDebt.push(entry) } : {}),
       ...handlers,
     });
@@ -793,7 +840,7 @@ export class ControlPlane {
 
       const params = { observationReceiptId: receipt.receiptId, targetFingerprint: sealed.targetFingerprint };
       const collectCapability = this.capabilities.validateParams("xhs.collect.standing_grant", params);
-      evaluateCapabilityPolicy(collectCapability, { canary: true, invocation: "mission_effect", policyMode: this.policyMode });
+      evaluateCapabilityPolicy(collectCapability, { canary: true, invocation: "mission_effect", policyMode: this.runtimePolicyMode });
       collectCreated = this.state.createJob({
         idempotencyKey: `${idempotencyKey}:collect`, actorId: controllerAgent, authorityNodeId: this.authorityNodeId,
         deviceId: run.deviceId, placement: {}, capability: collectCapability, params, canary: true,
@@ -915,10 +962,10 @@ export class ControlPlane {
     // REX Phase 5 §8.4 (P5b): nonpayment_v1 soft-passes a decayed parent grant at dispatch —
     // the run already recorded the provenance_debt at open; legacy (no policyMode) still throws.
     const mission = this.missions.requireActiveMission(tuple.missionId, {
-      policyMode: this.policyMode,
+      policyMode: this.runtimePolicyMode,
       debtSink: this.debtOnLowDisk ? (entry) => this.evidenceDebt.push(entry) : null,
     });
-    const verdict = this.firewall.classify(mergedEnvelope, mission, { policyMode: this.policyMode });
+    const verdict = this.firewall.classify(mergedEnvelope, mission, { policyMode: this.runtimePolicyMode });
     // REX Phase 5 (P5a): a reobserve verdict under nonpayment_v1 records an evidence_debt entry
     // (evidence failures / unclear state never block non-payment dispatch). legacy (debtOnLowDisk
     // false) never records and never re-routes.
@@ -972,14 +1019,31 @@ export class ControlPlane {
     canary = false,
   }) {
     const capability = this.capabilities.validateParams(capabilityId, params);
-    const policy = evaluateCapabilityPolicy(capability, { canary, invocation: "job", policyMode: this.policyMode });
-    this.evidence.assertCapacity(this.capacityBypassOpts(policy.externalEffect));
+    const routeRequest = this.#pilotPlacement({ actorId, deviceId, placement });
+    const route = this.policyMode?.pilotOnly
+      ? this.state.planPlacement({
+          authorityNodeId: this.authorityNodeId,
+          capability,
+          deviceId: routeRequest.deviceId,
+          placement: routeRequest.placement,
+          invocation: "job",
+          canary,
+        })
+      : null;
+    const requestPolicyMode = route
+      ? this.effectivePolicyMode({ actorId, deviceId: route.selectedDeviceId })
+      : this.policyMode;
+    const policy = evaluateCapabilityPolicy(capability, { canary, invocation: "job", policyMode: requestPolicyMode });
+    const pilotInScope = requestPolicyMode?.pilotScope === "in_scope";
+    const createDeviceId = pilotInScope ? routeRequest.deviceId : deviceId;
+    const createPlacement = pilotInScope ? routeRequest.placement : placement;
+    this.evidence.assertCapacity(this.capacityBypassOpts(policy.externalEffect, requestPolicyMode));
     const created = this.state.createJob({
       idempotencyKey,
       actorId,
       authorityNodeId: this.authorityNodeId,
-      deviceId,
-      placement,
+      deviceId: createDeviceId,
+      placement: createPlacement,
       capability,
       params,
       canary,
@@ -989,7 +1053,8 @@ export class ControlPlane {
     });
     if (!created.reused) {
       const device = this.state.requireDevice(created.job.deviceId);
-      this.evidence.initializeRun({ job: created.job, device, ...this.capacityOpts(policy.externalEffect) });
+      const jobPolicyMode = this.effectivePolicyMode({ actorId, device });
+      this.evidence.initializeRun({ job: created.job, device, ...this.capacityOpts(policy.externalEffect, jobPolicyMode) });
       if (created.job.status === "queued") queueMicrotask(() => void this.pump());
     }
     return {
@@ -1012,15 +1077,23 @@ export class ControlPlane {
     }
     try {
       const capability = this.capabilities.validateParams(capabilityId, params);
-      const policy = evaluateCapabilityPolicy(capability, { canary, invocation, policyMode: this.policyMode });
+      const routeRequest = this.#pilotPlacement({ actorId, deviceId, placement });
+      const pilotScoped = this.policyMode?.pilotOnly === true;
+      const preRoutePolicy = pilotScoped
+        ? null
+        : evaluateCapabilityPolicy(capability, { canary, invocation, policyMode: this.policyMode });
       const route = this.state.planPlacement({
         authorityNodeId: this.authorityNodeId,
         capability,
-        deviceId,
-        placement,
+        deviceId: routeRequest.deviceId,
+        placement: routeRequest.placement,
         invocation,
         canary,
       });
+      const requestPolicyMode = pilotScoped
+        ? this.effectivePolicyMode({ actorId, deviceId: route.selectedDeviceId })
+        : this.policyMode;
+      const policy = preRoutePolicy || evaluateCapabilityPolicy(capability, { canary, invocation, policyMode: requestPolicyMode });
       return {
         ...route,
         approvalRequired: policy.approvalRequired,
@@ -1798,12 +1871,27 @@ export class ControlPlane {
     canary = false,
   }) {
     const capability = capabilityId ? this.capabilities.require(capabilityId) : null;
-    if (capability) evaluateCapabilityPolicy(capability, { canary, invocation: "session", policyMode: this.policyMode });
+    const routeRequest = this.#pilotPlacement({ actorId, deviceId, placement });
+    const route = capability && this.policyMode?.pilotOnly
+      ? this.state.planPlacement({
+          authorityNodeId: this.authorityNodeId,
+          capability,
+          deviceId: routeRequest.deviceId,
+          placement: routeRequest.placement,
+          invocation: "session",
+          canary,
+        })
+      : null;
+    const sessionPolicyMode = route
+      ? this.effectivePolicyMode({ actorId, deviceId: route.selectedDeviceId })
+      : this.policyMode;
+    if (capability) evaluateCapabilityPolicy(capability, { canary, invocation: "session", policyMode: sessionPolicyMode });
+    const pilotInScope = sessionPolicyMode?.pilotScope === "in_scope";
     return this.state.createSession({
       actorId,
       authorityNodeId: this.authorityNodeId,
-      deviceId,
-      placement,
+      deviceId: pilotInScope ? routeRequest.deviceId : deviceId,
+      placement: pilotInScope ? routeRequest.placement : placement,
       capability,
       canary,
       ttlMs: this.leaseTtlMs,
@@ -1843,7 +1931,8 @@ export class ControlPlane {
       );
     }
     const capability = this.capabilities.validateParams(capabilityId, params);
-    const policy = evaluateCapabilityPolicy(capability, { canary: session.canary, invocation: "session", policyMode: this.policyMode });
+    const sessionPolicyMode = this.effectivePolicyMode({ actorId: session.actorId, deviceId: session.deviceId });
+    const policy = evaluateCapabilityPolicy(capability, { canary: session.canary, invocation: "session", policyMode: sessionPolicyMode });
     if (policy.approvalRequired) {
       throw new ControlPlaneError(
         "APPROVAL_REQUIRED",
@@ -1858,7 +1947,7 @@ export class ControlPlane {
         { status: 423, details: { sessionId } },
       );
     }
-    this.evidence.assertCapacity(this.capacityBypassOpts(false));
+    this.evidence.assertCapacity(this.capacityBypassOpts(policy.externalEffect, sessionPolicyMode));
     const created = this.state.createJob({
       idempotencyKey,
       actorId: session.actorId,
@@ -1871,7 +1960,7 @@ export class ControlPlane {
       sessionId,
       status: "queued",
       approvalRequired: false,
-      externalEffect: false,
+      externalEffect: policy.externalEffect,
     });
     if (created.reused) {
       if (created.job.sessionId !== sessionId) {
@@ -1887,7 +1976,7 @@ export class ControlPlane {
       };
     }
     const device = this.state.requireDevice(session.deviceId);
-    this.evidence.initializeRun({ job: created.job, device, ...this.capacityOpts(false) });
+    this.evidence.initializeRun({ job: created.job, device, ...this.capacityOpts(policy.externalEffect, sessionPolicyMode) });
     const promise = this.#runJob(created.job, {
       lease: { leaseId: session.leaseId, token },
       releaseLease: false,
@@ -1982,6 +2071,7 @@ export class ControlPlane {
     const capability = job.capability;
     const adapter = this.adapters.require(capability.implementation.adapter);
     const device = this.state.requireDevice(job.deviceId, { includeRuntime: true });
+    const jobPolicyMode = this.effectivePolicyMode({ actorId: job.actorId, device });
     const context = {
       job,
       capability,
@@ -2021,7 +2111,7 @@ export class ControlPlane {
       // REX Phase 5 §8.4 B5：把 effect intent + payment 分类 + debt 模式并进 adapter context，
       // execute/verify/restore 三处统一可读（spread 自 context/authorizedContext）。forward-
       // compatible：既有 adapter 只解构 {capability,device,params,...}，新字段不破坏它们。
-      const ctx = this.#adapterEffectContext(job, capability, financialCommit);
+      const ctx = this.#adapterEffectContext(job, capability, financialCommit, jobPolicyMode);
       context.effect = ctx.effect; context.payment = ctx.payment; context.debt = ctx.debt;
       authorizedContext.effect = ctx.effect; authorizedContext.payment = ctx.payment; authorizedContext.debt = ctx.debt;
       execution = await adapter.execute(authorizedContext);

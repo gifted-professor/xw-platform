@@ -75,18 +75,54 @@ export function shadowCompare(input, legacyVerdict) {
 // ─── Phase 5 §8.1 item 1：AUTONOMY_POLICY_MODE 解析 ───
 //
 // 三态：legacy（不查新策略，旧行为）/ shadow（算但不应用，effectiveDecisionSource=shadow）/
-// nonpayment_v1（active，deployed-runtime）。§8.1 item 1 明确「只在 fake adapter 上启用
-// nonpayment_v1」——真实 adapter 即便 env=nonpayment_v1 也降级为 shadow，不 active。
-// 这保证生产（真机/真 adapter）永不被新策略接管，直到 Phase 6/8 显式切流。
+// nonpayment_v1（active，deployed-runtime）。真实 adapter 只有在 launch config 明确给出
+// pilotActors + pilotAliases 时才可以 active；空 selector 永远继续 shadow。这样 Phase 7
+// 能切一台指定设备，而不会把全舰队或任意 actor 一起切流。request-scoped helper 再把
+// active 结果收窄到 exact actor + alias。
 const POLICY_MODES = new Set(["legacy", "shadow", "nonpayment_v1"]);
 
-export function resolvePolicyMode({ env = process.env, adapterKind = "real" } = {}) {
+function normalizeSelectorList(value, name) {
+  if (value === undefined || value === null || value === "") return [];
+  const list = Array.isArray(value) ? value : [value];
+  if (list.some((item) => typeof item !== "string" || item.trim() === "")) {
+    throw new TypeError(`${name} must contain non-empty strings`);
+  }
+  return [...new Set(list.map((item) => item.trim()))].sort();
+}
+
+function readSelectorEnv(env, name) {
+  const raw = env?.[name];
+  if (raw === undefined || raw === null || raw === "") return [];
+  try {
+    return normalizeSelectorList(JSON.parse(raw), name);
+  } catch (error) {
+    if (error instanceof TypeError) throw error;
+    throw new TypeError(`${name} must be a JSON array of non-empty strings`);
+  }
+}
+
+export function normalizePilotSelectors({ pilotActors = [], pilotAliases = [] } = {}) {
+  return {
+    pilotActors: normalizeSelectorList(pilotActors, "pilotActors"),
+    pilotAliases: normalizeSelectorList(pilotAliases, "pilotAliases"),
+  };
+}
+
+export function resolvePolicyMode({ env = process.env, adapterKind = "real", pilotActors, pilotAliases } = {}) {
   const mode = env.AUTONOMY_POLICY_MODE || "legacy";
   if (!POLICY_MODES.has(mode)) {
     throw new Error(`resolvePolicyMode: AUTONOMY_POLICY_MODE "${mode}" not in ${[...POLICY_MODES].join("/")}`);
   }
-  // nonpayment_v1 只在 fake adapter 上 active；真 adapter 降级 shadow（不 active）。
-  const active = mode === "nonpayment_v1" && adapterKind === "fake";
+  const selectors = normalizePilotSelectors({
+    pilotActors: pilotActors ?? readSelectorEnv(env, "CONTROL_PLANE_PILOT_ACTORS"),
+    pilotAliases: pilotAliases ?? readSelectorEnv(env, "CONTROL_PLANE_PILOT_ALIASES"),
+  });
+  const pilotConfigured = selectors.pilotActors.length > 0 && selectors.pilotAliases.length > 0;
+  // fake adapter remains available for the offline Phase 5 tests. Real adapter activation is
+  // explicitly pilot-scoped; a missing half of the selector is a shadow configuration, never a
+  // fleet-wide fallback.
+  const active = mode === "nonpayment_v1"
+    && (adapterKind === "fake" || (adapterKind === "real" && pilotConfigured));
   const consulted = mode !== "legacy"; // legacy 不查新策略
   return {
     mode,
@@ -94,6 +130,33 @@ export function resolvePolicyMode({ env = process.env, adapterKind = "real" } = 
     consulted,
     effectiveDecisionSource: active ? "deployed-runtime" : "shadow",
     adapterKind,
+    pilotOnly: mode === "nonpayment_v1" && adapterKind === "real",
+    pilotConfigured,
+    ...selectors,
+  };
+}
+
+export function isPilotScope(policyMode, { actorId = null, deviceAlias = null, physicalLabel = null } = {}) {
+  if (!policyMode || policyMode.pilotOnly !== true) return policyMode?.active === true;
+  if (policyMode.active !== true || policyMode.pilotConfigured !== true) return false;
+  const actor = typeof actorId === "string" ? actorId.trim() : "";
+  const alias = typeof deviceAlias === "string" ? deviceAlias.trim() : "";
+  const label = typeof physicalLabel === "string" ? physicalLabel.trim() : "";
+  return policyMode.pilotActors.includes(actor)
+    && (policyMode.pilotAliases.includes(alias) || policyMode.pilotAliases.includes(label));
+}
+
+// Derive the request-scoped mode without mutating the launch-level policy. Out-of-scope actors
+// and devices stay on shadow semantics; payment remains hard-gated in either result.
+export function policyModeForRequest(policyMode, context = {}) {
+  if (!policyMode) return null;
+  if (policyMode.pilotOnly !== true) return policyMode;
+  const inScope = isPilotScope(policyMode, context);
+  return {
+    ...policyMode,
+    active: inScope,
+    effectiveDecisionSource: inScope ? "deployed-runtime" : "shadow",
+    pilotScope: inScope ? "in_scope" : "out_of_scope",
   };
 }
 

@@ -40,7 +40,7 @@ function capability(id = "test.observe", overrides = {}) {
   };
 }
 
-function fixture(capabilities = [capability()]) {
+function fixture(capabilities = [capability()], policyMode = null) {
   const root = mkdtempSync(join(tempBase, "placement-test-"));
   const state = new StateStore({ dbPath: join(root, "control.db") });
   const registry = new CapabilityRegistry(capabilities);
@@ -76,6 +76,7 @@ function fixture(capabilities = [capability()]) {
     evidence,
     authorityNodeId,
     transportStatus: () => ({ status: "free", ageMs: null }),
+    policyMode,
   });
   return {
     root,
@@ -133,6 +134,57 @@ test("route plan is advisory and automatic jobs are assigned atomically by least
       capability: f.registry.require("test.observe"),
     }).job;
     assert.equal(constrained.deviceId, f.devices[1].deviceId);
+  } finally {
+    await f.close();
+  }
+});
+
+test("real nonpayment pilot pins the named actor to alias 01 while other actors stay approval-gated", async () => {
+  const effect = capability("test.effect", {
+    risk: "R2",
+    idempotency: "external_effect",
+    automationPolicy: { mode: "approval_required" },
+  });
+  const mode = {
+    mode: "nonpayment_v1",
+    active: true,
+    consulted: true,
+    effectiveDecisionSource: "deployed-runtime",
+    adapterKind: "real",
+    pilotOnly: true,
+    pilotConfigured: true,
+    pilotActors: ["pilot:rex"],
+    pilotAliases: ["01"],
+  };
+  const f = fixture([effect], mode);
+  try {
+    const pilotPlan = f.control.planRoute({ actorId: "pilot:rex", capabilityId: effect.id });
+    assert.equal(pilotPlan.selectedDeviceId, f.devices[0].deviceId);
+    assert.equal(pilotPlan.selectedDevice.alias, "01");
+    assert.equal(pilotPlan.approvalRequired, false);
+
+    const otherPlan = f.control.planRoute({ actorId: "other", capabilityId: effect.id, deviceId: f.devices[1].deviceId });
+    assert.equal(otherPlan.selectedDeviceId, f.devices[1].deviceId);
+    assert.equal(otherPlan.approvalRequired, true);
+
+    const pilotJob = f.control.submitJob({
+      idempotencyKey: "pilot-effect",
+      actorId: "pilot:rex",
+      capabilityId: effect.id,
+    });
+    assert.equal(pilotJob.job.deviceId, f.devices[0].deviceId);
+    assert.equal(pilotJob.job.approvalRequired, false);
+
+    const otherJob = f.control.submitJob({
+      idempotencyKey: "other-effect",
+      actorId: "other",
+      deviceId: f.devices[1].deviceId,
+      capabilityId: effect.id,
+    });
+    assert.equal(otherJob.job.deviceId, f.devices[1].deviceId);
+    assert.equal(otherJob.job.status, "waiting_approval");
+    assert.equal(otherJob.job.approvalRequired, true);
+    await f.control.waitForJob(pilotJob.job.jobId);
   } finally {
     await f.close();
   }

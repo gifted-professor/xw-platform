@@ -138,10 +138,10 @@ export function createControlPlaneRuntime({
       createXiaoweiAdapter(),
       createVisionAdapter(),
     ]);
-  // REX Phase 5 B7: production policy mode from env. shadow computes but does not apply
-  // (active=false); nonpayment_v1 only activates on fake adapters — resolvePolicyMode
-  // downgrades real adapters to shadow, so production is never taken over. legacy (unset
-  // env) stays null → byte-for-byte old behavior.
+  // REX Phase 5 B7 / Phase 7: production policy mode from the pinned launch config. shadow
+  // computes but does not apply; nonpayment_v1 on the real adapter is active only when the
+  // launch config supplies both pilot actor and pilot alias selectors. legacy (unset env) stays
+  // null, preserving the old behavior byte-for-byte.
   const autonomyMode = process.env.AUTONOMY_POLICY_MODE || "legacy";
   const resolvedPolicyMode = policyMode ?? (
     autonomyMode === "legacy" ? null : resolvePolicyMode({ env: process.env, adapterKind: "real" })
