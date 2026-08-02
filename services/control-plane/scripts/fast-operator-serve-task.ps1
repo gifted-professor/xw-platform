@@ -16,9 +16,25 @@ $taskName = "XhsFastOperator${Alias}Live"
 $launchConfig = Join-Path $stateRoot "serve-launch-${Alias}.json"
 $worker = Join-Path $PSScriptRoot "fast-operator-serve-worker.ps1"
 $wrapperPath = Join-Path $registryRoot "serve-restart-$Alias.ps1"
+$lifecycleLog = Join-Path $stateRoot "lifecycle-events.jsonl"
 
 function Write-Result([hashtable]$Value) {
     $Value | ConvertTo-Json -Depth 8 -Compress
+}
+
+function Write-LifecycleEvent([string]$Phase, [int]$ListenerPid = 0) {
+    $record = [ordered]@{
+        timestamp = (Get-Date).ToUniversalTime().ToString("o")
+        alias = $Alias
+        phase = $Phase
+        callerPid = $PID
+    }
+    if ($ListenerPid -gt 0) { $record["listenerPid"] = $ListenerPid }
+    try {
+        Add-Content -LiteralPath $lifecycleLog -Value ($record | ConvertTo-Json -Compress)
+    } catch {
+        # Audit failure must not change task lifecycle behavior.
+    }
 }
 
 function Resolve-Device {
@@ -144,14 +160,21 @@ $task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
 if ($Action -eq "Start" -or $Action -eq "Restart") {
     if ($null -eq $task) { throw "Task not installed: $taskName" }
     if ($Action -eq "Restart") {
+        $listener = Get-Listener $servePort
+        Write-LifecycleEvent -Phase "task-restart-request" -ListenerPid $(if ($null -ne $listener) { $listener.OwningProcess } else { 0 })
         Stop-Serve $servePort
+        Write-LifecycleEvent -Phase "task-stopped"
     } elseif ($null -ne (Get-Listener $servePort)) {
         throw "Port already occupied; use Restart for alias $Alias"
+    } else {
+        Write-LifecycleEvent -Phase "task-start-request"
     }
     Start-ScheduledTask -TaskName $taskName
     if (-not (Wait-ForListener $servePort $true)) {
         throw "FastOperator serve did not listen for alias $Alias on port $servePort"
     }
+    $listener = Get-Listener $servePort
+    Write-LifecycleEvent -Phase "task-started" -ListenerPid $(if ($null -ne $listener) { $listener.OwningProcess } else { 0 })
     Write-Result @{
         ok = $true
         action = $Action.ToLowerInvariant()
@@ -164,8 +187,11 @@ if ($Action -eq "Start" -or $Action -eq "Restart") {
 }
 
 if ($Action -eq "Stop") {
+    $listener = Get-Listener $servePort
+    Write-LifecycleEvent -Phase "task-stop-request" -ListenerPid $(if ($null -ne $listener) { $listener.OwningProcess } else { 0 })
     Stop-Serve $servePort
     $listening = $null -ne (Get-Listener $servePort)
+    if (-not $listening) { Write-LifecycleEvent -Phase "task-stopped" }
     Write-Result @{
         ok = -not $listening
         action = "stopped"

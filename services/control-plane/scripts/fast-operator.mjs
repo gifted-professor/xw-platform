@@ -21,6 +21,7 @@
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { createHash, randomUUID } from "node:crypto";
+import { writeSync } from "node:fs";
 import { acquireTransportLock } from "../control-plane/lib/xiaowei-transport.mjs";
 import { ControlPlaneError } from "../control-plane/lib/errors.mjs";
 import { guardFinancialCommit } from "../control-plane/lib/financial-commit-classifier.mjs";
@@ -349,21 +350,34 @@ export class FastOperator {
     // for old test doubles that expose neither one-shot method.
     let raw = "";
     let execOutTimedOut = false;
+    const probeAttempts = [];
     if (typeof this.session.execOut === "function") {
       try {
         raw = (await this.session.execOut(["cmd", "activity", "top"], 10000)).toString("utf8");
+        probeAttempts.push({ transport: "exec-out", outcome: raw ? "nonempty" : "empty" });
       } catch (error) {
         execOutTimedOut = /exec-out timeout/i.test(String(error?.message || error));
+        probeAttempts.push({ transport: "exec-out", outcome: execOutTimedOut ? "timeout" : "error" });
       }
     }
     if (!raw && !execOutTimedOut && typeof this.session.oneShotShell === "function") {
-      raw = await this.session.oneShotShell("cmd activity top", 10000).catch(() => "");
+      try {
+        raw = await this.session.oneShotShell("cmd activity top", 10000);
+        probeAttempts.push({ transport: "one-shot", outcome: raw ? "nonempty" : "empty" });
+      } catch {
+        probeAttempts.push({ transport: "one-shot", outcome: "error" });
+      }
     }
     if (!raw && typeof this.session.execOut !== "function" && typeof this.session.oneShotShell !== "function") {
-      raw = await this.session.exec(
-        "cmd activity top 2>/dev/null | grep -E 'mResumedActivity|ACTIVITY|Hist #[0-9]+:|Intent \\{|intent=\\{|dat=|clip=|mReferrer=|extras=|note_?[Ii]d' | head -160",
-        10000,
-      ).catch(() => "");
+      try {
+        raw = await this.session.exec(
+          "cmd activity top 2>/dev/null | grep -E 'mResumedActivity|ACTIVITY|Hist #[0-9]+:|Intent \\{|intent=\\{|dat=|clip=|mReferrer=|extras=|note_?[Ii]d' | head -160",
+          10000,
+        );
+        probeAttempts.push({ transport: "legacy-persistent", outcome: raw ? "nonempty" : "empty" });
+      } catch {
+        probeAttempts.push({ transport: "legacy-persistent", outcome: "error" });
+      }
     }
     const lines = String(raw).split(/\r?\n/);
     const normalizedActivity = (line) => {
@@ -404,8 +418,41 @@ export class FastOperator {
       try { this.diagnosticLogger?.({ event: "fast-operator.locator-shape", ...locatorShape }); } catch {}
       return locatorShape;
     };
+    const cappedCount = (pattern) => Math.min(99, lines.filter((line) => pattern.test(line)).length);
+    const sizeBucket = (size) => {
+      if (size <= 0) return "0";
+      if (size <= 64) return "1-64";
+      if (size <= 1024) return "65-1024";
+      if (size <= 8192) return "1025-8192";
+      return "8193+";
+    };
+    const lineBucket = (count) => {
+      if (!raw) return "0";
+      if (count <= 20) return "1-20";
+      if (count <= 100) return "21-100";
+      return "101+";
+    };
+    const logProbeShape = () => {
+      const probeShape = {
+        event: "fast-operator.locator-probe-shape",
+        activity: allowedActivity,
+        attempts: probeAttempts.slice(0, 2),
+        output: {
+          byteBucket: sizeBucket(Buffer.byteLength(String(raw), "utf8")),
+          lineBucket: lineBucket(lines.length),
+          histHeaders: cappedCount(/\bHist #[0-9]+:/),
+          activityHeaders: cappedCount(/^\s*ACTIVITY\b/),
+          resumedMarkers: cappedCount(/\bmResumedActivity\b/),
+          xhsComponentLines: Math.min(99, lines.filter((line) => normalizedActivity(line) != null).length),
+          matchingActivityLines: Math.min(99, lines.filter(isCurrentActivity).length),
+          intentMarkers: cappedCount(/\bIntent\s*\{|\bintent\s*=\s*\{/i),
+        },
+      };
+      try { this.diagnosticLogger?.(probeShape); } catch {}
+    };
     if (start < 0) {
       const locatorShape = logLocatorShape("", false);
+      logProbeShape();
       return { ok: false, notSent: true, step: "stableNoteLocatorUnavailable", locatorShape };
     }
     let end = lines.length;
@@ -1684,6 +1731,26 @@ function safeOperatorCode(value, fallback = "OPERATOR_ERROR") {
   return /^[A-Z][A-Z0-9_]{0,63}$/.test(code) ? code : fallback;
 }
 
+function writeServeProcessLifecycle(entry) {
+  try {
+    writeSync(2, `${JSON.stringify({ event: "fast-operator.process-lifecycle", ...entry, at: new Date().toISOString() })}\n`);
+  } catch {}
+}
+
+function installServeProcessLifecycle() {
+  writeServeProcessLifecycle({ phase: "node-start", pid: process.pid });
+  process.on("uncaughtExceptionMonitor", (error, origin) => {
+    writeServeProcessLifecycle({
+      phase: "node-uncaught",
+      pid: process.pid,
+      origin: origin === "unhandledRejection" ? "unhandledRejection" : "uncaughtException",
+      errorCode: safeOperatorCode(error?.code, "UNCAUGHT_EXCEPTION"),
+    });
+  });
+  process.once("beforeExit", (code) => writeServeProcessLifecycle({ phase: "node-before-exit", pid: process.pid, exitCode: code }));
+  process.once("exit", (code) => writeServeProcessLifecycle({ phase: "node-exit", pid: process.pid, exitCode: code }));
+}
+
 function operatorNotSent(step, errorCode, error, runtimeId) {
   return {
     ok: false,
@@ -1981,12 +2048,15 @@ export function serve(port, options = {}) {
       }));
     }
   });
-  server.listen(port, "127.0.0.1", () => console.log(JSON.stringify({ phase: "serving", port, serial })));
+  server.listen(port, "127.0.0.1", () => console.log(JSON.stringify({ phase: "serving", port, pid: process.pid })));
   return server;
 }
 
 const cmd = process.argv.find((a) => a === "serve" || a === "demo-scroll");
-if (cmd === "serve") serve(Number(arg("--port", "17895")));
+if (cmd === "serve") {
+  installServeProcessLifecycle();
+  serve(Number(arg("--port", "17895")));
+}
 else if (cmd === "demo-scroll") demoScroll(Number(process.argv[process.argv.indexOf("demo-scroll") + 1] ?? 10));
 else if (process.argv[1] && process.argv[1].endsWith("fast-operator.mjs")) {
   console.error("usage: fast-operator.mjs --adb <path> --serial <serial> (serve|demo-scroll <N>) [--port 17895]");

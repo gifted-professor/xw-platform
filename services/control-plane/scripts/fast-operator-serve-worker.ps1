@@ -64,6 +64,7 @@ $startRecord = [ordered]@{
     timestamp = (Get-Date).ToUniversalTime().ToString("o")
     alias = $alias
     phase = "worker-start"
+    workerPid = $PID
     expectedCommit = $expectedCommit
 }
 try {
@@ -79,17 +80,24 @@ $arguments = @(
 )
 
 Set-Location -LiteralPath $repoRoot
-& $nodeExe @arguments 1>> $stdout 2>> $stderr
-$nodeExitCode = $LASTEXITCODE
-$lifecycleRecord = [ordered]@{
-    timestamp = (Get-Date).ToUniversalTime().ToString("o")
-    alias = $alias
-    exitCode = $nodeExitCode
-    expectedCommit = $expectedCommit
-}
+$nodeExitCode = $null
 try {
-    Add-Content -LiteralPath $stderr -Value ($lifecycleRecord | ConvertTo-Json -Compress)
-} catch {
-    # Lifecycle logging must never change the FastOperator exit result.
+    & $nodeExe @arguments 1>> $stdout 2>> $stderr
+    $nodeExitCode = $LASTEXITCODE
+} finally {
+    $lifecycleRecord = [ordered]@{
+        timestamp = (Get-Date).ToUniversalTime().ToString("o")
+        alias = $alias
+        phase = "worker-exit"
+        workerPid = $PID
+        exitCode = $nodeExitCode
+        expectedCommit = $expectedCommit
+    }
+    try {
+        Add-Content -LiteralPath $stderr -Value ($lifecycleRecord | ConvertTo-Json -Compress)
+    } catch {
+        # Lifecycle logging must never change the FastOperator exit result.
+    }
 }
+if ($null -eq $nodeExitCode) { $nodeExitCode = 1 }
 exit $nodeExitCode

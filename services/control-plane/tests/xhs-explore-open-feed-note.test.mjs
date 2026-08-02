@@ -307,6 +307,43 @@ test("note locator observation prefers exec-out top activity dump when available
   assert.deepEqual(calls, [["cmd", "activity", "top"]]);
 });
 
+test("missing current activity block records only a redacted structural probe shape", async () => {
+  const diagnostics = [];
+  const operator = Object.create(FastOperator.prototype);
+  operator.diagnosticLogger = (entry) => diagnostics.push(entry);
+  operator.currentFocus = async () => ({
+    package: "com.xingin.xhs",
+    activity: "com.xingin.xhs.note.NoteDetailActivity",
+  });
+  operator.session = {
+    execOut: async () => Buffer.from(
+      "mResumedActivity: ActivityRecord{42 u0 com.xingin.xhs/.note.NoteDetailActivity t7}\n"
+      + "Intent { dat=https://private.example/token=private-token title=private-title }",
+    ),
+  };
+
+  const result = await operator.observeOpenNoteDetail();
+  assert.equal(result.ok, false);
+  assert.equal(result.step, "stableNoteLocatorUnavailable");
+  assert.equal(result.locatorShape.currentBlockFound, false);
+  assert.deepEqual(diagnostics.at(-1), {
+    event: "fast-operator.locator-probe-shape",
+    activity: "NoteDetailActivity",
+    attempts: [{ transport: "exec-out", outcome: "nonempty" }],
+    output: {
+      byteBucket: "65-1024",
+      lineBucket: "1-20",
+      histHeaders: 0,
+      activityHeaders: 0,
+      resumedMarkers: 1,
+      xhsComponentLines: 1,
+      matchingActivityLines: 1,
+      intentMarkers: 1,
+    },
+  });
+  assert.doesNotMatch(JSON.stringify(diagnostics), /private-title|private-token|private\.example/);
+});
+
 test("real serve switch exposes only the bounded openFeedNote method", async (t) => {
   const calls = [];
   const server = serve(0, {

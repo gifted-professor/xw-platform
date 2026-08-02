@@ -136,7 +136,24 @@ test("note-detail producer logs a secret-free shape when the current activity bl
     generic24Count: 0,
   };
   assert.deepEqual(result, { ok: false, notSent: true, step: "stableNoteLocatorUnavailable", locatorShape });
-  assert.deepEqual(diagnostics, [{ event: "fast-operator.locator-shape", ...locatorShape }]);
+  assert.deepEqual(diagnostics, [
+    { event: "fast-operator.locator-shape", ...locatorShape },
+    {
+      event: "fast-operator.locator-probe-shape",
+      activity: "NoteDetailActivity",
+      attempts: [{ transport: "legacy-persistent", outcome: "nonempty" }],
+      output: {
+        byteBucket: "65-1024",
+        lineBucket: "1-20",
+        histHeaders: 1,
+        activityHeaders: 0,
+        resumedMarkers: 0,
+        xhsComponentLines: 0,
+        matchingActivityLines: 0,
+        intentMarkers: 0,
+      },
+    },
+  ]);
   assert.doesNotMatch(JSON.stringify(diagnostics), /PrivateActivity|private-token|com\.other/);
 });
 

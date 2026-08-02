@@ -4,6 +4,7 @@ import test from "node:test";
 
 const task = readFileSync(new URL("../scripts/fast-operator-serve-task.ps1", import.meta.url), "utf8");
 const worker = readFileSync(new URL("../scripts/fast-operator-serve-worker.ps1", import.meta.url), "utf8");
+const operator = readFileSync(new URL("../scripts/fast-operator.mjs", import.meta.url), "utf8");
 
 test("serve lifecycle owns all four aliases and resolves private runtime data from local config", () => {
   assert.match(task, /ValidateSet\("Install", "Start", "Stop", "Restart", "Status"\)/);
@@ -65,9 +66,12 @@ test("worker pins the authoritative Xiaowei ADB server without exposing runtime 
 test("worker records a secret-free lifecycle event after the Node process exits", () => {
   assert.match(worker, /phase\s*=\s*"worker-start"/);
   assert.match(worker, /Add-Content\s+-LiteralPath\s+\$stderr[\s\S]*?\$arguments\s*=/);
+  assert.match(worker, /try\s*\{[\s\S]*?& \$nodeExe @arguments[\s\S]*?finally\s*\{/);
   assert.match(worker, /\$nodeExitCode\s*=\s*\$LASTEXITCODE/);
+  assert.match(worker, /phase\s*=\s*"worker-exit"/);
   assert.match(worker, /timestamp\s*=\s*\(Get-Date\)/);
   assert.match(worker, /alias\s*=\s*\$alias/);
+  assert.match(worker, /workerPid\s*=\s*\$PID/);
   assert.match(worker, /exitCode\s*=\s*\$nodeExitCode/);
   assert.match(worker, /expectedCommit\s*=\s*\$expectedCommit/);
   assert.match(worker, /Add-Content\s+-LiteralPath\s+\$stderr/);
@@ -75,4 +79,25 @@ test("worker records a secret-free lifecycle event after the Node process exits"
 
   const record = worker.match(/\$lifecycleRecord\s*=\s*\[ordered\]@[\s\S]*?\n}/)?.[0] ?? "";
   assert.doesNotMatch(record, /arguments|runtimeId|serial|token|authorization|deviceConfig|repoRoot|nodeExe/i);
+});
+
+test("official task start stop and restart requests leave an external secret-free audit trail", () => {
+  assert.match(task, /lifecycle-events\.jsonl/);
+  assert.match(task, /function Write-LifecycleEvent/);
+  for (const phase of ["task-start-request", "task-started", "task-stop-request", "task-stopped", "task-restart-request"]) {
+    assert.match(task, new RegExp(`phase[^\\n]+${phase}|Write-LifecycleEvent[^\\n]+${phase}`));
+  }
+  const lifecycleFunction = task.match(/function Write-LifecycleEvent[\s\S]*?\n}/)?.[0] ?? "";
+  assert.match(lifecycleFunction, /callerPid\s*=\s*\$PID/);
+  assert.doesNotMatch(lifecycleFunction, /runtimeId|serial|token|authorization|deviceConfig|repoRoot|nodeExe/i);
+});
+
+test("serve CLI records process lifecycle without changing imported test servers", () => {
+  assert.match(operator, /function Install-?ServeProcessLifecycle|function installServeProcessLifecycle/i);
+  assert.match(operator, /uncaughtExceptionMonitor/);
+  assert.match(operator, /phase:\s*"node-start"/);
+  assert.match(operator, /phase:\s*"node-exit"/);
+  assert.match(operator, /writeSync\(2,/);
+  assert.match(operator, /if \(cmd === "serve"\)[\s\S]*?installServeProcessLifecycle\(\)/);
+  assert.doesNotMatch(operator, /phase:\s*"serving"[^\n]+serial/);
 });
