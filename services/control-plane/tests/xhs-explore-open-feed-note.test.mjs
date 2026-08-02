@@ -307,6 +307,25 @@ test("note locator observation prefers exec-out dumpsys activity top when availa
   assert.deepEqual(calls, [["dumpsys", "activity", "top"]]);
 });
 
+test("Hist #0 block keeps Intent after a mid-block mResumedActivity marker", async () => {
+  const operator = Object.create(FastOperator.prototype);
+  operator.currentFocus = async () => ({
+    package: "com.xingin.xhs",
+    activity: "com.xingin.xhs.note.NoteDetailActivity",
+  });
+  operator.session = {
+    execOut: async () => Buffer.from(
+      "* Hist #0: ActivityRecord{top com.xingin.xhs/.note.NoteDetailActivity}\n"
+        + "  mResumedActivity: ActivityRecord{42 u0 com.xingin.xhs/.note.NoteDetailActivity t7}\n"
+        + "  Intent { act=android.intent.action.VIEW dat=xhsdiscover://item/0123456789abcdef01234567 }\n"
+        + "* Hist #1: ActivityRecord{old com.xingin.xhs/.index.IndexActivityV2}\n",
+    ),
+  };
+  const result = await operator.observeOpenNoteDetail();
+  assert.equal(result.ok, true);
+  assert.match(result.targetFingerprint, /^[a-f0-9]{64}$/);
+});
+
 test("mResumedActivity with a stable note intent URI yields a receipt", async () => {
   const operator = Object.create(FastOperator.prototype);
   operator.currentFocus = async () => ({

@@ -401,13 +401,22 @@ export class FastOperator {
       ? `${focus.package}${focus.activity}`
       : focus.activity;
     const isCurrentActivity = (line) => normalizedActivity(line) === normalizedFocusActivity;
-    const isActivityBoundary = (line) =>
-      /\bHist #[0-9]+:/.test(line) || /^\s*ACTIVITY\s/.test(line) || /\bmResumedActivity\b/.test(line);
     let start = lines.findIndex((line) => /\bHist #0:/.test(line) && isCurrentActivity(line));
     if (start < 0) start = lines.findIndex((line) => /^\s*ACTIVITY\s/.test(line) && isCurrentActivity(line));
     // dumpsys activity top often exposes the resumed record as mResumedActivity
     // without a Hist #0 / ACTIVITY header; that line is still the current block.
-    if (start < 0) start = lines.findIndex((line) => /\bmResumedActivity\b/.test(line) && isCurrentActivity(line));
+    let resumedAnchored = false;
+    if (start < 0) {
+      start = lines.findIndex((line) => /\bmResumedActivity\b/.test(line) && isCurrentActivity(line));
+      resumedAnchored = start >= 0;
+    }
+    // Hist # / ACTIVITY always end a block. A later mResumedActivity is only a
+    // boundary when the block itself was mResumed-anchored — otherwise a
+    // resumed marker between header and Intent would truncate a valid URI.
+    const isActivityBoundary = (line) =>
+      /\bHist #[0-9]+:/.test(line)
+      || /^\s*ACTIVITY\s/.test(line)
+      || (resumedAnchored && /\bmResumedActivity\b/.test(line));
     const allowedActivity = /NoteDetailActivity$/.test(focus.activity || "")
       ? "NoteDetailActivity"
       : "DetailFeedActivity";
