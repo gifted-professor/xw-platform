@@ -253,7 +253,29 @@ test("note locator observation prefers a one-shot activity dump over the persist
   assert.equal(result.ok, true);
   assert.equal(result.targetFingerprint.length, 64);
   assert.equal(calls.length, 1);
-  assert.match(calls[0], /^oneShot:dumpsys activity activities/);
+  assert.match(calls[0], /^oneShot:dumpsys activity top/);
+});
+
+test("note locator observation prefers exec-out top activity dump when available", async () => {
+  const calls = [];
+  const operator = Object.create(FastOperator.prototype);
+  operator.currentFocus = async () => ({
+    package: "com.xingin.xhs",
+    activity: "com.xingin.xhs.note.NoteDetailActivity",
+  });
+  operator.session = {
+    execOut: async (args) => {
+      calls.push(args);
+      return Buffer.from("ACTIVITY com.xingin.xhs/.note.NoteDetailActivity\\n"
+        + "  Intent { dat=xhsdiscover://item/0123456789abcdef01234567 }");
+    },
+    oneShotShell: async () => { throw new Error("one-shot fallback must not run"); },
+    exec: async () => { throw new Error("persistent locator fallback must not run"); },
+  };
+
+  const result = await operator.observeOpenNoteDetail();
+  assert.equal(result.ok, true);
+  assert.deepEqual(calls, [["dumpsys", "activity", "top"]]);
 });
 
 test("real serve switch exposes only the bounded openFeedNote method", async (t) => {
