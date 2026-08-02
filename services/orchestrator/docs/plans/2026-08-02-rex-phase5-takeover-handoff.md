@@ -14,7 +14,7 @@ REX-FREEDOM-V1（Review × Explorer：**非支付全自由，唯一硬闸是真�
 | B | `/Volumes/GPFS/Users/a1234/Desktop/Coding/xhs-device-agent-routing-v1-1`（GPFS） | 控制面源码 + 测试 | `afe3ca6` | `codex/rex-freedom-v1` |
 
 - 两仓都是本地 git 仓库（无 origin，PR 不走远程）。A 仓的 routing/scout/控制面代码不在本仓，在 B 仓。
-- 计划文件 + 文件白名单在 A 仓：`docs/plans/2026-08-01-review-explorer-payment-only-gate-plan.md`（计划全文）、`docs/plans/2026-08-01-review-explorer-payment-only-gate-plan.files.json`（白名单，`planSha256=8c19b669511b594fc56b25d5e13c4ddb8a8d1bc73ef58366ab07294849648ebc`）。
+- 计划文件 + 文件白名单在 A 仓：`docs/plans/2026-08-01-review-explorer-payment-only-gate-plan.md`（计划全文）、`docs/plans/2026-08-01-review-explorer-payment-only-gate-plan.files.json`（白名单，`planSha256=57b97d5772c13da8ee2426b8cff1841902001456f42870f383e8d04067dbc011`）。
 - 详细历史进度见 A 仓 `docs/plans/2026-08-01-rex-phase2-to-8-handoff.md`（§8.4 节是 Phase 5 逐项状态）。
 
 ## 2. 当前验证状态（接手前先复跑确认）

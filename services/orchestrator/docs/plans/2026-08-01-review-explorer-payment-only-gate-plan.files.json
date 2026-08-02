@@ -3,7 +3,7 @@
   "schemaId": "xhs.rex-scope.v1",
   "planId": "REX-FREEDOM-V1",
   "planVersion": "0.3.2",
-  "planSha256": "8c19b669511b594fc56b25d5e13c4ddb8a8d1bc73ef58366ab07294849648ebc",
+  "planSha256": "57b97d5772c13da8ee2426b8cff1841902001456f42870f383e8d04067dbc011",
   "authorization": {
     "sourceImplementation": true,
     "windowsDarkDeploy": false,

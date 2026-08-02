@@ -1213,6 +1213,27 @@ NO-GO：手改 Windows 源文件；服务 mode 与 release 不一致；部署触
 - writer failure、lease expiry、snapshot stale、target mismatch、进程崩溃；
 - 支付任务只走到 final commit 前，最后一步用 fake/transport spy，不做真钱尝试。
 
+##### 已锁定的 pilot task packet（2026-08-02）
+
+本轮“真实非支付 effect”固定为以下两条；`actor` 只是审计标识，不代表账号或登录身份：
+
+```text
+actor: codex:rex-phase7
+alias: 01
+runtimePolicyVersion: xhs.nonpayment-autonomy.v1
+effect-1: xhs.collect.standing_grant
+  - 在一篇新鲜、明确“未收藏”的指定笔记上收藏一次
+  - 必须走 Standing Grant Mission ECP，并带 observationReceiptId + targetFingerprint
+  - 验证收藏状态变为已收藏；随后只撤销本次收藏并回到 feed
+effect-2: xianyu.publish.save_draft_dry_run
+  - 使用专门的测试草稿输入保存一次草稿
+  - 验证 savedDraft=true、stoppedBeforePublish=true、publishTapped!=true
+  - 永不点击最终“发布”；草稿保留，清理由后续人工任务处理
+payment: 只做 fake/transport-spy 到 final commit 前，真实 payment transport 必须为 0
+```
+
+任一目标观察不新鲜、账号/App 不匹配、Standing Grant 不存在、登录墙/验证码/风控出现、保存草稿前置链路无法确认，或 postcondition 不成立，立即停在该 effect；不得换目标、裸重试或把命令 accepted 当成业务成功。
+
 GO：7A 的同场景延迟门全部通过；非支付 approval/waiting=0；unknown 自动 Explorer；落盘故障只有 debt；无重复 effect；lease 自动释放/恢复；payment final transport=0。
 
 NO-GO：candidate 明显慢于当前 lab、每 primitive 重复 preflight/lease；任一非支付需人处理才继续；Review/SEALED 影响下一任务；ambiguous 冻结整任务；支付正例下发。
