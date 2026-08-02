@@ -702,6 +702,138 @@ test("matrix: CLI flag pairs and scope unauthorized 17th / invalid baseline", as
   rmSync(root, { recursive: true, force: true });
 });
 
+test("matrix: 409 same content but wrong appliesTo/lifecycle/verifiedBy is conflict", async () => {
+  const root = mkdtempSync(join(tmpdir(), "repair-409-meta-"));
+  const store = new Map();
+  const server = createServer(async (req, res) => {
+    const url = new URL(req.url, "http://127.0.0.1");
+    if (req.method === "POST" && url.pathname === "/api/knowledge") {
+      const chunks = [];
+      for await (const c of req) chunks.push(c);
+      const envelope = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      store.set(envelope.id, {
+        ...structuredClone(envelope),
+        appliesTo: ["wrong-applies-to"],
+        lifecycle: "resolved",
+        verifiedBy: ["forged:actor"],
+      });
+      res.writeHead(409, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: false, error: `knowledge id already exists: ${envelope.id}` }));
+      return;
+    }
+    if (req.method === "GET" && url.pathname.startsWith("/api/knowledge/")) {
+      const id = decodeURIComponent(url.pathname.slice("/api/knowledge/".length));
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true, knowledge: store.get(id) }));
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  try {
+    const { port } = server.address();
+    const knowledgeClient = createKnowledgeClient({ endpoint: `http://127.0.0.1:${port}` });
+    knowledgeClient.listRepairProposals = async () => [FIRST_PROPOSAL];
+    const consumer = createRepairConsumer({ outboxRoot: root, actorId: "win-409-meta", knowledgeClient });
+    await consumer.loadProposal(FIRST_PROPOSAL);
+    const claim = await consumer.tryClaim({ at: new Date("2026-08-02T12:00:00.000Z") });
+    assert.equal(claim.ok, true);
+    assert.equal(consumer.projection.status, "claimed");
+    assert.equal(claim.mirror?.ok, false);
+    assert.equal(claim.mirror?.debt, true);
+    const mirrors = join(root, FIRST_PROPOSAL.transport.outboxNamespace, "knowledge-mirrors");
+    assert.equal(existsSync(mirrors) ? readdirSync(mirrors).length : 0, 0);
+    const debts = join(root, FIRST_PROPOSAL.transport.outboxNamespace, "evidence-debt");
+    assert.ok(readdirSync(debts).length >= 1);
+    MATRIX.registryCases.push({ name: "409-meta-conflict", ok: true });
+  } finally {
+    await new Promise((r) => server.close(r));
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("matrix: forged receipt with wrong knowledgeId is rejected and re-mirrored", async () => {
+  const root = mkdtempSync(join(tmpdir(), "repair-bad-kid-"));
+  try {
+    const store = memoryStore();
+    const consumer = createRepairConsumer({ outboxRoot: root, actorId: "win-bad-kid", knowledgeClient: store });
+    await consumer.loadProposal(FIRST_PROPOSAL);
+    assert.equal((await consumer.tryClaim({ at: new Date("2026-08-02T12:00:00.000Z") })).ok, true);
+    const event = consumer.listEvents()[0];
+    const mirrorsDir = join(root, FIRST_PROPOSAL.transport.outboxNamespace, "knowledge-mirrors");
+    const unsigned = {
+      schemaId: "xhs.repair-knowledge-mirror-receipt.v1",
+      schemaVersion: 1,
+      eventId: event.eventId,
+      eventSha256: sha256(event),
+      envelopeSha256: sha256(repairEventKnowledgeEnvelope(event)),
+      knowledgeId: `repair_event_${"b".repeat(24)}`,
+      mirroredAt: "2026-08-02T12:00:00.000Z",
+    };
+    const forged = { ...unsigned, receiptSha256: sha256(unsigned) };
+    writeFileSync(join(mirrorsDir, `${event.eventId}.json`), `${JSON.stringify(forged)}\n`);
+
+    let posts = 0;
+    const retryStore = memoryStore();
+    const orig = retryStore.postKnowledge.bind(retryStore);
+    retryStore.postKnowledge = async (envelope) => {
+      posts += 1;
+      return orig(envelope);
+    };
+    const restarted = createRepairConsumer({ outboxRoot: root, actorId: "win-bad-kid", knowledgeClient: retryStore });
+    await restarted.loadProposal(FIRST_PROPOSAL);
+    assert.ok(posts >= 1);
+    const accepted = JSON.parse(readFileSync(join(mirrorsDir, `${event.eventId}.json`), "utf8"));
+    assert.equal(accepted.knowledgeId, event.eventId);
+    MATRIX.outboxCases.push({ name: "wrong-knowledgeId-receipt", ok: true });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("matrix: forged debt with wrong event/envelope hash is rejected on hydrate", async () => {
+  const root = mkdtempSync(join(tmpdir(), "repair-bad-debt-"));
+  try {
+    const store = memoryStore();
+    const consumer = createRepairConsumer({
+      outboxRoot: root,
+      actorId: "win-bad-debt",
+      knowledgeClient: {
+        async listRepairProposals() { return [FIRST_PROPOSAL]; },
+        async getKnowledge() { return { ok: false, status: 404 }; },
+        async postKnowledge() { return { ok: false, debt: true, status: 500, code: "DOWN" }; },
+      },
+    });
+    await consumer.loadProposal(FIRST_PROPOSAL);
+    assert.equal((await consumer.tryClaim({ at: new Date("2026-08-02T12:00:00.000Z") })).ok, true);
+    const event = consumer.listEvents()[0];
+    const debtDir = join(root, FIRST_PROPOSAL.transport.outboxNamespace, "evidence-debt");
+    const unsigned = {
+      schemaId: "xhs.repair-evidence-debt.v1",
+      schemaVersion: 1,
+      layer: "repair-transport",
+      code: "KNOWLEDGE_MIRROR_FAILED",
+      cause: "forged",
+      at: "2026-08-02T12:00:00.000Z",
+      businessResultUnchanged: true,
+      envelopeId: event.eventId,
+      eventSha256: "f".repeat(64),
+      envelopeSha256: "e".repeat(64),
+    };
+    const forged = { ...unsigned, debtSha256: sha256(unsigned) };
+    writeFileSync(join(debtDir, `${event.eventId}.json`), `${JSON.stringify(forged)}\n`);
+
+    const restarted = createRepairConsumer({ outboxRoot: root, actorId: "win-bad-debt", knowledgeClient: store });
+    await restarted.loadProposal(FIRST_PROPOSAL);
+    assert.equal(restarted.evidenceDebt.some((d) => d.eventSha256 === "f".repeat(64)), false);
+    assert.ok(restarted.evidenceDebt.every((d) => d.eventSha256 === sha256(event)));
+    MATRIX.outboxCases.push({ name: "forged-debt-hashes", ok: true });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("matrix: report counters", () => {
   const report = {
     crashPhases: MATRIX.crashPhases.length,

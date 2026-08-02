@@ -166,12 +166,77 @@ export function createKnowledgeClient({
   };
 }
 
+const KNOWLEDGE_TRANSPORT_FIELDS = [
+  "id",
+  "scope",
+  "app",
+  "category",
+  "title",
+  "content",
+  "verifiedBy",
+  "needsEngineer",
+  "appliesTo",
+  "steps",
+  "verifyMode",
+  "lifecycle",
+];
+
+const MIRROR_RECEIPT_KEYS = [
+  "schemaId",
+  "schemaVersion",
+  "eventId",
+  "eventSha256",
+  "envelopeSha256",
+  "knowledgeId",
+  "mirroredAt",
+  "receiptSha256",
+];
+
+const EVIDENCE_DEBT_KEYS = [
+  "schemaId",
+  "schemaVersion",
+  "layer",
+  "code",
+  "cause",
+  "at",
+  "businessResultUnchanged",
+  "envelopeId",
+  "eventSha256",
+  "envelopeSha256",
+  "debtSha256",
+];
+
+function exactKeys(value, keys) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const actual = Object.keys(value).sort();
+  const expected = [...keys].sort();
+  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+}
+
+function validIsoTimestamp(value) {
+  if (typeof value !== "string") return false;
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?Z$/.test(value)) return false;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed);
+}
+
+function transportEnvelopeSlice(item) {
+  if (!item || typeof item !== "object") return null;
+  const slice = {};
+  for (const key of KNOWLEDGE_TRANSPORT_FIELDS) {
+    if (!Object.hasOwn(item, key)) return null;
+    slice[key] = item[key];
+  }
+  // Normalize content to canonical string form for stable compare.
+  slice.content = typeof slice.content === "string" ? slice.content : canonicalJson(slice.content);
+  return slice;
+}
+
 export function knowledgeEnvelopeCanonicallyEqual(posted, existing) {
-  if (!posted || !existing) return false;
-  if (posted.id !== existing.id) return false;
-  const postedContent = typeof posted.content === "string" ? posted.content : canonicalJson(posted.content);
-  const existingContent = typeof existing.content === "string" ? existing.content : canonicalJson(existing.content);
-  return sha256(postedContent) === sha256(existingContent);
+  const left = transportEnvelopeSlice(posted);
+  const right = transportEnvelopeSlice(existing);
+  if (!left || !right) return false;
+  return sha256(left) === sha256(right);
 }
 
 export function parseKnowledgeProposal(item) {
@@ -492,7 +557,7 @@ export function createRepairConsumer({
     return `${state.proposal.transport.outboxNamespace}/evidence-debt/${eventId}.json`;
   }
 
-  function buildMirrorReceipt(event, envelope, knowledgeId) {
+  function buildMirrorReceipt(event, envelope) {
     const eventDigest = sha256(event);
     const envelopeDigest = sha256(envelope);
     const body = {
@@ -501,7 +566,7 @@ export function createRepairConsumer({
       eventId: event.eventId,
       eventSha256: eventDigest,
       envelopeSha256: envelopeDigest,
-      knowledgeId: knowledgeId || event.eventId,
+      knowledgeId: event.eventId,
       mirroredAt: toIsoMs(),
     };
     return { ...body, receiptSha256: sha256({ ...body }) };
@@ -509,16 +574,21 @@ export function createRepairConsumer({
 
   function validateMirrorReceipt(receipt, eventId, event = null) {
     if (!receipt || typeof receipt !== "object") return { ok: false, reason: "missing" };
+    if (!exactKeys(receipt, MIRROR_RECEIPT_KEYS)) return { ok: false, reason: "keys" };
     if (receipt.schemaId !== MIRROR_RECEIPT_SCHEMA || receipt.schemaVersion !== 1) {
       return { ok: false, reason: "schema" };
     }
     if (receipt.eventId !== eventId || !EVENT_ID_RE.test(receipt.eventId || "")) {
       return { ok: false, reason: "eventId" };
     }
+    if (receipt.knowledgeId !== eventId || receipt.knowledgeId !== receipt.eventId) {
+      return { ok: false, reason: "knowledgeId" };
+    }
     if (!SHA256_RE.test(receipt.eventSha256 || "") || !SHA256_RE.test(receipt.envelopeSha256 || "")) {
       return { ok: false, reason: "hash" };
     }
     if (!SHA256_RE.test(receipt.receiptSha256 || "")) return { ok: false, reason: "receiptSha256" };
+    if (!validIsoTimestamp(receipt.mirroredAt)) return { ok: false, reason: "mirroredAt" };
     const { receiptSha256, ...unsigned } = receipt;
     if (sha256(unsigned) !== receiptSha256) return { ok: false, reason: "receipt_integrity" };
     if (event) {
@@ -529,35 +599,81 @@ export function createRepairConsumer({
     return { ok: true };
   }
 
-  function validateEvidenceDebt(debt, eventId = null) {
+  function validateEvidenceDebt(debt, eventId = null, event = null) {
     if (!debt || typeof debt !== "object") return { ok: false, reason: "missing" };
+    if (!exactKeys(debt, EVIDENCE_DEBT_KEYS)) return { ok: false, reason: "keys" };
     if (debt.schemaId !== EVIDENCE_DEBT_SCHEMA || debt.schemaVersion !== 1) {
       return { ok: false, reason: "schema" };
     }
     if (debt.layer !== "repair-transport") return { ok: false, reason: "layer" };
     if (typeof debt.code !== "string" || !debt.code) return { ok: false, reason: "code" };
+    if (typeof debt.cause !== "string" || !debt.cause.trim()) return { ok: false, reason: "cause" };
+    if (!validIsoTimestamp(debt.at)) return { ok: false, reason: "at" };
     if (debt.businessResultUnchanged !== true) return { ok: false, reason: "businessResultUnchanged" };
-    if (eventId && debt.envelopeId && debt.envelopeId !== eventId) return { ok: false, reason: "envelopeId" };
+    if (!eventId || debt.envelopeId !== eventId) return { ok: false, reason: "envelopeId" };
+    if (!SHA256_RE.test(debt.eventSha256 || "") || !SHA256_RE.test(debt.envelopeSha256 || "")) {
+      return { ok: false, reason: "hash" };
+    }
+    if (!SHA256_RE.test(debt.debtSha256 || "")) return { ok: false, reason: "debtSha256" };
+    const { debtSha256, ...unsigned } = debt;
+    if (sha256(unsigned) !== debtSha256) return { ok: false, reason: "debt_integrity" };
+    if (event) {
+      if (sha256(event) !== debt.eventSha256) return { ok: false, reason: "event_binding" };
+      if (sha256(repairEventKnowledgeEnvelope(event)) !== debt.envelopeSha256) {
+        return { ok: false, reason: "envelope_binding" };
+      }
+    }
     return { ok: true };
   }
 
+  function digestsForEventId(eventId) {
+    const event = listOutboxEvents(outboxRoot, state.proposal).find((item) => item.eventId === eventId);
+    if (!event) return null;
+    return {
+      event,
+      eventSha256: sha256(event),
+      envelopeSha256: sha256(repairEventKnowledgeEnvelope(event)),
+    };
+  }
+
   async function persistMirrorDebt(eventId, cause, code = "KNOWLEDGE_MIRROR_FAILED") {
-    const debt = {
+    const digests = digestsForEventId(eventId);
+    if (!digests) {
+      // Without a durable event binding, do not invent forgeable debt bytes.
+      state.evidenceDebt.push({
+        schemaId: EVIDENCE_DEBT_SCHEMA,
+        schemaVersion: 1,
+        layer: "repair-transport",
+        code,
+        cause: String(cause || "unknown"),
+        at: toIsoMs(),
+        businessResultUnchanged: true,
+        envelopeId: eventId,
+        eventSha256: "0".repeat(64),
+        envelopeSha256: "0".repeat(64),
+        debtSha256: "0".repeat(64),
+        ephemeral: true,
+      });
+      return null;
+    }
+    const unsigned = {
       schemaId: EVIDENCE_DEBT_SCHEMA,
       schemaVersion: 1,
       layer: "repair-transport",
       code,
-      cause,
+      cause: String(cause || "unknown"),
       at: toIsoMs(),
       businessResultUnchanged: true,
       envelopeId: eventId,
+      eventSha256: digests.eventSha256,
+      envelopeSha256: digests.envelopeSha256,
     };
+    const debt = { ...unsigned, debtSha256: sha256(unsigned) };
     try {
       await inject("before_debt_write", { eventId, debt });
       atomicReplaceJson(outboxRoot, debtRef(eventId), debt);
       await inject("after_debt_write", { eventId, debt });
     } catch (error) {
-      // Best-effort durable debt; never undo a durable claim/event because debt I/O failed.
       try {
         atomicReplaceJson(outboxRoot, debtRef(eventId), debt);
       } catch { /* ignore */ }
@@ -602,7 +718,7 @@ export function createRepairConsumer({
       if (receipt) state.mirroredEventIds.add(event.eventId);
       const debt = readValidatedJsonRef(
         debtRef(event.eventId),
-        (value) => validateEvidenceDebt(value, event.eventId),
+        (value) => validateEvidenceDebt(value, event.eventId, event),
       );
       if (debt) state.evidenceDebt.push(debt);
     }
@@ -615,7 +731,11 @@ export function createRepairConsumer({
         if (!name.endsWith(".json")) continue;
         const eventId = name.replace(/\.json$/, "");
         if (state.evidenceDebt.some((item) => item.envelopeId === eventId)) continue;
-        const debt = readValidatedJsonRef(debtRef(eventId), (value) => validateEvidenceDebt(value, eventId));
+        const event = byId.get(eventId) || null;
+        const debt = readValidatedJsonRef(
+          debtRef(eventId),
+          (value) => validateEvidenceDebt(value, eventId, event),
+        );
         if (debt) state.evidenceDebt.push(debt);
       }
     }
@@ -658,47 +778,27 @@ export function createRepairConsumer({
       const result = await knowledgeClient.postKnowledge(envelope);
       await inject("after_knowledge_post", { envelope, result });
       if (result?.debt) {
-        if (!result.skipped && envelope?.id) {
+        if (result.skipped) {
+          // Offline/absent client stubs — do not invent durable forgeable debt.
+        } else if (envelope?.id) {
           await persistMirrorDebt(
             envelope.id,
             result.error || result.code || `status ${result.status}`,
             "KNOWLEDGE_MIRROR_FAILED",
           );
-        } else {
-          state.evidenceDebt.push({
-            schemaId: EVIDENCE_DEBT_SCHEMA,
-            schemaVersion: 1,
-            layer: "repair-transport",
-            code: "KNOWLEDGE_MIRROR_FAILED",
-            cause: result.error || result.code || `status ${result.status}`,
-            at: toIsoMs(),
-            businessResultUnchanged: true,
-            envelopeId: envelope?.id || null,
-          });
         }
       }
       return result;
     } catch (error) {
       if (envelope?.id) {
         await persistMirrorDebt(envelope.id, error.message || "postKnowledge threw");
-      } else {
-        state.evidenceDebt.push({
-          schemaId: EVIDENCE_DEBT_SCHEMA,
-          schemaVersion: 1,
-          layer: "repair-transport",
-          code: "KNOWLEDGE_MIRROR_FAILED",
-          cause: error.message || "postKnowledge threw",
-          at: toIsoMs(),
-          businessResultUnchanged: true,
-          envelopeId: null,
-        });
       }
       return { ok: false, debt: true, error: error.message || String(error) };
     }
   }
 
-  async function writeMirrorReceipt(event, envelope, knowledgeId) {
-    const receipt = buildMirrorReceipt(event, envelope, knowledgeId);
+  async function writeMirrorReceipt(event, envelope, _knowledgeId) {
+    const receipt = buildMirrorReceipt(event, envelope);
     try {
       await inject("before_receipt_write", { event, receipt });
       const written = exclusiveWriteJson(outboxRoot, mirrorReceiptRef(event.eventId), receipt);
