@@ -11,7 +11,10 @@ description: 评审 Windows 落盘的验收证据，对照 Mac 已固化子 skil
 
 ## 步骤
 
-1. **采集事实**：跑 `node scripts/review-windows.mjs`。它 SSH Windows 拉 `tmp-know/ACCEPTANCE-*.md` + `EXPLORE-*.md`，本地遍历 `skills/<app>/*/SKILL.md` frontmatter（version/verified），对照 exit 码，输出 markdown 事实表到 stdout。脚本只列事实 + 机械三档（✅一致 / ⚠️ 有证据缺显式 exit / ❌ 无对应 ACCEPTANCE），**不做主观评判**。
+1. **采集事实**：按输入类型选择只读入口——
+   - 收到显式 sealed run bundle：先跑 `node scripts/review-run-bundle.mjs <bundleDir>`，核对 seal、manifest、runId、producer commit、事件绑定和 candidate path/hash，生成绑定 exact bundle 的 `xhs.review-receipt.v1` JSON。
+   - 只有 legacy Windows 停车场证据：跑 `node scripts/review-windows.mjs`。它 SSH Windows 拉 `tmp-know/ACCEPTANCE-*.md` + `EXPLORE-*.md`，本地遍历 `skills/<app>/*/SKILL.md` frontmatter（version/verified），对照 exit 码，输出 markdown 事实表到 stdout。
+   - 两个脚本都只列机械事实，**不做主观评判、不触发 adopt、不碰设备**；bundle review 失败只阻止收编，不反写 Windows 业务结果。
 
 2. **评判**：按 [`modes/governance.md`](../../modes/governance.md) 判——
    - §4 定位：Mac 是源仓库与治理侧，不碰设备、不推部署、不改权限层。
@@ -39,3 +42,4 @@ description: 评审 Windows 落盘的验收证据，对照 Mac 已固化子 skil
 ## 工具
 
 - `scripts/review-windows.mjs` — 采集脚本（零依赖、只读、`ADOPT_SSH` 覆盖 host、不进 `npm run check`）。
+- `scripts/review-run-bundle.mjs` — sealed bundle 离线核验与 `xhs.review-receipt.v1` 生成器（零依赖、只读、不 SSH、不 adopt）。
