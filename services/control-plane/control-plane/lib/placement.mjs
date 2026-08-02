@@ -1,7 +1,7 @@
 import { ControlPlaneError } from "./errors.mjs";
 
 const ROUTABLE_AVAILABILITY = new Set(["implemented", "approval_gated"]);
-const PLACEMENT_KEYS = new Set(["nodeId", "physicalLabel", "requiredTags"]);
+const PLACEMENT_KEYS = new Set(["alias", "nodeId", "physicalLabel", "requiredTags"]);
 
 function requireString(value, path) {
   if (typeof value !== "string" || value.trim() === "") {
@@ -42,6 +42,7 @@ export function normalizePlacementRequest({ deviceId = null, placement = {} } = 
     }
   }
   const normalized = {};
+  if (placement.alias !== undefined) normalized.alias = requireString(placement.alias, "placement.alias");
   if (placement.nodeId !== undefined) normalized.nodeId = requireString(placement.nodeId, "placement.nodeId");
   if (placement.physicalLabel !== undefined) {
     normalized.physicalLabel = requireString(placement.physicalLabel, "placement.physicalLabel");
@@ -111,6 +112,7 @@ export function selectPlacement({
     if (candidate.nodeId !== requestedNodeId || !candidate.online || candidate.quarantined) return false;
     if (!profile.enabled || !profile.capabilityIds.includes(capability.id)) return false;
     if (placementRequest.deviceId && candidate.deviceId !== placementRequest.deviceId) return false;
+    if (placementRequest.placement.alias && candidate.alias !== placementRequest.placement.alias) return false;
     if (placementRequest.placement.physicalLabel
       && candidate.physicalLabel !== placementRequest.placement.physicalLabel) return false;
     if (!requiredTags.every((tag) => profile.tags.includes(tag))) return false;

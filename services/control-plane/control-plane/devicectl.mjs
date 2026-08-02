@@ -41,9 +41,11 @@ function parseJsonOption(argv, name, fallback = {}) {
 
 function placementOptions(argv) {
   const placement = {};
+  const alias = option(argv, "--alias");
   const nodeId = option(argv, "--node");
   const physicalLabel = option(argv, "--physical-label");
   const requiredTags = options(argv, "--require-tag");
+  if (alias !== undefined) placement.alias = alias;
   if (nodeId !== undefined) placement.nodeId = nodeId;
   if (physicalLabel !== undefined) placement.physicalLabel = physicalLabel;
   if (requiredTags.length > 0) placement.requiredTags = requiredTags;
@@ -122,14 +124,14 @@ function help() {
   return `devicectl [--ssh xhs-windows] <command>
 
   health | nodes | devices | capabilities | leases
-  route plan --actor ID --capability ID [--device ID | --node ID --physical-label LABEL --require-tag TAG]
+  route plan --actor ID --capability ID [--device ID | --alias ALIAS | --node ID --physical-label LABEL --require-tag TAG]
   job submit --actor ID --capability ID --idempotency-key KEY [--device ID | placement selectors] [--params JSON]
   job status|watch|cancel --job ID
   job recover --job ID --actor ID --idempotency-key KEY
   job recover-inspect --job ID --actor ID --idempotency-key KEY
   job recover-inspect-record --job ID --inspection ID --actor ID --idempotency-key KEY --analysis JSON
   approval approve|deny --job ID --actor ID [--reason TEXT]
-  session acquire --actor ID [--device ID | --capability ID with placement selectors] [--canary]
+  session acquire --actor ID [--device ID | --alias ALIAS | --capability ID with placement selectors] [--canary]
   session heartbeat|release --session ID --token TOKEN
   session action --session ID --token TOKEN --capability ID --idempotency-key KEY [--params JSON]
   lab action --session ID --token TOKEN --action NAME --idempotency-key KEY [--data JSON]

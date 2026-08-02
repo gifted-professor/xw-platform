@@ -134,6 +134,15 @@ test("route plan is advisory and automatic jobs are assigned atomically by least
       capability: f.registry.require("test.observe"),
     }).job;
     assert.equal(constrained.deviceId, f.devices[1].deviceId);
+
+    const aliasConstrained = f.control.planRoute({
+      actorId: "agent-alias",
+      capabilityId: "test.observe",
+      placement: { alias: "02" },
+    });
+    assert.equal(aliasConstrained.selectedDeviceId, f.devices[1].deviceId);
+    assert.equal(aliasConstrained.selectedDevice.alias, "02");
+    assert.deepEqual(aliasConstrained.selector, { alias: "02" });
   } finally {
     await f.close();
   }
