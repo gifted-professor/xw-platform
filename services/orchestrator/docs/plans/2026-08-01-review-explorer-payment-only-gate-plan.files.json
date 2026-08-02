@@ -266,6 +266,7 @@
         "tests/mission-freedom-acceptance.test.mjs",
         "tests/mission-runtime.test.mjs",
         "tests/non-financial-autonomy.test.mjs",
+        "tests/nonpayment-liveness.test.mjs",
         "tests/operator-access.test.mjs",
         "tests/payment-tripwire.test.mjs",
         "tests/protected-human-commit.test.mjs",
