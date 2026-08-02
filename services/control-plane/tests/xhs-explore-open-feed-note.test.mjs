@@ -137,6 +137,17 @@ test("read-only focus prefers exec-out dumpsys window when available", async () 
   assert.deepEqual(calls, [["dumpsys", "window"]]);
 });
 
+test("read-only focus does not cascade to a second adb child after exec-out timeout", async () => {
+  const operator = Object.create(FastOperator.prototype);
+  const calls = [];
+  operator.session = {
+    execOut: async () => { calls.push("execOut"); throw new Error("exec-out timeout 8000ms"); },
+    oneShotShell: async () => { calls.push("oneShot"); return "mCurrentFocus=Window{bad}"; },
+  };
+  assert.deepEqual(await operator.currentFocus(), { package: null, activity: null, raw: "" });
+  assert.deepEqual(calls, ["execOut"]);
+});
+
 test("operator formally launches XHS from the desktop before reading the feed", async () => {
   const operator = Object.create(FastOperator.prototype);
   const trace = [];

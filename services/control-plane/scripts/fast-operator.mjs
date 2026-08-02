@@ -311,10 +311,17 @@ export class FastOperator {
     // filter the focus line locally. Older test doubles retain the persistent
     // fallback.
     let out = "";
+    let execOutTimedOut = false;
     if (typeof this.session.execOut === "function") {
-      try { out = (await this.session.execOut(["dumpsys", "window"], 8000)).toString("utf8"); } catch {}
+      try {
+        out = (await this.session.execOut(["dumpsys", "window"], 8000)).toString("utf8");
+      } catch (error) {
+        execOutTimedOut = /exec-out timeout/i.test(String(error?.message || error));
+      }
     }
-    if (!out && typeof this.session.oneShotShell === "function") {
+    // A timed-out child may still be draining on Windows.  Do not immediately
+    // start a second ADB child and turn one bounded failure into a 20s cascade.
+    if (!out && !execOutTimedOut && typeof this.session.oneShotShell === "function") {
       out = await this.session.oneShotShell("dumpsys window", 8000).catch(() => "");
     }
     if (!out && typeof this.session.execOut !== "function" && typeof this.session.oneShotShell !== "function") {
@@ -341,12 +348,15 @@ export class FastOperator {
     // is the compatibility fallback.  A persistent fallback is retained only
     // for old test doubles that expose neither one-shot method.
     let raw = "";
+    let execOutTimedOut = false;
     if (typeof this.session.execOut === "function") {
       try {
         raw = (await this.session.execOut(["dumpsys", "activity", "top"], 10000)).toString("utf8");
-      } catch {}
+      } catch (error) {
+        execOutTimedOut = /exec-out timeout/i.test(String(error?.message || error));
+      }
     }
-    if (!raw && typeof this.session.oneShotShell === "function") {
+    if (!raw && !execOutTimedOut && typeof this.session.oneShotShell === "function") {
       raw = await this.session.oneShotShell("dumpsys activity top", 10000).catch(() => "");
     }
     if (!raw && typeof this.session.execOut !== "function" && typeof this.session.oneShotShell !== "function") {
