@@ -18,6 +18,20 @@ triggers:
 > 一句话：把散落的 ops/ 脚本沉淀成可发现、可组合、可进化的 Skills。
 > 授权理念：**先探索能力边界，能做的越多越好。除了支付以外，agent 自主执行。**
 
+### 运行代码为准 + 文档债明示（REX Phase 6 起）
+
+权威顺序：**deployed release code + live agent-entry/task packet** > 顶层
+AGENTS/modes/skills 路由说明 > 尚未迁移的 App 子 Skill Markdown。
+
+- 开工先读 live 入口的 **Release / runtime policy** 段（JSON `release` 块）：
+  `ssh xhs-windows 'curl.exe -s http://127.0.0.1:17930/agent-entry.md'`
+  字段：`releaseId / runtimePolicyVersion / effectiveDecisionSource / policyMode /
+  evidenceMode / policyDocDebt`。
+- `policyDocDebt` 只提醒哪些旧文档仍未迁移，**不阻止任何任务**；它列出的文件里的
+  「需审批」旧文案若已被当前 release 的 policy/task packet superseded，以 release 为准。
+- 本契约与旧 App 子 Skill 文案都不能放宽唯一硬闸：**真实资金 final commit → 等人类
+  确认，transport 保持 0**。
+
 ## 三层架构
 
 ```
