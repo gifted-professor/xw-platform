@@ -119,7 +119,7 @@ class AdbShellSession {
     this.cmdSeq = 0;
   }
 
-  async start() {
+  async start({ allowUnavailable = false } = {}) {
     this.buf = "";
     this.waiters = [];
     const proc = spawn(this.adbPath, ["-s", this.serial, "shell"], { stdio: ["pipe", "pipe", "pipe"] });
@@ -148,8 +148,19 @@ class AdbShellSession {
     });
     proc.stderr.setEncoding("utf8");
     proc.stderr.on("data", () => {});
-    await this.exec("echo fastop-ready"); // warm up
-    return this;
+    try {
+      await this.exec("echo fastop-ready"); // warm up
+      return true;
+    } catch (error) {
+      if (!allowUnavailable) throw error;
+      try {
+        this.diagnosticLogger({
+          event: "fast-operator.persistent-shell-unavailable",
+          errorCode: "ADB_SHELL_UNAVAILABLE",
+        });
+      } catch {}
+      return false;
+    }
   }
 
   drain() {
@@ -209,7 +220,8 @@ class AdbShellSession {
   }
 
   async _restartAndExec(cmd, timeoutMs) {
-    await this.start();
+    const started = await this.start({ allowUnavailable: true });
+    if (!started) throw new Error("adb persistent shell unavailable");
     return this.exec(cmd, timeoutMs);
   }
 
@@ -300,7 +312,7 @@ export class FastOperator {
     return this.pacer.pace(bounds);
   }
 
-  async start() { await this.session.start(); return this; }
+  async start() { await this.session.start({ allowUnavailable: true }); return this; }
   async close() { await this.session.close(); }
 
   async currentFocus() {
