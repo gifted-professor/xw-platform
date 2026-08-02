@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { assertPinnedNodeVersion, createControlPlaneRuntime, loadStandingGrantIssuer } from "../control-plane/bootstrap.mjs";
 import { CapabilityRegistry } from "../control-plane/lib/capability-registry.mjs";
 import { AdapterRegistry, ControlPlane } from "../control-plane/lib/control-plane.mjs";
+import { validateJsonSchema } from "../control-plane/lib/json-schema-validator.mjs";
 import { EvidenceStore } from "../control-plane/lib/evidence-store.mjs";
 import { canonicalPaymentApprovalBytes, PaymentApprovalVerifier } from "../control-plane/lib/payment-approval-verifier.mjs";
 import { StateStore } from "../control-plane/lib/state-store.mjs";
@@ -325,6 +326,63 @@ test("production launch assets keep retired legacy UI routes enforced", () => {
   assert.match(worker, /CONTROL_PLANE_LEGACY_MODE\s*=\s*"enforce"/);
   assert.doesNotMatch(worker, /CONTROL_PLANE_LEGACY_MODE\s*=\s*"audit"/);
   assert.match(envExample, /^CONTROL_PLANE_LEGACY_MODE=enforce$/m);
+});
+
+test("REX B7: control-plane worker reads fixed modes/release from launch config without printing secrets", () => {
+  const worker = readFileSync(fileURLToPath(new URL("../scripts/control-plane-worker.ps1", import.meta.url)), "utf8");
+  // The launcher must derive the runtime policy mode, evidence mode, and release id from the
+  // launch config the task installer wrote, not from per-box guesses. Phase 6 dark deploys a
+  // fixed shadow/dual profile this way (bootstrap reads AUTONOMY_POLICY_MODE from env).
+  assert.match(worker, /AUTONOMY_POLICY_MODE/);
+  assert.match(worker, /EVIDENCE_MODE/);
+  assert.match(worker, /CONTROL_PLANE_RELEASE_ID/);
+  assert.match(worker, /autonomyPolicyMode/);
+  assert.match(worker, /evidenceMode/);
+  assert.match(worker, /releaseId/);
+  // The legacy UI route guard is separate and stays enforced regardless of autonomy mode.
+  assert.match(worker, /CONTROL_PLANE_LEGACY_MODE\s*=\s*"enforce"/);
+  // The launcher never echoes secrets or env values to stdout/stderr (Windows exec treats
+  // stderr as a liveness signal; echo would corrupt the supervised-task contract).
+  assert.doesNotMatch(worker, /Write-(Host|Output).*token/i);
+  assert.doesNotMatch(worker, /Write-(Host|Output).*\$env:/i);
+});
+
+test("REX B7: control-plane task installer writes the cross-repo release manifest and modes with full 40-SHA", () => {
+  const task = readFileSync(fileURLToPath(new URL("../scripts/control-plane-task.ps1", import.meta.url)), "utf8");
+  // Install/update must persist the fixed modes into the launch config and emit the shared
+  // cross-repo release manifest (schema xhs.cross-repo-release.v1) alongside the task.
+  assert.match(task, /cross-repo-release\.json/);
+  assert.match(task, /xhs\.cross-repo-release\.v1/);
+  assert.match(task, /registryCommit/);
+  assert.match(task, /deviceAgentCommit/);
+  assert.match(task, /windowsRegistryCommit/);
+  assert.match(task, /taskLaunchCommit/);
+  assert.match(task, /autonomyPolicyMode/);
+  assert.match(task, /evidenceMode/);
+  assert.match(task, /releaseId/);
+  // All four commit fields must be recorded as the full 40-hex SHA, never an abbreviation.
+  assert.match(task, /0-9a-f\]\{40\}/);
+});
+
+test("REX B7: a task.ps1-produced cross-repo release manifest validates against the shared schema", () => {
+  const schema = JSON.parse(readFileSync(fileURLToPath(new URL("../control-plane/schema/cross-repo-release.schema.json", import.meta.url)), "utf8"));
+  const manifest = {
+    schemaId: "xhs.cross-repo-release.v1",
+    schemaVersion: 1,
+    releaseId: "rel-shadow-2026-08-02",
+    registryCommit: "a".repeat(40),
+    deviceAgentCommit: "b".repeat(40),
+    windowsRegistryCommit: "c".repeat(40),
+    taskLaunchCommit: "d".repeat(40),
+    policyMode: "shadow",
+    evidenceMode: "dual",
+    runtimePolicyVersion: "xhs.nonpayment-autonomy.v1",
+    effectiveDecisionSource: "shadow",
+    policyDocDebt: [],
+    schemaContracts: [],
+    deployedAt: "2026-08-02T00:00:00Z",
+  };
+  assert.deepEqual(validateJsonSchema(manifest, schema), []);
 });
 
 test("router exposes job recovery without returning credentials", async () => {

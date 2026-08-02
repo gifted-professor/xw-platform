@@ -1,7 +1,16 @@
 param(
     [ValidateSet("Install", "Start", "Stop", "Status", "Remove")]
     [string]$Action = "Status",
-    [string]$TaskName = "XhsDeviceControlPlaneV1"
+    [string]$TaskName = "XhsDeviceControlPlaneV1",
+    [ValidateSet("legacy", "shadow", "nonpayment_v1")]
+    [string]$AutonomyPolicyMode = "legacy",
+    [ValidateSet("legacy", "dual", "v1")]
+    [string]$EvidenceMode = "legacy",
+    [string]$ReleaseId = "",
+    [string]$RegistryCommit = "",
+    [string]$WindowsRegistryCommit = "",
+    [string[]]$PilotActors = @(),
+    [string[]]$PilotAliases = @()
 )
 
 $ErrorActionPreference = "Stop"
@@ -37,6 +46,7 @@ if ($Action -eq "Install") {
     if ($nodeVersion -ne "24.11.1") { throw "Node 24.11.1 required; found $nodeVersion" }
     $gitCommit = (& git -C $repoRoot rev-parse HEAD).Trim()
     if ($LASTEXITCODE -ne 0) { throw "Unable to resolve repository commit" }
+    if ($gitCommit -notmatch "^[0-9a-f]{40}$") { throw "Repository HEAD must be a full 40-char SHA: $gitCommit" }
 
     New-Item -ItemType Directory -Force -Path $stateRoot | Out-Null
     $launch = [ordered]@{
@@ -45,9 +55,46 @@ if ($Action -eq "Install") {
         nodeExe = $nodeExe
         gitCommit = $gitCommit
         deviceConfig = $deviceConfig
+        releaseId = $ReleaseId
+        autonomyPolicyMode = $AutonomyPolicyMode
+        evidenceMode = $EvidenceMode
+        pilotActors = @($PilotActors)
+        pilotAliases = @($PilotAliases)
     }
     $json = $launch | ConvertTo-Json -Depth 5
     [IO.File]::WriteAllText($launchConfig, $json, (New-Object Text.UTF8Encoding($false)))
+
+    # REX Phase 6 B7: a cross-repo release manifest (xhs.cross-repo-release.v1) is written at
+    # install/update time when a release is pinned. deviceAgentCommit / taskLaunchCommit are this
+    # checkout's HEAD; registryCommit / windowsRegistryCommit are the registry repo SHAs supplied
+    # by the deploy flow (Windows has no git checkout of the registry repo). All must be full
+    # 40-char SHAs. effectiveDecisionSource mirrors resolvePolicyMode (shadow is compute-not-apply).
+    if (-not [string]::IsNullOrWhiteSpace($ReleaseId)) {
+        foreach ($commit in @($RegistryCommit, $WindowsRegistryCommit, $gitCommit)) {
+            if ($commit -notmatch "^[0-9a-f]{40}$") {
+                throw "Cross-repo release manifest requires full 40-char SHAs; got: $commit"
+            }
+        }
+        $effectiveDecisionSource = if ($AutonomyPolicyMode -eq "nonpayment_v1") { "deployed-runtime" } else { "shadow" }
+        $release = [ordered]@{
+            schemaId = "xhs.cross-repo-release.v1"
+            schemaVersion = 1
+            releaseId = $ReleaseId
+            registryCommit = $RegistryCommit
+            deviceAgentCommit = $gitCommit
+            windowsRegistryCommit = $WindowsRegistryCommit
+            taskLaunchCommit = $gitCommit
+            policyMode = $AutonomyPolicyMode
+            evidenceMode = $EvidenceMode
+            runtimePolicyVersion = "xhs.nonpayment-autonomy.v1"
+            effectiveDecisionSource = $effectiveDecisionSource
+            policyDocDebt = @()
+            schemaContracts = @()
+            deployedAt = (Get-Date).ToUniversalTime().ToString("o")
+        }
+        $releaseJson = $release | ConvertTo-Json -Depth 6
+        [IO.File]::WriteAllText((Join-Path $stateRoot "cross-repo-release.json"), $releaseJson, (New-Object Text.UTF8Encoding($false)))
+    }
 
     $powershell = Join-Path $PSHOME "powershell.exe"
     $arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$worker`" -LaunchConfig `"$launchConfig`""
@@ -70,6 +117,9 @@ if ($Action -eq "Install") {
         taskName = $TaskName
         gitCommit = $gitCommit
         node = $nodeVersion
+        releaseId = $ReleaseId
+        autonomyPolicyMode = $AutonomyPolicyMode
+        evidenceMode = $EvidenceMode
         autoStarted = $false
     }
     exit 0

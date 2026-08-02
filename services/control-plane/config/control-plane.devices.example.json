@@ -19,6 +19,31 @@
       "metadata": {
         "xhsServePort": 17895
       }
+    },
+    {
+      "alias": "02",
+      "physicalLabel": "rack-02",
+      "runtimeId": "replace-in-untracked-local-file",
+      "online": true,
+      "routingProfile": {
+        "enabled": true,
+        "tags": ["slot:02", "pilot:explorer"],
+        "capabilityIds": [
+          "xhs.explore.open_feed_note",
+          "xhs.observe.note_detail"
+        ]
+      },
+      "metadata": {
+        "xhsServePort": 17896,
+        "pilot": {
+          "queue": "explorer-shadow",
+          "selector": {
+            "mode": "shadow",
+            "pilotActors": [],
+            "pilotAliases": ["02"]
+          }
+        }
+      }
     }
   ]
 }

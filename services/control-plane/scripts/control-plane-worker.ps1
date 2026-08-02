@@ -25,11 +25,25 @@ if ($LASTEXITCODE -ne 0 -or $actualCommit -ne $expectedCommit) {
     throw "Repository commit mismatch: expected $expectedCommit, found $actualCommit"
 }
 
+# REX Phase 6 B7: fixed modes/release come from the launch config the task installer wrote,
+# never guessed here, and never echoed to stdout/stderr. AUTONOMY_POLICY_MODE feeds
+# bootstrap's resolvePolicyMode (legacy=null, shadow=compute-not-apply, nonpayment_v1=gated).
+$autonomyPolicyMode = [string]$launch.autonomyPolicyMode
+if ([string]::IsNullOrWhiteSpace($autonomyPolicyMode)) { $autonomyPolicyMode = "legacy" }
+$evidenceMode = [string]$launch.evidenceMode
+if ([string]::IsNullOrWhiteSpace($evidenceMode)) { $evidenceMode = "legacy" }
+$releaseId = [string]$launch.releaseId
+
 $env:CONTROL_PLANE_EXPECTED_HOST = "DESKTOP-3I1EVHE"
 $env:CONTROL_PLANE_NODE_ID = "DESKTOP-3I1EVHE"
 $env:CONTROL_PLANE_NODE_VERSION = "24.11.1"
 $env:CONTROL_PLANE_GIT_COMMIT = $actualCommit
 $env:CONTROL_PLANE_DEVICES_FILE = $deviceConfig
+$env:AUTONOMY_POLICY_MODE = $autonomyPolicyMode
+$env:EVIDENCE_MODE = $evidenceMode
+if (-not [string]::IsNullOrWhiteSpace($releaseId)) {
+    $env:CONTROL_PLANE_RELEASE_ID = $releaseId
+}
 $env:CONTROL_PLANE_LEGACY_MODE = "enforce"
 $env:NODE_NO_WARNINGS = "1"
 
