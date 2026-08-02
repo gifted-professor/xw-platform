@@ -17,6 +17,23 @@
 - Never bypass CAPTCHAs, platform restrictions, risk controls, or identity verification.
 - Never commit `.env`, `config/local.psd1`, `data/`, screenshots, UI XML, OAuth tokens, or real device/account identifiers.
 - Stop a device after two consecutive navigation failures and report the current screenshot and hierarchy paths.
+
+## Deployed code is authoritative + policy doc debt (REX Phase 6)
+
+Authority order: **deployed release code + live agent-entry/task packet** > top-level
+AGENTS / modes / skills routing docs > not-yet-migrated app sub-skill Markdown.
+
+- Read the **Release / runtime policy** block of the live entry before any device task:
+  `ssh xhs-windows 'curl.exe -s http://127.0.0.1:17930/agent-entry.md'`
+  (JSON: `GET http://127.0.0.1:17930/api/agent-entry` → `release`).
+  Fields: `releaseId / runtimePolicyVersion / effectiveDecisionSource / policyMode /
+  evidenceMode / policyDocDebt`.
+- `policyDocDebt` only reminds which stale docs are not yet migrated; it never blocks a
+  task. If a stale doc listed there says "requires approval" but the current release
+  policy / task packet has superseded that rule, the release wins.
+- Neither this contract nor any stale sub-skill text may widen the one hard gate: a real
+  money final commit waits for human confirmation with transport held at 0.
+
 ## 部署流程（2026-07-24 起，用户指定为标准流程）
 
 生产控制面跑在 Windows `C:\Users\Public\xhs-routing-v1-1`（git 分支
