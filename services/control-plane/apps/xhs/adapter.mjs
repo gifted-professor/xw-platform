@@ -32,6 +32,47 @@ function assertCollectReceiptParams(params) {
   }
 }
 
+function feedEvidenceFiles(result) {
+  const files = [];
+  for (const file of Array.isArray(result?.evidenceFiles) ? result.evidenceFiles : []) {
+    if (typeof file?.path !== "string" || file.path === "") continue;
+    files.push({
+      path: file.path,
+      kind: typeof file.kind === "string" && file.kind ? file.kind : "adapter",
+      label: typeof file.label === "string" && file.label ? file.label : "xhs-feed",
+      exportAllowed: file.exportAllowed === true,
+    });
+  }
+  return files;
+}
+
+/** Keep cards for verify; project redacted observe.feed fields for result summary. */
+function projectFeedCardsOutput(result) {
+  const cards = Array.isArray(result?.cards) ? result.cards : [];
+  const pageClass = typeof result?.pageClass === "string" && result.pageClass
+    ? result.pageClass
+    : "xhs.unknown";
+  const cardCount = Number.isInteger(result?.cardCount) ? result.cardCount : cards.length;
+  const evidenceFiles = Array.isArray(result?.evidenceFiles) ? result.evidenceFiles : [];
+  const artifactRefs = evidenceFiles
+    .filter((f) => typeof f?.path === "string" && f.path)
+    .map((f) => ({
+      kind: typeof f.kind === "string" && f.kind ? f.kind : "adapter",
+      label: typeof f.label === "string" && f.label ? f.label : "xhs-feed",
+      // path redacted to basename only in output projection
+      name: String(f.path).split(/[\\/]/).pop() || "artifact",
+      exportAllowed: f.exportAllowed === true,
+    }));
+  return {
+    cards,
+    dumpMs: result?.dumpMs,
+    pageClass,
+    cardCount,
+    artifactRefs,
+    evidenceDebt: Array.isArray(result?.evidenceDebt) ? result.evidenceDebt : [],
+  };
+}
+
 export function createXhsAdapter({ fetchImpl = globalThis.fetch } = {}) {
   return {
     id: "xhs",
@@ -70,6 +111,14 @@ export function createXhsAdapter({ fetchImpl = globalThis.fetch } = {}) {
         error.ambiguous = result.ambiguous === true || !error.notSent;
         throw error;
       }
+      if (capability.implementation.action === "feedCards") {
+        return {
+          vendorCode: 200,
+          output: projectFeedCardsOutput(result),
+          evidenceFiles: feedEvidenceFiles(result),
+          metrics: response.metrics,
+        };
+      }
       return {
         vendorCode: 200,
         output: result,
@@ -80,7 +129,16 @@ export function createXhsAdapter({ fetchImpl = globalThis.fetch } = {}) {
       const action = capability.implementation.action;
       const output = execution.output;
       if (action === "metrics") return { ok: Boolean(output && typeof output === "object"), mode: "state" };
-      if (action === "feedCards") return { ok: Array.isArray(output?.cards), mode: "state" };
+      if (action === "feedCards") {
+        return {
+          ok: Array.isArray(output?.cards)
+            && typeof output?.pageClass === "string"
+            && output.pageClass !== ""
+            && Number.isInteger(output?.cardCount)
+            && output.cardCount >= 0,
+          mode: "state",
+        };
+      }
       if (action === "observeOpenNoteDetail" || action === "openFeedNote") {
         return {
           ok: output?.ok === true

@@ -259,7 +259,7 @@ test("adapter dispatches and seals the combined navigation observation", async (
   assert.equal(adapter.buildExplicitObservationReceipt({ capability, execution }).targetFingerprint, "b".repeat(64));
 });
 
-test("note locator observation prefers a one-shot dumpsys activity top over the persistent shell", async () => {
+test("note locator observation prefers a one-shot dumpsys activity activities over the persistent shell", async () => {
   const operator = Object.create(FastOperator.prototype);
   const calls = [];
   operator.currentFocus = async () => ({
@@ -282,10 +282,10 @@ test("note locator observation prefers a one-shot dumpsys activity top over the 
   assert.equal(result.ok, true);
   assert.equal(result.targetFingerprint.length, 64);
   assert.equal(calls.length, 1);
-  assert.match(calls[0], /^oneShot:dumpsys activity top/);
+  assert.match(calls[0], /^oneShot:dumpsys activity activities/);
 });
 
-test("note locator observation prefers exec-out dumpsys activity top when available", async () => {
+test("note locator observation prefers exec-out dumpsys activity activities when available", async () => {
   const calls = [];
   const operator = Object.create(FastOperator.prototype);
   operator.currentFocus = async () => ({
@@ -304,7 +304,7 @@ test("note locator observation prefers exec-out dumpsys activity top when availa
 
   const result = await operator.observeOpenNoteDetail();
   assert.equal(result.ok, true);
-  assert.deepEqual(calls, [["dumpsys", "activity", "top"]]);
+  assert.deepEqual(calls, [["dumpsys", "activity", "activities"]]);
 });
 
 test("Hist #0 block keeps Intent after a mid-block mResumedActivity marker", async () => {
@@ -324,6 +324,92 @@ test("Hist #0 block keeps Intent after a mid-block mResumedActivity marker", asy
   const result = await operator.observeOpenNoteDetail();
   assert.equal(result.ok, true);
   assert.match(result.targetFingerprint, /^[a-f0-9]{64}$/);
+});
+
+test("activities dump prefers topResumed Hist over an earlier historical NoteDetail", async () => {
+  const operator = Object.create(FastOperator.prototype);
+  operator.currentFocus = async () => ({
+    package: "com.xingin.xhs",
+    activity: "com.xingin.matrix.notedetail.NoteDetailActivity",
+  });
+  operator.session = {
+    execOut: async (args) => {
+      if (args.join(" ") !== "dumpsys activity activities") return Buffer.from("");
+      return Buffer.from(
+        "  * Task{old}\n"
+          + "    * Hist  #0: ActivityRecord{aaa u0 com.xingin.xhs/com.xingin.matrix.notedetail.NoteDetailActivity t1}\n"
+          + "      Intent { dat=xhsdiscover://item/aaaaaaaaaaaaaaaaaaaaaaaa }\n"
+          + "  * Task{cur}\n"
+          + "    topResumedActivity=ActivityRecord{bbb u0 com.xingin.xhs/com.xingin.matrix.notedetail.NoteDetailActivity t9}\n"
+          + "    * Hist  #1: ActivityRecord{bbb u0 com.xingin.xhs/com.xingin.matrix.notedetail.NoteDetailActivity t9}\n"
+          + "      Intent { dat=xhsdiscover://item/bbbbbbbbbbbbbbbbbbbbbbbb }\n",
+      );
+    },
+  };
+  const result = await operator.observeOpenNoteDetail();
+  assert.equal(result.ok, true);
+  const { createHash } = await import("node:crypto");
+  assert.equal(
+    result.targetFingerprint,
+    createHash("sha256").update("xhs:note:bbbbbbbbbbbbbbbbbbbbbbbb").digest("hex"),
+  );
+});
+
+test("activities dump Hist #1 with spaced header yields a receipt", async () => {
+  const operator = Object.create(FastOperator.prototype);
+  operator.currentFocus = async () => ({
+    package: "com.xingin.xhs",
+    activity: "com.xingin.matrix.notedetail.NoteDetailActivity",
+  });
+  operator.session = {
+    execOut: async (args) => {
+      if (args.join(" ") !== "dumpsys activity activities") return Buffer.from("");
+      return Buffer.from(
+        "    topResumedActivity=ActivityRecord{aa u0 com.xingin.xhs/com.xingin.matrix.notedetail.NoteDetailActivity t9}\n"
+          + "    * Hist  #1: ActivityRecord{aa u0 com.xingin.xhs/com.xingin.matrix.notedetail.NoteDetailActivity t9}\n"
+          + "      Intent { dat=xhsdiscover://item/abcdef0123456789abcdef01 cmp=com.xingin.xhs/com.xingin.matrix.notedetail.NoteDetailActivity }\n"
+          + "    * Hist  #0: ActivityRecord{bb u0 com.xingin.xhs/.index.v2.IndexActivityV2 t9}\n",
+      );
+    },
+  };
+  const result = await operator.observeOpenNoteDetail();
+  assert.equal(result.ok, true);
+  assert.match(result.targetFingerprint, /^[a-f0-9]{64}$/);
+});
+
+test("unredacted portrait_feed/<24hex> URI yields a receipt; bare portrait_feed stays fail-closed", async () => {
+  const operatorOk = Object.create(FastOperator.prototype);
+  operatorOk.currentFocus = async () => ({
+    package: "com.xingin.xhs",
+    activity: "com.xingin.matrix.notedetail.NoteDetailActivity",
+  });
+  operatorOk.session = {
+    execOut: async () => Buffer.from(
+      "    * Hist  #1: ActivityRecord{aa u0 com.xingin.xhs/com.xingin.matrix.notedetail.NoteDetailActivity t9}\n"
+        + "      Intent { dat=xhsdiscover://portrait_feed/abcdef0123456789abcdef01 cmp=com.xingin.xhs/com.xingin.matrix.notedetail.NoteDetailActivity }\n",
+    ),
+  };
+  assert.equal((await operatorOk.observeOpenNoteDetail()).ok, true);
+
+  const diagnostics = [];
+  const operatorClosed = Object.create(FastOperator.prototype);
+  operatorClosed.diagnosticLogger = (entry) => diagnostics.push(entry);
+  operatorClosed.currentFocus = async () => ({
+    package: "com.xingin.xhs",
+    activity: "com.xingin.matrix.notedetail.NoteDetailActivity",
+  });
+  operatorClosed.session = {
+    execOut: async () => Buffer.from(
+      "    * Hist  #1: ActivityRecord{aa u0 com.xingin.xhs/com.xingin.matrix.notedetail.NoteDetailActivity t9}\n"
+        + "      Intent { dat=xhsdiscover://portrait_feed cmp=com.xingin.xhs/com.xingin.matrix.notedetail.NoteDetailActivity (has extras) }\n",
+    ),
+  };
+  const closed = await operatorClosed.observeOpenNoteDetail();
+  assert.equal(closed.ok, false);
+  assert.equal(closed.step, "stableNoteLocatorUnavailable");
+  assert.equal(closed.locatorShape.currentBlockFound, true);
+  assert.equal(closed.locatorShape.datScheme, "portrait_feed");
+  assert.deepEqual(closed.locatorShape.fields.dat, { present: true, has24Hex: false });
 });
 
 test("mResumedActivity with a stable note intent URI yields a receipt", async () => {
@@ -380,8 +466,10 @@ test("missing current activity block records only a redacted structural probe sh
   });
   operator.session = {
     execOut: async (args) => {
-      if (args[0] === "dumpsys") return Buffer.from("TASK id=1\n  * Hist #1: ActivityRecord{old com.other/.PrivateActivity}\n");
-      return Buffer.from(".");
+      if (args.join(" ") === "dumpsys activity activities") {
+        return Buffer.from("TASK id=1\n  * Hist #1: ActivityRecord{old com.other/.PrivateActivity}\n");
+      }
+      return Buffer.from("");
     },
   };
 
@@ -393,7 +481,9 @@ test("missing current activity block records only a redacted structural probe sh
     event: "fast-operator.locator-probe-shape",
     activity: "NoteDetailActivity",
     attempts: [
-      { transport: "exec-out:dumpsys activity top", outcome: "nonempty" },
+      { transport: "exec-out:dumpsys activity activities", outcome: "nonempty" },
+      { transport: "exec-out:dumpsys activity top", outcome: "empty" },
+      { transport: "exec-out:cmd activity top", outcome: "empty" },
     ],
     output: {
       byteBucket: "65-1024",
@@ -409,7 +499,7 @@ test("missing current activity block records only a redacted structural probe sh
   assert.doesNotMatch(JSON.stringify(diagnostics), /PrivateActivity|com\.other/);
 });
 
-test("empty dumpsys activity top falls through to cmd activity top", async () => {
+test("empty dumpsys activity activities falls through to dumpsys activity top", async () => {
   const calls = [];
   const operator = Object.create(FastOperator.prototype);
   operator.currentFocus = async () => ({
@@ -419,16 +509,19 @@ test("empty dumpsys activity top falls through to cmd activity top", async () =>
   operator.session = {
     execOut: async (args) => {
       calls.push(args);
-      if (args[0] === "dumpsys") return Buffer.from("");
-      return Buffer.from(
-        "ACTIVITY com.xingin.xhs/.note.NoteDetailActivity\n"
-          + "  Intent { dat=xhsdiscover://item/0123456789abcdef01234567 }",
-      );
+      if (args.join(" ") === "dumpsys activity activities") return Buffer.from("");
+      if (args.join(" ") === "dumpsys activity top") {
+        return Buffer.from(
+          "ACTIVITY com.xingin.xhs/.note.NoteDetailActivity\n"
+            + "  Intent { dat=xhsdiscover://item/0123456789abcdef01234567 }",
+        );
+      }
+      return Buffer.from("");
     },
   };
   const result = await operator.observeOpenNoteDetail();
   assert.equal(result.ok, true);
-  assert.deepEqual(calls, [["dumpsys", "activity", "top"], ["cmd", "activity", "top"]]);
+  assert.deepEqual(calls, [["dumpsys", "activity", "activities"], ["dumpsys", "activity", "top"]]);
 });
 
 test("real serve switch exposes only the bounded openFeedNote method", async (t) => {
@@ -595,6 +688,7 @@ test("serve preserves a secret-free locator shape for a graceful stable-locator 
   const locatorShape = {
     activity: "NoteDetailActivity",
     currentBlockFound: true,
+    datScheme: "none",
     fields: {
       dat: { present: false, has24Hex: false },
       clip: { present: false, has24Hex: false },

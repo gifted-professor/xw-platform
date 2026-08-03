@@ -340,58 +340,26 @@ export class FastOperator {
     if (focus.package !== "com.xingin.xhs" || !/(?:NoteDetailActivity|DetailFeedActivity)$/.test(focus.activity || "")) {
       return { ok: false, notSent: true, step: "notOnExactNoteDetail" };
     }
-    // Keep the top-activity read one-shot all the way down.  The Windows
-    // Xiaowei build can terminate the task host when a shell pipeline (`grep`
-    // / `head`) is attached to dumpsys, and the full activity-history dump is
-    // unnecessarily broad for this receipt.  Prefer `dumpsys activity top`
-    // (exec-out, no pipeline): field evidence showed `cmd activity top` often
-    // returns a tiny unstructured blob on this transport.  one-shot shell is
-    // the compatibility fallback.  A persistent fallback is retained only for
-    // old test doubles that expose neither one-shot method.
-    let raw = "";
-    let stopCascade = false;
+    // Field evidence (2026-08-02, alias 01): `dumpsys activity top` often has
+    // zero XHS content or times out on Xiaowei ADB, while
+    // `dumpsys activity activities` carries the current NoteDetail Hist block
+    // and Intent { dat=... }. Probe activities first, then top / cmd top.
+    // Never attach a remote grep pipeline to dumpsys (Xiaowei may kill the host).
     const probeAttempts = [];
     const recordProbe = (transport, outcome) => {
       probeAttempts.push({ transport, outcome });
     };
     const takeText = (value) => String(value == null ? "" : value.toString("utf8"));
-    if (typeof this.session.execOut === "function") {
-      for (const args of [["dumpsys", "activity", "top"], ["cmd", "activity", "top"]]) {
-        if (raw || stopCascade) break;
-        const transport = `exec-out:${args.join(" ")}`;
-        try {
-          raw = takeText(await this.session.execOut(args, 10000));
-          recordProbe(transport, raw ? "nonempty" : "empty");
-        } catch (error) {
-          stopCascade = /exec-out timeout/i.test(String(error?.message || error));
-          recordProbe(transport, stopCascade ? "timeout" : "error");
-        }
-      }
-    }
-    if (!raw && !stopCascade && typeof this.session.oneShotShell === "function") {
-      for (const command of ["dumpsys activity top", "cmd activity top"]) {
-        if (raw) break;
-        const transport = `one-shot:${command}`;
-        try {
-          raw = takeText(await this.session.oneShotShell(command, 10000));
-          recordProbe(transport, raw ? "nonempty" : "empty");
-        } catch {
-          recordProbe(transport, "error");
-        }
-      }
-    }
-    if (!raw && typeof this.session.execOut !== "function" && typeof this.session.oneShotShell !== "function") {
-      try {
-        raw = takeText(await this.session.exec(
-          "dumpsys activity top 2>/dev/null | grep -E 'mResumedActivity|ACTIVITY|Hist #[0-9]+:|Intent \\{|intent=\\{|dat=|clip=|mReferrer=|extras=|note_?[Ii]d' | head -160",
-          10000,
-        ));
-        recordProbe("legacy-persistent", raw ? "nonempty" : "empty");
-      } catch {
-        recordProbe("legacy-persistent", "error");
-      }
-    }
-    const lines = String(raw).split(/\r?\n/);
+    const execOutProbes = [
+      ["dumpsys", "activity", "activities"],
+      ["dumpsys", "activity", "top"],
+      ["cmd", "activity", "top"],
+    ];
+    const oneShotProbes = [
+      "dumpsys activity activities",
+      "dumpsys activity top",
+      "cmd activity top",
+    ];
     const normalizedActivity = (line) => {
       const parsed = String(line).match(/\bcom\.xingin\.xhs\/([A-Za-z0-9_.$]+)/);
       if (!parsed) return null;
@@ -401,25 +369,20 @@ export class FastOperator {
       ? `${focus.package}${focus.activity}`
       : focus.activity;
     const isCurrentActivity = (line) => normalizedActivity(line) === normalizedFocusActivity;
-    let start = lines.findIndex((line) => /\bHist #0:/.test(line) && isCurrentActivity(line));
-    if (start < 0) start = lines.findIndex((line) => /^\s*ACTIVITY\s/.test(line) && isCurrentActivity(line));
-    // dumpsys activity top often exposes the resumed record as mResumedActivity
-    // without a Hist #0 / ACTIVITY header; that line is still the current block.
-    let resumedAnchored = false;
-    if (start < 0) {
-      start = lines.findIndex((line) => /\bmResumedActivity\b/.test(line) && isCurrentActivity(line));
-      resumedAnchored = start >= 0;
-    }
-    // Hist # / ACTIVITY always end a block. A later mResumedActivity is only a
-    // boundary when the block itself was mResumed-anchored — otherwise a
-    // resumed marker between header and Intent would truncate a valid URI.
-    const isActivityBoundary = (line) =>
-      /\bHist #[0-9]+:/.test(line)
-      || /^\s*ACTIVITY\s/.test(line)
-      || (resumedAnchored && /\bmResumedActivity\b/.test(line));
+    // activities dump uses "* Hist  #1:"; top dump uses "Hist #0:" / ACTIVITY / mResumedActivity.
+    const histHeader = /\bHist\s+#\d+:/;
     const allowedActivity = /NoteDetailActivity$/.test(focus.activity || "")
       ? "NoteDetailActivity"
       : "DetailFeedActivity";
+    const classifyDatScheme = (block) => {
+      const dat = String(block).match(/\bdat\s*=\s*([^\s}]+)/i);
+      if (!dat) return "none";
+      const value = dat[1];
+      if (/xhsdiscover:\/\/item\//i.test(value) || /xiaohongshu\.com\/explore\//i.test(value)) return "item";
+      if (/xhsdiscover:\/\/discovery\/item\//i.test(value) || /xiaohongshu\.com\/discovery\/item\//i.test(value)) return "discovery";
+      if (/xhsdiscover:\/\/portrait_feed/i.test(value)) return "portrait_feed";
+      return "other";
+    };
     const logLocatorShape = (currentActivityBlock, currentBlockFound) => {
       const blockLines = currentBlockFound ? String(currentActivityBlock).split(/\r?\n/) : [];
       const shapeFor = (pattern) => {
@@ -433,6 +396,7 @@ export class FastOperator {
       const locatorShape = {
         activity: allowedActivity,
         currentBlockFound,
+        datScheme: classifyDatScheme(currentActivityBlock),
         fields: {
           dat: shapeFor(/\bdat\s*=/i),
           clip: shapeFor(/\bclip(?:Data)?\s*=/i),
@@ -444,7 +408,6 @@ export class FastOperator {
       try { this.diagnosticLogger?.({ event: "fast-operator.locator-shape", ...locatorShape }); } catch {}
       return locatorShape;
     };
-    const cappedCount = (pattern) => Math.min(99, lines.filter((line) => pattern.test(line)).length);
     const sizeBucket = (size) => {
       if (size <= 0) return "0";
       if (size <= 64) return "1-64";
@@ -452,58 +415,176 @@ export class FastOperator {
       if (size <= 8192) return "1025-8192";
       return "8193+";
     };
-    const lineBucket = (count) => {
-      if (!raw) return "0";
+    const lineBucket = (count, rawText) => {
+      if (!rawText) return "0";
       if (count <= 20) return "1-20";
       if (count <= 100) return "21-100";
       return "101+";
     };
-    const logProbeShape = () => {
+    const parseCandidate = (raw) => {
+      const lines = String(raw).split(/\r?\n/);
+      const recordIdOf = (line) => {
+        const m = String(line).match(/\bActivityRecord\{([0-9a-f]+)\b/i);
+        return m ? m[1].toLowerCase() : null;
+      };
+      // Prefer the resumed/top-resumed record so a historical NoteDetail Hist
+      // earlier in a multi-task activities dump cannot steal the locator.
+      let start = -1;
+      let resumedAnchored = false;
+      const resumedIdx = lines.findIndex(
+        (line) => /\b(?:mResumedActivity|topResumedActivity)\b/.test(line) && isCurrentActivity(line),
+      );
+      if (resumedIdx >= 0) {
+        const resumedId = recordIdOf(lines[resumedIdx]);
+        if (resumedId) {
+          const histForResumed = lines.findIndex(
+            (line) => histHeader.test(line) && isCurrentActivity(line) && recordIdOf(line) === resumedId,
+          );
+          if (histForResumed >= 0) {
+            start = histForResumed;
+          } else {
+            start = resumedIdx;
+            resumedAnchored = true;
+          }
+        } else {
+          start = resumedIdx;
+          resumedAnchored = true;
+        }
+      }
+      if (start < 0) start = lines.findIndex((line) => /^\s*ACTIVITY\s/.test(line) && isCurrentActivity(line));
+      if (start < 0) start = lines.findIndex((line) => histHeader.test(line) && isCurrentActivity(line));
+      const isActivityBoundary = (line) =>
+        histHeader.test(line)
+        || /^\s*ACTIVITY\s/.test(line)
+        || (resumedAnchored && /\b(?:mResumedActivity|topResumedActivity)\b/.test(line));
+      const cappedCount = (pattern) => Math.min(99, lines.filter((line) => pattern.test(line)).length);
       const probeShape = {
         event: "fast-operator.locator-probe-shape",
         activity: allowedActivity,
-        attempts: probeAttempts.slice(0, 3),
+        attempts: probeAttempts.slice(0, 4),
         output: {
           byteBucket: sizeBucket(Buffer.byteLength(String(raw), "utf8")),
-          lineBucket: lineBucket(lines.length),
-          histHeaders: cappedCount(/\bHist #[0-9]+:/),
+          lineBucket: lineBucket(lines.length, raw),
+          histHeaders: cappedCount(histHeader),
           activityHeaders: cappedCount(/^\s*ACTIVITY\b/),
-          resumedMarkers: cappedCount(/\bmResumedActivity\b/),
+          resumedMarkers: cappedCount(/\b(?:mResumedActivity|topResumedActivity)\b/),
           xhsComponentLines: Math.min(99, lines.filter((line) => normalizedActivity(line) != null).length),
           matchingActivityLines: Math.min(99, lines.filter(isCurrentActivity).length),
           intentMarkers: cappedCount(/\bIntent\s*\{|\bintent\s*=\s*\{/i),
         },
       };
-      try { this.diagnosticLogger?.(probeShape); } catch {}
+      if (start < 0) return { found: false, probeShape, block: "" };
+      let end = lines.length;
+      for (let index = start + 1; index < lines.length; index += 1) {
+        if (isActivityBoundary(lines[index])) {
+          end = index;
+          break;
+        }
+      }
+      return { found: true, probeShape, block: lines.slice(start, end).join("\n") };
     };
-    if (start < 0) {
-      const locatorShape = logLocatorShape("", false);
-      logProbeShape();
-      return { ok: false, notSent: true, step: "stableNoteLocatorUnavailable", locatorShape };
-    }
-    let end = lines.length;
-    for (let index = start + 1; index < lines.length; index += 1) {
-      if (isActivityBoundary(lines[index])) {
-        end = index;
-        break;
+    // Stable note id must come from an explicit note URI on the *current*
+    // activity Intent. Accept item/discovery/explore forms and an unredacted
+    // portrait_feed/<24hex> path. Bare portrait_feed (Android-redacted `...`)
+    // and opaque extras alone stay fail-closed.
+    const noteUriRe =
+      /(?:xhsdiscover:\/\/(?:item|discovery\/item|portrait_feed)\/|https?:\/\/(?:www\.)?xiaohongshu\.com\/(?:explore|discovery\/item)\/)([0-9a-f]{24})(?=[/?&#}\s]|$)/i;
+
+    let lastProbeShape = null;
+    let lastBlock = "";
+    let lastFound = false;
+    let stopCascade = false;
+    const tryRaw = (raw) => {
+      const parsed = parseCandidate(raw);
+      lastProbeShape = parsed.probeShape;
+      if (!parsed.found) return null;
+      lastFound = true;
+      lastBlock = parsed.block;
+      const match = parsed.block.match(noteUriRe);
+      if (!match) {
+        const locatorShape = logLocatorShape(parsed.block, true);
+        return { ok: false, notSent: true, step: "stableNoteLocatorUnavailable", locatorShape };
+      }
+      const locator = `xhs:note:${match[1].toLowerCase()}`;
+      const digest = (value) => createHash("sha256").update(value).digest("hex");
+      return {
+        ok: true,
+        pageFingerprint: digest(`xhs:page:${focus.package}:${focus.activity}:${locator}`),
+        targetFingerprint: digest(locator),
+        observedAt: new Date().toISOString(),
+      };
+    };
+
+    if (typeof this.session.execOut === "function") {
+      for (const args of execOutProbes) {
+        if (stopCascade) break;
+        const transport = `exec-out:${args.join(" ")}`;
+        try {
+          const text = takeText(await this.session.execOut(args, args[2] === "activities" ? 15000 : 10000));
+          recordProbe(transport, text ? "nonempty" : "empty");
+          if (!text) continue;
+          const outcome = tryRaw(text);
+          if (outcome) return outcome;
+        } catch (error) {
+          stopCascade = /exec-out timeout/i.test(String(error?.message || error));
+          recordProbe(transport, stopCascade ? "timeout" : "error");
+        }
       }
     }
-    const currentActivityBlock = lines.slice(start, end).join("\n");
-    const match = currentActivityBlock.match(
-      /(?:xhsdiscover:\/\/(?:item|discovery\/item)\/|https?:\/\/(?:www\.)?xiaohongshu\.com\/(?:explore|discovery\/item)\/)([0-9a-f]{24})(?=[/?&#}\s]|$)/i,
-    );
-    if (!match) {
-      const locatorShape = logLocatorShape(currentActivityBlock, true);
-      return { ok: false, notSent: true, step: "stableNoteLocatorUnavailable", locatorShape };
+    if (!lastFound && !stopCascade && typeof this.session.oneShotShell === "function") {
+      for (const command of oneShotProbes) {
+        const transport = `one-shot:${command}`;
+        try {
+          const text = takeText(await this.session.oneShotShell(command, /activities/.test(command) ? 15000 : 10000));
+          recordProbe(transport, text ? "nonempty" : "empty");
+          if (!text) continue;
+          const outcome = tryRaw(text);
+          if (outcome) return outcome;
+        } catch {
+          recordProbe(transport, "error");
+        }
+      }
     }
-    const locator = `xhs:note:${match[1].toLowerCase()}`;
-    const digest = (value) => createHash("sha256").update(value).digest("hex");
-    return {
-      ok: true,
-      pageFingerprint: digest(`xhs:page:${focus.package}:${focus.activity}:${locator}`),
-      targetFingerprint: digest(locator),
-      observedAt: new Date().toISOString(),
-    };
+    if (!lastFound && typeof this.session.execOut !== "function" && typeof this.session.oneShotShell !== "function") {
+      try {
+        const text = takeText(await this.session.exec(
+          "dumpsys activity activities 2>/dev/null | grep -E 'mResumedActivity|topResumedActivity|ACTIVITY|Hist #[0-9]+:|Intent \\{|intent=\\{|dat=|clip=|mReferrer=|extras=|note_?[Ii]d' | head -200",
+          15000,
+        ));
+        recordProbe("legacy-persistent", text ? "nonempty" : "empty");
+        if (text) {
+          const outcome = tryRaw(text);
+          if (outcome) return outcome;
+        }
+      } catch {
+        recordProbe("legacy-persistent", "error");
+      }
+    }
+
+    const locatorShape = logLocatorShape(lastBlock, lastFound);
+    if (lastProbeShape) {
+      lastProbeShape.attempts = probeAttempts.slice(0, 4);
+      try { this.diagnosticLogger?.(lastProbeShape); } catch {}
+    } else {
+      try {
+        this.diagnosticLogger?.({
+          event: "fast-operator.locator-probe-shape",
+          activity: allowedActivity,
+          attempts: probeAttempts.slice(0, 4),
+          output: {
+            byteBucket: "0",
+            lineBucket: "0",
+            histHeaders: 0,
+            activityHeaders: 0,
+            resumedMarkers: 0,
+            xhsComponentLines: 0,
+            matchingActivityLines: 0,
+            intentMarkers: 0,
+          },
+        });
+      } catch {}
+    }
+    return { ok: false, notSent: true, step: "stableNoteLocatorUnavailable", locatorShape };
   }
 
   // hierarchy dump：exec-out uiautomator dump /dev/tty（一次性，避免持久 shell 分帧）

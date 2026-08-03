@@ -31,7 +31,7 @@ test("XHS adapter uses a per-device loopback serve and fail-closed verifier", as
       calls.push({ url, body: JSON.parse(options.body), headers: options.headers });
       return new Response(JSON.stringify({
         ok: true,
-        result: { cards: [] },
+        result: { cards: [], pageClass: "xhs.feed.index.empty", cardCount: 0 },
         metrics: {},
       }), { status: 200, headers: { "content-type": "application/json" } });
     },
@@ -44,6 +44,8 @@ test("XHS adapter uses a per-device loopback serve and fail-closed verifier", as
   assert.equal(calls[0].headers["x-control-lease-id"], leaseAuthorization.leaseId);
   assert.equal(calls[0].headers["x-control-token"], leaseAuthorization.token);
   assert.equal(calls[0].headers["x-control-device-id"], leaseAuthorization.deviceId);
+  assert.equal(execution.output.pageClass, "xhs.feed.index.empty");
+  assert.equal(execution.output.cardCount, 0);
   assert.deepEqual(await adapter.verify({ capability, execution }), { ok: true, mode: "state" });
 
   const send = registry.require("xhs.comment.send");
@@ -53,13 +55,58 @@ test("XHS adapter uses a per-device loopback serve and fail-closed verifier", as
   }), { ok: false, ambiguous: true, mode: "custom" });
 });
 
+test("XHS observe.feed projects redacted fields and evidenceFiles without failing on debt", async () => {
+  const { mkdtempSync, writeFileSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { tmpdir } = await import("node:os");
+  const dir = mkdtempSync(join(tmpdir(), "xhs-feed-test-"));
+  const shot = join(dir, "shot.png");
+  const dump = join(dir, "dump.xml");
+  writeFileSync(shot, Buffer.from("89504e470d0a1a0a", "hex"));
+  writeFileSync(dump, "<hierarchy text=\"secret-author\" content-desc=\"pii\"></hierarchy>\n");
+  const adapter = createXhsAdapter({
+    fetchImpl: async () => new Response(JSON.stringify({
+      ok: true,
+      result: {
+        cards: [{ cover: { center: [1, 2] }, authorName: "secret-author" }],
+        pageClass: "xhs.feed.index",
+        cardCount: 1,
+        evidenceFiles: [
+          { path: dump, kind: "ui_dump", label: "xhs-feed-ui-dump", exportAllowed: true },
+          { path: shot, kind: "screenshot", label: "xhs-feed-screenshot", exportAllowed: false },
+        ],
+        evidenceDebt: [{ layer: "adapter-evidence", code: "MISSING_SCREENSHOT", cause: "simulated" }],
+      },
+      metrics: {},
+    }), { status: 200, headers: { "content-type": "application/json" } }),
+  });
+  const capability = registry.require("xhs.observe.feed");
+  const execution = await adapter.execute({ capability, device: privateDevice, params: {}, leaseAuthorization });
+  assert.equal(execution.output.pageClass, "xhs.feed.index");
+  assert.equal(execution.output.cardCount, 1);
+  assert.equal(execution.output.evidenceDebt[0].code, "MISSING_SCREENSHOT");
+  assert.ok(Array.isArray(execution.output.artifactRefs));
+  assert.equal(execution.output.artifactRefs.length, 2);
+  assert.equal(execution.output.artifactRefs[0].kind, "ui_dump");
+  assert.equal(execution.output.artifactRefs[0].name, "dump.xml");
+  assert.equal(execution.output.artifactRefs[1].name, "shot.png");
+  assert.equal(execution.evidenceFiles.length, 2);
+  assert.equal(execution.evidenceFiles[0].kind, "ui_dump");
+  assert.equal(execution.evidenceFiles[0].exportAllowed, true);
+  assert.equal(execution.evidenceFiles[1].kind, "screenshot");
+  assert.equal(execution.evidenceFiles[1].exportAllowed, false);
+  assert.deepEqual(await adapter.verify({ capability, execution }), { ok: true, mode: "state" });
+});
+
 test("generic XHS observation capabilities do not claim a Discovery receipt", async () => {
   const adapter = createXhsAdapter({
     fetchImpl: async (_url, options) => {
       const action = JSON.parse(options.body).action;
       return new Response(JSON.stringify({
         ok: true,
-        result: action === "feedCards" ? { cards: [] } : { online: true },
+        result: action === "feedCards"
+          ? { cards: [], pageClass: "xhs.feed.index.empty", cardCount: 0 }
+          : { online: true },
         metrics: {},
       }), { status: 200, headers: { "content-type": "application/json" } });
     },
