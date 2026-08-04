@@ -25,6 +25,14 @@ if ($LASTEXITCODE -ne 0 -or $actualCommit -ne $expectedCommit) {
     throw "Repository commit mismatch: expected $expectedCommit, found $actualCommit"
 }
 
+if ($launch.PSObject.Properties.Name -contains "allowDirtyWorktree" -and [bool]$launch.allowDirtyWorktree) {
+    $env:XHS_ALLOW_DIRTY_WORKTREE = "1"
+} else {
+    Remove-Item Env:XHS_ALLOW_DIRTY_WORKTREE -ErrorAction SilentlyContinue
+}
+& $nodeExe (Join-Path $repoRoot "scripts\assert-release-gates.mjs")
+if ($LASTEXITCODE -ne 0) { throw "release gates failed" }
+
 # REX Phase 6 B7: fixed modes/release come from the launch config the task installer wrote,
 # never guessed here, and never echoed to stdout/stderr. AUTONOMY_POLICY_MODE feeds
 # bootstrap's resolvePolicyMode (legacy=null, shadow=compute-not-apply, nonpayment_v1=gated).

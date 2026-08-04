@@ -454,6 +454,7 @@ test("WeChat adapter requires title match and baseline restoration", async () =>
     device: privateDevice,
     params: { title: "local-test-contact" },
     evidenceDirectory: fileURLToPath(new URL("../control-plane/runtime", import.meta.url)),
+    leaseAuthorization,
   });
   assert.equal((await adapter.verify({ capability, execution })).ok, true);
 });

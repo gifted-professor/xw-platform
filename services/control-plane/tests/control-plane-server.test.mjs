@@ -46,7 +46,7 @@ test("production bootstrap installs the control-plane-owned Discovery producer",
     const runtime = createControlPlaneRuntime({
       state,
       capabilities: new CapabilityRegistry([capability]),
-      adapters: new AdapterRegistry([{ id: "test", async execute() { return {}; } }]),
+      adapters: new AdapterRegistry([{ id: "test", async execute() { return {}; }, async verify() { return { ok: true }; }, async restore() { return { ok: true }; } }]),
       evidence: new EvidenceStore({ runsRoot: join(root, "runs"), state, minFreeBytes: 0, minExternalEffectFreeBytes: 0 }),
       deviceConfigPath: join(root, "missing-devices.json"),
     });
@@ -63,7 +63,7 @@ test("production bootstrap derives shadow policy mode from env but never activat
     const runtime = createControlPlaneRuntime({
       state,
       capabilities: new CapabilityRegistry([capability]),
-      adapters: new AdapterRegistry([{ id: "test", async execute() { return {}; } }]),
+      adapters: new AdapterRegistry([{ id: "test", async execute() { return {}; }, async verify() { return { ok: true }; }, async restore() { return { ok: true }; } }]),
       evidence: new EvidenceStore({ runsRoot: join(root, "runs"), state, minFreeBytes: 0, minExternalEffectFreeBytes: 0 }),
       deviceConfigPath: join(root, "missing-devices.json"),
     });
@@ -88,7 +88,7 @@ test("production bootstrap keeps legacy (null policyMode) when env is unset (B7)
     const runtime = createControlPlaneRuntime({
       state,
       capabilities: new CapabilityRegistry([capability]),
-      adapters: new AdapterRegistry([{ id: "test", async execute() { return {}; } }]),
+      adapters: new AdapterRegistry([{ id: "test", async execute() { return {}; }, async verify() { return { ok: true }; }, async restore() { return { ok: true }; } }]),
       evidence: new EvidenceStore({ runsRoot: join(root, "runs"), state, minFreeBytes: 0, minExternalEffectFreeBytes: 0 }),
       deviceConfigPath: join(root, "missing-devices.json"),
     });
@@ -108,7 +108,7 @@ test("health exposes the runtime policy schema version when a policy mode is act
     const control = new ControlPlane({
       state,
       capabilities: registry,
-      adapters: new AdapterRegistry([{ id: "test", async execute() { return {}; } }]),
+      adapters: new AdapterRegistry([{ id: "test", async execute() { return {}; }, async verify() { return { ok: true }; }, async restore() { return { ok: true }; } }]),
       evidence,
       policyMode: { mode: "shadow", active: false, consulted: true, effectiveDecisionSource: "shadow", adapterKind: "real" },
     });
@@ -128,7 +128,7 @@ test("health does not claim a policy schema version under legacy (no policyMode)
   const evidence = new EvidenceStore({ runsRoot: join(root, "runs"), state, minFreeBytes: 0, minExternalEffectFreeBytes: 0 });
   const registry = new CapabilityRegistry([capability]);
   try {
-    const control = new ControlPlane({ state, capabilities: registry, adapters: new AdapterRegistry([{ id: "test", async execute() { return {}; } }]), evidence });
+    const control = new ControlPlane({ state, capabilities: registry, adapters: new AdapterRegistry([{ id: "test", async execute() { return {}; }, async verify() { return { ok: true }; }, async restore() { return { ok: true }; } }]), evidence });
     const router = new ControlRouter({ control, state, capabilities: registry, evidence });
     const result = await router.handle({ method: "GET", path: "/control/v1/health" });
     assert.equal(result.status, 200);
@@ -150,7 +150,7 @@ test("health exposes the runtime policy mode and release id (B7)", async () => {
     const control = new ControlPlane({
       state,
       capabilities: registry,
-      adapters: new AdapterRegistry([{ id: "test", async execute() { return {}; } }]),
+      adapters: new AdapterRegistry([{ id: "test", async execute() { return {}; }, async verify() { return { ok: true }; }, async restore() { return { ok: true }; } }]),
       evidence,
       policyMode: { mode: "shadow", active: false, consulted: true, effectiveDecisionSource: "shadow", adapterKind: "real" },
     });
@@ -186,6 +186,7 @@ test("bootstrap producer reuses the owned session job runner and records a trust
           } } };
         },
         async verify() { return { ok: true, mode: "state" }; },
+        async restore() { return { ok: true }; },
       }]),
       evidence: new EvidenceStore({ runsRoot: join(root, "runs"), state, minFreeBytes: 0, minExternalEffectFreeBytes: 0 }),
       deviceConfigPath: join(root, "missing-devices.json"),
@@ -676,7 +677,7 @@ function paymentHarness({ nowMs = Date.parse("2026-08-01T06:00:00.000Z") } = {})
   };
   const control = new ControlPlane({
     state, capabilities: registry, evidence,
-    adapters: new AdapterRegistry([{ id: "test", async execute() { return {}; } }]),
+    adapters: new AdapterRegistry([{ id: "test", async execute() { return {}; }, async verify() { return { ok: true }; }, async restore() { return { ok: true }; } }]),
     paymentApprovalVerifier: verifier, now,
   });
   const signApproval = (binding, overrides = {}) => {
@@ -845,7 +846,7 @@ test("payment control surface: restart loses the live handle -> durable pending 
     const restarted = new ControlPlane({
       state: h.state, capabilities: h.state ? new CapabilityRegistry([capability]) : null,
       evidence: h.evidence,
-      adapters: new AdapterRegistry([{ id: "test", async execute() { return {}; } }]),
+      adapters: new AdapterRegistry([{ id: "test", async execute() { return {}; }, async verify() { return { ok: true }; }, async restore() { return { ok: true }; } }]),
       paymentApprovalVerifier: h.verifier, now: h.now,
     });
     // The durable row is still waiting before reconstruct-driven recovery; with no live handle the
@@ -927,7 +928,7 @@ test("#runJob guard fail-closes a generic capability whose params target a finan
   const evidence = new EvidenceStore({ runsRoot: join(root, "runs"), state, minFreeBytes: 0, minExternalEffectFreeBytes: 0 });
   const control = new ControlPlane({
     state, capabilities: registry, evidence,
-    adapters: new AdapterRegistry([{ id: "test", async execute() { executeCalls += 1; return {}; } }]),
+    adapters: new AdapterRegistry([{ id: "test", async execute() { executeCalls += 1; return {}; }, async verify() { return { ok: true }; }, async restore() { return { ok: true }; } }]),
   });
   try {
     const financialParams = {

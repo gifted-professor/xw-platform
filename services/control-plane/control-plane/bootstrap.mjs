@@ -3,6 +3,7 @@ import { hostname } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { createDouyinAdapter } from "../apps/douyin/adapter.mjs";
 import { createWechatAdapter } from "../apps/wechat/adapter.mjs";
 import { createXhsAdapter } from "../apps/xhs/adapter.mjs";
 import { createXianyuAdapter } from "../apps/xianyu/adapter.mjs";
@@ -13,6 +14,10 @@ import { AdapterRegistry, ControlPlane } from "./lib/control-plane.mjs";
 import { EvidenceStore } from "./lib/evidence-store.mjs";
 import { ControlPlaneError } from "./lib/errors.mjs";
 import { DelegationGrantRuntime } from "./lib/delegation-grant-runtime.mjs";
+import {
+  loadGeneratedOverlay,
+  resolveOverlayMode,
+} from "./lib/generated-overlay.mjs";
 import { resolvePolicyMode } from "./lib/nonpayment-autonomy-policy.mjs";
 import { StateStore } from "./lib/state-store.mjs";
 import { TrustedHumanIssuer } from "./lib/trusted-human-issuer.mjs";
@@ -134,6 +139,7 @@ export function createControlPlaneRuntime({
     : new AdapterRegistry(adapters || [
       createXhsAdapter(),
       createXianyuAdapter(),
+      createDouyinAdapter(),
       createWechatAdapter(),
       createXiaoweiAdapter(),
       createVisionAdapter(),
@@ -168,6 +174,16 @@ export function createControlPlaneRuntime({
     ],
   });
   control.installDiscoveryProducer({ capabilityForPrimitive: discoveryCapabilityForPrimitive });
+
+  // Phase 4: optional generated recipe overlay. Never removes static capabilities;
+  // never auto-executes recipes. Flag off → skip attach entirely.
+  const overlayMode = resolveOverlayMode();
+  let recipeOverlay = null;
+  if (overlayMode !== "off") {
+    recipeOverlay = loadGeneratedOverlay({ featureFlag: overlayMode });
+    control.recipeOverlay = recipeOverlay;
+  }
+
   return {
     root,
     state: runtimeState,
@@ -175,6 +191,7 @@ export function createControlPlaneRuntime({
     adapters: adapterRegistry,
     evidence: runtimeEvidence,
     control,
+    recipeOverlay,
     delegationGrants,
     dbPath: resolvedDbPath,
     runsRoot: resolvedRunsRoot,

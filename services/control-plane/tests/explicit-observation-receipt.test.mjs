@@ -99,6 +99,8 @@ test("default production allowlist rejects metrics/feed even with a valid parser
     }), { code: "EXPLICIT_RECEIPT_BINDING_MISMATCH" });
     const adapter = {
       id: "xhs", async execute() {},
+      async verify() { return { ok: true }; },
+      async restore() { return { ok: true }; },
       getExplicitObservationReceipt({ job, receiptId }) {
         if (job.jobId !== sourceJob.jobId || receiptId !== "sealed-receipt") return null;
         return { pageFingerprint: "page-fingerprint", targetFingerprint: "target-a", observedAt: new Date().toISOString(), evidenceId: sourceEvidence.evidenceId, evidenceHash: sourceEvidence.sha256 };
@@ -123,7 +125,7 @@ test("a receipt can be minted only through an explicit test-only capability and 
     state.upsertDevice({ alias: "01", physicalLabel: "rack-01", nodeId: AUTHORITY, runtimeId: "private-01", routingProfile: { enabled: true, tags: ["slot:01"], capabilityIds: [fakeCapability.id] } });
     fixture.capabilities = capabilities;
     const { sourceJob, evidence } = sourceJobWithEvidence(state, fixture, fakeCapability.id);
-    const adapter = { id: "test-receipt", async execute() {}, getExplicitObservationReceipt() { return { pageFingerprint: "page-fingerprint", targetFingerprint: "target-a", observedAt: new Date().toISOString(), evidenceId: evidence.evidenceId, evidenceHash: evidence.sha256 }; } };
+    const adapter = { id: "test-receipt", async execute() {}, async verify() { return { ok: true }; }, async restore() { return { ok: true }; }, getExplicitObservationReceipt() { return { pageFingerprint: "page-fingerprint", targetFingerprint: "target-a", observedAt: new Date().toISOString(), evidenceId: evidence.evidenceId, evidenceHash: evidence.sha256 }; } };
     const control = new ControlPlane({ state, capabilities, adapters: new AdapterRegistry([adapter]), evidence: { findByIdAndHash() { return evidence; } }, authorityNodeId: AUTHORITY, leaseHeartbeatMs: 5000, leaseTtlMs: 60000, schedulerIntervalMs: 100, receiptAuthorityAllowlist: [{ capabilityId: fakeCapability.id, adapterId: adapter.id }] });
     const receipt = control.recordExplicitObservationReceipt({ tuple: fixture.run.tuple, sourceJobId: sourceJob.jobId, adapterReceiptId: "sealed-receipt" });
     assert.equal(receipt.status, "recorded");

@@ -9,11 +9,18 @@
       "online": true,
       "routingProfile": {
         "enabled": true,
-        "tags": ["slot:01"],
+        "tags": [
+          "slot:01"
+        ],
         "capabilityIds": [
           "xiaowei.device.list",
           "xiaowei.lab.raw",
-          "xhs.observe.metrics"
+          "xhs.observe.metrics",
+          "douyin.observe.snapshot",
+          "douyin.observe.search",
+          "douyin.like.dry_run",
+          "douyin.collect.dry_run",
+          "douyin.follow.dry_run"
         ]
       },
       "metadata": {
@@ -27,10 +34,18 @@
       "online": true,
       "routingProfile": {
         "enabled": true,
-        "tags": ["slot:02", "pilot:explorer"],
+        "tags": [
+          "slot:02",
+          "pilot:explorer"
+        ],
         "capabilityIds": [
           "xhs.explore.open_feed_note",
-          "xhs.observe.note_detail"
+          "xhs.observe.note_detail",
+          "douyin.observe.snapshot",
+          "douyin.observe.search",
+          "douyin.like.dry_run",
+          "douyin.collect.dry_run",
+          "douyin.follow.dry_run"
         ]
       },
       "metadata": {
@@ -40,7 +55,9 @@
           "selector": {
             "mode": "shadow",
             "pilotActors": [],
-            "pilotAliases": ["02"]
+            "pilotAliases": [
+              "02"
+            ]
           }
         }
       }

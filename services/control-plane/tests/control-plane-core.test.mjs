@@ -715,6 +715,7 @@ test("sent failures become ambiguous without automatic retry", async () => {
       throw error;
     },
     async restore() { return { ok: true }; },
+    async verify() { return { ok: true, mode: "state" }; },
   };
   const f = fixture({ capabilities: [manifest("test.ambiguous")], adapter });
   try {

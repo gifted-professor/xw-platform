@@ -1,0 +1,166 @@
+{
+  "schemaVersion": 1,
+  "capabilities": [
+    {
+      "schemaVersion": 1,
+      "id": "douyin.observe.snapshot",
+      "appId": "douyin",
+      "packageName": "com.ss.android.ugc.aweme",
+      "versionRange": "observed",
+      "maturity": "E2",
+      "risk": "R0",
+      "resources": ["device", "transport:xiaowei:22222"],
+      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+      "outputSchema": { "type": "object" },
+      "preconditions": [
+        "Douyin is installed on the device",
+        "GatewayOperator lease is available via control-plane job"
+      ],
+      "verification": {
+        "mode": "state",
+        "description": "foreground package is Douyin and a semantic snapshot with focus is returned"
+      },
+      "restoration": { "required": false, "description": "read-only observation; leaves Douyin in foreground" },
+      "timeoutMs": 60000,
+      "idempotency": "read_only",
+      "automationPolicy": { "mode": "automatic" },
+      "implementation": { "adapter": "douyin", "action": "snapshot" },
+      "evidence": [
+        "skills/douyin/SKILL.md",
+        "skills/douyin/douyin-like/SKILL.md (v1.0 verified @01 dry-run path uses same launch+dump)",
+        "skills/douyin/douyin-search/SKILL.md (v1.0 verified @01)"
+      ],
+      "availability": "implemented"
+    },
+    {
+      "schemaVersion": 1,
+      "id": "douyin.observe.search",
+      "appId": "douyin",
+      "packageName": "com.ss.android.ugc.aweme",
+      "versionRange": "observed",
+      "maturity": "E2",
+      "risk": "R0",
+      "resources": ["device", "transport:xiaowei:22222"],
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "keyword": { "type": "string", "minLength": 1, "maxLength": 40 }
+        },
+        "required": ["keyword"],
+        "additionalProperties": false
+      },
+      "outputSchema": { "type": "object" },
+      "preconditions": [
+        "Douyin is installed on the device",
+        "search is explore-only: never opens a result card or pages deeper"
+      ],
+      "verification": {
+        "mode": "state",
+        "description": "SearchResultActivity reached with 综合 tab present, then back to SplashActivity"
+      },
+      "restoration": {
+        "required": true,
+        "description": "operator backs to Splash shell; restore is a no-op if already home"
+      },
+      "timeoutMs": 120000,
+      "idempotency": "replay_safe",
+      "automationPolicy": { "mode": "automatic" },
+      "implementation": { "adapter": "douyin", "action": "search" },
+      "evidence": [
+        "skills/douyin/douyin-search/SKILL.md (v1.0 verified @01)",
+        "tmp-know/ACCEPTANCE-DOUYIN-SEARCH.md"
+      ],
+      "availability": "implemented"
+    },
+    {
+      "schemaVersion": 1,
+      "id": "douyin.like.dry_run",
+      "appId": "douyin",
+      "packageName": "com.ss.android.ugc.aweme",
+      "versionRange": "observed",
+      "maturity": "E2",
+      "risk": "R0",
+      "resources": ["device", "transport:xiaowei:22222"],
+      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+      "outputSchema": { "type": "object" },
+      "preconditions": [
+        "Douyin feed is reachable after launch",
+        "dry-run only: locate like rail button, never tap"
+      ],
+      "verification": {
+        "mode": "state",
+        "description": "like button located with likeState and locatedNotTapped=true"
+      },
+      "restoration": { "required": false, "description": "no UI mutation; leaves Douyin on feed" },
+      "timeoutMs": 90000,
+      "idempotency": "replay_safe",
+      "automationPolicy": { "mode": "automatic" },
+      "implementation": { "adapter": "douyin", "action": "like-dry-run" },
+      "evidence": [
+        "skills/douyin/douyin-like/SKILL.md",
+        "tmp-know/ACCEPTANCE-DOUYIN-LIKE.md"
+      ],
+      "availability": "implemented"
+    },
+    {
+      "schemaVersion": 1,
+      "id": "douyin.collect.dry_run",
+      "appId": "douyin",
+      "packageName": "com.ss.android.ugc.aweme",
+      "versionRange": "observed",
+      "maturity": "E2",
+      "risk": "R0",
+      "resources": ["device", "transport:xiaowei:22222"],
+      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+      "outputSchema": { "type": "object" },
+      "preconditions": [
+        "Douyin feed is reachable after launch",
+        "dry-run only: locate collect rail button, never tap"
+      ],
+      "verification": {
+        "mode": "state",
+        "description": "collect button located with collectState and locatedNotTapped=true"
+      },
+      "restoration": { "required": false, "description": "no UI mutation; leaves Douyin on feed" },
+      "timeoutMs": 90000,
+      "idempotency": "replay_safe",
+      "automationPolicy": { "mode": "automatic" },
+      "implementation": { "adapter": "douyin", "action": "collect-dry-run" },
+      "evidence": [
+        "skills/douyin/douyin-collect/SKILL.md",
+        "tmp-know/ACCEPTANCE-DOUYIN-COLLECT.md"
+      ],
+      "availability": "implemented"
+    },
+    {
+      "schemaVersion": 1,
+      "id": "douyin.follow.dry_run",
+      "appId": "douyin",
+      "packageName": "com.ss.android.ugc.aweme",
+      "versionRange": "observed",
+      "maturity": "E2",
+      "risk": "R0",
+      "resources": ["device", "transport:xiaowei:22222"],
+      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+      "outputSchema": { "type": "object" },
+      "preconditions": [
+        "Douyin feed is reachable after launch",
+        "dry-run only: locate follow rail button, never tap"
+      ],
+      "verification": {
+        "mode": "state",
+        "description": "follow button located with followState and locatedNotTapped=true"
+      },
+      "restoration": { "required": false, "description": "no UI mutation; leaves Douyin on feed" },
+      "timeoutMs": 90000,
+      "idempotency": "replay_safe",
+      "automationPolicy": { "mode": "automatic" },
+      "implementation": { "adapter": "douyin", "action": "follow-dry-run" },
+      "evidence": [
+        "skills/douyin/douyin-follow/SKILL.md",
+        "tmp-know/ACCEPTANCE-DOUYIN-COLLECT-FOLLOW.md"
+      ],
+      "availability": "implemented"
+    }
+  ]
+}

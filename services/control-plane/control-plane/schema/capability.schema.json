@@ -80,6 +80,20 @@
         "action": { "type": "string", "minLength": 1 }
       }
     },
-    "evidence": { "type": "array", "items": { "type": "string" } }
+    "evidence": { "type": "array", "items": { "type": "string" } },
+    "availability": {
+      "type": "string",
+      "enum": [
+        "implemented",
+        "canary_only",
+        "lab_only",
+        "disabled",
+        "observed",
+        "approval_gated",
+        "dependency_pending",
+        "dependency_pending_wechat_ocr"
+      ]
+    },
+    "description": { "type": "string" }
   }
 }

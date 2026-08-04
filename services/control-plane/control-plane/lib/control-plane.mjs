@@ -114,6 +114,8 @@ export class AdapterRegistry {
       if (!adapter?.id) throw new TypeError("adapter.id is required");
       if (this.adapters.has(adapter.id)) throw new TypeError(`duplicate adapter ${adapter.id}`);
       if (typeof adapter.execute !== "function") throw new TypeError(`${adapter.id}.execute is required`);
+      if (typeof adapter.verify !== "function") throw new TypeError(`${adapter.id}.verify is required`);
+      if (typeof adapter.restore !== "function") throw new TypeError(`${adapter.id}.restore is required`);
       this.adapters.set(adapter.id, adapter);
     }
   }

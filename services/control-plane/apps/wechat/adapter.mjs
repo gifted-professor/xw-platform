@@ -7,9 +7,27 @@ import { ControlPlaneError } from "../../control-plane/lib/errors.mjs";
 const root = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 const defaultScript = join(root, "scripts", "wechat-operator.mjs");
 
+function operatorEnv(leaseAuthorization) {
+  if (!leaseAuthorization?.leaseId || !leaseAuthorization?.token || !leaseAuthorization?.deviceId) {
+    throw new ControlPlaneError("LEASE_CONTEXT_REQUIRED", "WeChat adapter requires an active control-plane lease", {
+      status: 500,
+    });
+  }
+  return {
+    ...process.env,
+    XHS_OPERATOR_LEASE_ID: leaseAuthorization.leaseId,
+    XHS_OPERATOR_LEASE_TOKEN: leaseAuthorization.token,
+    XHS_OPERATOR_DEVICE_ID: leaseAuthorization.deviceId,
+    XHS_OPERATOR_CONTROL_URL: leaseAuthorization.controlUrl || "http://127.0.0.1:17920",
+  };
+}
+
 function argsFor(script, action, device, params, evidenceDirectory) {
   if (!device.runtimeId) {
     throw new ControlPlaneError("DEVICE_RUNTIME_ID_MISSING", "WeChat adapter needs a private runtime ID", { status: 503 });
+  }
+  if (!evidenceDirectory) {
+    throw new ControlPlaneError("EVIDENCE_DIR_REQUIRED", "WeChat adapter needs an evidence directory", { status: 500 });
   }
   const args = [script, action, "--serial", device.runtimeId, "--evidence-dir", evidenceDirectory];
   if (params.title) args.push("--title", String(params.title));
@@ -36,12 +54,12 @@ function evidenceFiles(output) {
 export function createWechatAdapter({ run = runJsonCommand, operatorPath = defaultScript } = {}) {
   return {
     id: "wechat",
-    async execute({ capability, device, params, evidenceDirectory }) {
+    async execute({ capability, device, params, evidenceDirectory, leaseAuthorization }) {
       requireFile(operatorPath, capability.id);
       const output = await run(
         process.execPath,
         argsFor(operatorPath, capability.implementation.action, device, params, evidenceDirectory),
-        { cwd: root, timeoutMs: capability.timeoutMs },
+        { cwd: root, timeoutMs: capability.timeoutMs, env: operatorEnv(leaseAuthorization) },
       );
       return { vendorCode: 0, output, evidenceFiles: evidenceFiles(output) };
     },
@@ -61,13 +79,13 @@ export function createWechatAdapter({ run = runJsonCommand, operatorPath = defau
       }
       return { ok: false, ambiguous: true, mode: "custom" };
     },
-    async restore({ capability, device, evidenceDirectory }) {
+    async restore({ capability, device, evidenceDirectory, leaseAuthorization }) {
       if (!capability.restoration.required) return { ok: true };
       requireFile(operatorPath, capability.id);
       const output = await run(
         process.execPath,
         argsFor(operatorPath, "restore", device, {}, evidenceDirectory),
-        { cwd: root, timeoutMs: 60000 },
+        { cwd: root, timeoutMs: 60000, env: operatorEnv(leaseAuthorization) },
       );
       return { ok: output?.ok === true, evidenceFiles: evidenceFiles(output) };
     },
