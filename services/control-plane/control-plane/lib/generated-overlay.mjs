@@ -10,6 +10,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 
 import { canonicalize, canonicalJson } from "./canonical.mjs";
+import { resolveRecipeExecutor } from "./recipe-interpreter.mjs";
 
 export const DEFAULT_OVERLAY_PATH =
   "C:\\Users\\Public\\xhs-agent-control\\generated-overlay\\recipe-catalog.json";
@@ -76,6 +77,12 @@ export function validateOverlayDocument(doc) {
     }
     if (r.executor == null || typeof r.executor !== "object") {
       return { ok: false, reason: `recipe_${i}_executor` };
+    }
+    // Phase 5: accept capability wrapper (default) or primitive_steps whitelist.
+    try {
+      resolveRecipeExecutor(r.executor);
+    } catch (e) {
+      return { ok: false, reason: `recipe_${i}_executor_invalid:${e?.message || e}` };
     }
     if (typeof r.riskCeiling !== "string" || !r.riskCeiling.trim()) {
       return { ok: false, reason: `recipe_${i}_riskCeiling` };

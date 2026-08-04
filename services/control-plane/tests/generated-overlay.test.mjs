@@ -160,3 +160,45 @@ test("shadow filter marks shadowOnly", () => {
   assert.equal(shadowed.length, 2);
   assert.ok(shadowed.every((r) => r.shadowOnly === true));
 });
+
+test("Phase 5: overlay accepts primitive_steps executor; rejects unknown kind", () => {
+  const okDoc = buildDoc({
+    recipes: [
+      {
+        recipeId: "recipe.primitive.demo",
+        revision: 1,
+        status: "canary_only",
+        executor: {
+          kind: "primitive_steps",
+          steps: [
+            { id: "s1", kind: "screenshot", params: { label: "home" } },
+            { id: "s2", kind: "back", params: {} },
+          ],
+        },
+        riskCeiling: "R0",
+        eligibleAliases: ["01"],
+        descriptorHash: "c".repeat(64),
+      },
+    ],
+  });
+  assert.equal(validateOverlayDocument(okDoc).ok, true);
+
+  const badDoc = buildDoc({
+    recipes: [
+      {
+        recipeId: "recipe.bad",
+        revision: 1,
+        status: "canary_only",
+        executor: {
+          kind: "primitive_steps",
+          steps: [{ id: "x", kind: "adbShell", params: {} }],
+        },
+        riskCeiling: "R0",
+        descriptorHash: "d".repeat(64),
+      },
+    ],
+  });
+  const bad = validateOverlayDocument(badDoc);
+  assert.equal(bad.ok, false);
+  assert.match(bad.reason, /executor_invalid/);
+});
