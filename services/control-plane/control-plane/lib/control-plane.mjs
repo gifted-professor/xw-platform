@@ -85,7 +85,11 @@ function resultSummary(execution, verification, restoration, error = null) {
     // 执行细节摘要（ok/step/verified/counts/text），便于 VERIFICATION_FAILED 时回溯，不落完整 dump
     output: out && typeof out === "object"
       ? Object.fromEntries(
-        ["ok", "step", "verified", "verifyMethod", "beforeCount", "afterCount", "text", "diagnostic"]
+        [
+          "ok", "step", "verified", "verifyMethod", "beforeCount", "afterCount", "text", "diagnostic",
+          // xhs.observe.feed redacted projection (no cards / author text)
+          "pageClass", "cardCount", "artifactRefs", "evidenceDebt",
+        ]
           .filter((k) => out[k] !== undefined)
           .map((k) => [k, out[k]]),
       )

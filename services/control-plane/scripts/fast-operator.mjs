@@ -21,7 +21,9 @@
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { createHash, randomUUID } from "node:crypto";
-import { writeSync } from "node:fs";
+import { mkdirSync, writeFileSync, writeSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { acquireTransportLock } from "../control-plane/lib/xiaowei-transport.mjs";
 import { ControlPlaneError } from "../control-plane/lib/errors.mjs";
 import { guardFinancialCommit } from "../control-plane/lib/financial-commit-classifier.mjs";
@@ -641,6 +643,7 @@ export class FastOperator {
         this.metrics.totalDumpMs += Date.now() - t0;
         doc._dumpMs = Date.now() - t0;
         doc._label = label;
+        doc._hierarchyXml = slice;
         return doc;
       }
       const idleFail = /could not get idle state|UiAutomator.*[Ee]rror|AndroidRuntime/i.test(xml)
@@ -871,6 +874,95 @@ export class FastOperator {
       await new Promise((r) => setTimeout(r, 500));
     }
     return { paused: true, activity: (await this.currentFocus()).activity };
+  }
+
+  // R0 observe.feed：dump + 脱敏投影字段；截图/UI dump 写失败只记 evidenceDebt，不改业务结果。
+  async observeFeedCards({ label } = {}) {
+    const evidenceDebt = [];
+    const evidenceFiles = [];
+    const evidenceDir = join(
+      process.env.XHS_FEED_EVIDENCE_DIR || join(tmpdir(), "xhs-feed-evidence"),
+      String(this.serial || "unknown").replace(/[^A-Za-z0-9_-]/g, "_"),
+    );
+    mkdirSync(evidenceDir, { recursive: true });
+    const stamp = Date.now();
+    const d = await this.feedDump({ label });
+    const cards = this.feedCards(d);
+    let pageClass = "xhs.unknown";
+    try {
+      const focus = await this.currentFocus();
+      if ((focus.activity || "").includes("IndexActivity")) {
+        pageClass = cards.length ? "xhs.feed.index" : "xhs.feed.index.empty";
+      } else if (focus.package === "com.xingin.xhs") {
+        pageClass = `xhs.activity.${String(focus.activity || "unknown").split(".").pop()}`;
+      }
+    } catch {
+      evidenceDebt.push({
+        layer: "adapter-evidence",
+        code: "FOCUS_UNAVAILABLE",
+        cause: "currentFocus failed during observe.feed; business result remains succeeded",
+      });
+    }
+    try {
+      const xml = d._hierarchyXml;
+      if (typeof xml === "string" && xml.includes("<hierarchy")) {
+        const dumpPath = join(evidenceDir, `xhs-feed-ui-dump-${stamp}.xml`);
+        writeFileSync(dumpPath, xml, "utf8");
+        evidenceFiles.push({
+          path: dumpPath,
+          kind: "ui_dump",
+          label: "xhs-feed-ui-dump",
+          exportAllowed: true,
+        });
+      } else {
+        evidenceDebt.push({
+          layer: "adapter-evidence",
+          code: "MISSING_UI_DUMP",
+          cause: "feed dump had no hierarchy xml to persist; business result remains succeeded",
+        });
+      }
+    } catch {
+      evidenceDebt.push({
+        layer: "adapter-evidence",
+        code: "MISSING_UI_DUMP",
+        cause: "ui dump write failed; business result remains succeeded",
+      });
+    }
+    try {
+      const shotPath = join(evidenceDir, `xhs-feed-screenshot-${stamp}.png`);
+      const png = typeof this.session.execOut === "function"
+        ? await this.session.execOut(["screencap", "-p"], 15000)
+        : null;
+      if (png && Buffer.isBuffer(png) ? png.length > 8 : String(png || "").length > 8) {
+        writeFileSync(shotPath, png);
+        evidenceFiles.push({
+          path: shotPath,
+          kind: "screenshot",
+          label: "xhs-feed-screenshot",
+          exportAllowed: false,
+        });
+      } else {
+        evidenceDebt.push({
+          layer: "adapter-evidence",
+          code: "MISSING_SCREENSHOT",
+          cause: "screencap returned empty; business result remains succeeded",
+        });
+      }
+    } catch {
+      evidenceDebt.push({
+        layer: "adapter-evidence",
+        code: "MISSING_SCREENSHOT",
+        cause: "screencap failed; business result remains succeeded",
+      });
+    }
+    return {
+      cards,
+      dumpMs: d._dumpMs,
+      pageClass,
+      cardCount: cards.length,
+      evidenceFiles,
+      evidenceDebt,
+    };
   }
 
   // feed dump：feed 内联视频自动播放也会让 uiautomator 拿不到 idle。失败时小滚一次把视频移出视口再重试。
@@ -2017,7 +2109,7 @@ export function serve(port, options = {}) {
         case "scrollUp": out = await op.scrollUp(q.n ?? 1, q.label); break;
         case "scrollN": out = await op.scrollN({ n: q.n ?? 1, down: q.down !== false, label: q.label }); break;
         case "tap": out = await op.tap(q.x, q.y); break;
-        case "feedCards": { const d = await op.feedDump({ label: q.label }); out = { cards: op.feedCards(d), dumpMs: d._dumpMs }; break; }
+        case "feedCards": out = await op.observeFeedCards({ label: q.label }); break;
         case "observeOpenNoteDetail": out = await op.observeOpenNoteDetail(); break;
         case "openFeedNote": out = await op.openFeedNote({ selector: q.selector ?? "any", index: q.index }); break;
         case "openCard": { const d = await op.dump({ label: "open" }); const cards = op.feedCards(d); const c = cards[q.idx ?? 0]; out = await op.openCard(c); break; }
