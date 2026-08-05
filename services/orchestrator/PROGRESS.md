@@ -1,8 +1,10 @@
 # xhs-registry 进度
 
-> 最后更新：2026-08-02 REX Phase 7 只读重放在 cmd-activity top locator 后仍被 serve 生命周期阻断（shadow/dual；7A 未通过，7B/支付未启动）
+> 最后更新：2026-08-05 抖音「搜索图片→复制分享链接」explore→repair→run 首次正式闭环
 
 ## 一句话现状（北极星，所有 agent 必读）
+
+**2026-08-05 抖音分享链接 explore→repair→run 首次正式闭环**：`douyin.observe.share_link` 已在默认 01 通过正式 leased job：搜索关键词 → 精确选择「图片」筛选 → 打开首个可见图片卡片 → 详情分享 → 「分享链接」 → 复制成功 UI → 搜索框回读唯一 `v.douyin.com` URL → 恢复原关键词 → 回 Douyin Splash → 控制面 returnHome。生产 `xhs-device-agent` **main / origin/main / task-launch.gitCommit** 已对齐 **`1e1d7f6cc423c8b7176ebbba199a18bfea58a161`**；runtime-critical **108/108**、release receipt/main-origin/content-hash gates 全绿，overlay 仍为 shadow。修复证据：PR #37（exact `ee453d33`，移除不稳定 Button class 假设，保留精确语义/几何/同 bounds 去重/多目标 fail-closed）与 PR #38（exact `e39140ad`，长分享文案恢复显式用有界 256 DEL，其他调用默认仍 48）均由 DeepSeek V4 Flash 独立 `APPROVE`。最终 job **`job_88bed837-f2e1-4ba3-b2f9-d4409ad198da`** / run **`run_69c48eb4-d73a-444d-8514-7810619dff84`** `succeeded`，`verification.ok=true`、`restoration.ok=true`、`returnHome.ok=true`，verification hash `3d47f55b…`；终态 01–04 ready、lease/job/审批均 0。Catalog 已正式收编 **`douyin.observe.share_link.wrap@1`**，服务器验真 receiptHash **`a39acaf3…`**，当前诚实状态为 **candidate / 1 个独立成功**；尚未达到第 2 独立 worker window，不能称 canary/implemented，overlay 未写入。知识库：`pitfall-douyin-share-link-filter-class-and-long-clipboard-20260805`、`recipe-douyin-search-image-share-link-20260805`。
 
 **愿景**：AI agent 原生公司——无人操控手机，每台/每群 agent 配真机，自动做运营、上架、客服回复等真实业务。
 **当前阶段**：基础设施已建成（身份/审批闸/知识库/scout 骨架/多模型路由/无人值守验收/手机面板），业务刚点火（首例控制面真评论 2026-07-24 已发出）。
