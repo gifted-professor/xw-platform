@@ -117,13 +117,14 @@ function commandArgs({ script, action, device, params, evidenceDirectory = null 
 export function createXianyuAdapter({ run = runJsonCommand, operatorPath = defaultScript } = {}) {
   return {
     id: "xianyu",
-    async execute({ capability, device, params, leaseAuthorization }) {
+    async execute({ capability, device, params, leaseAuthorization, evidenceDirectory = null }) {
       requireFile(operatorPath, capability.id);
       const output = await run(process.execPath, commandArgs({
         script: operatorPath,
         action: capability.implementation.action,
         device,
         params,
+        evidenceDirectory,
       }), { cwd: root, timeoutMs: capability.timeoutMs, env: operatorEnv(leaseAuthorization) });
       return { vendorCode: 0, output, evidenceFiles: evidenceFiles(output) };
     },

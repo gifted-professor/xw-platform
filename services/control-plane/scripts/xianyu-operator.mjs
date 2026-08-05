@@ -25,6 +25,11 @@ import {
   resolveTarget,
 } from "./vision-safety.mjs";
 import { classifyXianyuPage } from "./xianyu-page-classifier.mjs";
+import {
+  createProgressTracker,
+  DEFAULT_STALL_MS,
+  uiFingerprint,
+} from "./lib/stall-progress.mjs";
 
 const IDLEFISH_PACKAGE = "com.taobao.idlefish";
 const IDLEFISH_MAIN_ACTIVITY = "com.taobao.idlefish.maincontainer.activity.MainActivity";
@@ -468,18 +473,52 @@ export async function settle(ms = 1200) {
 /**
  * 任务内实时 supervisor：逐步打点 + expect 检查 + 有限次恢复。
  * Agent 执行与死脚本的分界：失败先维持，再决定是否升级，而不是闷头跑完再查 log。
+ *
+ * Progress survives ADAPTER_TIMEOUT via evidenceDir/progress.jsonl.
+ * Dump fingerprint unchanged ≥ stallMs → stall + llmEscalationRecommended
+ * (慢 vs 卡；接 LLM = 脚本路径失败/降级，不是常态油门)。
  */
-export function createStepSupervisor(op, { onEvent = null } = {}) {
+export function createStepSupervisor(op, {
+  onEvent = null,
+  evidenceDir = null,
+  stallMs = DEFAULT_STALL_MS,
+} = {}) {
   const events = [];
-  const emit = (payload) => {
-    const ev = { t: new Date().toISOString(), serial: op?.serial || null, ...payload };
+  const progress = createProgressTracker({ evidenceDir, stallMs });
+  const emit = (payload, { snap = null } = {}) => {
+    const progressNote = progress.note({
+      phase: payload?.phase || "note",
+      name: payload?.name ?? null,
+      step: payload?.step ?? null,
+      ok: Object.prototype.hasOwnProperty.call(payload || {}, "ok") ? payload.ok : null,
+      snap,
+      extra: {
+        attempt: payload?.attempt ?? null,
+        expectOk: payload?.expectOk ?? null,
+        reason: payload?.reason ?? null,
+        error: payload?.error ?? null,
+        maxAttempts: payload?.maxAttempts ?? null,
+      },
+    });
+    const ev = {
+      t: new Date().toISOString(),
+      serial: op?.serial || null,
+      dumpFingerprint: progressNote.dumpFingerprint,
+      stalled: progressNote.stalled,
+      unchangedMs: progressNote.unchangedMs,
+      llmEscalationRecommended: progressNote.llmEscalationRecommended,
+      diagnosisHint: progressNote.diagnosisHint,
+      ...payload,
+    };
     events.push(ev);
     // stdout is reserved for the one terminal JSON document consumed by the
-    // control-plane command runner. Progress diagnostics must stay on stderr.
+    // control-plane command runner. Progress must stay on stderr AND progress.jsonl
+    // (stderr is not persisted across ADAPTER_TIMEOUT).
     console.error(JSON.stringify({ event: "supervisor", ...ev }).slice(0, 1400));
     if (typeof onEvent === "function") {
       try { onEvent(ev); } catch { /* ignore listener errors */ }
     }
+    return ev;
   };
 
   /**
@@ -505,6 +544,8 @@ export function createStepSupervisor(op, { onEvent = null } = {}) {
         if (typeof expect === "function") {
           snap = await snapshot(op, `sup-expect-${name}-${attempt}`);
           expectOk = !!(await expect(snap, lastResult));
+        } else if (lastResult?.page?.focus || lastResult?.snap?.focus) {
+          snap = lastResult.page || lastResult.snap;
         }
         const stepOk = lastResult?.ok !== false && expectOk;
         emit({
@@ -514,14 +555,21 @@ export function createStepSupervisor(op, { onEvent = null } = {}) {
           step: lastResult?.step || null,
           ok: stepOk,
           expectOk,
-        });
-        if (stepOk) return { ...lastResult, supervisor: { name, attempt } };
+        }, { snap });
+        if (stepOk) {
+          return { ...lastResult, supervisor: { name, attempt }, stall: progress.summary() };
+        }
         if (attempt < maxAttempts && typeof recover === "function") {
-          emit({ phase: "recover", name, attempt, reason: lastResult?.step || "expect-failed" });
+          emit({ phase: "recover", name, attempt, reason: lastResult?.step || "expect-failed" }, { snap });
           await recover({ attempt, snap, result: lastResult });
           continue;
         }
-        return { ...lastResult, ok: critical ? false : lastResult?.ok, supervisor: { name, attempt } };
+        return {
+          ...lastResult,
+          ok: critical ? false : lastResult?.ok,
+          supervisor: { name, attempt },
+          stall: progress.summary(),
+        };
       } catch (e) {
         lastError = e;
         emit({ phase: "error", name, attempt, error: String(e.message || e) });
@@ -539,6 +587,7 @@ export function createStepSupervisor(op, { onEvent = null } = {}) {
           step: `${name}-threw`,
           error: String(e.message || e),
           supervisor: { name, attempt },
+          stall: progress.summary(),
         };
       }
     }
@@ -547,11 +596,21 @@ export function createStepSupervisor(op, { onEvent = null } = {}) {
       step: `${name}-exhausted`,
       error: lastError ? String(lastError.message || lastError) : null,
       supervisor: { name },
+      stall: progress.summary(),
     };
   }
 
-  return { run, emit, events };
+  return {
+    run,
+    emit,
+    events,
+    progress,
+    progressPath: progress.path,
+    stallSummary: () => progress.summary(),
+  };
 }
+
+export { uiFingerprint, DEFAULT_STALL_MS, createProgressTracker };
 
 /** 确保仍在闲鱼发闲置编辑页；掉到桌面/其它 App 时重拉 + open-publish。带页面指纹闸。 */
 export async function ensureOnPublishCompose(op, { maxAttempts = 2 } = {}) {
@@ -3960,7 +4019,7 @@ export async function publishDryRun(op, plan, {
   saveDraft = false,
 } = {}) {
   const optionsSaveDraft = saveDraft === true;
-  const sup = createStepSupervisor(op);
+  const sup = createStepSupervisor(op, { evidenceDir, stallMs: DEFAULT_STALL_MS });
   const summary = {
     ok: true,
     stoppedBeforePublish: !publish,
@@ -3969,6 +4028,10 @@ export async function publishDryRun(op, plan, {
     steps: {},
     evidence: {},
     supervisorEvents: sup.events,
+    progressPath: sup.progressPath,
+    progress: sup.progressPath
+      ? { path: sup.progressPath, kind: "progress", label: "xianyu-progress" }
+      : null,
   };
 
   const record = (key, result) => {
@@ -4003,9 +4066,16 @@ export async function publishDryRun(op, plan, {
   });
   record("open", opened);
   if (!opened.ok) {
+    summary.stall = sup.stallSummary();
+    if (summary.stall?.llmEscalationRecommended) {
+      summary.llmEscalationRecommended = true;
+      summary.diagnosisHint = summary.stall.diagnosisHint || "stuck_or_slow";
+    }
     return { ...summary, ok: false, step: opened.step || "open", stoppedBeforePublish: true };
   }
   let page = opened.page || await snapshot(op, "xianyu-publish-fill-start");
+  // Seed dump fingerprint so later unchanged UI can declare stall before wall timeout.
+  sup.emit({ phase: "ui-seed", name: "open", step: "opened" }, { snap: page });
 
   // 1. 图片
   if (skipUpload) {
@@ -4176,6 +4246,11 @@ export async function publishDryRun(op, plan, {
   if (!summary.ok) {
     const diagnostic = firstFailedPublishDiagnostic(summary.steps);
     if (diagnostic) summary.diagnostic = diagnostic;
+  }
+  summary.stall = sup.stallSummary();
+  if (summary.stall?.llmEscalationRecommended) {
+    summary.llmEscalationRecommended = true;
+    summary.diagnosisHint = summary.stall.diagnosisHint || "stuck_or_slow";
   }
   return summary;
 }
