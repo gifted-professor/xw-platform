@@ -27,7 +27,7 @@ depends:
 
 ```bash
 set XHS_LOCAL=1
-node ops/douyin-rail-set.mjs --aliases 01,02
+node ops/douyin-rail-set.mjs --session-dir <contexts-dir> --aliases 01,02
 ```
 
 同机第二起起带 `--no-force-stop`。biz：`op:douyin-rail-set`。

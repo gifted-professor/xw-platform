@@ -19,14 +19,14 @@ verified:
 
 ```bash
 # 默认输出到临时目录
-node ops/dump-ui.mjs --alias <01-04>
+node ops/dump-ui.mjs --alias <01-04> --session-file <explorer-session.json>
 
 # 保存到文件
-node ops/dump-ui.mjs --alias <01-04> --out /tmp/dump.xml
+node ops/dump-ui.mjs --alias <01-04> --session-file <explorer-session.json> --out /tmp/dump.xml
 
 # Windows 本地
 set XHS_LOCAL=1
-node ops/dump-ui.mjs --alias 01
+node ops/dump-ui.mjs --alias 01 --session-file <explorer-session.json>
 ```
 
 ## 参数

@@ -19,11 +19,11 @@ verified:
 
 ```bash
 # 快捷方向
-node ops/swipe.mjs --alias <01-04> --up
-node ops/swipe.mjs --alias <01-04> --down
+node ops/swipe.mjs --alias <01-04> --session-file <explorer-session.json> --up
+node ops/swipe.mjs --alias <01-04> --session-file <explorer-session.json> --down
 
 # 自定义起止坐标
-node ops/swipe.mjs --alias <01-04> --x1 540 --y1 1800 --x2 540 --y2 700 --ms 350
+node ops/swipe.mjs --alias <01-04> --session-file <explorer-session.json> --x1 540 --y1 1800 --x2 540 --y2 700 --ms 350
 ```
 
 ## 参数

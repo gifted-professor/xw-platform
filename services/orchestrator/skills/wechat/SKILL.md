@@ -129,7 +129,7 @@ verified: false
 1. 微信 Tab 顶栏放大镜 → `FTSMainUI`
 2. `input-text` 输入关键词 → 结果分栏：最常使用/联系人、群聊、聊天记录、收藏
 3. 点「联系人」进 `ChattingUI`；群聊行约 **Y=380**（本机 1080×2400，搜「问题解答群」时）
-4. 发消息：`input-text` 聚焦输入框 → `adb input tap ~990 2260` 点绿「发送」（`ops/tap` 易点到 `+`）
+4. 发消息：`input-text` 聚焦输入框 → 持同一 Explorer `--session-file` 用 `ops/tap.mjs --x 990 --y 2260` 点绿「发送」（坐标仅为历史线索，操作前先截图复核）
 
 ## 历史消息能力（结论）
 

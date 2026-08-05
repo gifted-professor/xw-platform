@@ -33,13 +33,13 @@ depends:
 ```bash
 # 推荐：只定位不点
 set XHS_LOCAL=1
-node ops/douyin-like.mjs --alias 01 --dry-run
+node ops/douyin-like.mjs --alias 01 --session-file <explorer-session.json> --dry-run
 
 # 真点赞（自主；会改赞状态）
-node ops/douyin-like.mjs --alias 01
+node ops/douyin-like.mjs --alias 01 --session-file <explorer-session.json>
 
 # 不 force-stop
-node ops/douyin-like.mjs --alias 01 --dry-run --no-force-stop
+node ops/douyin-like.mjs --alias 01 --session-file <explorer-session.json> --dry-run --no-force-stop
 ```
 
 ## 流程

@@ -29,7 +29,7 @@ const TAB_NAMES = ["综合", "视频", "用户", "图文", "直播", "团购"];
 
 const { opt, flag } = parseArgs(process.argv.slice(2));
 if (flag("--help") || flag("-h")) {
-  console.log(`用法: node ops/douyin-search.mjs --alias <01-04> --keyword <词> [--no-force-stop]
+  console.log(`用法: node ops/douyin-search.mjs --alias <01-04> --session-file <context.json> --keyword <词> [--no-force-stop]
 stdout: DOUYIN_SEARCH=ok TABS=综合,视频,用户,图文,直播,团购 COUNT=N FOCUS=SearchResultActivity
 只搜索+记录 Tabs/卡片数，不点开卡片、不翻页；back 回 Splash 壳。`);
   process.exit(0);
@@ -38,6 +38,8 @@ stdout: DOUYIN_SEARCH=ok TABS=综合,视频,用户,图文,直播,团购 COUNT=N 
 const alias = opt("--alias");
 const keyword = opt("--keyword") || opt("--text");
 const ssh = opt("--ssh", "xhs-windows");
+const sessionFile = opt("--session-file");
+if (!sessionFile) { console.log("✗ need --session-file"); process.exit(4); }
 const forceStop = !flag("--no-force-stop");
 if (!alias || !keyword) {
   console.log("✗ need --alias --keyword");
@@ -49,7 +51,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function runOps(args, timeoutMs = 120000) {
   return new Promise((resolve) => {
     const t0 = Date.now();
-    const p = spawn("node", args, { cwd: ROOT });
+    const childArgs = args.includes("--session-file") ? args : [...args, "--session-file", sessionFile];
+    const p = spawn("node", childArgs, { cwd: ROOT });
     let out = "";
     const timer = setTimeout(() => {
       try { p.kill("SIGKILL"); } catch {}

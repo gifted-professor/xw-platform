@@ -21,7 +21,7 @@ const PKG = "com.xingin.xhs";
 
 const { opt, flag } = parseArgs(process.argv.slice(2));
 if (flag("--help") || flag("-h")) {
-  console.log(`用法: node ops/xhs-publish-draft.mjs --alias <01-04> [--caption 文案] [--publish]
+  console.log(`用法: node ops/xhs-publish-draft.mjs --alias <01-04> --session-file <context.json> [--caption 文案] [--publish]
 选1图+填文案，默认不点发布；--publish 经人授权才点。`);
   process.exit(0);
 }
@@ -29,6 +29,8 @@ if (flag("--help") || flag("-h")) {
 const alias = opt("--alias");
 const caption = opt("--caption") || "自动化草稿测试，不会发布";
 const ssh = opt("--ssh", "xhs-windows");
+const sessionFile = opt("--session-file");
+if (!sessionFile) { console.log("✗ need --session-file"); process.exit(4); }
 const forceStop = !flag("--no-force-stop");
 const doPublish = flag("--publish");
 if (!alias) {
@@ -41,7 +43,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function runOps(args, timeoutMs = 360000) {
   return new Promise((resolve) => {
     const t0 = Date.now();
-    const p = spawn("node", args, { cwd: ROOT });
+    const childArgs = args.includes("--session-file") ? args : [...args, "--session-file", sessionFile];
+    const p = spawn("node", childArgs, { cwd: ROOT });
     let out = "";
     const timer = setTimeout(() => {
       try {

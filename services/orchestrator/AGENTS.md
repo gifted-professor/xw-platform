@@ -71,9 +71,10 @@ AGENTS/modes/skills 路由说明 > 尚未迁移的 App 子 Skill Markdown。
 | 要做的事 | 默认命令（cwd = 本仓 xhs-registry，除非注明） |
 |----------|-----------------------------------------------|
 | 看 live | `ssh xhs-windows 'curl.exe -s http://127.0.0.1:17930/agent-entry.md'` |
-| **探索开工检查** | `node ops/explore-preflight.mjs --alias 01` |
-| **探索截屏（一步）** | `node ops/screenshot-and-analyze.mjs --alias 01` → `SHOT=…` |
-| **探索 dump/点/输入/焦点/开 App** | `ops/dump-ui.mjs` / `tap.mjs` / `input-text.mjs` / `focus.mjs` / `launch-app.mjs`（lab 22222，见 `modes/explorer.md`） |
+| **探索占用登记** | `node ops/xw-explore-session.mjs acquire --alias <alias> --actor <actor> --session-file "$env:USERPROFILE\.xhs-explorer-sessions\<run>-<alias>.json"`；结束必须 `release` |
+| **探索开工检查** | `node ops/explore-preflight.mjs --alias <alias> --session-file <same.json>` |
+| **探索截屏（一步）** | `node ops/screenshot-and-analyze.mjs --alias <alias> --session-file <same.json>` → `SHOT=…` |
+| **探索 dump/点/输入/焦点/开 App** | 所有 `ops/dump-ui.mjs` / `tap.mjs` / `input-text.mjs` / `focus.mjs` / `launch-app.mjs` 必须带同一 `--session-file`（见 `modes/explorer.md`） |
 | **01/02 full_dry_run 并发（临时默认）** | `node ops/conc2-full-dry-run.mjs --actor <you>-conc2` |
 | 同上只预检 | `node ops/conc2-full-dry-run.mjs --actor <you>-conc2 --dry-run` |
 | 隔离后 main-safe 清 | `node ops/recover-main-safe.mjs --job <jobId> --actor <you>` |

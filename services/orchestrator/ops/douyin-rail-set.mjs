@@ -9,7 +9,7 @@
  * biz: op="douyin-rail-set"
  */
 import { spawn } from "node:child_process";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "./_explore-lib.mjs";
 import { bizRecord } from "./_biz-trace.mjs";
@@ -25,12 +25,14 @@ const OPS = [
 
 const { opt, flag } = parseArgs(process.argv.slice(2));
 if (flag("--help") || flag("-h")) {
-  console.log(`用法: node ops/douyin-rail-set.mjs [--aliases 01,02] [--no-force-stop]
+  console.log(`用法: node ops/douyin-rail-set.mjs --session-dir <contexts-dir> [--aliases 01,02] [--no-force-stop]
 每机串行 like→collect→follow --dry-run；汇总 PASS/FAIL。默认 aliases=01,02。`);
   process.exit(0);
 }
 
 const ssh = opt("--ssh", "xhs-windows");
+const sessionDir = opt("--session-dir");
+if (!sessionDir) { console.log("✗ need --session-dir containing <alias>.json contexts"); process.exit(4); }
 const forceStop = !flag("--no-force-stop");
 const aliases = String(opt("--aliases", "01,02"))
   .split(/[,:\s]+/)
@@ -86,7 +88,7 @@ async function main() {
   for (const alias of aliases) {
     console.log(`=== alias=${alias} ===`);
     for (const op of OPS) {
-      const args = [op.script, "--alias", alias, "--dry-run", "--ssh", ssh];
+      const args = [op.script, "--alias", alias, "--session-file", resolve(sessionDir, `${alias}.json`), "--dry-run", "--ssh", ssh];
       // 每 op 都 force-stop：同机连跑否则 a11y/dump 易死（01 实测）
       if (!forceStop) args.push("--no-force-stop");
       const r = await runOps(args, 180000);

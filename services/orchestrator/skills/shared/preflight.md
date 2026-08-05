@@ -5,13 +5,11 @@
 ## 一键检查
 
 ```bash
-# Mac（默认 SSH）
-node ops/explore-preflight.mjs --alias 01
-
-# Windows 本地
+# Windows 本地：先 acquire 正式 session；单独 preflight 只体检，不授权碰机
 set XHS_LOCAL=1
-node ops/explore-preflight.mjs --alias 01
-# 或: node ops/explore-preflight.mjs --alias 01 --local
+$xwSession = "$env:USERPROFILE\.xhs-explorer-sessions\xw-explore-<runId>-01.json"
+node ops/xw-explore-session.mjs acquire --alias 01 --actor <actor> --session-file $xwSession
+node ops/explore-preflight.mjs --alias 01 --session-file $xwSession
 ```
 
 ## 检查项

@@ -26,8 +26,8 @@ depends:
 
 ```bash
 set XHS_LOCAL=1
-node ops/douyin-follow.mjs --alias 01 --dry-run
-node ops/douyin-follow.mjs --alias 01
+node ops/douyin-follow.mjs --alias 01 --session-file <explorer-session.json> --dry-run
+node ops/douyin-follow.mjs --alias 01 --session-file <explorer-session.json>
 ```
 
 ## 流程

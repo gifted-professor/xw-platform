@@ -19,10 +19,10 @@ verified:
 
 ```bash
 # 启动小红书
-node ops/launch-app.mjs --alias <01-04> --package com.xingin.xhs
+node ops/launch-app.mjs --alias <01-04> --session-file <explorer-session.json> --package com.xingin.xhs
 
 # 启动闲鱼（指定 Activity）
-node ops/launch-app.mjs --alias <01-04> --package com.taobao.idlefish --activity com.taobao.idlefish.maincontainer.activity.MainActivity
+node ops/launch-app.mjs --alias <01-04> --session-file <explorer-session.json> --package com.taobao.idlefish --activity com.taobao.idlefish.maincontainer.activity.MainActivity
 ```
 
 ## 参数

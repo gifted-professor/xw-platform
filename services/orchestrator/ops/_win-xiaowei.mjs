@@ -6,6 +6,11 @@
 import { writeFileSync, mkdirSync, appendFileSync, copyFileSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import * as readline from "node:readline";
+import {
+  assertExplorerSessionIdentity,
+  explorerSessionIdentity,
+  verifyExplorerSession,
+} from "./_explore-lease.mjs";
 
 const argv = process.argv.slice(2);
 const opt = (n, fb = null) => {
@@ -20,8 +25,31 @@ const serial = opt("--serial");
 const action = opt("--action");
 const traceAlias = opt("--alias", null); // 调用方注入：设备 01-04
 const traceTag = opt("--tag", null);     // 调用方注入：脚本名，如 xhs-like-one
+const sessionFile = opt("--session-file", null);
+let pinnedExplorerIdentity = null;
 if (!serial || !action) {
   console.log(JSON.stringify({ ok: false, error: "need --serial and --action" }));
+  process.exit(2);
+}
+if (!sessionFile) {
+  console.log(JSON.stringify({ ok: false, error: "CONTROL_LEASE_REQUIRED: --session-file is required" }));
+  process.exit(2);
+}
+async function assertActiveExplorerLease() {
+  const authorization = await verifyExplorerSession({ contextPath: sessionFile, alias: traceAlias });
+  if (authorization.serial !== serial) {
+    throw Object.assign(new Error("EXPLORER_SESSION_SERIAL_MISMATCH"), { code: "EXPLORER_SESSION_SERIAL_MISMATCH" });
+  }
+  const currentIdentity = explorerSessionIdentity(authorization);
+  if (pinnedExplorerIdentity === null) {
+    pinnedExplorerIdentity = currentIdentity;
+  } else assertExplorerSessionIdentity(pinnedExplorerIdentity, authorization);
+  return authorization;
+}
+try {
+  await assertActiveExplorerLease();
+} catch (error) {
+  console.log(JSON.stringify({ ok: false, error: `${error.code || "CONTROL_LEASE_REQUIRED"}: ${error.message}` }));
   process.exit(2);
 }
 
@@ -89,6 +117,9 @@ function sleep(ms) {
 }
 
 async function xwInvoke(payload, timeoutMs = 25000) {
+  // Revalidate immediately before every raw transport request, not only once per
+  // high-level REPL dispatch. This narrows expiry/release windows for multi-step ops.
+  await assertActiveExplorerLease();
   const WS = globalThis.WebSocket;
   if (typeof WS !== "function") throw new Error("WebSocket unavailable");
   return new Promise((resolve, reject) => {
@@ -380,6 +411,7 @@ async function runRepl() {
       return;
     }
     try {
+      await assertActiveExplorerLease();
       const r = await dispatch(req);
       process.stdout.write(JSON.stringify(r) + "\n");
     } catch (e) {

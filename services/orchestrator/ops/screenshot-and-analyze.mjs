@@ -1,10 +1,8 @@
 #!/usr/bin/env node
-// 一步截屏到本地路径（Mac SSH 或 Windows 本地均可）
+// 一步截屏到本地路径（经 session_action screen primitive）
 //
-//   node ops/screenshot-and-analyze.mjs --alias 01
-//   node ops/screenshot-and-analyze.mjs --alias 01 --out /tmp/a.png
-//   node ops/screenshot-and-analyze.mjs --alias 01 --local
-//   node ops/screenshot-and-analyze.mjs --alias 01 --analyze   # 可选：调本地 analyze.py
+//   node ops/screenshot-and-analyze.mjs --alias 01 --session-file <ctx>
+//   node ops/screenshot-and-analyze.mjs --alias 01 --session-file <ctx> --out /tmp/a.png
 //
 // stdout 含一行: SHOT=/abs/path.png
 // exit: 0 ok | 2 设备不行 | 4 客户端
@@ -14,29 +12,29 @@ import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import {
+  authorizeExplorerLease,
   parseArgs,
   resolveDevice,
-  ensureWinHelper,
-  runWinXiaowei,
-  parseJsonLine,
-  scpFrom,
+  runExplorerPrimitive,
   isLocalMode,
 } from "./_explore-lib.mjs";
+import { copyExplorerEvidence } from "./_explore-session-action.mjs";
 
 const { opt, flag } = parseArgs(process.argv.slice(2));
+const SESSION_FILE = opt("--session-file");
 
 if (flag("--help") || flag("-h")) {
   console.log(`用法: node ops/screenshot-and-analyze.mjs --alias <01-04> [选项]
 
 选项:
+  --session-file <context.json>  必填；由 xw-explore-session acquire 生成
   --ssh xhs-windows
   --local               本机直跑（Windows；也可用 XHS_LOCAL=1）
   --out <local.png>     默认 %TEMP%/xhs-explore/<alias>-<ts>.png
   --analyze             若存在 visual-grounding-poc，对截图跑 analyze.py
   --vgp <path>          默认 ~/Desktop/Coding/visual-grounding-poc
 
-环境: Mac=SSH / Windows=本地短路；截屏封装在 ops/_win-screencap.mjs → 22222。
-禁止手搓逐步 scp——用本脚本。`);
+经 xiaowei.explorer.primitive session_action（screen）；不直连 22222/ADB。`);
   process.exit(0);
 }
 
@@ -53,40 +51,20 @@ if (!ALIAS) {
 }
 
 try {
+  await authorizeExplorerLease(SSH, ALIAS, SESSION_FILE);
   const { serial } = resolveDevice(SSH, ALIAS);
-  const helper = ensureWinHelper(SSH, "_win-screencap.mjs");
-  const remotePng = `C:/Users/Public/xhs-agent-runs/_explore/shot-${ALIAS}-${TS}.png`;
-
-  let raw;
-  try {
-    raw = runWinXiaowei(SSH, helper, ["--serial", serial, "--out", remotePng]);
-  } catch (e) {
-    const msg = `${e.message || e}`.slice(0, 500);
-    console.log(`✗ screencap failed: ${msg}`);
-    process.exit(2);
-  }
-
-  let meta;
-  try {
-    meta = parseJsonLine(raw);
-  } catch {
-    console.log(`✗ bad screencap response: ${String(raw).slice(0, 200)}`);
-    process.exit(4);
-  }
-  if (!meta.ok) {
-    console.log(`✗ ${meta.error || "screencap not ok"}`);
-    process.exit(2);
-  }
-
-  scpFrom(SSH, remotePng.replace(/\\/g, "/"), OUT);
+  const result = await runExplorerPrimitive({ primitive: "screen" });
+  copyExplorerEvidence(result, "screen.png", OUT);
   if (!existsSync(OUT)) {
-    console.log(`✗ ${isLocalMode() ? "本地拷贝" : "scp"} 后文件不存在`);
+    console.log(`✗ evidence copy 后文件不存在`);
     process.exit(4);
   }
 
   console.log(`SHOT=${OUT}`);
+  console.log(`JOB=${result.jobId}`);
   console.log(`SERIAL=${serial}`);
   console.log(`ALIAS=${ALIAS}`);
+  console.log(`MODE=${isLocalMode() ? "local" : "ssh"}`);
 
   if (ANALYZE) {
     const pyUnix = join(VGP, ".venv", "bin", "python");

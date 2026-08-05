@@ -25,8 +25,8 @@ depends:
 
 ```bash
 set XHS_LOCAL=1
-node ops/douyin-follow-set.mjs
-node ops/douyin-follow-set.mjs --aliases 01,02
+node ops/douyin-follow-set.mjs --session-dir <contexts-dir>
+node ops/douyin-follow-set.mjs --session-dir <contexts-dir> --aliases 01,02
 ```
 
 出口：`ok`/`partial` → 0；全灭 → 2。biz：`op:douyin-follow-set`。

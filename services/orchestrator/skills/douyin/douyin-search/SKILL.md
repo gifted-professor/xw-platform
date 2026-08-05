@@ -28,14 +28,14 @@ depends:
 
 ```bash
 # Mac（默认 SSH → Windows）
-node ops/douyin-search.mjs --alias 01 --keyword 阿勒泰
+node ops/douyin-search.mjs --alias 01 --session-file <explorer-session.json> --keyword 阿勒泰
 
 # 不 force-stop（沿用当前前台）
-node ops/douyin-search.mjs --alias 01 --keyword 阿勒泰 --no-force-stop
+node ops/douyin-search.mjs --alias 01 --session-file <explorer-session.json> --keyword 阿勒泰 --no-force-stop
 
 # Windows 本机
 set XHS_LOCAL=1
-node ops/douyin-search.mjs --alias 01 --keyword 阿勒泰
+node ops/douyin-search.mjs --alias 01 --session-file <explorer-session.json> --keyword 阿勒泰
 ```
 
 ## 流程

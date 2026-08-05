@@ -6,7 +6,7 @@
 
 | ID | 项 | 结果 |
 |----|-----|------|
-| C1 | `explore-preflight.mjs --alias 01` | exit 0，`mode=local`，22222 detected |
+| C1 | `explore-preflight.mjs --alias 01 --session-file <active-context>` | exit 0，`mode=local`，正式 lease 可见，22222 detected |
 | C2 | focus / dump-ui / screenshot / swipe / back / shell | 全部 exit 0 |
 | C3 | `xhs-like-one --dry-run` | LIKE=dry-run，located-not-tapped（**依赖设备初始状态**：须能进笔记详情并 dump 到点赞按钮；若停在搜索页等，可能 `LIKE=fail REASON=like_btn_missing`——属业务定位，与本地/SSH 无关） |
 | C3 | `xhs-collect-one --dry-run` | COLLECT=dry-run |

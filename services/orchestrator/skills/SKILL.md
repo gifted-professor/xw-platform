@@ -123,17 +123,14 @@ AGENTS/modes/skills 路由说明 > 尚未迁移的 App 子 Skill Markdown。
 ## 开工前
 
 ```bash
-# Mac（默认 SSH → Windows）
-node ops/explore-preflight.mjs --alias 01
-
-# Windows（本机直连，不经 SSH）
+# Windows（Explorer 必须先持有正式可见 lease；context 只能放用户私有目录）
 set XHS_LOCAL=1
-node ops/explore-preflight.mjs --alias 01
-# 或: node ops/explore-preflight.mjs --alias 01 --local
-# win32 下也可省略开关（自动本地）
+$xwSession = "$env:USERPROFILE\.xhs-explorer-sessions\xw-explore-<runId>-01.json"
+node ops/xw-explore-session.mjs acquire --alias 01 --actor <actor> --session-file $xwSession
+node ops/explore-preflight.mjs --alias 01 --session-file $xwSession
 ```
 
-**检查通过就直接动手，不要先问「我能不能做」。**
+**只有 acquire + preflight 都通过才可碰机；结束必须 release。** Mac 治理侧不碰设备。
 
 ## 进化机制
 

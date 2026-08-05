@@ -18,7 +18,7 @@ verified:
 ## 用法
 
 ```bash
-node ops/screenshot-and-analyze.mjs --alias <01-04>
+node ops/screenshot-and-analyze.mjs --alias <01-04> --session-file <explorer-session.json>
 ```
 
 ## 参数

@@ -34,10 +34,10 @@ depends:
 
 ```bash
 # 填草稿但不发布（默认安全模式）
-node ops/xhs-publish-draft.mjs --alias <01-04> --caption "文案内容"
+node ops/xhs-publish-draft.mjs --alias <01-04> --session-file <explorer-session.json> --caption "文案内容"
 
 # 经授权后真发布（不可逆！）
-node ops/xhs-publish-draft.mjs --alias <01-04> --caption "文案内容" --publish
+node ops/xhs-publish-draft.mjs --alias <01-04> --session-file <explorer-session.json> --caption "文案内容" --publish
 ```
 
 ## 参数

@@ -3,6 +3,11 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, existsSync, readdirSync, renameSync, copyFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import {
+  assertExplorerSessionIdentity,
+  explorerSessionIdentity,
+  verifyExplorerSession,
+} from "./_explore-lease.mjs";
 
 const argv = process.argv.slice(2);
 const opt = (n) => {
@@ -11,14 +16,33 @@ const opt = (n) => {
 };
 const serial = opt("--serial");
 const out = opt("--out");
-if (!serial || !out) {
-  console.log(JSON.stringify({ ok: false, error: "need --serial and --out" }));
+const alias = opt("--alias");
+const sessionFile = opt("--session-file");
+let pinnedExplorerIdentity = null;
+if (!serial || !out || !alias || !sessionFile) {
+  console.log(JSON.stringify({ ok: false, error: "need --serial, --out, --alias and --session-file" }));
+  process.exit(2);
+}
+
+async function assertActiveExplorerLease() {
+  const authorization = await verifyExplorerSession({ contextPath: sessionFile, alias });
+  if (authorization.serial !== serial) throw new Error("EXPLORER_SESSION_SERIAL_MISMATCH");
+  const currentIdentity = explorerSessionIdentity(authorization);
+  if (pinnedExplorerIdentity === null) pinnedExplorerIdentity = currentIdentity;
+  else assertExplorerSessionIdentity(pinnedExplorerIdentity, authorization);
+  return authorization;
+}
+try {
+  await assertActiveExplorerLease();
+} catch (error) {
+  console.log(JSON.stringify({ ok: false, error: `${error.code || "CONTROL_LEASE_REQUIRED"}: ${error.message}` }));
   process.exit(2);
 }
 
 mkdirSync(dirname(out), { recursive: true });
 
 async function viaXiaowei() {
+  await assertActiveExplorerLease();
   const dir = join(dirname(out), `_gwshot_${String(serial).replace(/[^A-Za-z0-9_-]/g, "_")}`);
   mkdirSync(dir, { recursive: true });
   const before = new Set(readdirSync(dir).filter((f) => /\.png$/i.test(f)));
@@ -72,7 +96,7 @@ async function viaXiaowei() {
   return { method: "xiaowei-Screen", src: found };
 }
 
-function viaAdb() {
+async function viaAdb() {
   const ADB_CANDIDATES = [
     process.env.ADB_PATH,
     "D:\\download\\lvjian\\tools\\adb.exe",
@@ -95,10 +119,12 @@ function viaAdb() {
   }
   if (!adb) throw new Error("adb not found");
   const remote = "/sdcard/xhs_explore_tmp.png";
+  await assertActiveExplorerLease();
   execFileSync(adb, ["-s", serial, "shell", "screencap", "-p", remote], {
     stdio: ["ignore", "pipe", "pipe"],
     timeout: 20000,
   });
+  await assertActiveExplorerLease();
   execFileSync(adb, ["-s", serial, "pull", remote, out], {
     stdio: ["ignore", "pipe", "pipe"],
     timeout: 30000,
@@ -113,7 +139,7 @@ try {
     meta = await viaXiaowei();
   } catch (e1) {
     try {
-      meta = viaAdb();
+      meta = await viaAdb();
       meta.fallbackFrom = String(e1.message || e1).slice(0, 160);
     } catch (e2) {
       console.log(JSON.stringify({
