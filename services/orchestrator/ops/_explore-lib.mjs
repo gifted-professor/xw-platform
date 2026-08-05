@@ -1,12 +1,16 @@
 // 双端共享：alias→serial、helper、调 _win-xiaowei
 // Mac = SSH/SCP；Windows = 本地短路（XHS_LOCAL=1 / --local / win32 自动）
-import { execFileSync, spawn } from "node:child_process";
-import { createInterface } from "node:readline";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync, statSync, copyFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { verifyExplorerSession } from "./_explore-lease.mjs";
+import {
+  copyExplorerEvidence,
+  executeExplorerSessionAction,
+  mapExplorerOpToPrimitive,
+} from "./_explore-session-action.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -66,17 +70,8 @@ export function parseArgs(argv) {
   return { opt, flag };
 }
 
-// 推导调用本 lib 的脚本名（如 xhs-like-one），供 trace --tag 使用。
-function callerScriptName() {
-  try {
-    const p = process.argv[1];
-    if (!p) return null;
-    return String(p).split(/[\\/]/).pop().replace(/\.mjs$/, "") || null;
-  } catch { return null; }
-}
-
 /**
- * 本地模式：不经 SSH，本机直连 17930/17920/22222 + 本机 node helper。
+ * 本地模式：不经 SSH，本机直连 17930/17920 + session_action（不再直连 22222）。
  * 触发：XHS_LOCAL=1 | --local | win32 自动；XHS_LOCAL=0 显式关掉自动。
  */
 export function isLocalMode(argv = process.argv) {
@@ -203,56 +198,36 @@ export function ensureWinHelper(ssh, localName = "_win-xiaowei.mjs") {
 }
 
 export function runWinXiaowei(ssh, remoteHelper, args) {
-  const finalArgs = [...args];
-  const serialIndex = finalArgs.indexOf("--serial");
-  const serial = serialIndex >= 0 ? finalArgs[serialIndex + 1] : null;
-  requireTransportAuthorization({ serial });
-  if (!finalArgs.includes("--session-file")) {
-    finalArgs.push("--session-file", explorerAuthorization.path);
-  }
-  if (!finalArgs.includes("--alias")) {
-    finalArgs.push("--alias", explorerAuthorization.alias);
-  }
-  // 注入调用方脚本名供 trace --tag；alias 由调用方可选传（原子脚本暂无则跳过）
-  const scriptName = callerScriptName();
-  if (scriptName && !finalArgs.includes("--tag")) {
-    finalArgs.push("--tag", scriptName);
-  }
-  try {
-    if (isLocalMode()) {
-      return execFileSync(process.execPath, [remoteHelper, ...finalArgs], {
-        encoding: "utf8",
-        maxBuffer: 16 * 1024 * 1024,
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-    }
-    return execFileSync("ssh", [...SSH_OPTS, ssh, "node", remoteHelper, ...finalArgs], {
-      encoding: "utf8",
-      maxBuffer: 16 * 1024 * 1024,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-  } catch (e) {
-    const msg = `${e.stdout || ""}${e.stderr || e.message || ""}`;
-    throw new Error(msg.slice(0, 800));
-  }
+  // Fail closed: Explorer device I/O must go through control-plane session actions.
+  // Keep the CONTROL_LEASE_REQUIRED gate for callers that never authorized.
+  requireTransportAuthorization();
+  throw Object.assign(
+    new Error("EXPLORER_RAW_HELPER_DISABLED: use openWinXwSession / executeExplorerSessionAction (no direct 22222/ADB)"),
+    { code: 2, controlCode: "EXPLORER_RAW_HELPER_DISABLED" },
+  );
 }
 
 /**
  * adb shell via Xiaowei. Always send command as --cmd-b64 so spaces survive SSH.
  * Returns parsed JSON line from _win-xiaowei.
+ * @deprecated arbitrary shell is not a bounded Explorer primitive — fail closed.
  */
 export function runWinShell(ssh, serial, cmd, remoteHelper = null) {
-  const helper = remoteHelper || ensureWinHelper(ssh);
-  const b64 = Buffer.from(String(cmd), "utf8").toString("base64");
-  const raw = runWinXiaowei(ssh, helper, [
-    "--serial",
-    serial,
-    "--action",
-    "shell",
-    "--cmd-b64",
-    b64,
-  ]);
-  return parseJsonLine(raw);
+  requireTransportAuthorization({ serial });
+  throw Object.assign(
+    new Error("EXPLORER_SHELL_NOT_BOUNDED: arbitrary shell is not an Explorer primitive"),
+    { code: 2, controlCode: "EXPLORER_SHELL_NOT_BOUNDED" },
+  );
+}
+
+export async function runExplorerPrimitive(params, { idempotencyKey = null } = {}) {
+  const auth = requireTransportAuthorization();
+  return executeExplorerSessionAction({
+    contextPath: auth.path,
+    alias: auth.alias,
+    params,
+    idempotencyKey,
+  });
 }
 
 export function parseJsonLine(raw) {
@@ -290,81 +265,51 @@ export function parseKVLines(text) {
 }
 
 /**
- * 常驻 pipe session：Mac 开一条 ssh channel + node repl；Windows 本地直接 spawn node repl。
- * 单动作延迟从 ~1.2s（每动作新握手）降到 ~0.2s（只走本地 WS 回环）。
- * 无锁、无新服务生命周期——pipe 由调用方 own，close() 即结束。
+ * Explorer session action client (replaces raw 22222 REPL).
+ * Same surface as the old helper: ready / cmd / close / serial.
+ * Each cmd() is one formal control-plane session_action.
  *
- *   const s = await openWinXwSession(ssh, alias);
+ *   const s = openWinXwSession(ssh, alias);
+ *   await s.ready;
  *   await s.cmd({ op: "tap", x: 540, y: 1200 });
- *   await s.cmd({ op: "back", times: 2 });
  *   s.close();
  */
 export function openWinXwSession(ssh, alias) {
-  requireTransportAuthorization({ alias });
+  const auth = requireTransportAuthorization({ alias });
   const { serial } = resolveDevice(ssh, alias);
-  const helper = ensureWinHelper(ssh);
-  const scriptName = callerScriptName();
-  const replArgs = ["--serial", serial, "--action", "repl", "--alias", alias];
-  replArgs.push("--session-file", explorerAuthorization.path);
-  if (scriptName) replArgs.push("--tag", scriptName);
-  const child = isLocalMode()
-    ? spawn(process.execPath, [helper, ...replArgs], {
-        stdio: ["pipe", "pipe", "ignore"],
-      })
-    : spawn("ssh", [...SSH_OPTS, ssh, "node", helper, ...replArgs], {
-        stdio: ["pipe", "pipe", "ignore"],
-      });
-  const pending = [];
-  const rl = createInterface({ input: child.stdout });
-  const readyResolvers = [];
-  rl.on("line", (line) => {
-    if (readyResolvers.length) {
-      try {
-        const j = JSON.parse(line);
-        if (j.action === "repl-ready") {
-          readyResolvers.shift()(j);
-          return;
-        }
-      } catch { /* not the ready line */ }
-    }
-    const r = pending.shift();
-    if (r) r(line);
-  });
   let closed = false;
-  const ready = new Promise((resolveP, reject) => {
-    readyResolvers.push(resolveP);
-    const t = setTimeout(() => reject(new Error("repl ready timeout (no repl-ready line)")), 15000);
-    child.on("error", (e) => { clearTimeout(t); reject(e); });
-    child.on("exit", (code) => {
-      clearTimeout(t);
-      closed = true;
-      if (pending.length) pending.shift()(null); // unblock waiters → they throw
-      if (code !== 0 && code !== null) reject(new Error(`repl exited code=${code}`));
-    });
-  });
 
-  async function cmd(payload, timeoutMs = 60000) {
-    if (closed) throw new Error("repl session closed");
-    const p = new Promise((resolveP, reject) => {
-      const t = setTimeout(() => reject(new Error(`repl cmd timeout ${payload.op}`)), timeoutMs);
-      pending.push((line) => {
-        clearTimeout(t);
-        if (line == null) reject(new Error("repl exited mid-cmd"));
-        else {
-          try { resolveP(JSON.parse(line)); } catch (e) { reject(new Error(`repl bad json: ${line.slice(0, 200)}`)); }
-        }
-      });
+  async function cmd(payload, _timeoutMs = 60000) {
+    if (closed) throw new Error("explorer session client closed");
+    // Re-verify lease identity before every formal action.
+    requireTransportAuthorization({ alias, serial });
+    const params = mapExplorerOpToPrimitive(payload);
+    const result = await executeExplorerSessionAction({
+      contextPath: auth.path,
+      alias: auth.alias,
+      params,
     });
-    child.stdin.write(JSON.stringify(payload) + "\n");
-    return p;
+    const output = { ok: true, action: params.primitive, ...(result.output || {}), jobId: result.jobId, runId: result.runId };
+    if (params.primitive === "dump_ui" && payload.out) {
+      copyExplorerEvidence(result, "dump-ui.xml", payload.out);
+      output.path = payload.out;
+    }
+    if (params.primitive === "screen" && payload.out) {
+      copyExplorerEvidence(result, "screen.png", payload.out);
+      output.path = payload.out;
+    }
+    return output;
   }
 
   function close() {
     closed = true;
-    try { child.stdin.end(); } catch { /* */ }
-    try { rl.close(); } catch { /* */ }
-    try { child.kill(); } catch { /* */ }
   }
 
-  return { ready, cmd, close, serial, child };
+  return {
+    ready: Promise.resolve({ action: "repl-ready", ok: true, mode: "session_action" }),
+    cmd,
+    close,
+    serial,
+    child: null,
+  };
 }

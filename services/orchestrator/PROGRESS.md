@@ -2,9 +2,14 @@
 
 > 最后更新：2026-08-05 抖音「搜索图片→复制分享链接」explore→repair→run 首次正式闭环
 
-## 2026-08-05 Explorer lease 硬闸（source-only，尚未部署）
+## 2026-08-05 Explorer lease → session_action fencing（source-only，尚未部署）
 
-发现 `/xw explore` 的文档要求与原子脚本不一致：`explore-preflight` 只检查 `lease=free`，随后 screenshot/dump/tap/input/focus/launch/shell 等直接走 22222/ADB，没有 acquire session，因此可能出现“设备正被 agent 操作但 Registry 仍显示 free”。分支 `codex/explorer-lease-hard-gate-20260805` 已补 `ops/xw-explore-session.mjs`：按 alias 原子 acquire `xiaowei.lab.raw` canary session、把 token 限定写入用户私有 context 目录并在 Windows 收紧 ACL、由每个设备 op heartbeat、显式 release。全部 Explorer 设备 ops 在高层 op/REPL dispatch 开始前复核，底层 `_win-xiaowei`/`_win-screencap` 还会在每个 22222/ADB request 与 fallback 前复核 session/lease/actor/device/alias/serial、quarantine 和 `/control/v1/leases` 可见记录；生产 endpoint 固定 17920/17930，context 不可改写 endpoint；无 detached keeper，前台 keepalive 钉死 contextId/sessionId。缺 context、错 alias、不可见 lease 或第二 agent 抢占均 fail closed。**剩余跨仓架构债**：raw transport 尚未注册为 control-plane `session_action`，因此 verify→I/O 与外部 release 之间仍不是跨客户端原子 fencing；最终闭合需 xhs-device-agent/control-plane 扩展 action/fencing token，本分支不虚称已解决。当前只完成源码和 fake-control 离线测试，未碰设备、未 acquire live session、未部署；上线后旧的不带 `--session-file` 调用会按设计失败。
+发现 `/xw explore` 的文档要求与原子脚本不一致：`explore-preflight` 只检查 `lease=free`，随后 screenshot/dump/tap/input/focus/launch/shell 等直接走 22222/ADB，没有 acquire session。分支 `codex/explorer-lease-hard-gate-20260805` 先补可见 lease 硬闸；同日继续把设备 I/O 收成控制面 `session_action`：
+
+- Registry：acquire 改绑 `xiaowei.explorer.primitive`；`ops/_explore-session-action.mjs` + 原子 ops / `openWinXwSession` 全部 POST `/control/v1/sessions/:id/actions`；`runWinXiaowei`/`shell` fail closed；不再业务直连 22222/ADB。
+- Routing（worktree `codex/explorer-primitive-session-action-20260805`）：新增 bounded capability + adapter（screen/dump_ui/focus/tap/swipe/back/launch_app/input_text）；action 运行中 `release` → `423 SESSION_ACTION_RUNNING`；lab_only 跳过 post-job return-home。
+
+离线：Registry Explorer gate **14/14**；routing explorer-primitive + return-home **14/14**；`npm run check` 双仓绿。**未 merge、未部署、未真机 canary**；上线需双仓一起部署，并把 Windows `control-plane.devices.json` 加上 `xiaowei.explorer.primitive`。
 
 ## 一句话现状（北极星，所有 agent 必读）
 

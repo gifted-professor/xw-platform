@@ -50,7 +50,7 @@ node ops/douyin-rail-set.mjs --aliases 02,03 --session-dir $xwSessionDir
 
 控制面按设备原子互斥；不同设备可并行，同一设备始终串行。任一 acquire 失败时只释放本轮已拿到的 context，不得改用无 lease 旁路。
 
-脚本检查：17930/17920 health → agent-entry ready/lease → control devices online；**17910 为可选探测**（`ops/dump-ui|tap|focus|launch-app|screenshot` 走小薇 **22222**，不绑 17910）。见知识库 `note-17910-optional-for-explorer-ops-20260727`。
+脚本检查：17930/17920 health → agent-entry ready/lease → control devices online；**17910 为可选探测**（`ops/dump-ui|tap|focus|launch-app|screenshot` 经 **`xiaowei.explorer.primitive` session_action**，不绑 17910、不直连 22222）。见知识库 `note-17910-optional-for-explorer-ops-20260727`。
 
 也可手查：
 
@@ -60,7 +60,7 @@ ssh xhs-windows 'curl.exe -s http://127.0.0.1:17920/control/v1/health'
 ssh xhs-windows 'curl.exe -s http://127.0.0.1:17930/agent-entry.md'
 ```
 
-截屏 / dump / tap / 输入 / 开 App（**禁止**手搓临时脚本；**不依赖 17910**，走小薇 22222）：
+截屏 / dump / tap / 输入 / 开 App（**禁止**手搓临时脚本；**不依赖 17910**；每步正式 session_action）：
 
 ```bash
 node ops/screenshot-and-analyze.mjs --alias 01 --session-file $xwSession   # SHOT=/path.png
@@ -75,7 +75,7 @@ node ops/input-text.mjs --alias 01 --session-file $xwSession --text "行2" --ent
 node ops/launch-app.mjs --alias 01 --session-file $xwSession --package com.taobao.idlefish
 ```
 
-> 以上是持正式 canary session lease 的 **Explorer lab 通道**（22222）。缺 `--session-file`、alias/serial 不匹配、heartbeat 失败或 lease 不可见都会在设备 I/O 前拒绝；不用于 R2 外发。
+> 以上是持正式 canary session lease 的 **Explorer session_action 通道**（`xiaowei.explorer.primitive`）。缺 `--session-file`、alias/serial 不匹配、heartbeat 失败或 lease 不可见都会在设备 I/O 前拒绝；arbitrary `shell` 已禁用。不用于 R2 外发。
 > **Flutter（闲鱼）**：首进字段带 `--x --y` refocus；**多行连续**后续用 `--no-refocus`（+ 建议 `--keep-ime`）；SKU 规格值加 `--enter`。见 `pitfall-input-text-multiline-refocus-20260727`。
 
 ---
@@ -101,7 +101,7 @@ node ops/launch-app.mjs --alias 01 --session-file $xwSession --package com.taoba
 - 读 agent-entry / knowledge / capabilities  
 - 写 knowledge（recipe / pitfall / unknown）  
 - R0/R1 job（observe、`*_dry_run` 等 automatic）  
-- Explorer ops：先 `xw-explore-session acquire`，再用同一个 `--session-file` 执行 preflight / screenshot / **dump-ui / tap / input-text / focus / launch-app**（lab **22222**，不绑 17910）
+- Explorer ops：先 `xw-explore-session acquire`，再用同一个 `--session-file` 执行 preflight / screenshot / **dump-ui / tap / input-text / focus / launch-app**（`xiaowei.explorer.primitive` session_action，不绑 17910）
 - session canary lease 必须在控制面可见；每个 op 自动 heartbeat，结束显式 release
 
 
@@ -114,7 +114,7 @@ node ops/launch-app.mjs --alias 01 --session-file $xwSession --package com.taoba
 | live 状态 | `GET …:17930/api/agent-entry` |
 | 能力目录 | `GET …:17930/api/capabilities` 或控制面 |
 | 生产碰机 | `devicectl job/session` 正道 |
-| 探索交互 | `ops/xw-explore-session.mjs` acquire 后，所有原子脚本带同一个 `--session-file`（**22222**，不绑 17910） |
+| 探索交互 | `ops/xw-explore-session.mjs` acquire 后，所有原子脚本带同一个 `--session-file`（session_action，不绑 17910） |
 | 观测 capability | `xhs.observe.*` / `xianyu.observe.snapshot` / `wechat.observe.*` |
 | 已知剧本回归 | **Runner**：`ops/conc4-full-dry-run.mjs` |
 

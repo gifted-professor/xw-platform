@@ -1,9 +1,15 @@
 #!/usr/bin/env node
-// node ops/dump-ui.mjs --alias 01 [--out /tmp/a.xml]
+// node ops/dump-ui.mjs --alias 01 --session-file <ctx> [--out /tmp/a.xml]
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
-import { authorizeExplorerLease, parseArgs, resolveDevice, ensureWinHelper, runWinXiaowei, parseJsonLine, scpFrom } from "./_explore-lib.mjs";
+import {
+  authorizeExplorerLease,
+  parseArgs,
+  resolveDevice,
+  runExplorerPrimitive,
+} from "./_explore-lib.mjs";
+import { copyExplorerEvidence } from "./_explore-session-action.mjs";
 
 const { opt, flag } = parseArgs(process.argv.slice(2));
 if (flag("--help") || flag("-h")) {
@@ -22,17 +28,10 @@ if (!alias) {
 try {
   await authorizeExplorerLease(ssh, alias, sessionFile);
   const { serial } = resolveDevice(ssh, alias);
-  const helper = ensureWinHelper(ssh);
-  const remote = `C:/Users/Public/xhs-agent-runs/_explore/dump-${alias}-${ts}.xml`;
-  const raw = runWinXiaowei(ssh, helper, ["--serial", serial, "--action", "dump", "--out", remote]);
-  const j = parseJsonLine(raw);
-  if (!j.ok) {
-    console.log(`✗ ${j.error || "dump failed"}`);
-    process.exit(2);
-  }
-  scpFrom(ssh, remote.replace(/\\/g, "/"), localOut);
+  const result = await runExplorerPrimitive({ primitive: "dump_ui" });
+  copyExplorerEvidence(result, "dump-ui.xml", localOut);
   if (!existsSync(localOut)) {
-    console.log("✗ local dump missing after scp");
+    console.log("✗ local dump missing after evidence copy");
     process.exit(4);
   }
   const xml = readFileSync(localOut, "utf8");
@@ -42,9 +41,9 @@ try {
   }
   console.log(`DUMP=${localOut}`);
   console.log(`BYTES=${xml.length}`);
+  console.log(`JOB=${result.jobId}`);
   console.log(`ALIAS=${alias}`);
   console.log(`SERIAL=${serial}`);
-  // quick dump quality hint
   const hasText = /text="[^"]+"/.test(xml);
   const hasDesc = /content-desc="[^"]+"/.test(xml);
   const nodes = (xml.match(/<node /g) || []).length;

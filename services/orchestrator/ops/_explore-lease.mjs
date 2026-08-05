@@ -14,7 +14,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 
 export const EXPLORER_SESSION_SCHEMA = "xhs.explorer-session-context.v1";
-export const EXPLORER_CAPABILITY_ID = "xiaowei.lab.raw";
+export const EXPLORER_CAPABILITY_ID = "xiaowei.explorer.primitive";
 export const DEFAULT_CONTROL_BASE = "http://127.0.0.1:17920";
 export const DEFAULT_REGISTRY_BASE = "http://127.0.0.1:17930";
 

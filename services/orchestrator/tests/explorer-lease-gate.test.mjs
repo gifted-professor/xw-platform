@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -28,6 +28,9 @@ async function fixture() {
     visible: true,
     quarantined: false,
     releaseConfirmed: true,
+    actionRunning: false,
+    lastAction: null,
+    evidenceRoot: mkdtempSync(join(tmpdir(), "explorer-action-")),
   };
   const server = createServer(async (req, res) => {
     const url = new URL(req.url, "http://127.0.0.1");
@@ -56,7 +59,7 @@ async function fixture() {
     }
     if (req.method === "POST" && url.pathname === "/control/v1/sessions") {
       if (state.lease) return send(423, { error: { code: "DEVICE_BUSY", message: "busy" } });
-      if (body.actorId !== "agent:explorer-test" || body.capabilityId !== "xiaowei.lab.raw"
+      if (body.actorId !== "agent:explorer-test" || body.capabilityId !== "xiaowei.explorer.primitive"
         || body.canary !== true || body.placement?.alias !== "02") {
         return send(400, { error: { code: "BAD_REQUEST", message: "bad binding" } });
       }
@@ -76,11 +79,50 @@ async function fixture() {
         actorId: body.actorId,
         deviceId: state.lease.deviceId,
         canary: true,
-        scopeCapabilityId: "xiaowei.lab.raw",
+        scopeCapabilityId: "xiaowei.explorer.primitive",
         routeDecision: { selectedDevice: { alias: "02", deviceId: "device-02" } },
         expiresAt: state.lease.expiresAt,
       };
       return send(201, { session: state.session });
+    }
+    if (req.method === "POST" && url.pathname === "/control/v1/sessions/session-fixture/actions") {
+      if (!state.session) return send(404, { error: { code: "SESSION_NOT_FOUND", message: "missing" } });
+      if (body.token !== state.token) return send(403, { error: { code: "SESSION_TOKEN_INVALID", message: "bad token" } });
+      if (body.capabilityId !== "xiaowei.explorer.primitive") {
+        return send(409, { error: { code: "SESSION_CAPABILITY_MISMATCH", message: "bad capability" } });
+      }
+      if (state.actionRunning) {
+        return send(423, { error: { code: "SESSION_ACTION_RUNNING", message: "action running" } });
+      }
+      state.lastAction = body;
+      const evidenceDirectory = join(state.evidenceRoot || tmpdir(), "evidence-fixture");
+      mkdirSync(evidenceDirectory, { recursive: true });
+      if (body.params?.primitive === "dump_ui") {
+        writeFileSync(join(evidenceDirectory, "dump-ui.xml"), "<hierarchy/>", "utf8");
+      }
+      if (body.params?.primitive === "screen") {
+        writeFileSync(join(evidenceDirectory, "screen.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+      }
+      if (body.params?.primitive === "focus") {
+        return send(200, {
+          job: {
+            jobId: "job-fixture",
+            runId: "run-fixture",
+            status: "succeeded",
+            result: { output: { ok: true, primitive: "focus", package: "com.test", activity: ".Main", raw: "com.test/.Main" } },
+            storage: { evidenceDirectory },
+          },
+        });
+      }
+      return send(200, {
+        job: {
+          jobId: "job-fixture",
+          runId: "run-fixture",
+          status: "succeeded",
+          result: { output: { ok: true, primitive: body.params?.primitive } },
+          storage: { evidenceDirectory },
+        },
+      });
     }
     if (req.method === "POST" && url.pathname === "/control/v1/sessions/session-fixture/heartbeat") {
       if (!state.session) return send(404, { error: { code: "SESSION_NOT_FOUND", message: "missing" } });
@@ -90,6 +132,9 @@ async function fixture() {
     if (req.method === "POST" && url.pathname === "/control/v1/sessions/session-fixture/release") {
       if (!state.session) return send(404, { error: { code: "SESSION_NOT_FOUND", message: "missing" } });
       if (body.token !== state.token) return send(403, { error: { code: "SESSION_TOKEN_INVALID", message: "bad token" } });
+      if (state.actionRunning) {
+        return send(423, { error: { code: "SESSION_ACTION_RUNNING", message: "cannot release while action running" } });
+      }
       if (state.releaseConfirmed) {
         state.lease = null;
         state.session = null;
@@ -391,7 +436,7 @@ test("screencap pins one session identity across Xiaowei and ADB fallback", () =
   assert.match(source, /async function viaAdb\(\)[\s\S]*await assertActiveExplorerLease\(\)[\s\S]*screencap[\s\S]*await assertActiveExplorerLease\(\)[\s\S]*pull/);
 });
 
-test("device transport and Explorer CLI primitive reject missing lease context before I/O", () => {
+test("raw helper path is fail-closed; CLI requires session-file", () => {
   assert.throws(
     () => runWinXiaowei("xhs-windows", "missing-helper.mjs", ["--serial", "serial-02", "--action", "tap"]),
     /CONTROL_LEASE_REQUIRED/,
@@ -403,6 +448,12 @@ test("device transport and Explorer CLI primitive reject missing lease context b
   });
   assert.equal(result.status, 2);
   assert.match(`${result.stdout}${result.stderr}`, /session-file|CONTROL_LEASE_REQUIRED/i);
+  const shell = spawnSync(process.execPath, ["ops/shell.mjs", "--alias", "02", "--cmd", "id"], {
+    cwd: ROOT,
+    encoding: "utf8",
+  });
+  assert.equal(shell.status, 4);
+  assert.match(`${shell.stdout}${shell.stderr}`, /EXPLORER_SHELL_NOT_BOUNDED/);
   for (const [helper, args] of [
     ["ops/_win-xiaowei.mjs", ["--serial", "serial-02", "--action", "tap", "--x", "1", "--y", "1"]],
     ["ops/_win-screencap.mjs", ["--serial", "serial-02", "--alias", "02", "--out", join(tmpdir(), "must-not-exist.png")]],
@@ -413,16 +464,78 @@ test("device transport and Explorer CLI primitive reject missing lease context b
   }
 });
 
-test("every supported Explorer transport caller performs lease authorization", () => {
+test("every supported Explorer transport caller performs lease authorization or fails closed", () => {
   const callers = [
     "back.mjs", "dump-ui.mjs", "focus.mjs", "input-text.mjs", "launch-app.mjs",
-    "screenshot-and-analyze.mjs", "shell.mjs", "swipe.mjs", "tap.mjs",
+    "screenshot-and-analyze.mjs", "swipe.mjs", "tap.mjs",
     "xhs-follow-one.mjs", "xhs-like-one.mjs",
   ];
   for (const name of callers) {
     const source = readFileSync(join(ROOT, "ops", name), "utf8");
     assert.match(source, /authorizeExplorerLease/, name);
     assert.match(source, /await authorizeExplorerLease\(/, name);
+  }
+  const shell = readFileSync(join(ROOT, "ops", "shell.mjs"), "utf8");
+  assert.match(shell, /EXPLORER_SHELL_NOT_BOUNDED/);
+  assert.doesNotMatch(shell, /authorizeExplorerLease/);
+});
+
+test("Explorer ops route through session_action client, not raw 22222 helpers", () => {
+  for (const name of ["tap.mjs", "focus.mjs", "back.mjs", "swipe.mjs", "dump-ui.mjs", "launch-app.mjs", "input-text.mjs", "screenshot-and-analyze.mjs"]) {
+    const source = readFileSync(join(ROOT, "ops", name), "utf8");
+    assert.match(source, /runExplorerPrimitive|executeExplorerSessionAction|copyExplorerEvidence/, name);
+    assert.doesNotMatch(source, /runWinXiaowei|runWinShell/, name);
+  }
+  const lib = readFileSync(join(ROOT, "ops", "_explore-lib.mjs"), "utf8");
+  assert.match(lib, /EXPLORER_RAW_HELPER_DISABLED/);
+  assert.match(lib, /executeExplorerSessionAction/);
+  assert.match(lib, /mode: "session_action"/);
+});
+
+test("session action client posts bounded primitive and rejects shell mapping", async () => {
+  const { EXPLORER_CAPABILITY_ID } = await import("../ops/_explore-lease.mjs");
+  const {
+    executeExplorerSessionAction,
+    mapExplorerOpToPrimitive,
+    resetExplorerActionPin,
+  } = await import("../ops/_explore-session-action.mjs");
+  assert.equal(EXPLORER_CAPABILITY_ID, "xiaowei.explorer.primitive");
+  assert.throws(
+    () => mapExplorerOpToPrimitive({ op: "shell", cmd: "id" }),
+    (error) => error.code === "EXPLORER_SHELL_NOT_BOUNDED",
+  );
+  const f = await fixture();
+  try {
+    resetExplorerActionPin();
+    const acquired = await acquireExplorerSession({
+      alias: "02",
+      actor: "agent:explorer-test",
+      contextPath: join(f.dir, "ctx.json"),
+      controlBase: f.base,
+      registryBase: f.base,
+      allowTestEndpoints: true,
+      contextRoot: f.dir,
+      skipAclHardening: true,
+    });
+    const result = await executeExplorerSessionAction({
+      contextPath: acquired.path,
+      alias: "02",
+      params: { primitive: "focus" },
+      controlBase: f.base,
+      registryBase: f.base,
+      fetchImpl: globalThis.fetch,
+      allowTestEndpoints: true,
+      contextRoot: f.dir,
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.jobId, "job-fixture");
+    assert.equal(result.output.package, "com.test");
+    assert.equal(f.state.lastAction.capabilityId, "xiaowei.explorer.primitive");
+    assert.equal(f.state.lastAction.params.primitive, "focus");
+    assert.equal(f.state.lastAction.token, "lease_token_fixture_secret");
+  } finally {
+    rmSync(f.state.evidenceRoot, { recursive: true, force: true });
+    await f.close();
   }
 });
 
