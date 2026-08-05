@@ -25,6 +25,16 @@ const LAUNCHER_LABELS = new Set([
   "小米商城",
   "游戏中心",
   "手机管家",
+  "米家",
+  "哔哩哔哩",
+  "QQ",
+  "飞书",
+  "抖音",
+  "微信",
+  "小红书",
+  "支付宝",
+  "闲鱼",
+  "微购相册",
 ]);
 const LAUNCHER_SYSTEM_LABELS = new Set([
   "设置",
@@ -37,6 +47,9 @@ const LAUNCHER_SYSTEM_LABELS = new Set([
   "主题壁纸",
   "安全中心",
 ]);
+const LAUNCHER_PAGE_INDICATOR = "桌面分页指示器";
+const LAUNCHER_DOCK = "桌面底栏";
+const LAUNCHER_SEARCH = "桌面搜索栏";
 const UNSAFE_CONTENT_PATTERN = /验证码|安全验证|支付密码|确认支付|青少年模式|继续访问|同意并继续/;
 const UNSAFE_ACTION_PATTERN = /^(?:立即)?登录|^(?:允许|拒绝|取消|确定|稍后|我知道了)(?:$|\s|访问|使用|一次|本次)|(?:权限|删除|发布|保存)(?:$|[：:])/;
 
@@ -123,26 +136,48 @@ export function classifyRecoveryPage({
     ));
     const distinct = new Set(known.map((entry) => entry.label));
     const hasSystemAnchor = known.some((entry) => LAUNCHER_SYSTEM_LABELS.has(entry.label));
+    const pageIndicator = entries.filter((entry) => (
+      entry.label === LAUNCHER_PAGE_INDICATOR
+      && entry.bounds[1] >= height * 0.68
+      && entry.bounds[3] <= height * 0.84
+    ));
+    const dock = entries.filter((entry) => (
+      entry.label === LAUNCHER_DOCK
+      && entry.bounds[1] >= height * 0.76
+      && entry.bounds[3] <= height * 0.94
+      && entry.bounds[2] - entry.bounds[0] >= width * 0.72
+    ));
+    const search = entries.filter((entry) => (
+      entry.label === LAUNCHER_SEARCH
+      && entry.bounds[1] >= height * 0.86
+      && entry.bounds[3] <= height * 0.99
+      && entry.bounds[2] - entry.bounds[0] >= width * 0.72
+    ));
+    const launcherChrome = [...pageIndicator, ...dock, ...search];
+    const hasLauncherChrome = pageIndicator.length > 0 && dock.length > 0 && search.length > 0;
     const columnBands = new Set(known.map((entry) => Math.min(3, Math.floor(
       ((entry.bounds[0] + entry.bounds[2]) / 2) / (width / 4),
     ))));
     const rowBands = new Set(known.map((entry) => Math.floor(
       ((entry.bounds[1] + entry.bounds[3]) / 2) / (height / 5),
     )));
-    if (distinct.size >= 6 && hasSystemAnchor && columnBands.size >= 3 && rowBands.size >= 2) {
+    if (distinct.size >= 6 && (hasSystemAnchor || hasLauncherChrome)
+      && columnBands.size >= 3 && rowBands.size >= 2) {
       return result(
         "main-safe",
         0.99,
-        known,
-        ["exact MIUI launcher focus and a multi-row, multi-column launcher fingerprint agree"],
+        [...known, ...launcherChrome],
+        [hasSystemAnchor
+          ? "exact MIUI launcher focus and a system-app anchored launcher grid agree"
+          : "exact MIUI launcher focus, a launcher grid, and complete launcher chrome agree"],
         entries.length,
       );
     }
     return result(
       "unknown",
       0,
-      known,
-      ["MIUI launcher focus lacks the required multi-row, multi-column visual fingerprint"],
+      [...known, ...launcherChrome],
+      ["MIUI launcher focus lacks a system-app anchor or the complete launcher chrome fingerprint"],
       entries.length,
     );
   }

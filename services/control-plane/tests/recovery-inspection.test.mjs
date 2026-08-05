@@ -142,6 +142,44 @@ test("rejects MIUI labels without a launcher grid layout", () => {
   assert.equal(normalized.pageClassification.safeStateVerified, false);
 });
 
+test("accepts the audited secondary MIUI launcher page fingerprint", () => {
+  const normalized = normalizeFixture([
+    ["QQ", [55, 700, 220, 860]],
+    ["飞书", [315, 700, 485, 860]],
+    ["抖音", [585, 700, 750, 860]],
+    ["微信", [845, 700, 1025, 860]],
+    ["小红书", [55, 1170, 220, 1340]],
+    ["支付宝", [315, 1170, 485, 1340]],
+    ["闲鱼", [585, 1170, 750, 1340]],
+    ["桌面分页指示器", [420, 1740, 660, 1840]],
+    ["桌面底栏", [45, 1880, 1035, 2180]],
+    ["桌面搜索栏", [60, 2190, 1020, 2335]],
+  ], {
+    package: "com.miui.home",
+    activity: "com.miui.home.launcher.Launcher",
+  });
+  assert.equal(normalized.pageClassification.pageType, "main-safe");
+  assert.equal(normalized.pageClassification.safeStateVerified, true);
+  assert.equal(normalized.pageClassification.confidence, 0.99);
+});
+
+test("rejects a third-party launcher grid without system or chrome anchors", () => {
+  const normalized = normalizeFixture([
+    ["QQ", [55, 700, 220, 860]],
+    ["飞书", [315, 700, 485, 860]],
+    ["抖音", [585, 700, 750, 860]],
+    ["微信", [845, 700, 1025, 860]],
+    ["小红书", [55, 1170, 220, 1340]],
+    ["支付宝", [315, 1170, 485, 1340]],
+    ["闲鱼", [585, 1170, 750, 1340]],
+  ], {
+    package: "com.miui.home",
+    activity: "com.miui.home.launcher.Launcher",
+  });
+  assert.equal(normalized.pageClassification.pageType, "unknown");
+  assert.equal(normalized.pageClassification.safeStateVerified, false);
+});
+
 test("accepts Douyin main only with exact focus and complete bottom navigation", () => {
   const normalized = normalizeFixture([
     ["首页", [20, 2160, 190, 2360]],
