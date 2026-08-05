@@ -358,15 +358,27 @@ export class GatewayOperator {
     ];
     let lastDumpOut = "";
     let dumped = false;
-    for (const cmd of dumpVariants) {
-      lastDumpOut = await this.shellExec(cmd, 20000).catch((error) => String(error?.message || error));
-      // uiautomator prints path on success; idle failures often leave empty/missing file.
-      const probe = await this.shellExec(`ls -l ${remote} 2>/dev/null | head -1`, 8000).catch(() => "");
-      if (/\s[1-9]\d*\s/.test(probe) || /dump/.test(String(lastDumpOut || ""))) {
-        dumped = true;
-        break;
+    // Video/Splash animation → "could not get idle state". Tap center to pause,
+    // then retry with backoff (same pattern as FastOperator.pauseIfVideoNote).
+    for (let attempt = 0; attempt < 5 && !dumped; attempt += 1) {
+      if (attempt > 0) {
+        await this.shellExec("input tap 540 1200", 5000).catch(() => null);
+        await new Promise((r) => setTimeout(r, 900 + attempt * 700));
       }
-      await new Promise((r) => setTimeout(r, 600));
+      for (const cmd of dumpVariants) {
+        lastDumpOut = await this.shellExec(cmd, 25000).catch((error) => String(error?.message || error));
+        const idleFail = /could not get idle state/i.test(String(lastDumpOut || ""));
+        if (idleFail) {
+          await this.shellExec(`rm -f ${remote}`, 5000).catch(() => null);
+          continue;
+        }
+        const probe = await this.shellExec(`ls -l ${remote} 2>/dev/null | head -1`, 8000).catch(() => "");
+        if (/\s[1-9]\d*\s/.test(probe) || /UI hierchary dumped|UI hierarchy dumped/i.test(String(lastDumpOut || ""))) {
+          dumped = true;
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 400));
+      }
     }
     if (!dumped) {
       await this.shellExec(`rm -f ${remote}`, 5000).catch(() => null);
