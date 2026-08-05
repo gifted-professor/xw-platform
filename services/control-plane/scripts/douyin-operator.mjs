@@ -699,6 +699,7 @@ export async function shareLink(op, keyword, { wait = settle, progress = () => {
 
   await op.inputTextViaXiaowei(text, {
     clearFirst: true,
+    clearKeypresses: 256,
     refocus: async () => op.tap(returnedInput.cx, returnedInput.cy, "douyin search input restore"),
   });
   await op.shellExec("input keyevent KEYCODE_ENTER", 6000);
@@ -780,6 +781,7 @@ async function restoreSearchKeyword(op, keyword, wait) {
   await wait(250);
   await op.inputTextViaXiaowei(text, {
     clearFirst: true,
+    clearKeypresses: 256,
     refocus: async () => op.tap(input.cx, input.cy, "douyin restore keyword refocus"),
   });
   await op.shellExec("input keyevent KEYCODE_ENTER", 6000);
