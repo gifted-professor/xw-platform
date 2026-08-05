@@ -1,5 +1,5 @@
 import { ControlPlaneError } from "./errors.mjs";
-import { classifyXianyuPage } from "../../scripts/xianyu-page-classifier.mjs";
+import { classifyRecoveryPage } from "../../scripts/recovery-page-classifier.mjs";
 
 const SHA256 = /^[a-f0-9]{64}$/;
 
@@ -93,7 +93,7 @@ export function normalizeRecoveryVisualAnalysis(input, { expectedImageSha256, fo
     version: boundedString(input.analyzer?.version, "analyzer.version"),
     timings: normalizeTimings(input.analyzer?.timings),
   };
-  const pageClassification = classifyXianyuPage({ elements, focus, resolution });
+  const pageClassification = classifyRecoveryPage({ elements, focus, resolution });
   return {
     schemaVersion: "xhs.visual-elements.v1",
     image: {
