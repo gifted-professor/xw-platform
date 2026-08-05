@@ -347,7 +347,32 @@ export class GatewayOperator {
     const token = `${process.pid}-${Date.now()}`;
     const remote = `/sdcard/xianyu-dump-${token}.xml`;
     const t0 = Date.now();
-    await this.shellExec(`uiautomator dump ${remote}`, 20000);
+    // Screen-off / continuous animation → empty hierarchy or idle timeout.
+    await this.shellExec("input keyevent KEYCODE_WAKEUP", 5000).catch(() => null);
+    await this.shellExec("input keyevent KEYCODE_MENU", 5000).catch(() => null);
+    await new Promise((r) => setTimeout(r, 400));
+
+    const dumpVariants = [
+      `uiautomator dump ${remote}`,
+      `uiautomator dump --compressed ${remote}`,
+    ];
+    let lastDumpOut = "";
+    let dumped = false;
+    for (const cmd of dumpVariants) {
+      lastDumpOut = await this.shellExec(cmd, 20000).catch((error) => String(error?.message || error));
+      // uiautomator prints path on success; idle failures often leave empty/missing file.
+      const probe = await this.shellExec(`ls -l ${remote} 2>/dev/null | head -1`, 8000).catch(() => "");
+      if (/\s[1-9]\d*\s/.test(probe) || /dump/.test(String(lastDumpOut || ""))) {
+        dumped = true;
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 600));
+    }
+    if (!dumped) {
+      await this.shellExec(`rm -f ${remote}`, 5000).catch(() => null);
+      throw new Error(`gateway dump: uiautomator failed (${String(lastDumpOut).slice(0, 160)})`);
+    }
+
     let b64 = "";
     for (let i = 0; i < 3; i += 1) {
       b64 = await this.shellExec(`base64 ${remote}`, 20000).catch(() => "");
@@ -357,7 +382,9 @@ export class GatewayOperator {
     await this.shellExec(`rm -f ${remote}`, 5000).catch(() => null);
     if (!b64 || !b64.trim()) throw new Error("gateway dump: empty base64");
     const xml = Buffer.from(b64.replace(/\s+/g, ""), "base64").toString("utf8");
-    if (!xml.includes("<hierarchy")) throw new Error("gateway dump: hierarchy XML not returned");
+    if (!xml.includes("<hierarchy")) {
+      throw new Error(`gateway dump: hierarchy XML not returned (${xml.slice(0, 80).replace(/\s+/g, " ")})`);
+    }
     this.metrics.dumps += 1;
     this.metrics.totalDumpMs += Date.now() - t0;
     return xml;
