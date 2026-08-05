@@ -50,6 +50,54 @@
       "implementation": { "adapter": "xiaowei", "action": "raw" },
       "evidence": ["origin/feat/xiaowei-full-device-api"],
       "availability": "canary_only"
+    },
+    {
+      "schemaVersion": 1,
+      "id": "xiaowei.explorer.primitive",
+      "appId": "xiaowei",
+      "packageName": null,
+      "versionRange": "observed:9.10.113",
+      "maturity": "E1",
+      "risk": "R1",
+      "resources": ["device", "transport:xiaowei:22222"],
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "primitive": {
+            "type": "string",
+            "enum": ["screen", "dump_ui", "focus", "tap", "swipe", "back", "launch_app", "input_text"]
+          },
+          "x": { "type": "integer", "minimum": 0, "maximum": 4096 },
+          "y": { "type": "integer", "minimum": 0, "maximum": 4096 },
+          "x1": { "type": "integer", "minimum": 0, "maximum": 4096 },
+          "y1": { "type": "integer", "minimum": 0, "maximum": 4096 },
+          "x2": { "type": "integer", "minimum": 0, "maximum": 4096 },
+          "y2": { "type": "integer", "minimum": 0, "maximum": 4096 },
+          "durationMs": { "type": "integer", "minimum": 50, "maximum": 5000 },
+          "times": { "type": "integer", "minimum": 1, "maximum": 5 },
+          "package": { "type": "string", "minLength": 1, "maxLength": 200 },
+          "activity": { "type": "string", "minLength": 1, "maxLength": 300 },
+          "forceStop": { "type": "boolean" },
+          "text": { "type": "string", "minLength": 1, "maxLength": 500 },
+          "refocusX": { "type": "integer", "minimum": 0, "maximum": 4096 },
+          "refocusY": { "type": "integer", "minimum": 0, "maximum": 4096 },
+          "clearFirst": { "type": "boolean" },
+          "enter": { "type": "boolean" },
+          "deferRestore": { "type": "boolean" }
+        },
+        "required": ["primitive"],
+        "additionalProperties": false
+      },
+      "outputSchema": { "type": "object" },
+      "preconditions": ["exclusive canary session", "bounded Explorer primitive"],
+      "verification": { "mode": "custom", "description": "primitive-specific bounded observation" },
+      "restoration": { "required": false, "description": "caller must choose only bounded reversible primitives" },
+      "timeoutMs": 60000,
+      "idempotency": "replay_safe",
+      "automationPolicy": { "mode": "lab_only", "canaryOnly": true },
+      "implementation": { "adapter": "xiaowei", "action": "explorer_primitive" },
+      "evidence": ["HANDOFF-2026-08-05-xw-explorer-session-fencing"],
+      "availability": "canary_only"
     }
   ]
 }

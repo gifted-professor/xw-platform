@@ -15,6 +15,7 @@
         "capabilityIds": [
           "xiaowei.device.list",
           "xiaowei.lab.raw",
+          "xiaowei.explorer.primitive",
           "xhs.observe.metrics",
           "douyin.observe.snapshot",
           "douyin.observe.search",

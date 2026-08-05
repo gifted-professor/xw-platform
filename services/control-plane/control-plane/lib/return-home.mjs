@@ -17,14 +17,18 @@ export function isLauncherPackage(pkg) {
 /**
  * Default ON. Opt out with XHS_RETURN_HOME_AFTER_JOB=0 or XHS_SKIP_RETURN_HOME=1.
  * recoveryAttempt jobs never return home (recover-main-safe needs App foreground).
+ * lab_only / Explorer session primitives also skip — each action must leave App UI intact.
  */
 export function shouldReturnHomeAfterJob({
   env = process.env,
   recoveryAttempt = false,
+  capability = null,
 } = {}) {
   if (recoveryAttempt) return false;
   if (env.XHS_SKIP_RETURN_HOME === "1") return false;
   if (env.XHS_RETURN_HOME_AFTER_JOB === "0") return false;
+  if (capability?.automationPolicy?.mode === "lab_only") return false;
+  if (capability?.id === "xiaowei.explorer.primitive" || capability?.id === "xiaowei.lab.raw") return false;
   return true;
 }
 

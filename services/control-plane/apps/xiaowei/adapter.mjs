@@ -1,12 +1,23 @@
 import { ControlPlaneError } from "../../control-plane/lib/errors.mjs";
 import { XiaoweiTransport } from "../../control-plane/lib/xiaowei-transport.mjs";
+import { executeExplorerPrimitive } from "./explorer-primitive.mjs";
 
 const RAW_ALLOWLIST = new Set(["list", "Screen", "imeList"]);
 
 export function createXiaoweiAdapter({ transport = new XiaoweiTransport() } = {}) {
   return {
     id: "xiaowei",
-    async execute({ capability, device, params, job }) {
+    async execute({ capability, device, params, job, evidenceDirectory, leaseAuthorization }) {
+      if (capability.implementation.action === "explorer_primitive") {
+        return executeExplorerPrimitive({
+          transport,
+          device,
+          params,
+          evidenceDirectory,
+          leaseAuthorization,
+          job,
+        });
+      }
       const action = capability.implementation.action === "raw" ? params.action : capability.implementation.action;
       if (capability.implementation.action === "raw") {
         if (!job.canary) throw new ControlPlaneError("CANARY_REQUIRED", "raw Xiaowei action requires canary session", { status: 403 });
@@ -22,6 +33,9 @@ export function createXiaoweiAdapter({ transport = new XiaoweiTransport() } = {}
       return { vendorCode: output?.code ?? null, output };
     },
     async verify({ capability, execution }) {
+      if (capability.implementation.action === "explorer_primitive") {
+        return { ok: execution.output?.ok === true, mode: capability.verification.mode };
+      }
       if (capability.implementation.action === "list") {
         return { ok: execution.output?.code === 10000 && Array.isArray(execution.output?.data), mode: "state" };
       }
