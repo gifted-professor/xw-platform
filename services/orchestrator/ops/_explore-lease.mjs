@@ -324,6 +324,7 @@ export async function verifyExplorerSession({
   }
   return {
     path,
+    contextId: context.contextId,
     session: { ...session, token: undefined },
     lease,
     alias: context.alias,

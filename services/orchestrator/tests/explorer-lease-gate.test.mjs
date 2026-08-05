@@ -354,6 +354,9 @@ test("Xiaowei REPL revalidates the Explorer lease before every dispatch", () => 
   const source = readFileSync(join(ROOT, "ops", "_win-xiaowei.mjs"), "utf8");
   const repl = source.slice(source.indexOf("async function runRepl()"), source.indexOf("// ---- main ----"));
   assert.match(repl, /await assertActiveExplorerLease\(\);\s*\n\s*const r = await dispatch\(req\);/);
+  assert.match(source, /let pinnedExplorerIdentity = null/);
+  assert.match(source, /EXPLORER_SESSION_IDENTITY_CHANGED/);
+  assert.match(source, /contextId: authorization\.contextId/);
 });
 
 test("device transport and Explorer CLI primitive reject missing lease context before I/O", () => {

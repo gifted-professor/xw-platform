@@ -19,9 +19,13 @@ if (!serial || !out || !alias || !sessionFile) {
   process.exit(2);
 }
 
-try {
+async function assertActiveExplorerLease() {
   const authorization = await verifyExplorerSession({ contextPath: sessionFile, alias });
   if (authorization.serial !== serial) throw new Error("EXPLORER_SESSION_SERIAL_MISMATCH");
+  return authorization;
+}
+try {
+  await assertActiveExplorerLease();
 } catch (error) {
   console.log(JSON.stringify({ ok: false, error: `${error.code || "CONTROL_LEASE_REQUIRED"}: ${error.message}` }));
   process.exit(2);
@@ -30,6 +34,7 @@ try {
 mkdirSync(dirname(out), { recursive: true });
 
 async function viaXiaowei() {
+  await assertActiveExplorerLease();
   const dir = join(dirname(out), `_gwshot_${String(serial).replace(/[^A-Za-z0-9_-]/g, "_")}`);
   mkdirSync(dir, { recursive: true });
   const before = new Set(readdirSync(dir).filter((f) => /\.png$/i.test(f)));
@@ -83,7 +88,7 @@ async function viaXiaowei() {
   return { method: "xiaowei-Screen", src: found };
 }
 
-function viaAdb() {
+async function viaAdb() {
   const ADB_CANDIDATES = [
     process.env.ADB_PATH,
     "D:\\download\\lvjian\\tools\\adb.exe",
@@ -106,10 +111,12 @@ function viaAdb() {
   }
   if (!adb) throw new Error("adb not found");
   const remote = "/sdcard/xhs_explore_tmp.png";
+  await assertActiveExplorerLease();
   execFileSync(adb, ["-s", serial, "shell", "screencap", "-p", remote], {
     stdio: ["ignore", "pipe", "pipe"],
     timeout: 20000,
   });
+  await assertActiveExplorerLease();
   execFileSync(adb, ["-s", serial, "pull", remote, out], {
     stdio: ["ignore", "pipe", "pipe"],
     timeout: 30000,
@@ -124,7 +131,7 @@ try {
     meta = await viaXiaowei();
   } catch (e1) {
     try {
-      meta = viaAdb();
+      meta = await viaAdb();
       meta.fallbackFrom = String(e1.message || e1).slice(0, 160);
     } catch (e2) {
       console.log(JSON.stringify({
