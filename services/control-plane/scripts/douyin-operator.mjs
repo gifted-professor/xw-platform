@@ -258,29 +258,36 @@ async function dumpWithRetry(op, label, { attempts = 4, accept = () => true } = 
 export async function startDouyin(op, { forceStop = true } = {}) {
   if (forceStop) {
     await op.shellExec(`am force-stop ${DOUYIN_PACKAGE}`, 8000);
+    await settle(800);
   }
-  // Prefer am start -W so we wait for activity; monkey alone leaves Splash animating
-  // and uiautomator then hits "could not get idle state" on alias 01.
-  await op.shellExec(
-    `am start -W -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -p ${DOUYIN_PACKAGE} >/dev/null 2>&1 || `
-      + `monkey -p ${DOUYIN_PACKAGE} -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1`,
-    20000,
-  );
+  // Keep launches as separate plain shell commands (gateway adb_shell is not a full
+  // interactive shell; `||` / redirects have been unreliable on alias 01).
+  let launchOut = await op.shellExec(
+    `am start -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -p ${DOUYIN_PACKAGE}`,
+    15000,
+  ).catch((error) => String(error?.message || error));
+  const amLooksBad = /Error|Exception|not found|does not exist|SecurityException/i.test(String(launchOut || ""))
+    || !/Starting|cmp=/i.test(String(launchOut || ""));
+  if (amLooksBad) {
+    launchOut = await op.shellExec(
+      `monkey -p ${DOUYIN_PACKAGE} -c android.intent.category.LAUNCHER 1`,
+      15000,
+    ).catch((error) => String(error?.message || error));
+  }
   let focus = null;
   const attempts = forceStop ? 16 : 10;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    await settle(attempt === 0 ? (forceStop ? 4000 : 2500) : 900);
+    await settle(attempt === 0 ? (forceStop ? SETTLE_AFTER_LAUNCH_MS : 2500) : 900);
     focus = await op.currentFocus();
     if (focus.package === DOUYIN_PACKAGE) {
-      // Splash/feed video keeps a11y busy; light center tap helps later dumps settle.
-      if (attempt >= 2) {
+      if (attempt >= 1) {
         await op.shellExec("input tap 540 1200", 5000).catch(() => null);
         await settle(800);
       }
       return focus;
     }
   }
-  return focus || { package: null, activity: null, raw: "" };
+  return focus || { package: null, activity: null, raw: String(launchOut || "").slice(0, 160) };
 }
 
 /** Prefer soft bring-to-foreground; only force-stop if Douyin is not running. */
