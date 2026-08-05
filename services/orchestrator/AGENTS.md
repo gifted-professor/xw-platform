@@ -71,7 +71,7 @@ AGENTS/modes/skills 路由说明 > 尚未迁移的 App 子 Skill Markdown。
 | 要做的事 | 默认命令（cwd = 本仓 xhs-registry，除非注明） |
 |----------|-----------------------------------------------|
 | 看 live | `ssh xhs-windows 'curl.exe -s http://127.0.0.1:17930/agent-entry.md'` |
-| **探索占用登记** | `node ops/xw-explore-session.mjs acquire --alias <alias> --actor <actor> --session-file <explicit.json>`；结束必须 `release` |
+| **探索占用登记** | `node ops/xw-explore-session.mjs acquire --alias <alias> --actor <actor> --session-file "$env:USERPROFILE\.xhs-explorer-sessions\<run>-<alias>.json"`；结束必须 `release` |
 | **探索开工检查** | `node ops/explore-preflight.mjs --alias <alias> --session-file <same.json>` |
 | **探索截屏（一步）** | `node ops/screenshot-and-analyze.mjs --alias <alias> --session-file <same.json>` → `SHOT=…` |
 | **探索 dump/点/输入/焦点/开 App** | 所有 `ops/dump-ui.mjs` / `tap.mjs` / `input-text.mjs` / `focus.mjs` / `launch-app.mjs` 必须带同一 `--session-file`（见 `modes/explorer.md`） |

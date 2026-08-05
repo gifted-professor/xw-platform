@@ -30,11 +30,15 @@ if (!sessionFile) {
   console.log(JSON.stringify({ ok: false, error: "CONTROL_LEASE_REQUIRED: --session-file is required" }));
   process.exit(2);
 }
-try {
+async function assertActiveExplorerLease() {
   const authorization = await verifyExplorerSession({ contextPath: sessionFile, alias: traceAlias });
   if (authorization.serial !== serial) {
     throw Object.assign(new Error("EXPLORER_SESSION_SERIAL_MISMATCH"), { code: "EXPLORER_SESSION_SERIAL_MISMATCH" });
   }
+  return authorization;
+}
+try {
+  await assertActiveExplorerLease();
 } catch (error) {
   console.log(JSON.stringify({ ok: false, error: `${error.code || "CONTROL_LEASE_REQUIRED"}: ${error.message}` }));
   process.exit(2);
@@ -395,6 +399,7 @@ async function runRepl() {
       return;
     }
     try {
+      await assertActiveExplorerLease();
       const r = await dispatch(req);
       process.stdout.write(JSON.stringify(r) + "\n");
     } catch (e) {

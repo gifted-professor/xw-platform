@@ -1,7 +1,5 @@
 #!/usr/bin/env node
-import { spawn } from "node:child_process";
 import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 
 import {
   acquireExplorerSession,
@@ -22,12 +20,13 @@ const sessionFile = opt("--session-file");
 
 function usage() {
   console.log(`用法:
-  node ops/xw-explore-session.mjs acquire --alias <01-04> --actor <id> [--session-file <absolute.json>] [--no-keepalive]
+  node ops/xw-explore-session.mjs acquire --alias <01-04> --actor <id> [--session-file <profile-root.json>]
   node ops/xw-explore-session.mjs status --session-file <absolute.json>
   node ops/xw-explore-session.mjs heartbeat --session-file <absolute.json>
   node ops/xw-explore-session.mjs release --session-file <absolute.json>
 
-acquire 会创建正式 canary session lease；token 只写入 mode=0600 context，不打印。
+acquire 会创建正式 canary session lease；token 写入用户私有目录并收紧 ACL，不打印。
+不启动 detached keeper；每次 Explorer op 会 heartbeat，长时间观察时前台运行 keepalive。
 所有 Explorer 设备脚本必须传同一个 --session-file。`);
 }
 
@@ -57,15 +56,6 @@ try {
       actor: opt("--actor"),
       contextPath: sessionFile,
     });
-    if (!flag("--no-keepalive")) {
-      const script = fileURLToPath(import.meta.url);
-      const child = spawn(process.execPath, [script, "keepalive", "--session-file", result.path], {
-        detached: true,
-        stdio: "ignore",
-        windowsHide: true,
-      });
-      child.unref();
-    }
     console.log(JSON.stringify(publicResult("acquire", result)));
   } else if (["status", "heartbeat"].includes(command)) {
     if (!sessionFile) throw Object.assign(new Error("--session-file is required"), { code: "EXPLORER_SESSION_CONTEXT_REQUIRED" });
@@ -78,8 +68,12 @@ try {
   } else if (command === "keepalive") {
     if (!sessionFile) throw Object.assign(new Error("--session-file is required"), { code: "EXPLORER_SESSION_CONTEXT_REQUIRED" });
     // Validate before entering the loop so a malformed context fails immediately.
-    readExplorerSessionContext(resolve(sessionFile));
-    await keepExplorerSessionAlive({ contextPath: resolve(sessionFile) });
+    const pinned = readExplorerSessionContext(resolve(sessionFile)).context;
+    await keepExplorerSessionAlive({
+      contextPath: resolve(sessionFile),
+      expectedContextId: pinned.contextId,
+      expectedSessionId: pinned.sessionId,
+    });
   } else {
     usage();
     process.exit(4);

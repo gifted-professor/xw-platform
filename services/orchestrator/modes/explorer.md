@@ -26,13 +26,13 @@ AGENTS/modes/skills 路由说明 > 尚未迁移的 App 子 Skill Markdown。
 Windows 本机 `/xw explore` 必须先 acquire 正式 session；`preflight` 单独运行只能体检，不能授权后续碰机：
 
 ```powershell
-$xwSession = "$env:TEMP\xw-explore-<runId>-01.json"
+$xwSession = "$env:USERPROFILE\.xhs-explorer-sessions\xw-explore-<runId>-01.json"
 node ops/xw-explore-session.mjs acquire --alias 01 --actor <actor> --session-file $xwSession
 node ops/explore-preflight.mjs --alias 01 --session-file $xwSession
 # 仅当仍依赖旧 17910 设备 API 时：preflight 再加 --require-17910
 ```
 
-`acquire` 会创建控制面可见的 exclusive canary session，并启动 ≤15s heartbeat keeper；第二个 agent 会得到 `DEVICE_BUSY`。任务结束无论成功、失败或中止都执行：
+`acquire` 会创建控制面可见的 exclusive canary session；每条设备 op 都会 heartbeat，第二个 agent 会得到 `DEVICE_BUSY`。它不会启动脱离 owner 的后台 keeper；长时间只观察时可在前台运行 `keepalive`。任务结束无论成功、失败或中止都执行：
 
 ```powershell
 node ops/xw-explore-session.mjs release --session-file $xwSession
@@ -41,7 +41,7 @@ node ops/xw-explore-session.mjs release --session-file $xwSession
 跨机任务先逐台 acquire；每个 alias 必须有自己的 context，不能共享 token。集合脚本使用 `<session-dir>\<alias>.json`：
 
 ```powershell
-$xwSessionDir = "$env:TEMP\xw-explore-<runId>"
+$xwSessionDir = "$env:USERPROFILE\.xhs-explorer-sessions"
 node ops/xw-explore-session.mjs acquire --alias 02 --actor <actor>-02 --session-file "$xwSessionDir\02.json"
 node ops/xw-explore-session.mjs acquire --alias 03 --actor <actor>-03 --session-file "$xwSessionDir\03.json"
 node ops/douyin-rail-set.mjs --aliases 02,03 --session-dir $xwSessionDir
@@ -89,7 +89,7 @@ node ops/launch-app.mjs --alias 01 --session-file $xwSession --package com.taoba
 | R2/R3 **执行**外发（评论/发布/私信…） | 只允许 submit 挂起等人 |
 | 逐步 scp 临时脚本当默认手法 | 用 `screenshot-and-analyze.mjs` |
 | 有 dump/语义仍 vision 死磕；同目标 vision **>2 次** | VLM 像素 Y 可偏 **−1330px**（见下）；费时 |
-| 交互式 session 长时间不 heartbeat | keeper 默认 ≤15s heartbeat；仍应在 finally release |
+| 交互式 session 长时间不 heartbeat | 每个 op 自动 heartbeat；纯观察期若需续租则前台 keepalive，仍须 finally release |
 | 遇验证码/风控/登录墙继续点 | 立即停 + knowledge |
 | 一次会话多个主 flow | 失焦；一轮一个 scope |
 | 编造验证结果 | `verifyMode=human` 时标待人 |
@@ -102,7 +102,7 @@ node ops/launch-app.mjs --alias 01 --session-file $xwSession --package com.taoba
 - 写 knowledge（recipe / pitfall / unknown）  
 - R0/R1 job（observe、`*_dry_run` 等 automatic）  
 - Explorer ops：先 `xw-explore-session acquire`，再用同一个 `--session-file` 执行 preflight / screenshot / **dump-ui / tap / input-text / focus / launch-app**（lab **22222**，不绑 17910）
-- session canary lease 必须在控制面可见；keeper 自动 heartbeat，结束显式 release
+- session canary lease 必须在控制面可见；每个 op 自动 heartbeat，结束显式 release
 
 
 ---
@@ -232,7 +232,7 @@ Explorer 产出 recipe 默认 **`verifyMode=human`**，content 可带 `[explorer
   allow_switch_device: false
 
 步骤:
-  1) node ops/xw-explore-session.mjs acquire --alias 01 --actor <actor> --session-file <explicit-path>
+  1) node ops/xw-explore-session.mjs acquire --alias 01 --actor <actor> --session-file "$env:USERPROFILE\.xhs-explorer-sessions\<run>-01.json"
   2) timeout 1200 node ops/explore-preflight.mjs --alias 01 --session-file <same-path>
   3) 需要截屏: node ops/screenshot-and-analyze.mjs --alias 01 --session-file <same-path>
   3) 正道 devicectl job only；dump-first；vision≤2/目标（Y 可偏 −1330px，有 bounds 禁 vision）

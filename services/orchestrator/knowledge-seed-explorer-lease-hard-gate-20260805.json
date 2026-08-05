@@ -5,7 +5,7 @@
     "category": "pitfall",
     "lifecycle": "backlog",
     "title": "Explorer preflight 只检查 free 不等于已占用，设备 ops 必须绑定正式 session",
-    "content": "旧 Explorer 流程只在 preflight 检查 ready/free，随后 screenshot/dump/tap/input/focus/launch/shell 直接走 22222/ADB；因此可能实际操作设备但 Registry 仍显示 lease=free。source-only 分支 codex/explorer-lease-hard-gate-20260805 已增加 xw-explore-session acquire/heartbeat/release，并让全部支持的 Explorer ops、_win-xiaowei 与 _win-screencap 在 I/O 前校验 sessionId/leaseId/actor/device/alias/serial 和控制面可见 lease。缺 session-file、错 alias、不可见 lease、过期 token 或并发抢占均 fail closed。尚未部署或真机验证。",
+    "content": "旧 Explorer 流程只在 preflight 检查 ready/free，随后 screenshot/dump/tap/input/focus/launch/shell 直接走 22222/ADB；因此可能实际操作设备但 Registry 仍显示 lease=free。source-only 分支 codex/explorer-lease-hard-gate-20260805 已增加 xw-explore-session acquire/heartbeat/release，并让全部支持的 Explorer ops、_win-xiaowei 与 _win-screencap 在每次 I/O 前校验 sessionId/leaseId/actor/device/alias/serial、quarantine 和控制面可见 lease。生产 endpoint 固定 17920/17930；token context 仅可写用户私有目录并收紧 Windows ACL；不启动 detached keeper。缺 session-file、错 alias、不可见 lease、过期 token 或并发抢占均 fail closed。尚未部署或真机验证。",
     "appliesTo": [
       "ops/xw-explore-session.mjs",
       "ops/_explore-lease.mjs",
@@ -18,7 +18,7 @@
       "先 acquire xiaowei.lab.raw canary session 并保存显式 session-file",
       "用同一 session-file 运行 preflight 和每个 Explorer 设备 op",
       "确认 /control/v1/leases 可见 interactive lease 且 holder/device 匹配",
-      "任务 finally 显式 release；keeper 只负责避免思考间隙过期"
+      "每个设备 op 自动 heartbeat；长时间纯观察只能前台 keepalive，并在 finally 显式 release"
     ],
     "verifyMode": "constraint",
     "verifiedBy": ["fake-control-offline-tests-20260805"]

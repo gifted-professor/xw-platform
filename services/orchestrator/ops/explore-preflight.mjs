@@ -1,10 +1,8 @@
 #!/usr/bin/env node
 // Explorer 开工检查：不通则非 0，禁止开干。
 //
-//   node ops/explore-preflight.mjs --alias 01
-//   node ops/explore-preflight.mjs --alias 01 --local
-//   set XHS_LOCAL=1 && node ops/explore-preflight.mjs --alias 01
-//   node ops/explore-preflight.mjs --alias 01 --require-17910
+//   node ops/explore-preflight.mjs --alias 01 --session-file <profile-private.json>
+// 无 --session-file 只做只读体检，不授权后续设备操作。
 //
 // exit: 0 可开工 | 2 舰队/设备不行 | 4 客户端/SSH
 

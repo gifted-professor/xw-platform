@@ -158,7 +158,9 @@ verified: false
 
 ```bash
 set XHS_LOCAL=1
-node ops/explore-preflight.mjs --alias 01
+$xwSession = "$env:USERPROFILE\.xhs-explorer-sessions\xw-explore-<runId>-01.json"
+node ops/xw-explore-session.mjs acquire --alias 01 --actor <actor> --session-file $xwSession
+node ops/explore-preflight.mjs --alias 01 --session-file $xwSession
 node ops/launch-app.mjs --alias 01 --session-file <explorer-session.json> --package com.ss.android.ugc.aweme --force-stop
 # 等 5-6s 再 dump（抖音 settle 比 XHS 慢）
 node ops/dump-ui.mjs --alias 01 --session-file <explorer-session.json>

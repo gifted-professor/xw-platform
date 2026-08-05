@@ -1,24 +1,32 @@
 import { randomUUID } from "node:crypto";
 import {
+  chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
+import { execFileSync } from "node:child_process";
 
 export const EXPLORER_SESSION_SCHEMA = "xhs.explorer-session-context.v1";
 export const EXPLORER_CAPABILITY_ID = "xiaowei.lab.raw";
 export const DEFAULT_CONTROL_BASE = "http://127.0.0.1:17920";
 export const DEFAULT_REGISTRY_BASE = "http://127.0.0.1:17930";
 
+export function defaultExplorerSessionRoot() {
+  return join(homedir(), ".xhs-explorer-sessions");
+}
+
 function leaseError(code, message, status = 409) {
   return Object.assign(new Error(message), { code, status });
 }
 
-function cleanBase(value, fallback) {
+function cleanBase(value, fallback, { allowTestEndpoints = false } = {}) {
   const base = String(value || fallback).trim().replace(/\/$/, "");
   const parsed = new URL(base);
   if (!(["127.0.0.1", "localhost", "::1"].includes(parsed.hostname))) {
@@ -29,6 +37,9 @@ function cleanBase(value, fallback) {
   }
   if (parsed.username || parsed.password || parsed.pathname !== "/" || parsed.search || parsed.hash) {
     throw leaseError("CONTROL_BASE_INVALID", "Explorer lease base must not contain credentials, paths, query, or hash");
+  }
+  if (!allowTestEndpoints && base !== fallback) {
+    throw leaseError("CONTROL_BASE_INVALID", `Explorer production endpoint is fixed at ${fallback}`);
   }
   return base;
 }
@@ -73,22 +84,54 @@ async function requestJson(url, { method = "GET", body, fetchImpl = globalThis.f
 
 export function defaultExplorerSessionPath(alias, actor) {
   const safeActor = validateActor(actor).replace(/[^A-Za-z0-9._-]/g, "_");
-  return join(homedir(), ".xhs-explorer-sessions", `${safeActor}-${validateAlias(alias)}.json`);
+  return join(defaultExplorerSessionRoot(), `${safeActor}-${validateAlias(alias)}.json`);
 }
 
-export function resolveContextPath(value, { alias, actor } = {}) {
+function ensureSafeContextRoot(rootValue) {
+  const root = resolve(String(rootValue));
+  mkdirSync(root, { recursive: true, mode: 0o700 });
+  const stat = lstatSync(root);
+  const physical = realpathSync(root);
+  const sameRoot = process.platform === "win32"
+    ? physical.toLowerCase() === root.toLowerCase()
+    : physical === root;
+  if (!stat.isDirectory() || stat.isSymbolicLink() || !sameRoot) {
+    throw leaseError("EXPLORER_CONTEXT_PATH_INVALID", "session context root must be a physical directory");
+  }
+  return root;
+}
+
+export function resolveContextPath(value, {
+  alias,
+  actor,
+  contextRoot = defaultExplorerSessionRoot(),
+} = {}) {
   const selected = value || defaultExplorerSessionPath(alias, actor);
   if (!isAbsolute(String(selected))) {
     throw leaseError("EXPLORER_CONTEXT_PATH_INVALID", "session context path must be absolute");
   }
   const path = resolve(String(selected));
+  const root = ensureSafeContextRoot(contextRoot);
+  const sameParent = process.platform === "win32"
+    ? dirname(path).toLowerCase() === root.toLowerCase()
+    : dirname(path) === root;
+  if (!sameParent) {
+    throw leaseError("EXPLORER_CONTEXT_PATH_INVALID", `session context must be directly under ${root}`);
+  }
   return path;
 }
 
-export function readExplorerSessionContext(pathValue) {
-  const path = resolve(String(pathValue || ""));
+export function readExplorerSessionContext(pathValue, { contextRoot = defaultExplorerSessionRoot() } = {}) {
+  const path = resolveContextPath(pathValue, { contextRoot });
   let context;
-  try { context = JSON.parse(readFileSync(path, "utf8")); } catch (error) {
+  try {
+    const stat = lstatSync(path);
+    if (!stat.isFile() || stat.isSymbolicLink()) {
+      throw leaseError("EXPLORER_SESSION_CONTEXT_INVALID", "Explorer session context must be a regular file", 400);
+    }
+    context = JSON.parse(readFileSync(path, "utf8"));
+  } catch (error) {
+    if (error?.code === "EXPLORER_SESSION_CONTEXT_INVALID") throw error;
     throw leaseError(
       error?.code === "ENOENT" ? "EXPLORER_SESSION_CONTEXT_REQUIRED" : "EXPLORER_SESSION_CONTEXT_INVALID",
       error?.code === "ENOENT" ? `Explorer session context is missing: ${path}` : `invalid Explorer session context: ${error.message}`,
@@ -96,6 +139,13 @@ export function readExplorerSessionContext(pathValue) {
     );
   }
   const required = ["sessionId", "leaseId", "token", "actorId", "deviceId", "alias"];
+  if (Object.hasOwn(context || {}, "controlBase") || Object.hasOwn(context || {}, "registryBase")) {
+    throw leaseError(
+      "EXPLORER_SESSION_CONTEXT_INVALID",
+      "Explorer session context must not select control or registry endpoints",
+      400,
+    );
+  }
   if (context?.schemaId !== EXPLORER_SESSION_SCHEMA || required.some((key) => typeof context[key] !== "string" || !context[key])) {
     throw leaseError("EXPLORER_SESSION_CONTEXT_INVALID", "Explorer session context is incomplete", 400);
   }
@@ -104,13 +154,38 @@ export function readExplorerSessionContext(pathValue) {
   return { path, context };
 }
 
-function writeContextExclusive(path, context) {
-  mkdirSync(dirname(path), { recursive: true });
+function hardenContextPermissions(path, { skipAclHardening = false } = {}) {
+  if (skipAclHardening) return;
+  if (process.platform !== "win32") {
+    chmodSync(path, 0o600);
+    return;
+  }
+  const username = String(process.env.USERNAME || "").trim();
+  const domain = String(process.env.USERDOMAIN || "").trim();
+  if (!username) throw leaseError("EXPLORER_CONTEXT_ACL_FAILED", "USERNAME is required to secure session context", 500);
+  const principal = domain ? `${domain}\\${username}` : username;
+  try {
+    execFileSync("icacls.exe", [path, "/inheritance:r", "/grant:r", `${principal}:(F)`], {
+      windowsHide: true,
+      stdio: "ignore",
+    });
+  } catch (error) {
+    throw leaseError("EXPLORER_CONTEXT_ACL_FAILED", `failed to secure session context ACL: ${error.message}`, 500);
+  }
+}
+
+function writeContextExclusive(path, context, options = {}) {
   writeFileSync(path, `${JSON.stringify(context, null, 2)}\n`, {
     encoding: "utf8",
     flag: "wx",
     mode: 0o600,
   });
+  try {
+    hardenContextPermissions(path, options);
+  } catch (error) {
+    rmSync(path, { force: true });
+    throw error;
+  }
 }
 
 export async function acquireExplorerSession({
@@ -120,15 +195,18 @@ export async function acquireExplorerSession({
   controlBase = DEFAULT_CONTROL_BASE,
   registryBase = DEFAULT_REGISTRY_BASE,
   fetchImpl = globalThis.fetch,
+  allowTestEndpoints = false,
+  contextRoot = defaultExplorerSessionRoot(),
+  skipAclHardening = false,
 } = {}) {
   const requestedAlias = validateAlias(alias);
   const actorId = validateActor(actor);
-  const path = resolveContextPath(contextPath, { alias: requestedAlias, actor: actorId });
+  const path = resolveContextPath(contextPath, { alias: requestedAlias, actor: actorId, contextRoot });
   if (existsSync(path)) {
     throw leaseError("EXPLORER_SESSION_CONTEXT_EXISTS", `refusing to replace existing session context: ${path}`, 409);
   }
-  const registry = cleanBase(registryBase, DEFAULT_REGISTRY_BASE);
-  const control = cleanBase(controlBase, DEFAULT_CONTROL_BASE);
+  const registry = cleanBase(registryBase, DEFAULT_REGISTRY_BASE, { allowTestEndpoints });
+  const control = cleanBase(controlBase, DEFAULT_CONTROL_BASE, { allowTestEndpoints });
   const entry = await requestJson(`${registry}/api/agent-entry`, { fetchImpl });
   const device = (entry.devices || []).find((item) => item.alias === requestedAlias);
   if (!device) throw leaseError("EXPLORER_DEVICE_NOT_FOUND", `alias ${requestedAlias} is not registered`, 404);
@@ -153,13 +231,31 @@ export async function acquireExplorerSession({
   const selectedAlias = session?.routeDecision?.selectedDevice?.alias;
   if (!session?.sessionId || !session?.leaseId || !session?.token || !session?.deviceId
     || session.scopeCapabilityId !== EXPLORER_CAPABILITY_ID || session.canary !== true
-    || selectedAlias !== requestedAlias) {
+    || session.actorId !== actorId || selectedAlias !== requestedAlias
+    || session.routeDecision?.selectedDevice?.deviceId !== session.deviceId) {
     if (session?.sessionId && session?.token) {
       await requestJson(`${control}/control/v1/sessions/${encodeURIComponent(session.sessionId)}/release`, {
         method: "POST", body: { token: session.token }, fetchImpl,
       }).catch(() => {});
     }
     throw leaseError("EXPLORER_SESSION_BINDING_INVALID", "control returned an incorrectly bound Explorer session", 409);
+  }
+  let leasePayload;
+  try {
+    leasePayload = await requestJson(`${control}/control/v1/leases`, { fetchImpl });
+  } catch (error) {
+    await requestJson(`${control}/control/v1/sessions/${encodeURIComponent(session.sessionId)}/release`, {
+      method: "POST", body: { token: session.token }, fetchImpl,
+    }).catch(() => {});
+    throw error;
+  }
+  const visibleLease = (leasePayload.leases || []).find((item) => item.leaseId === session.leaseId);
+  if (!visibleLease || visibleLease.deviceId !== session.deviceId || visibleLease.kind !== "interactive"
+    || visibleLease.holderId !== actorId) {
+    await requestJson(`${control}/control/v1/sessions/${encodeURIComponent(session.sessionId)}/release`, {
+      method: "POST", body: { token: session.token }, fetchImpl,
+    }).catch(() => {});
+    throw leaseError("EXPLORER_LEASE_NOT_VISIBLE", "new Explorer lease is not visible in the control plane", 423);
   }
   const context = {
     schemaId: EXPLORER_SESSION_SCHEMA,
@@ -175,11 +271,9 @@ export async function acquireExplorerSession({
     canary: true,
     createdAt: new Date().toISOString(),
     expiresAt: session.expiresAt,
-    controlBase: control,
-    registryBase: registry,
   };
   try {
-    writeContextExclusive(path, context);
+    writeContextExclusive(path, context, { skipAclHardening });
   } catch (error) {
     await requestJson(`${control}/control/v1/sessions/${encodeURIComponent(session.sessionId)}/release`, {
       method: "POST", body: { token: session.token }, fetchImpl,
@@ -192,14 +286,18 @@ export async function acquireExplorerSession({
 export async function verifyExplorerSession({
   contextPath,
   alias = null,
+  controlBase = DEFAULT_CONTROL_BASE,
+  registryBase = DEFAULT_REGISTRY_BASE,
   fetchImpl = globalThis.fetch,
+  allowTestEndpoints = false,
+  contextRoot = defaultExplorerSessionRoot(),
 } = {}) {
-  const { path, context } = readExplorerSessionContext(contextPath);
+  const { path, context } = readExplorerSessionContext(contextPath, { contextRoot });
   if (alias !== null && validateAlias(alias) !== context.alias) {
     throw leaseError("EXPLORER_SESSION_ALIAS_MISMATCH", `session is for ${context.alias}, not ${alias}`, 409);
   }
-  const control = cleanBase(context.controlBase, DEFAULT_CONTROL_BASE);
-  const registry = cleanBase(context.registryBase, DEFAULT_REGISTRY_BASE);
+  const control = cleanBase(controlBase, DEFAULT_CONTROL_BASE, { allowTestEndpoints });
+  const registry = cleanBase(registryBase, DEFAULT_REGISTRY_BASE, { allowTestEndpoints });
   const heartbeat = await requestJson(
     `${control}/control/v1/sessions/${encodeURIComponent(context.sessionId)}/heartbeat`,
     { method: "POST", body: { token: context.token }, fetchImpl },
@@ -220,7 +318,8 @@ export async function verifyExplorerSession({
   }
   const device = (entry.devices || []).find((item) => item.alias === context.alias);
   const entryDeviceId = device?.control?.deviceId || device?.deviceId;
-  if (!device || entryDeviceId !== context.deviceId || !device.serial || device.state?.online !== true) {
+  if (!device || entryDeviceId !== context.deviceId || !device.serial || device.state?.online !== true
+    || device.state?.quarantined === true) {
     throw leaseError("EXPLORER_DEVICE_BINDING_CHANGED", "alias/device/serial binding changed while session was active", 409);
   }
   return {
@@ -234,9 +333,15 @@ export async function verifyExplorerSession({
   };
 }
 
-export async function releaseExplorerSession({ contextPath, fetchImpl = globalThis.fetch } = {}) {
-  const { path, context } = readExplorerSessionContext(contextPath);
-  const control = cleanBase(context.controlBase, DEFAULT_CONTROL_BASE);
+export async function releaseExplorerSession({
+  contextPath,
+  controlBase = DEFAULT_CONTROL_BASE,
+  fetchImpl = globalThis.fetch,
+  allowTestEndpoints = false,
+  contextRoot = defaultExplorerSessionRoot(),
+} = {}) {
+  const { path, context } = readExplorerSessionContext(contextPath, { contextRoot });
+  const control = cleanBase(controlBase, DEFAULT_CONTROL_BASE, { allowTestEndpoints });
   let released = false;
   let alreadyExpired = false;
   try {
@@ -245,6 +350,9 @@ export async function releaseExplorerSession({ contextPath, fetchImpl = globalTh
       { method: "POST", body: { token: context.token }, fetchImpl },
     );
     released = payload.released === true;
+    if (!released) {
+      throw leaseError("EXPLORER_RELEASE_NOT_CONFIRMED", "control did not confirm Explorer session release", 409);
+    }
   } catch (error) {
     if (error.status === 404) alreadyExpired = true;
     else throw error;
@@ -257,13 +365,31 @@ export async function keepExplorerSessionAlive({
   contextPath,
   intervalMs = 15_000,
   maxDurationMs = 40 * 60_000,
+  controlBase = DEFAULT_CONTROL_BASE,
+  registryBase = DEFAULT_REGISTRY_BASE,
   fetchImpl = globalThis.fetch,
+  allowTestEndpoints = false,
+  contextRoot = defaultExplorerSessionRoot(),
+  expectedContextId = null,
+  expectedSessionId = null,
   sleep = (ms) => new Promise((resolveSleep) => setTimeout(resolveSleep, ms)),
 } = {}) {
   const started = Date.now();
   while (Date.now() - started < maxDurationMs) {
     if (!existsSync(contextPath)) return { stopped: "context_removed" };
-    await verifyExplorerSession({ contextPath, fetchImpl });
+    const current = readExplorerSessionContext(contextPath, { contextRoot }).context;
+    if ((expectedContextId && current.contextId !== expectedContextId)
+      || (expectedSessionId && current.sessionId !== expectedSessionId)) {
+      throw leaseError("EXPLORER_KEEPALIVE_IDENTITY_CHANGED", "session context identity changed", 409);
+    }
+    await verifyExplorerSession({
+      contextPath,
+      controlBase,
+      registryBase,
+      fetchImpl,
+      allowTestEndpoints,
+      contextRoot,
+    });
     await sleep(intervalMs);
   }
   return { stopped: "max_duration" };

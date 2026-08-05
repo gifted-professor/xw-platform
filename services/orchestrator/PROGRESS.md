@@ -4,7 +4,7 @@
 
 ## 2026-08-05 Explorer lease 硬闸（source-only，尚未部署）
 
-发现 `/xw explore` 的文档要求与原子脚本不一致：`explore-preflight` 只检查 `lease=free`，随后 screenshot/dump/tap/input/focus/launch/shell 等直接走 22222/ADB，没有 acquire session，因此可能出现“设备正被 agent 操作但 Registry 仍显示 free”。分支 `codex/explorer-lease-hard-gate-20260805` 已补 `ops/xw-explore-session.mjs`：按 alias 原子 acquire `xiaowei.lab.raw` canary session、把 token 仅写入 mode=0600 context、后台 ≤15s heartbeat、显式 release。全部 Explorer 设备 ops 与底层 `_win-xiaowei`/`_win-screencap` 在 I/O 前会 heartbeat，并核对 session/lease/actor/device/alias/serial 与 `/control/v1/leases` 可见记录；缺 context、错 alias、不可见 lease 或第二 agent 抢占均 fail closed。当前只完成源码和 fake-control 离线测试，未碰设备、未 acquire live session、未部署；上线后旧的不带 `--session-file` 调用会按设计失败。
+发现 `/xw explore` 的文档要求与原子脚本不一致：`explore-preflight` 只检查 `lease=free`，随后 screenshot/dump/tap/input/focus/launch/shell 等直接走 22222/ADB，没有 acquire session，因此可能出现“设备正被 agent 操作但 Registry 仍显示 free”。分支 `codex/explorer-lease-hard-gate-20260805` 已补 `ops/xw-explore-session.mjs`：按 alias 原子 acquire `xiaowei.lab.raw` canary session、把 token 限定写入用户私有 context 目录并在 Windows 收紧 ACL、由每个设备 op heartbeat、显式 release。全部 Explorer 设备 ops 与底层 `_win-xiaowei`/`_win-screencap` 在每次 I/O 前会 heartbeat，并核对 session/lease/actor/device/alias/serial、quarantine 与 `/control/v1/leases` 可见记录；生产 endpoint 固定 17920/17930，context 不可改写 endpoint；无 detached keeper，前台 keepalive 钉死 contextId/sessionId。缺 context、错 alias、不可见 lease 或第二 agent 抢占均 fail closed。当前只完成源码和 fake-control 离线测试，未碰设备、未 acquire live session、未部署；上线后旧的不带 `--session-file` 调用会按设计失败。
 
 ## 一句话现状（北极星，所有 agent 必读）
 

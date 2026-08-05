@@ -24,7 +24,7 @@ git pull
 ```powershell
 cd C:\Users\Public\xhs-registry
 $env:XHS_LOCAL = "1"
-node ops/explore-preflight.mjs --alias 01
+node ops/explore-preflight.mjs --alias 01 --session-file "$env:USERPROFILE\.xhs-explorer-sessions\<active>.json"
 ```
 
 `win32` 下也可省略 `XHS_LOCAL`（`_explore-lib` 自动本地）。不要用 `Host xhs-windows → 127.0.0.1` 当正式方案。
