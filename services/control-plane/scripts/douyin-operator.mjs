@@ -738,9 +738,8 @@ export async function shareLink(op, keyword, { wait = settle, progress = () => {
 }
 
 function isSystemHomeFocus(focus) {
-  return /com\.miui\.home|launcher/i.test(
-    `${focus?.package || ""} ${focus?.activity || ""} ${focus?.raw || ""}`,
-  );
+  return focus?.package === "com.miui.home"
+    && /(?:^|\.)launcher\.Launcher$/i.test(String(focus?.activity || ""));
 }
 
 export function hasExactSearchInput(nodes, keyword) {
@@ -834,12 +833,18 @@ function isRecoverySafeFocus(focus) {
   return focusMatches(focus, /SplashActivity/i) || isSystemHomeFocus(focus);
 }
 
-export async function inspectRecoveryPage(op, { evidenceDir } = {}) {
+export async function inspectRecoveryPage(op, {
+  evidenceDir,
+  screenshotLabel = "inspection",
+} = {}) {
   if (!evidenceDir) throw new Error("douyin recovery inspection requires --evidence-dir");
   mkdirSync(evidenceDir, { recursive: true });
   const startedAt = new Date().toISOString();
   const focusBefore = await op.currentFocus();
-  const screenshot = await op.capturePng(join(evidenceDir, `douyin-recovery-inspect-${Date.now()}.png`));
+  const screenshot = await op.capturePng(join(
+    evidenceDir,
+    `douyin-recovery-${screenshotLabel}-${Date.now()}.png`,
+  ));
   const doc = await dumpWithRetry(op, "douyin-recovery-inspect", { attempts: 3 });
   const focus = await op.currentFocus();
   const focusStable = sameFocus(focusBefore, focus);
@@ -852,7 +857,7 @@ export async function inspectRecoveryPage(op, { evidenceDir } = {}) {
     evidenceFiles: [{
       path: screenshot.path,
       kind: "screenshot",
-      label: "douyin-recovery-inspection",
+      label: `douyin-recovery-${screenshotLabel}`,
     }],
     observation: {
       schemaVersion: 1,
@@ -875,17 +880,68 @@ export async function inspectRecoveryPage(op, { evidenceDir } = {}) {
   };
 }
 
-export async function recoverShareLink(op, { evidenceDir } = {}) {
-  const inspected = await inspectRecoveryPage(op, { evidenceDir });
-  const focus = inspected.observation?.focus || null;
-  const safeStateVerified = inspected.ok === true && isRecoverySafeFocus(focus);
+export async function recoverShareLink(op, { evidenceDir, wait = settle } = {}) {
+  const before = await inspectRecoveryPage(op, {
+    evidenceDir,
+    screenshotLabel: "initial",
+  });
+  const beforeFocus = before.observation?.focus || null;
+  const alreadySafe = before.ok === true && isRecoverySafeFocus(beforeFocus);
+  if (alreadySafe) {
+    return {
+      ...before,
+      ok: true,
+      step: "already-safe-main",
+      focus: beforeFocus,
+      safeStateVerified: true,
+      zeroActionVerified: true,
+      transitionPerformed: false,
+    };
+  }
+
+  // A changing focus is not safe to act on. A stable foreign focus may receive one
+  // Android HOME action, but this recovery attempt intentionally remains failed.
+  // The caller must run a fresh hash-bound inspection and then a zero-action recovery.
+  if (before.ok !== true) {
+    return {
+      ...before,
+      ok: false,
+      focus: beforeFocus,
+      safeStateVerified: false,
+      zeroActionVerified: false,
+      transitionPerformed: false,
+    };
+  }
+
+  await op.home();
+  await wait(1000);
+  const after = await inspectRecoveryPage(op, {
+    evidenceDir,
+    screenshotLabel: "after-home-transition",
+  });
+  const focus = after.observation?.focus || null;
+  const safeStateVerified = after.ok === true && isSystemHomeFocus(focus);
   return {
-    ...inspected,
-    ok: safeStateVerified,
-    step: safeStateVerified ? "already-safe-main" : "safe-state-not-verified",
+    ...after,
+    ok: false,
+    step: safeStateVerified
+      ? "system-home-transitioned-reinspect-required"
+      : "system-home-transition-failed",
+    stoppedBeforeAction: false,
     focus,
     safeStateVerified,
-    zeroActionVerified: safeStateVerified,
+    zeroActionVerified: false,
+    transitionPerformed: true,
+    evidenceFiles: [
+      ...(before.evidenceFiles || []).map((file) => ({
+        ...file,
+        label: "douyin-recovery-before-home-transition",
+      })),
+      ...(after.evidenceFiles || []).map((file) => ({
+        ...file,
+        label: "douyin-recovery-after-home-transition",
+      })),
+    ],
   };
 }
 
