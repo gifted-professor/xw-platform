@@ -2219,10 +2219,19 @@ export class ControlPlane {
       // Default fleet policy: always leave the device on system desktop after a job.
       // Soft: failure is recorded, does not flip RESTORATION_FAILED / quarantine.
       if (shouldReturnHomeAfterJob({ recoveryAttempt: false })) {
-        const returnHome = await returnDeviceHome({
-          device,
-          leaseAuthorization: authorizedContext.leaseAuthorization,
-        });
+        let returnHome;
+        try {
+          returnHome = await returnDeviceHome({
+            device,
+            leaseAuthorization: authorizedContext.leaseAuthorization,
+          });
+        } catch (error) {
+          returnHome = {
+            ok: false,
+            reason: "return_home_uncaught",
+            error: String(error?.message || error).slice(0, 240),
+          };
+        }
         restoration = { ...(restoration && typeof restoration === "object" ? restoration : { ok: true }), returnHome };
         this.evidence.appendEvent(job.runId, {
           type: "job.return_home",

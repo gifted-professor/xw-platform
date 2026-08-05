@@ -56,6 +56,24 @@ test("returnDeviceHome presses home and checks launcher focus", async () => {
   assert.deepEqual(calls.map((c) => c[0]), ["ctor", "start", "home", "focus", "close"]);
 });
 
+test("returnDeviceHome soft-fails when GatewayOperator.start throws", async () => {
+  class BoomOp {
+    constructor() {}
+    async start() {
+      throw new Error("gateway probe failed");
+    }
+  }
+  const result = await returnDeviceHome({
+    device: { runtimeId: "serial-01" },
+    leaseAuthorization: { leaseId: "L", token: "T", deviceId: "D" },
+    GatewayOperatorImpl: BoomOp,
+    settleMs: 0,
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, "return_home_error");
+  assert.match(String(result.error || ""), /gateway probe failed/);
+});
+
 test("returnDeviceHome soft-fails without lease/runtime", async () => {
   const a = await returnDeviceHome({ device: {}, leaseAuthorization: { leaseId: "L", token: "T", deviceId: "D" } });
   assert.equal(a.ok, false);
