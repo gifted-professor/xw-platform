@@ -255,28 +255,40 @@ async function dumpWithRetry(op, label, { attempts = 4, accept = () => true } = 
   throw lastError || new Error(`douyin dump failed: ${label}`);
 }
 
-export async function startDouyin(op) {
-  await op.shellExec(`am force-stop ${DOUYIN_PACKAGE}`, 8000);
+export async function startDouyin(op, { forceStop = true } = {}) {
+  if (forceStop) {
+    await op.shellExec(`am force-stop ${DOUYIN_PACKAGE}`, 8000);
+  }
   await op.shellExec(
     `monkey -p ${DOUYIN_PACKAGE} -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1`,
     15000,
   );
   let focus = null;
-  for (let attempt = 0; attempt < 12; attempt += 1) {
-    await settle(attempt === 0 ? SETTLE_AFTER_LAUNCH_MS : 800);
+  const attempts = forceStop ? 12 : 8;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    await settle(attempt === 0 ? (forceStop ? SETTLE_AFTER_LAUNCH_MS : 2500) : 800);
     focus = await op.currentFocus();
     if (focus.package === DOUYIN_PACKAGE) return focus;
   }
   return focus || { package: null, activity: null, raw: "" };
 }
 
+/** Prefer soft bring-to-foreground; only force-stop if Douyin is not running. */
+export async function ensureDouyinForeground(op) {
+  let focus = await op.currentFocus();
+  if (focus.package === DOUYIN_PACKAGE) return focus;
+  focus = await startDouyin(op, { forceStop: false });
+  if (focus.package === DOUYIN_PACKAGE) return focus;
+  return startDouyin(op, { forceStop: true });
+}
+
 export async function snapshot(op, label = "douyin-snapshot", { launchIfNeeded = true } = {}) {
   let focus = await op.currentFocus();
   if (launchIfNeeded && focus.package !== DOUYIN_PACKAGE) {
-    focus = await startDouyin(op);
+    focus = await ensureDouyinForeground(op);
   }
   await settle(500);
-  const doc = await dumpWithRetry(op, label);
+  const doc = await dumpWithRetry(op, label, { attempts: 3 });
   focus = await op.currentFocus();
   const nodes = semanticSnapshot(doc);
   return {
@@ -294,7 +306,7 @@ export async function search(op, keyword) {
   const text = String(keyword || "").trim();
   if (!text) throw new Error("search requires --keyword");
 
-  let focus = await startDouyin(op);
+  let focus = await ensureDouyinForeground(op);
   const homeDoc = await dumpWithRetry(op, "douyin-search-home");
   const entry = findSearchEntry(homeDoc.nodes);
   await op.tap(entry.cx, entry.cy);
@@ -506,10 +518,15 @@ const isDirectRun = Boolean(process.argv[1])
 
 if (isDirectRun) {
   main().catch((error) => {
-    console.error(JSON.stringify({
+    const payload = JSON.stringify({
       ok: false,
-      error: { message: error?.message || String(error) },
-    }));
+      errorCode: "DOUYIN_OPERATOR_ERROR",
+      error: { message: String(error?.message || error).slice(0, 400) },
+    });
+    // stdout so control-plane command-runner can surface adapterCode/message;
+    // stderr kept for local debugging (Windows bridge does not consume this path).
+    console.log(payload);
+    console.error(payload);
     process.exit(1);
   });
 }
