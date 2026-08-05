@@ -1,6 +1,8 @@
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { fingerprint } from "../../control-plane/lib/canonical.mjs";
 import { requireFile, runJsonCommand } from "../../control-plane/lib/command-runner.mjs";
 import { ControlPlaneError } from "../../control-plane/lib/errors.mjs";
 
@@ -23,35 +25,93 @@ function operatorEnv(leaseAuthorization) {
   };
 }
 
-function commandArgs({ script, action, device, params = {} }) {
+function commandArgs({ script, action, device, params = {}, evidenceDirectory = null, job = null }) {
   if (!device.runtimeId) {
     throw new ControlPlaneError("DEVICE_RUNTIME_ID_MISSING", "Douyin adapter needs a private runtime ID", { status: 503 });
   }
   const args = [script, "--serial", device.runtimeId, "--transport", "gateway", action];
-  if (action === "search") {
+  if (action === "search" || action === "share-link") {
     const keyword = params.keyword ?? params.text;
     if (typeof keyword !== "string" || !keyword.trim()) {
-      throw new ControlPlaneError("DOUYIN_KEYWORD_REQUIRED", "douyin.observe.search requires params.keyword", {
+      throw new ControlPlaneError("DOUYIN_KEYWORD_REQUIRED", `${action} requires params.keyword`, {
         status: 400,
       });
     }
     args.push("--keyword", String(keyword).trim());
   }
+  if (action === "share-link-restore" && typeof params.keyword === "string" && params.keyword.trim()) {
+    args.push("--keyword", params.keyword.trim());
+  }
+  if (action === "share-link" || action === "share-link-restore") {
+    if (!evidenceDirectory) {
+      throw new ControlPlaneError("EVIDENCE_DIR_REQUIRED", "Douyin share-link needs an evidence directory", {
+        status: 500,
+      });
+    }
+    args.push("--evidence-dir", evidenceDirectory);
+    if (job?.runId) args.push("--run-id", job.runId);
+    if (job?.jobId) args.push("--job-id", job.jobId);
+  }
   return args;
+}
+
+function isDouyinShareUrl(value) {
+  return /^https:\/\/v\.douyin\.com\/[A-Za-z0-9_-]+\/$/.test(String(value || ""));
+}
+
+function writeShareLinkEvidence(evidenceDirectory, output) {
+  mkdirSync(evidenceDirectory, { recursive: true });
+  const path = join(evidenceDirectory, "douyin-share-link-observation.json");
+  const url = isDouyinShareUrl(output?.url) ? output.url : null;
+  const evidence = {
+    schemaId: "xhs.douyin-share-link-observation.v1",
+    schemaVersion: 1,
+    observedAt: Number.isFinite(Date.parse(output?.observedAt)) ? output.observedAt : new Date().toISOString(),
+    url,
+    keywordFingerprint: typeof output?.keyword === "string" ? fingerprint(output.keyword) : null,
+    keywordLength: typeof output?.keyword === "string" ? output.keyword.length : null,
+    copied: output?.copied === true,
+    openedDetail: output?.openedDetail === true,
+    searchRestored: output?.searchRestored === true,
+    backHome: output?.backHome === true,
+    stoppedBeforeExternalShare: output?.stoppedBeforeExternalShare === true,
+    externalShareTriggered: output?.externalShareTriggered === true,
+    locatorFingerprint: fingerprint({
+      imageFilter: output?.imageFilter?.bounds || null,
+      selectedCard: output?.selectedCard?.bounds || null,
+      shareButton: output?.shareButton?.bounds || null,
+      shareLinkAction: output?.shareLinkAction?.bounds || null,
+    }),
+  };
+  writeFileSync(path, `${JSON.stringify(evidence, null, 2)}\n`, "utf8");
+  const files = [{ path, kind: "observation", label: "douyin-share-link" }];
+  const progressPath = join(evidenceDirectory, "progress.jsonl");
+  if (existsSync(progressPath)) {
+    files.push({ path: progressPath, kind: "progress", label: "douyin-share-link-progress" });
+  }
+  return files;
 }
 
 export function createDouyinAdapter({ run = runJsonCommand, operatorPath = defaultScript } = {}) {
   return {
     id: "douyin",
-    async execute({ capability, device, params, leaseAuthorization }) {
+    async execute({ capability, device, params, evidenceDirectory, leaseAuthorization, job }) {
       requireFile(operatorPath, capability.id);
       const output = await run(process.execPath, commandArgs({
         script: operatorPath,
         action: capability.implementation.action,
         device,
         params,
+        evidenceDirectory,
+        job,
       }), { cwd: root, timeoutMs: capability.timeoutMs, env: operatorEnv(leaseAuthorization) });
-      return { vendorCode: 0, output, evidenceFiles: [] };
+      return {
+        vendorCode: 0,
+        output,
+        evidenceFiles: capability.implementation.action === "share-link"
+          ? writeShareLinkEvidence(evidenceDirectory, output)
+          : [],
+      };
     },
     async verify({ capability, execution }) {
       const output = execution.output;
@@ -73,6 +133,35 @@ export function createDouyinAdapter({ run = runJsonCommand, operatorPath = defau
             && output.stoppedBeforeOpen === true
           ),
           mode: "state",
+        };
+      }
+      if (action === "share-link") {
+        const ok = Boolean(
+          output?.ok
+          && isDouyinShareUrl(output?.url)
+          && output?.text === output.url
+          && output?.copied === true
+          && output?.openedDetail === true
+          && output?.searchRestored === true
+          && output?.backHome === true
+          && output?.stoppedBeforeExternalShare === true
+          && output?.externalShareTriggered === false
+          && output?.focus?.package === DOUYIN_PACKAGE
+          && /SplashActivity/i.test(output?.focus?.activity || output?.focus?.raw || "")
+        );
+        return {
+          ok,
+          mode: "hash",
+          hash: ok ? fingerprint({
+            capabilityId: capability.id,
+            url: output.url,
+            copied: true,
+            openedDetail: true,
+            searchRestored: true,
+            backHome: true,
+            stoppedBeforeExternalShare: true,
+            externalShareTriggered: false,
+          }) : null,
         };
       }
       if (action === "like-dry-run") {
@@ -116,8 +205,25 @@ export function createDouyinAdapter({ run = runJsonCommand, operatorPath = defau
       }
       return { ok: false, mode: "state" };
     },
-    async restore({ capability }) {
+    async restore({ capability, device, params, evidenceDirectory, leaseAuthorization, job }) {
       if (!capability.restoration?.required) return { ok: true };
+      if (capability.implementation.action === "share-link") {
+        requireFile(operatorPath, capability.id);
+        const output = await run(process.execPath, commandArgs({
+          script: operatorPath,
+          action: "share-link-restore",
+          device,
+          params,
+          evidenceDirectory,
+          job,
+        }), { cwd: root, timeoutMs: 90000, env: operatorEnv(leaseAuthorization) });
+        return {
+          ok: output?.ok === true && output?.safeStateVerified === true,
+          step: output?.step || null,
+          focus: output?.focus || null,
+          keywordRestored: output?.keywordRestored ?? null,
+        };
+      }
       // search already backs to Splash inside the operator; restore is a soft ack.
       return { ok: true };
     },
