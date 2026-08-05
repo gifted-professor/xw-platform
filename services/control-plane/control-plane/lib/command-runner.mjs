@@ -99,15 +99,32 @@ export function runJsonCommand(command, args, {
         return;
       }
       const output = stdout.toString("utf8").trim();
+      const errText = stderr.toString("utf8").trim();
       if (code !== 0) {
         let adapterCode = null;
-        try {
-          const parsed = output ? JSON.parse(output) : null;
-          adapterCode = typeof parsed?.errorCode === "string"
-            ? parsed.errorCode.slice(0, 96)
-            : null;
-        } catch {
-          // A failed adapter is not required to return JSON. Keep diagnostics bounded.
+        let adapterMessage = null;
+        const tryParse = (raw) => {
+          if (!raw) return null;
+          try {
+            return JSON.parse(raw);
+          } catch {
+            // Adapters may print a trailing JSON line after noise.
+            const start = raw.lastIndexOf("{");
+            const end = raw.lastIndexOf("}");
+            if (start >= 0 && end > start) {
+              try { return JSON.parse(raw.slice(start, end + 1)); } catch { return null; }
+            }
+            return null;
+          }
+        };
+        const parsed = tryParse(output) || tryParse(errText);
+        if (typeof parsed?.errorCode === "string") {
+          adapterCode = parsed.errorCode.slice(0, 96);
+        }
+        if (typeof parsed?.error?.message === "string") {
+          adapterMessage = parsed.error.message.slice(0, 240);
+        } else if (typeof parsed?.error === "string") {
+          adapterMessage = parsed.error.slice(0, 240);
         }
         reject(new ControlPlaneError("ADAPTER_FAILED", "adapter process failed", {
           status: 502,
@@ -115,6 +132,7 @@ export function runJsonCommand(command, args, {
             exitCode: code,
             stderrPresent: stderr.length > 0,
             adapterCode,
+            adapterMessage,
           },
         }));
         return;
