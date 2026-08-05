@@ -358,12 +358,12 @@ export class GatewayOperator {
     ];
     let lastDumpOut = "";
     let dumped = false;
-    // Video/Splash animation → "could not get idle state". Tap center to pause,
-    // then retry with backoff (same pattern as FastOperator.pauseIfVideoNote).
+    // Video/Splash animation → "could not get idle state". R0-safe settle:
+    // wake + backoff only — no fixed-coordinate tap (would hit arbitrary UI).
     for (let attempt = 0; attempt < 5 && !dumped; attempt += 1) {
       if (attempt > 0) {
-        await this.shellExec("input tap 540 1200", 5000).catch(() => null);
-        await new Promise((r) => setTimeout(r, 900 + attempt * 700));
+        await this.shellExec("input keyevent KEYCODE_WAKEUP", 5000).catch(() => null);
+        await new Promise((r) => setTimeout(r, 1200 + attempt * 800));
       }
       for (const cmd of dumpVariants) {
         lastDumpOut = await this.shellExec(cmd, 25000).catch((error) => String(error?.message || error));

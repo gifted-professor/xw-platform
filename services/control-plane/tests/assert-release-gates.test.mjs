@@ -117,6 +117,51 @@ test("write-release-test-receipt binds HEAD and bodyHash", () => {
   }
 });
 
+test("assert-release-gates rejects thin receipt suite", () => {
+  const runtimeDir = join(repoRoot, "runtime");
+  mkdirSync(runtimeDir, { recursive: true });
+  const receiptPath = join(runtimeDir, "release-test-receipt.json");
+  const backupPath = join(runtimeDir, `release-test-receipt.bak-thin-${Date.now()}.json`);
+  let hadBackup = false;
+  try {
+    const existing = spawnSync("cmd", ["/c", `if exist "${receiptPath}" copy /Y "${receiptPath}" "${backupPath}"`], {
+      encoding: "utf8",
+    });
+    hadBackup = existing.status === 0;
+    const head = spawnSync("git", ["-C", repoRoot, "rev-parse", "HEAD"], { encoding: "utf8" }).stdout.trim();
+    const thin = {
+      ok: true,
+      gitCommit: head,
+      command: "node --test tests/return-home.test.mjs",
+      passed: 4,
+      failed: 0,
+      completedAt: new Date().toISOString(),
+    };
+    const canonical = `${JSON.stringify(thin, Object.keys(thin).sort())}\n`;
+    thin.bodyHash = createHash("sha256").update(canonical).digest("hex");
+    writeFileSync(receiptPath, `${JSON.stringify(thin, null, 2)}\n`);
+
+    const result = runGates({
+      XHS_ALLOW_DIRTY_WORKTREE: "1",
+      XHS_ALLOW_NON_MAIN: "1",
+      XHS_REQUIRE_TEST_RECEIPT: "1",
+      XHS_RECEIPT_MIN_PASSED: "15",
+      XHS_RECEIPT_REQUIRE_SUITE: "1",
+    });
+    assert.notEqual(result.status, 0);
+    const body = parseJsonLine(result.stdout);
+    assert.equal(body.ok, false);
+    assert.match(String(body.error || ""), /runtime-critical|passed must be/);
+  } finally {
+    if (hadBackup) {
+      spawnSync("cmd", ["/c", `move /Y "${backupPath}" "${receiptPath}"`], { encoding: "utf8" });
+    } else {
+      try { rmSync(receiptPath, { force: true }); } catch { /* ignore */ }
+      try { rmSync(backupPath, { force: true }); } catch { /* ignore */ }
+    }
+  }
+});
+
 test("AdapterRegistry requires verify and restore", async () => {
   const { AdapterRegistry } = await import("../control-plane/lib/control-plane.mjs");
   assert.throws(

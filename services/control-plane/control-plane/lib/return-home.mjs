@@ -34,6 +34,8 @@ function settle(ms) {
 
 /**
  * Press HOME via GatewayOperator (lease-gated). Returns a small receipt object.
+ * Entire path is soft-fail — including GatewayOperator.start() — so a bad
+ * lease/gateway probe never escalates to RESTORATION_FAILED / recovery_required.
  */
 export async function returnDeviceHome({
   device,
@@ -49,11 +51,12 @@ export async function returnDeviceHome({
     return { ok: false, skipped: true, reason: "lease_context_missing" };
   }
 
-  const op = await new GatewayOperatorImpl({
-    serial,
-    leaseAuthorization,
-  }).start();
+  let op = null;
   try {
+    op = await new GatewayOperatorImpl({
+      serial,
+      leaseAuthorization,
+    }).start();
     await op.home();
     await settle(settleMs);
     // One bounce if still inside an app (some OEM home needs double-press).
@@ -77,6 +80,6 @@ export async function returnDeviceHome({
       error: String(error?.message || error).slice(0, 240),
     };
   } finally {
-    try { await op.close?.(); } catch { /* ignore */ }
+    try { await op?.close?.(); } catch { /* ignore */ }
   }
 }

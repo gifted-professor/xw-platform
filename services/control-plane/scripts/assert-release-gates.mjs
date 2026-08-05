@@ -10,6 +10,8 @@
  *   XHS_REQUIRE_MAIN_ORIGIN=1     — require branch main && HEAD==origin/main (fetch fail-closed)
  *   XHS_ALLOW_NON_MAIN=1          — skip main/origin check (tests only; worker must not set)
  *   XHS_RECEIPT_MAX_AGE_MS        — receipt freshness window (default 48h)
+ *   XHS_RECEIPT_MIN_PASSED        — min passed tests when receipt required (default 15)
+ *   XHS_RECEIPT_REQUIRE_SUITE=1   — command must cite ≥2 runtime-critical test files (default on with receipt)
  */
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
@@ -22,8 +24,28 @@ const requireReceipt = process.env.XHS_REQUIRE_TEST_RECEIPT === "1";
 const requireMainOrigin = process.env.XHS_REQUIRE_MAIN_ORIGIN === "1"
   && process.env.XHS_ALLOW_NON_MAIN !== "1";
 const receiptMaxAgeMs = Number(process.env.XHS_RECEIPT_MAX_AGE_MS || 48 * 60 * 60 * 1000);
+const receiptMinPassed = Number(process.env.XHS_RECEIPT_MIN_PASSED || 15);
+// When receipt is required, also require a real suite citation unless explicitly disabled.
+const requireReceiptSuite = process.env.XHS_RECEIPT_REQUIRE_SUITE !== "0";
 
 const TRACKED_PREFIXES = ["apps/", "control-plane/", "scripts/", "contracts/"];
+
+/** Receipt command must cite ≥2 of these when XHS_RECEIPT_REQUIRE_SUITE is on. */
+const RUNTIME_CRITICAL_TEST_MARKERS = Object.freeze([
+  "tests/return-home.test.mjs",
+  "tests/generated-overlay.test.mjs",
+  "tests/assert-release-gates.test.mjs",
+  "tests/control-plane-core.test.mjs",
+  "tests/stall-progress.test.mjs",
+  "tests/capability-registry.test.mjs",
+  "tests/gateway-operator.test.mjs",
+  "tests/douyin-observe-snapshot.test.mjs",
+]);
+
+function countRuntimeCriticalMarkers(command) {
+  const text = String(command || "");
+  return RUNTIME_CRITICAL_TEST_MARKERS.filter((marker) => text.includes(marker)).length;
+}
 
 function fail(message, extra = {}) {
   const payload = {
@@ -177,6 +199,20 @@ if (requireReceipt) {
       dirty, head, branch, originMain, trackedContentSha256, fileCount,
     });
   }
+  if (!/\bnode\b.*--test|\bnpm\s+test\b/.test(receipt.command)) {
+    fail("release gates failed: receipt.command must be node --test or npm test", {
+      dirty, head, branch, originMain, trackedContentSha256, fileCount,
+    });
+  }
+  if (requireReceiptSuite) {
+    const markerHits = countRuntimeCriticalMarkers(receipt.command);
+    if (markerHits < 2) {
+      fail(
+        `release gates failed: receipt.command must cite ≥2 runtime-critical tests (got ${markerHits})`,
+        { dirty, head, branch, originMain, trackedContentSha256, fileCount },
+      );
+    }
+  }
   if (!Number.isInteger(receipt.passed) || receipt.passed < 0
     || !Number.isInteger(receipt.failed) || receipt.failed < 0) {
     fail("release gates failed: receipt.passed/failed must be non-negative integers", {
@@ -187,6 +223,12 @@ if (requireReceipt) {
     fail("release gates failed: receipt.failed must be 0", {
       dirty, head, branch, originMain, trackedContentSha256, fileCount,
     });
+  }
+  if (receipt.passed < receiptMinPassed) {
+    fail(
+      `release gates failed: receipt.passed must be ≥ ${receiptMinPassed} (got ${receipt.passed})`,
+      { dirty, head, branch, originMain, trackedContentSha256, fileCount },
+    );
   }
   const completedAt = Date.parse(receipt.completedAt);
   if (!Number.isFinite(completedAt)) {
