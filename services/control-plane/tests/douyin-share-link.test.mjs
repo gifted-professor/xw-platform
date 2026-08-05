@@ -79,7 +79,7 @@ test("share-link capability is an automatic replay-safe R1 observation", () => {
 
 test("share-link semantic locators match the observed UI and fail closed on ambiguity", () => {
   const doc = parseAllUiNodes(hierarchy([
-    { text: "图片", className: "android.widget.Button", bounds: [372, 356, 514, 433] },
+    { text: "图片", className: "android.widget.TextView", bounds: [372, 356, 514, 433] },
     { resourceId: "com.ss.android.ugc.aweme:id/qib", clickable: true, bounds: [546, 472, 1069, 1169] },
     { desc: "分享84.7万，按钮", className: "android.widget.LinearLayout", clickable: true, bounds: [929, 2225, 1080, 2345] },
     { text: "分享链接", className: "android.widget.TextView", bounds: [991, 2229, 1080, 2271] },
@@ -106,6 +106,18 @@ test("share-link semantic locators match the observed UI and fail closed on ambi
     { text: "图片", className: "android.widget.Button", bounds: [372, 356, 514, 433] },
   ]));
   assert.equal(findImageFilter(ambiguous.nodes), null);
+
+  const duplicateSemanticNode = parseAllUiNodes(hierarchy([
+    { text: "图片", className: "android.widget.TextView", bounds: [208, 356, 349, 433] },
+    { desc: "图片", className: "android.view.View", clickable: true, bounds: [208, 356, 349, 433] },
+  ]));
+  assert.deepEqual(findImageFilter(duplicateSemanticNode.nodes)?.bounds, [208, 356, 349, 433]);
+
+  const geometricDecoys = parseAllUiNodes(hierarchy([
+    { text: "图片", className: "android.widget.TextView", bounds: [372, 80, 514, 157] },
+    { desc: "图片", className: "android.view.View", bounds: [0, 251, 1080, 649] },
+  ]));
+  assert.equal(findImageFilter(geometricDecoys.nodes), null);
 });
 
 test("adapter exposes only a verified short link and writes a redacted observation receipt", async () => {

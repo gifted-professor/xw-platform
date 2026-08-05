@@ -228,14 +228,27 @@ export function countCards(nodes) {
 }
 
 export function findImageFilter(nodes) {
-  const hits = (nodes || []).filter((node) => {
+  const hitsByBounds = new Map();
+  for (const node of nodes || []) {
     const c = centerOf(node.bounds);
-    return node.text === "图片"
-      && /Button/.test(String(node.className || ""))
-      && c
-      && c.cy > 250
-      && c.cy < 650;
-  });
+    const exactLabel = [node.text, node.contentDesc]
+      .some((value) => String(value || "").trim() === "图片");
+    if (!exactLabel
+      || !c
+      || c.cy <= 250
+      || c.cy >= 650
+      || c.w < 40
+      || c.w > 240
+      || c.h < 24
+      || c.h > 140) continue;
+
+    const boundsKey = node.bounds.join(",");
+    const existing = hitsByBounds.get(boundsKey);
+    if (!existing || (!existing.clickable && node.clickable)) {
+      hitsByBounds.set(boundsKey, node);
+    }
+  }
+  const hits = [...hitsByBounds.values()];
   return hits.length === 1 ? publicLocator(hits[0], "图片") : null;
 }
 
