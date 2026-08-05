@@ -383,6 +383,14 @@ test("a long-lived helper rejects a replacement context even on the same alias a
   );
 });
 
+test("screencap pins one session identity across Xiaowei and ADB fallback", () => {
+  const source = readFileSync(join(ROOT, "ops", "_win-screencap.mjs"), "utf8");
+  assert.match(source, /let pinnedExplorerIdentity = null/);
+  assert.match(source, /assertExplorerSessionIdentity\(pinnedExplorerIdentity, authorization\)/);
+  assert.match(source, /async function viaXiaowei\(\) \{\s*await assertActiveExplorerLease\(\)/);
+  assert.match(source, /async function viaAdb\(\)[\s\S]*await assertActiveExplorerLease\(\)[\s\S]*screencap[\s\S]*await assertActiveExplorerLease\(\)[\s\S]*pull/);
+});
+
 test("device transport and Explorer CLI primitive reject missing lease context before I/O", () => {
   assert.throws(
     () => runWinXiaowei("xhs-windows", "missing-helper.mjs", ["--serial", "serial-02", "--action", "tap"]),

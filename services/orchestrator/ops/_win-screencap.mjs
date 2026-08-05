@@ -3,7 +3,11 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, existsSync, readdirSync, renameSync, copyFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { verifyExplorerSession } from "./_explore-lease.mjs";
+import {
+  assertExplorerSessionIdentity,
+  explorerSessionIdentity,
+  verifyExplorerSession,
+} from "./_explore-lease.mjs";
 
 const argv = process.argv.slice(2);
 const opt = (n) => {
@@ -14,6 +18,7 @@ const serial = opt("--serial");
 const out = opt("--out");
 const alias = opt("--alias");
 const sessionFile = opt("--session-file");
+let pinnedExplorerIdentity = null;
 if (!serial || !out || !alias || !sessionFile) {
   console.log(JSON.stringify({ ok: false, error: "need --serial, --out, --alias and --session-file" }));
   process.exit(2);
@@ -22,6 +27,9 @@ if (!serial || !out || !alias || !sessionFile) {
 async function assertActiveExplorerLease() {
   const authorization = await verifyExplorerSession({ contextPath: sessionFile, alias });
   if (authorization.serial !== serial) throw new Error("EXPLORER_SESSION_SERIAL_MISMATCH");
+  const currentIdentity = explorerSessionIdentity(authorization);
+  if (pinnedExplorerIdentity === null) pinnedExplorerIdentity = currentIdentity;
+  else assertExplorerSessionIdentity(pinnedExplorerIdentity, authorization);
   return authorization;
 }
 try {
