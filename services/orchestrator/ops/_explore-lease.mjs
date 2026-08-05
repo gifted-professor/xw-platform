@@ -22,6 +22,24 @@ export function defaultExplorerSessionRoot() {
   return join(homedir(), ".xhs-explorer-sessions");
 }
 
+export function explorerSessionIdentity(authorization) {
+  return {
+    contextId: authorization?.contextId,
+    sessionId: authorization?.session?.sessionId,
+    leaseId: authorization?.lease?.leaseId,
+    actorId: authorization?.actorId,
+    deviceId: authorization?.deviceId,
+  };
+}
+
+export function assertExplorerSessionIdentity(expected, authorization) {
+  const current = explorerSessionIdentity(authorization);
+  if (!expected || Object.keys(current).some((key) => !current[key] || expected[key] !== current[key])) {
+    throw leaseError("EXPLORER_SESSION_IDENTITY_CHANGED", "Explorer session identity changed after helper startup", 409);
+  }
+  return current;
+}
+
 function leaseError(code, message, status = 409) {
   return Object.assign(new Error(message), { code, status });
 }

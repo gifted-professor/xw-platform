@@ -8,6 +8,8 @@ import test from "node:test";
 
 import {
   acquireExplorerSession,
+  assertExplorerSessionIdentity,
+  explorerSessionIdentity,
   keepExplorerSessionAlive,
   readExplorerSessionContext,
   releaseExplorerSession,
@@ -355,8 +357,30 @@ test("Xiaowei REPL revalidates the Explorer lease before every dispatch", () => 
   const repl = source.slice(source.indexOf("async function runRepl()"), source.indexOf("// ---- main ----"));
   assert.match(repl, /await assertActiveExplorerLease\(\);\s*\n\s*const r = await dispatch\(req\);/);
   assert.match(source, /let pinnedExplorerIdentity = null/);
-  assert.match(source, /EXPLORER_SESSION_IDENTITY_CHANGED/);
-  assert.match(source, /contextId: authorization\.contextId/);
+  assert.match(source, /assertExplorerSessionIdentity\(pinnedExplorerIdentity, authorization\)/);
+});
+
+test("a long-lived helper rejects a replacement context even on the same alias and device", () => {
+  const original = {
+    contextId: "context-a",
+    session: { sessionId: "session-a" },
+    lease: { leaseId: "lease-a" },
+    actorId: "agent:a",
+    deviceId: "device-02",
+  };
+  const replacement = {
+    ...original,
+    contextId: "context-b",
+    session: { sessionId: "session-b" },
+    lease: { leaseId: "lease-b" },
+    actorId: "agent:b",
+  };
+  const pinned = explorerSessionIdentity(original);
+  assert.deepEqual(assertExplorerSessionIdentity(pinned, original), pinned);
+  assert.throws(
+    () => assertExplorerSessionIdentity(pinned, replacement),
+    (error) => error.code === "EXPLORER_SESSION_IDENTITY_CHANGED",
+  );
 });
 
 test("device transport and Explorer CLI primitive reject missing lease context before I/O", () => {

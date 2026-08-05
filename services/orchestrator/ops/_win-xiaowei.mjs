@@ -6,7 +6,11 @@
 import { writeFileSync, mkdirSync, appendFileSync, copyFileSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import * as readline from "node:readline";
-import { verifyExplorerSession } from "./_explore-lease.mjs";
+import {
+  assertExplorerSessionIdentity,
+  explorerSessionIdentity,
+  verifyExplorerSession,
+} from "./_explore-lease.mjs";
 
 const argv = process.argv.slice(2);
 const opt = (n, fb = null) => {
@@ -36,22 +40,10 @@ async function assertActiveExplorerLease() {
   if (authorization.serial !== serial) {
     throw Object.assign(new Error("EXPLORER_SESSION_SERIAL_MISMATCH"), { code: "EXPLORER_SESSION_SERIAL_MISMATCH" });
   }
-  const currentIdentity = {
-    contextId: authorization.contextId,
-    sessionId: authorization.session.sessionId,
-    leaseId: authorization.lease.leaseId,
-    actorId: authorization.actorId,
-    deviceId: authorization.deviceId,
-  };
+  const currentIdentity = explorerSessionIdentity(authorization);
   if (pinnedExplorerIdentity === null) {
     pinnedExplorerIdentity = currentIdentity;
-  } else if (Object.keys(pinnedExplorerIdentity)
-    .some((key) => pinnedExplorerIdentity[key] !== currentIdentity[key])) {
-    throw Object.assign(
-      new Error("Explorer session identity changed after helper startup"),
-      { code: "EXPLORER_SESSION_IDENTITY_CHANGED" },
-    );
-  }
+  } else assertExplorerSessionIdentity(pinnedExplorerIdentity, authorization);
   return authorization;
 }
 try {
