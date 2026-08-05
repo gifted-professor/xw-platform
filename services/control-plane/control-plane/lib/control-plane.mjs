@@ -19,6 +19,7 @@ import { guardFinancialCommit } from "./financial-commit-classifier.mjs";
 import { acquireTransportLock as defaultAcquireTransportLock } from "./xiaowei-transport.mjs";
 import { policyModeForRequest } from "./nonpayment-autonomy-policy.mjs";
 import { buildStallVerdictFromEvidenceDir } from "../../scripts/lib/stall-verdict.mjs";
+import { returnDeviceHome, shouldReturnHomeAfterJob } from "./return-home.mjs";
 
 const moduleDir = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(moduleDir, "..", "..");
@@ -90,6 +91,8 @@ function resultSummary(execution, verification, restoration, error = null) {
           "ok", "step", "verified", "verifyMethod", "beforeCount", "afterCount", "text", "diagnostic",
           // observe.snapshot: keep focus/package/nodeCount for VERIFICATION_FAILED triage
           "focus", "packageName", "nodeCount", "appId", "reason",
+          // default post-job desktop return (also mirrored on restoration.returnHome)
+          "returnHome",
           // xhs.observe.feed redacted projection (no cards / author text)
           "pageClass", "cardCount", "artifactRefs", "evidenceDebt",
         ]
@@ -106,7 +109,12 @@ function resultSummary(execution, verification, restoration, error = null) {
       mode: verification.mode || null,
       hash: verification.hash || null,
     } : null,
-    restoration: restoration ? { ok: restoration.ok !== false } : null,
+    restoration: restoration
+      ? {
+        ok: restoration.ok !== false,
+        ...(restoration.returnHome ? { returnHome: restoration.returnHome } : {}),
+      }
+      : null,
   };
 }
 
@@ -2207,6 +2215,23 @@ export class ControlPlane {
         : { ok: !capability.restoration.required };
       if (capability.restoration.required && restoration?.ok === false) {
         throw new ControlPlaneError("RESTORATION_FAILED", "adapter restoration failed", { status: 409 });
+      }
+      // Default fleet policy: always leave the device on system desktop after a job.
+      // Soft: failure is recorded, does not flip RESTORATION_FAILED / quarantine.
+      if (shouldReturnHomeAfterJob({ recoveryAttempt: false })) {
+        const returnHome = await returnDeviceHome({
+          device,
+          leaseAuthorization: authorizedContext.leaseAuthorization,
+        });
+        restoration = { ...(restoration && typeof restoration === "object" ? restoration : { ok: true }), returnHome };
+        this.evidence.appendEvent(job.runId, {
+          type: "job.return_home",
+          jobId: job.jobId,
+          ok: returnHome?.ok === true,
+          packageName: returnHome?.packageName || null,
+          reason: returnHome?.reason || null,
+          createdAt: new Date().toISOString(),
+        });
       }
     } catch (error) {
       restoreError = asControlError(error, "RESTORATION_FAILED");

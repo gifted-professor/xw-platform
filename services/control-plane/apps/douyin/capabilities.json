@@ -20,7 +20,10 @@
         "mode": "state",
         "description": "foreground package is Douyin and a semantic snapshot with focus is returned"
       },
-      "restoration": { "required": false, "description": "read-only observation; leaves Douyin in foreground" },
+      "restoration": {
+        "required": false,
+        "description": "read-only observation; control-plane default return-home leaves system launcher after job"
+      },
       "timeoutMs": 120000,
       "idempotency": "read_only",
       "automationPolicy": { "mode": "automatic" },
