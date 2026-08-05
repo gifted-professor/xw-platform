@@ -347,10 +347,10 @@ export class GatewayOperator {
     const token = `${process.pid}-${Date.now()}`;
     const remote = `/sdcard/xianyu-dump-${token}.xml`;
     const t0 = Date.now();
-    // Screen-off / continuous animation → empty hierarchy or idle timeout.
+    // Screen-off / idle timeout often yields empty hierarchy. Wake only —
+    // KEYCODE_MENU steals focus (breaks Douyin/Xianyu postcondition checks).
     await this.shellExec("input keyevent KEYCODE_WAKEUP", 5000).catch(() => null);
-    await this.shellExec("input keyevent KEYCODE_MENU", 5000).catch(() => null);
-    await new Promise((r) => setTimeout(r, 400));
+    await new Promise((r) => setTimeout(r, 300));
 
     const dumpVariants = [
       `uiautomator dump ${remote}`,

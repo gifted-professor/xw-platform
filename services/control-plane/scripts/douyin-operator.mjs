@@ -287,6 +287,11 @@ export async function snapshot(op, label = "douyin-snapshot", { launchIfNeeded =
   if (launchIfNeeded && focus.package !== DOUYIN_PACKAGE) {
     focus = await ensureDouyinForeground(op);
   }
+  if (focus.package !== DOUYIN_PACKAGE) {
+    throw new Error(
+      `douyin not foreground after launch (pkg=${focus.package || "null"} act=${focus.activity || "null"})`,
+    );
+  }
   await settle(500);
   const doc = await dumpWithRetry(op, label, { attempts: 3 });
   focus = await op.currentFocus();

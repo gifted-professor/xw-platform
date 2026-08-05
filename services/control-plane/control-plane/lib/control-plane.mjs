@@ -88,6 +88,8 @@ function resultSummary(execution, verification, restoration, error = null) {
       ? Object.fromEntries(
         [
           "ok", "step", "verified", "verifyMethod", "beforeCount", "afterCount", "text", "diagnostic",
+          // observe.snapshot: keep focus/package/nodeCount for VERIFICATION_FAILED triage
+          "focus", "packageName", "nodeCount", "appId", "reason",
           // xhs.observe.feed redacted projection (no cards / author text)
           "pageClass", "cardCount", "artifactRefs", "evidenceDebt",
         ]

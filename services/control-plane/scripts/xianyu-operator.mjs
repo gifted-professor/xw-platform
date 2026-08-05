@@ -4582,6 +4582,7 @@ if (entry === import.meta.url) {
     console.log(JSON.stringify({
       ok: false,
       errorCode: error?.code || "XIANYU_OPERATOR_FAILED",
+      error: { message: String(error?.message || error).slice(0, 400) },
     }));
     process.exitCode = 1;
   });
