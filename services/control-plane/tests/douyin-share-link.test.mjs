@@ -392,7 +392,7 @@ test("restore action backs to Douyin Splash and falls back to verified system ho
   assert.equal(home.step, "system-home-restored");
 });
 
-test("recovery inspection and recovery are screenshot-backed and zero-action", async () => {
+test("recovery is zero-action on a safe page and stages one HOME transition otherwise", async () => {
   const root = mkdtempSync(join(tmpdir(), "douyin-share-recovery-"));
   const calls = [];
   const focus = { package: "com.miui.home", activity: ".launcher.Launcher" };
@@ -424,14 +424,49 @@ test("recovery inspection and recovery are screenshot-backed and zero-action", a
     assert.equal(recovered.step, "already-safe-main");
     assert.deepEqual([...new Set(calls)].sort(), ["dump", "focus", "screen"]);
 
-    const unsafe = await recoverShareLink({
+    let foreignFocus = true;
+    let homeCalls = 0;
+    const transitioned = await recoverShareLink({
       ...op,
       async currentFocus() {
-        return { package: "com.example.other", activity: "OtherActivity" };
+        return foreignFocus
+          ? { package: "com.example.other", activity: "OtherActivity" }
+          : focus;
       },
-    }, { evidenceDir: root });
-    assert.equal(unsafe.ok, false);
-    assert.equal(unsafe.zeroActionVerified, false);
+      async home() {
+        homeCalls += 1;
+        foreignFocus = false;
+      },
+    }, { evidenceDir: root, wait: async () => {} });
+    assert.equal(transitioned.ok, false);
+    assert.equal(transitioned.step, "system-home-transitioned-reinspect-required");
+    assert.equal(transitioned.safeStateVerified, true);
+    assert.equal(transitioned.zeroActionVerified, false);
+    assert.equal(transitioned.transitionPerformed, true);
+    assert.equal(transitioned.stoppedBeforeAction, false);
+    assert.equal(transitioned.evidenceFiles.length, 2);
+    assert.equal(homeCalls, 1);
+
+    let focusReads = 0;
+    let unstableHomeCalls = 0;
+    const unstable = await recoverShareLink({
+      ...op,
+      async currentFocus() {
+        focusReads += 1;
+        return {
+          package: "com.example.other",
+          activity: focusReads === 1 ? "FirstActivity" : "SecondActivity",
+        };
+      },
+      async home() {
+        unstableHomeCalls += 1;
+      },
+    }, { evidenceDir: root, wait: async () => {} });
+    assert.equal(unstable.ok, false);
+    assert.equal(unstable.step, "focus-changed-during-capture");
+    assert.equal(unstable.zeroActionVerified, false);
+    assert.equal(unstable.transitionPerformed, false);
+    assert.equal(unstableHomeCalls, 0);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
