@@ -95,6 +95,9 @@ function resultSummary(execution, verification, restoration, error = null) {
           "returnHome",
           // xhs.observe.feed redacted projection (no cards / author text)
           "pageClass", "cardCount", "artifactRefs", "evidenceDebt",
+          // xiaowei.explorer.primitive bounded receipt (no full input text / tokens)
+          "primitive", "x", "y", "x1", "y1", "x2", "y2", "durationMs", "times",
+          "path", "bytes", "textLen", "textPreview", "audit", "package", "activity", "stdout",
         ]
           .filter((k) => out[k] !== undefined)
           .map((k) => [k, out[k]]),
@@ -2218,7 +2221,7 @@ export class ControlPlane {
       }
       // Default fleet policy: always leave the device on system desktop after a job.
       // Soft: failure is recorded, does not flip RESTORATION_FAILED / quarantine.
-      if (shouldReturnHomeAfterJob({ recoveryAttempt: false })) {
+      if (shouldReturnHomeAfterJob({ recoveryAttempt: false, capability })) {
         let returnHome;
         try {
           returnHome = await returnDeviceHome({
