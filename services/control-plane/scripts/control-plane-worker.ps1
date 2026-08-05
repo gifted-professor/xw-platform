@@ -25,6 +25,39 @@ if ($LASTEXITCODE -ne 0 -or $actualCommit -ne $expectedCommit) {
     throw "Repository commit mismatch: expected $expectedCommit, found $actualCommit"
 }
 
+if ($launch.PSObject.Properties.Name -contains "allowDirtyWorktree" -and [bool]$launch.allowDirtyWorktree) {
+    $env:XHS_ALLOW_DIRTY_WORKTREE = "1"
+} else {
+    Remove-Item Env:XHS_ALLOW_DIRTY_WORKTREE -ErrorAction SilentlyContinue
+}
+if ($launch.PSObject.Properties.Name -contains "requireTestReceipt" -and [bool]$launch.requireTestReceipt) {
+    $env:XHS_REQUIRE_TEST_RECEIPT = "1"
+} else {
+    Remove-Item Env:XHS_REQUIRE_TEST_RECEIPT -ErrorAction SilentlyContinue
+}
+if (-not ($launch.PSObject.Properties.Name -contains "requireMainOrigin") -or [bool]$launch.requireMainOrigin) {
+    $env:XHS_REQUIRE_MAIN_ORIGIN = "1"
+} else {
+    Remove-Item Env:XHS_REQUIRE_MAIN_ORIGIN -ErrorAction SilentlyContinue
+}
+Remove-Item Env:XHS_ALLOW_NON_MAIN -ErrorAction SilentlyContinue
+& $nodeExe (Join-Path $repoRoot "scripts\assert-release-gates.mjs")
+if ($LASTEXITCODE -ne 0) { throw "release gates failed" }
+
+$recipeOverlayMode = [string]$launch.recipeOverlayMode
+if ([string]::IsNullOrWhiteSpace($recipeOverlayMode)) { $recipeOverlayMode = "off" }
+$env:XHS_RECIPE_OVERLAY_MODE = $recipeOverlayMode
+if ($launch.PSObject.Properties.Name -contains "recipeOverlayPath" -and -not [string]::IsNullOrWhiteSpace([string]$launch.recipeOverlayPath)) {
+    $env:XHS_RECIPE_OVERLAY_PATH = [string]$launch.recipeOverlayPath
+} else {
+    Remove-Item Env:XHS_RECIPE_OVERLAY_PATH -ErrorAction SilentlyContinue
+}
+if ($launch.PSObject.Properties.Name -contains "recipeOverlaySha256" -and -not [string]::IsNullOrWhiteSpace([string]$launch.recipeOverlaySha256)) {
+    $env:XHS_RECIPE_OVERLAY_SHA256 = [string]$launch.recipeOverlaySha256.ToLower()
+} else {
+    Remove-Item Env:XHS_RECIPE_OVERLAY_SHA256 -ErrorAction SilentlyContinue
+}
+
 # REX Phase 6 B7: fixed modes/release come from the launch config the task installer wrote,
 # never guessed here, and never echoed to stdout/stderr. AUTONOMY_POLICY_MODE feeds
 # bootstrap's resolvePolicyMode (legacy=null, shadow=compute-not-apply, nonpayment_v1=gated).

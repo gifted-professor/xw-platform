@@ -69,12 +69,17 @@ export function createKnowledgeClient({
   }
 
   return {
-    async listRepairProposals() {
+    async listRepairKnowledgeItems() {
       const url = `${endpoint}/api/knowledge?appliesTo=${encodeURIComponent("repair-proposal-v1")}&lifecycle=backlog`;
       const response = await fetchImpl(url, { signal: AbortSignal.timeout(timeoutMs) });
       if (!response.ok) throw new Error(`knowledge list failed: ${response.status}`);
       const data = await readJsonSafe(response);
       const items = data.knowledge || data.items || [];
+      // Client-side needsEngineer=true: registry list API has no needsEngineer query param.
+      return items.filter((item) => item && item.needsEngineer === true && item.lifecycle === "backlog");
+    },
+    async listRepairProposals() {
+      const items = await this.listRepairKnowledgeItems();
       return items.map((item) => parseKnowledgeProposal(item)).filter(Boolean);
     },
     async getKnowledge(id) {

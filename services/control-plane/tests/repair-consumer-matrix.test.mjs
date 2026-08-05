@@ -686,7 +686,7 @@ test("matrix: CLI flag pairs and scope unauthorized 17th / invalid baseline", as
   process.exitCode = 0;
   MATRIX.cliCases.push({ name: "offline-demo-only", ok: true });
 
-  assert.equal(REPAIR_CONSUMER_ALLOWED_PATHS.size, 17);
+  assert.equal(REPAIR_CONSUMER_ALLOWED_PATHS.size, 22);
   const authorized = [...REPAIR_CONSUMER_ALLOWED_PATHS];
   assert.equal(evaluateScopeGuard([...authorized, "contracts/repair-extra.v1.schema.json"]).ok, false);
   assert.equal(evaluateScopeGuard([...authorized, "skills/SKILL.md"]).ok, false);

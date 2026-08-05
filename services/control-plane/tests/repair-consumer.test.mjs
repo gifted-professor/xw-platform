@@ -774,7 +774,7 @@ test("scope guard exact allowlist rejects repair-extra and invalid baseline", as
     evaluateScopeGuard,
     collectTouchedFiles,
   } = await import("../scripts/repair-consumer-scope-guard.mjs");
-  assert.equal(REPAIR_CONSUMER_ALLOWED_PATHS.size, 17);
+  assert.equal(REPAIR_CONSUMER_ALLOWED_PATHS.size, 22);
   assert.equal(REPAIR_CONSUMER_ALLOWED_PATHS instanceof Set, true);
   const authorized = [...REPAIR_CONSUMER_ALLOWED_PATHS];
   assert.equal(evaluateScopeGuard(authorized).ok, true);
