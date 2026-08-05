@@ -19,10 +19,10 @@ verified:
 
 ```bash
 # 执行简单命令
-node ops/shell.mjs --alias <01-04> --cmd "input swipe 540 1800 540 700 350"
+node ops/shell.mjs --alias <01-04> --session-file <explorer-session.json> --cmd "input swipe 540 1800 540 700 350"
 
 # 查看设备属性
-node ops/shell.mjs --alias <01-04> --cmd "getprop ro.product.model"
+node ops/shell.mjs --alias <01-04> --session-file <explorer-session.json> --cmd "getprop ro.product.model"
 ```
 
 ## 参数

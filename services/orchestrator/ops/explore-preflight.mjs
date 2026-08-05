@@ -10,6 +10,7 @@
 
 import { execFileSync } from "node:child_process";
 import { isLocalMode, sshCurl as libSshCurl } from "./_explore-lib.mjs";
+import { verifyExplorerSession } from "./_explore-lease.mjs";
 
 const argv = process.argv.slice(2);
 const opt = (n, fb = null) => {
@@ -19,7 +20,7 @@ const opt = (n, fb = null) => {
 const flag = (n) => argv.includes(n);
 
 if (flag("--help") || flag("-h")) {
-  console.log(`用法: node ops/explore-preflight.mjs --alias <01-04> [--ssh xhs-windows] [--local] [--require-17910]
+  console.log(`用法: node ops/explore-preflight.mjs --alias <01-04> [--session-file <context.json>] [--local] [--require-17910]
 
 检查顺序:
   1) registry 17930 /control health 17920
@@ -28,6 +29,7 @@ if (flag("--help") || flag("-h")) {
   4) 小薇 22222 端口 LISTEN（交互 ops 依赖它，不通=失败）
   5) 可选 17910 device/v1/devices（--require-17910 时不通=失败；默认只警告）
 
+无 --session-file 只做只读体检，不能授权设备 ops；正式 Explorer 必须先 acquire。
 本地模式: XHS_LOCAL=1 | --local | win32 自动（直连本机，不经 SSH）
 
 exit: 0 ok | 2 fleet/device | 4 client/ssh`);
@@ -37,6 +39,7 @@ exit: 0 ok | 2 fleet/device | 4 client/ssh`);
 const ALIAS = opt("--alias");
 const SSH = opt("--ssh", "xhs-windows");
 const REQUIRE_17910 = flag("--require-17910");
+const SESSION_FILE = opt("--session-file");
 const LOCAL = isLocalMode();
 
 if (!ALIAS) {
@@ -74,9 +77,17 @@ function suggestUiAccess(alias) {
 
 const log = (m) => console.log(m);
 const problems = [];
+let ownedSession = null;
 
 try {
   log(`[preflight] alias=${ALIAS} ${LOCAL ? "mode=local" : `ssh=${SSH}`}`);
+  if (SESSION_FILE) {
+    if (!LOCAL) throw new Error("--session-file lease verification requires Windows local mode");
+    ownedSession = await verifyExplorerSession({ contextPath: SESSION_FILE, alias: ALIAS });
+    log(`  owned_session=${ownedSession.session.sessionId} lease=${ownedSession.lease.leaseId}`);
+  } else {
+    log("  check_only=yes（未持 session；后续设备 ops 会拒绝执行）");
+  }
 
   // 1) health
   let h30, h20;
@@ -123,10 +134,11 @@ try {
   log(`  ui_access_hint=${suggestUiAccess(ALIAS)}`);
 
   if (online !== true) problems.push(`${ALIAS}: online!=true`);
-  if (ready !== true) problems.push(`${ALIAS}: ready!=true（先恢复/清隔离/刷 success）`);
+  if (ready !== true && !ownedSession) problems.push(`${ALIAS}: ready!=true（先恢复/清隔离/刷 success）`);
   if (quarantined === true) problems.push(`${ALIAS}: quarantined`);
-  if (leaseFree === false) problems.push(`${ALIAS}: lease 占用中`);
+  if (leaseFree === false && !ownedSession) problems.push(`${ALIAS}: lease 占用中`);
   if (!deviceId) problems.push(`${ALIAS}: 无 deviceId`);
+  if (ownedSession && ownedSession.deviceId !== deviceId) problems.push(`${ALIAS}: session device binding mismatch`);
 
   // 3) control devices
   try {
@@ -177,6 +189,7 @@ try {
   // machine-readable footer
   console.log(`DEVICE_ID=${deviceId}`);
   console.log(`SERIAL=${serial || ""}`);
+  console.log(`LEASE_MODE=${ownedSession ? "owned_session" : "check_only"}`);
   console.log("✓ preflight ok — 可开工");
   process.exit(0);
 } catch (e) {

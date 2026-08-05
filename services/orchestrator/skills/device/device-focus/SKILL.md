@@ -18,7 +18,7 @@ verified:
 ## 用法
 
 ```bash
-node ops/focus.mjs --alias <01-04>
+node ops/focus.mjs --alias <01-04> --session-file <explorer-session.json>
 ```
 
 ## 输出

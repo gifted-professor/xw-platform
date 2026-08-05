@@ -6,6 +6,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, statSync, copyFileS
 import { homedir } from "node:os";
 import { dirname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { verifyExplorerSession } from "./_explore-lease.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -23,6 +24,38 @@ export const SSH_OPTS = [
 // serial 是物理锚点（稳定），热路径不必每次 ssh+curl 查 registry。带 TTL + env 逃生口。
 const SERIAL_CACHE = join(homedir(), ".xhs-serial-cache.json");
 const SERIAL_TTL_MS = 5 * 60 * 1000;
+let explorerAuthorization = null;
+
+export async function authorizeExplorerLease(ssh, alias, sessionFile) {
+  if (!sessionFile) {
+    throw Object.assign(
+      new Error("Explorer device access requires --session-file from xw-explore-session acquire"),
+      { code: 2, controlCode: "CONTROL_LEASE_REQUIRED" },
+    );
+  }
+  if (!isLocalMode()) {
+    throw Object.assign(
+      new Error("Explorer lease hard gate currently requires Windows local mode"),
+      { code: 4, controlCode: "EXPLORER_LOCAL_MODE_REQUIRED" },
+    );
+  }
+  const verified = await verifyExplorerSession({ contextPath: sessionFile, alias });
+  explorerAuthorization = { ...verified, ssh };
+  return verified;
+}
+
+function requireTransportAuthorization({ alias = null, serial = null } = {}) {
+  if (!explorerAuthorization) {
+    throw Object.assign(new Error("CONTROL_LEASE_REQUIRED: no verified Explorer session"), { code: 2 });
+  }
+  if (alias && explorerAuthorization.alias !== alias) {
+    throw Object.assign(new Error(`EXPLORER_SESSION_ALIAS_MISMATCH: ${alias}`), { code: 2 });
+  }
+  if (serial && explorerAuthorization.serial !== serial) {
+    throw Object.assign(new Error("EXPLORER_SESSION_SERIAL_MISMATCH"), { code: 2 });
+  }
+  return explorerAuthorization;
+}
 
 export function parseArgs(argv) {
   const opt = (n, fb = null) => {
@@ -124,6 +157,16 @@ function resolveDeviceLive(ssh, alias) {
 }
 
 export function resolveDevice(ssh, alias) {
+  if (explorerAuthorization) {
+    const authorization = requireTransportAuthorization({ alias });
+    return {
+      serial: authorization.serial,
+      deviceId: authorization.deviceId,
+      online: true,
+      dev: null,
+      leased: true,
+    };
+  }
   const cached = readSerialCache(alias);
   if (cached) {
     // 命中缓存：热路径跳过 registry 查询。offline guard 让位给交互响应；
@@ -161,6 +204,15 @@ export function ensureWinHelper(ssh, localName = "_win-xiaowei.mjs") {
 
 export function runWinXiaowei(ssh, remoteHelper, args) {
   const finalArgs = [...args];
+  const serialIndex = finalArgs.indexOf("--serial");
+  const serial = serialIndex >= 0 ? finalArgs[serialIndex + 1] : null;
+  requireTransportAuthorization({ serial });
+  if (!finalArgs.includes("--session-file")) {
+    finalArgs.push("--session-file", explorerAuthorization.path);
+  }
+  if (!finalArgs.includes("--alias")) {
+    finalArgs.push("--alias", explorerAuthorization.alias);
+  }
   // 注入调用方脚本名供 trace --tag；alias 由调用方可选传（原子脚本暂无则跳过）
   const scriptName = callerScriptName();
   if (scriptName && !finalArgs.includes("--tag")) {
@@ -248,10 +300,12 @@ export function parseKVLines(text) {
  *   s.close();
  */
 export function openWinXwSession(ssh, alias) {
+  requireTransportAuthorization({ alias });
   const { serial } = resolveDevice(ssh, alias);
   const helper = ensureWinHelper(ssh);
   const scriptName = callerScriptName();
   const replArgs = ["--serial", serial, "--action", "repl", "--alias", alias];
+  replArgs.push("--session-file", explorerAuthorization.path);
   if (scriptName) replArgs.push("--tag", scriptName);
   const child = isLocalMode()
     ? spawn(process.execPath, [helper, ...replArgs], {

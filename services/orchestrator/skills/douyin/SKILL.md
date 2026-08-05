@@ -159,9 +159,9 @@ verified: false
 ```bash
 set XHS_LOCAL=1
 node ops/explore-preflight.mjs --alias 01
-node ops/launch-app.mjs --alias 01 --package com.ss.android.ugc.aweme --force-stop
+node ops/launch-app.mjs --alias 01 --session-file <explorer-session.json> --package com.ss.android.ugc.aweme --force-stop
 # 等 5-6s 再 dump（抖音 settle 比 XHS 慢）
-node ops/dump-ui.mjs --alias 01
+node ops/dump-ui.mjs --alias 01 --session-file <explorer-session.json>
 ```
 
 | 目标 | 做法 |

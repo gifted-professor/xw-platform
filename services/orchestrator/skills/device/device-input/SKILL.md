@@ -19,14 +19,14 @@ verified:
 
 ```bash
 # 基本输入（先点坐标聚焦，再输入）
-node ops/input-text.mjs --alias <01-04> --text "蓝色" --x 540 --y 1200
+node ops/input-text.mjs --alias <01-04> --session-file <explorer-session.json> --text "蓝色" --x 540 --y 1200
 
 # 输入后按回车（SKU 规格值）
-node ops/input-text.mjs --alias <01-04> --text "蓝色" --x 540 --y 1200 --enter
+node ops/input-text.mjs --alias <01-04> --session-file <explorer-session.json> --text "蓝色" --x 540 --y 1200 --enter
 
 # 多行输入：首行 refocus，后续行 no-refocus
-node ops/input-text.mjs --alias <01-04> --text "行1" --x 540 --y 870 --enter --keep-ime
-node ops/input-text.mjs --alias <01-04> --text "行2" --enter --keep-ime --no-refocus
+node ops/input-text.mjs --alias <01-04> --session-file <explorer-session.json> --text "行1" --x 540 --y 870 --enter --keep-ime
+node ops/input-text.mjs --alias <01-04> --session-file <explorer-session.json> --text "行2" --enter --keep-ime --no-refocus
 ```
 
 ## 参数

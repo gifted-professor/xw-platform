@@ -3,6 +3,7 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, existsSync, readdirSync, renameSync, copyFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { verifyExplorerSession } from "./_explore-lease.mjs";
 
 const argv = process.argv.slice(2);
 const opt = (n) => {
@@ -11,8 +12,18 @@ const opt = (n) => {
 };
 const serial = opt("--serial");
 const out = opt("--out");
-if (!serial || !out) {
-  console.log(JSON.stringify({ ok: false, error: "need --serial and --out" }));
+const alias = opt("--alias");
+const sessionFile = opt("--session-file");
+if (!serial || !out || !alias || !sessionFile) {
+  console.log(JSON.stringify({ ok: false, error: "need --serial, --out, --alias and --session-file" }));
+  process.exit(2);
+}
+
+try {
+  const authorization = await verifyExplorerSession({ contextPath: sessionFile, alias });
+  if (authorization.serial !== serial) throw new Error("EXPLORER_SESSION_SERIAL_MISMATCH");
+} catch (error) {
+  console.log(JSON.stringify({ ok: false, error: `${error.code || "CONTROL_LEASE_REQUIRED"}: ${error.message}` }));
   process.exit(2);
 }
 

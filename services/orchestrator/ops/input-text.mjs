@@ -13,11 +13,11 @@
 // 规格值提交常需 --enter（operator 路径：input + KEYCODE_ENTER）。
 //
 // stdout 键：INPUT=ok TEXT_LEN=… PREVIEW=… ALIAS=… SERIAL=… REFOCUS=… ENTER=… RESTORED=…
-import { parseArgs, resolveDevice, ensureWinHelper, runWinXiaowei, parseJsonLine } from "./_explore-lib.mjs";
+import { authorizeExplorerLease, parseArgs, resolveDevice, ensureWinHelper, runWinXiaowei, parseJsonLine } from "./_explore-lib.mjs";
 
 const { opt, flag } = parseArgs(process.argv.slice(2));
 if (flag("--help") || flag("-h")) {
-  console.log(`用法: node ops/input-text.mjs --alias <01-04> --text <str> [选项]
+  console.log(`用法: node ops/input-text.mjs --alias <01-04> --session-file <context.json> --text <str> [选项]
 
 选项:
   --x --y          切 XwIME 后 refocus 点击（Flutter 首进字段强烈建议）
@@ -36,6 +36,7 @@ stdout: INPUT=ok`);
 const alias = opt("--alias");
 const text = opt("--text");
 const ssh = opt("--ssh", "xhs-windows");
+const sessionFile = opt("--session-file");
 const x = opt("--x");
 const y = opt("--y");
 const clearFirst = flag("--clear-first");
@@ -52,6 +53,7 @@ if (!alias || text == null || text === "") {
 const textB64 = Buffer.from(String(text), "utf8").toString("base64");
 
 try {
+  await authorizeExplorerLease(ssh, alias, sessionFile);
   const { serial } = resolveDevice(ssh, alias);
   const helper = ensureWinHelper(ssh);
   const args = [

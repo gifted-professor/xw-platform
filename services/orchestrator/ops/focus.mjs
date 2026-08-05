@@ -1,19 +1,21 @@
 #!/usr/bin/env node
 // node ops/focus.mjs --alias 01
-import { parseArgs, resolveDevice, ensureWinHelper, runWinXiaowei, parseJsonLine } from "./_explore-lib.mjs";
+import { authorizeExplorerLease, parseArgs, resolveDevice, ensureWinHelper, runWinXiaowei, parseJsonLine } from "./_explore-lib.mjs";
 
 const { opt, flag } = parseArgs(process.argv.slice(2));
 if (flag("--help") || flag("-h")) {
-  console.log("用法: node ops/focus.mjs --alias <01-04> [--ssh xhs-windows]\nstdout: FOCUS=pkg/activity");
+  console.log("用法: node ops/focus.mjs --alias <01-04> --session-file <context.json>\nstdout: FOCUS=pkg/activity");
   process.exit(0);
 }
 const alias = opt("--alias");
 const ssh = opt("--ssh", "xhs-windows");
+const sessionFile = opt("--session-file");
 if (!alias) {
   console.log("✗ need --alias");
   process.exit(4);
 }
 try {
+  await authorizeExplorerLease(ssh, alias, sessionFile);
   const { serial } = resolveDevice(ssh, alias);
   const helper = ensureWinHelper(ssh);
   const raw = runWinXiaowei(ssh, helper, ["--serial", serial, "--action", "focus"]);

@@ -23,9 +23,19 @@ AGENTS/modes/skills 路由说明 > 尚未迁移的 App 子 Skill Markdown。
 
 **任一步失败 → 禁止开干。**
 
-```bash
-node ops/explore-preflight.mjs --alias 01
-# 仅当仍依赖旧 17910 设备 API 时：再加 --require-17910（默认不需要）
+Windows 本机 `/xw explore` 必须先 acquire 正式 session；`preflight` 单独运行只能体检，不能授权后续碰机：
+
+```powershell
+$xwSession = "$env:TEMP\xw-explore-<runId>-01.json"
+node ops/xw-explore-session.mjs acquire --alias 01 --actor <actor> --session-file $xwSession
+node ops/explore-preflight.mjs --alias 01 --session-file $xwSession
+# 仅当仍依赖旧 17910 设备 API 时：preflight 再加 --require-17910
+```
+
+`acquire` 会创建控制面可见的 exclusive canary session，并启动 ≤15s heartbeat keeper；第二个 agent 会得到 `DEVICE_BUSY`。任务结束无论成功、失败或中止都执行：
+
+```powershell
+node ops/xw-explore-session.mjs release --session-file $xwSession
 ```
 
 脚本检查：17930/17920 health → agent-entry ready/lease → control devices online；**17910 为可选探测**（`ops/dump-ui|tap|focus|launch-app|screenshot` 走小薇 **22222**，不绑 17910）。见知识库 `note-17910-optional-for-explorer-ops-20260727`。
@@ -41,19 +51,19 @@ ssh xhs-windows 'curl.exe -s http://127.0.0.1:17930/agent-entry.md'
 截屏 / dump / tap / 输入 / 开 App（**禁止**手搓临时脚本；**不依赖 17910**，走小薇 22222）：
 
 ```bash
-node ops/screenshot-and-analyze.mjs --alias 01   # SHOT=/path.png
-node ops/dump-ui.mjs --alias 01                  # DUMP=/path.xml
-node ops/focus.mjs --alias 01                    # FOCUS=pkg/activity
-node ops/tap.mjs --alias 01 --x 540 --y 1200     # TAP=ok
+node ops/screenshot-and-analyze.mjs --alias 01 --session-file $xwSession   # SHOT=/path.png
+node ops/dump-ui.mjs --alias 01 --session-file $xwSession                  # DUMP=/path.xml
+node ops/focus.mjs --alias 01 --session-file $xwSession                    # FOCUS=pkg/activity
+node ops/tap.mjs --alias 01 --session-file $xwSession --x 540 --y 1200     # TAP=ok
 # 中文输入：效卫 XwIME（禁止 adb input text / clipboard 当主路径）
-node ops/input-text.mjs --alias 01 --text "蓝色" --x 540 --y 1200 --enter
+node ops/input-text.mjs --alias 01 --session-file $xwSession --text "蓝色" --x 540 --y 1200 --enter
 # 多行描述：首行 refocus；后续 --no-refocus 保光标（每行再点会跳位/乱序）
-node ops/input-text.mjs --alias 01 --text "行1" --x 540 --y 870 --enter --keep-ime
-node ops/input-text.mjs --alias 01 --text "行2" --enter --keep-ime --no-refocus
-node ops/launch-app.mjs --alias 01 --package com.taobao.idlefish
+node ops/input-text.mjs --alias 01 --session-file $xwSession --text "行1" --x 540 --y 870 --enter --keep-ime
+node ops/input-text.mjs --alias 01 --session-file $xwSession --text "行2" --enter --keep-ime --no-refocus
+node ops/launch-app.mjs --alias 01 --session-file $xwSession --package com.taobao.idlefish
 ```
 
-> 以上是 **Explorer lab 通道**（22222）。生产业务仍用 job/session；探索可用，不用于 R2 外发。  
+> 以上是持正式 canary session lease 的 **Explorer lab 通道**（22222）。缺 `--session-file`、alias/serial 不匹配、heartbeat 失败或 lease 不可见都会在设备 I/O 前拒绝；不用于 R2 外发。
 > **Flutter（闲鱼）**：首进字段带 `--x --y` refocus；**多行连续**后续用 `--no-refocus`（+ 建议 `--keep-ime`）；SKU 规格值加 `--enter`。见 `pitfall-input-text-multiline-refocus-20260727`。
 
 ---
@@ -62,12 +72,12 @@ node ops/launch-app.mjs --alias 01 --package com.taobao.idlefish
 
 | 禁止 | 原因 |
 |------|------|
-| 无 lease 的 GatewayOperator / 临时 `_*.mjs` 干跑 | 入口违规 |
+| 无 lease 的 GatewayOperator / Explorer ops / 临时 `_*.mjs` 干跑 | 入口违规；脚本现已 fail closed |
 | 写 control.db、调用 approve/deny | 红线 |
 | R2/R3 **执行**外发（评论/发布/私信…） | 只允许 submit 挂起等人 |
 | 逐步 scp 临时脚本当默认手法 | 用 `screenshot-and-analyze.mjs` |
 | 有 dump/语义仍 vision 死磕；同目标 vision **>2 次** | VLM 像素 Y 可偏 **−1330px**（见下）；费时 |
-| 交互式 session 长时间不 heartbeat | lease 可能被回收；≤20s 心跳或改用 job |
+| 交互式 session 长时间不 heartbeat | keeper 默认 ≤15s heartbeat；仍应在 finally release |
 | 遇验证码/风控/登录墙继续点 | 立即停 + knowledge |
 | 一次会话多个主 flow | 失焦；一轮一个 scope |
 | 编造验证结果 | `verifyMode=human` 时标待人 |
@@ -79,8 +89,8 @@ node ops/launch-app.mjs --alias 01 --package com.taobao.idlefish
 - 读 agent-entry / knowledge / capabilities  
 - 写 knowledge（recipe / pitfall / unknown）  
 - R0/R1 job（observe、`*_dry_run` 等 automatic）  
-- Explorer ops：preflight / screenshot / **dump-ui / tap / input-text / focus / launch-app**（lab **22222**，不绑 17910）  
-- session canary（若 capability 要求且 lease 可见）；**长 session 每 ≤20s heartbeat**，否则优先 job 模式  
+- Explorer ops：先 `xw-explore-session acquire`，再用同一个 `--session-file` 执行 preflight / screenshot / **dump-ui / tap / input-text / focus / launch-app**（lab **22222**，不绑 17910）
+- session canary lease 必须在控制面可见；keeper 自动 heartbeat，结束显式 release
 
 
 ---
@@ -92,7 +102,7 @@ node ops/launch-app.mjs --alias 01 --package com.taobao.idlefish
 | live 状态 | `GET …:17930/api/agent-entry` |
 | 能力目录 | `GET …:17930/api/capabilities` 或控制面 |
 | 生产碰机 | `devicectl job/session` 正道 |
-| 探索交互 | `ops/tap\|input-text\|dump-ui\|focus\|launch-app\|screenshot-and-analyze.mjs`（**22222**，不绑 17910） |
+| 探索交互 | `ops/xw-explore-session.mjs` acquire 后，所有原子脚本带同一个 `--session-file`（**22222**，不绑 17910） |
 | 观测 capability | `xhs.observe.*` / `xianyu.observe.snapshot` / `wechat.observe.*` |
 | 已知剧本回归 | **Runner**：`ops/conc4-full-dry-run.mjs` |
 
@@ -210,11 +220,12 @@ Explorer 产出 recipe 默认 **`verifyMode=human`**，content 可带 `[explorer
   allow_switch_device: false
 
 步骤:
-  1) timeout 1200 node ops/explore-preflight.mjs --alias 01
-  2) 需要截屏: node ops/screenshot-and-analyze.mjs --alias 01
+  1) node ops/xw-explore-session.mjs acquire --alias 01 --actor <actor> --session-file <explicit-path>
+  2) timeout 1200 node ops/explore-preflight.mjs --alias 01 --session-file <same-path>
+  3) 需要截屏: node ops/screenshot-and-analyze.mjs --alias 01 --session-file <same-path>
   3) 正道 devicectl job only；dump-first；vision≤2/目标（Y 可偏 −1330px，有 bounds 禁 vision）
-  4) 若用 session：每 ≤20s heartbeat；否则优先 job
-  5) 结束 POST knowledge（成功 A/B/C 或 aborted）
+  4) 所有设备 ops 必须传同一个 session file；alias/lease 不符立即停
+  5) 结束 POST knowledge（成功 A/B/C 或 aborted），finally release session
 
 禁止: 旁路碰机、approve、R2 执行、逐步 scp、vision 死磕、无 heartbeat 长 session。
 ```

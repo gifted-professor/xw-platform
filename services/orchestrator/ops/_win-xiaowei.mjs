@@ -6,6 +6,7 @@
 import { writeFileSync, mkdirSync, appendFileSync, copyFileSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import * as readline from "node:readline";
+import { verifyExplorerSession } from "./_explore-lease.mjs";
 
 const argv = process.argv.slice(2);
 const opt = (n, fb = null) => {
@@ -20,8 +21,22 @@ const serial = opt("--serial");
 const action = opt("--action");
 const traceAlias = opt("--alias", null); // 调用方注入：设备 01-04
 const traceTag = opt("--tag", null);     // 调用方注入：脚本名，如 xhs-like-one
+const sessionFile = opt("--session-file", null);
 if (!serial || !action) {
   console.log(JSON.stringify({ ok: false, error: "need --serial and --action" }));
+  process.exit(2);
+}
+if (!sessionFile) {
+  console.log(JSON.stringify({ ok: false, error: "CONTROL_LEASE_REQUIRED: --session-file is required" }));
+  process.exit(2);
+}
+try {
+  const authorization = await verifyExplorerSession({ contextPath: sessionFile, alias: traceAlias });
+  if (authorization.serial !== serial) {
+    throw Object.assign(new Error("EXPLORER_SESSION_SERIAL_MISMATCH"), { code: "EXPLORER_SESSION_SERIAL_MISMATCH" });
+  }
+} catch (error) {
+  console.log(JSON.stringify({ ok: false, error: `${error.code || "CONTROL_LEASE_REQUIRED"}: ${error.message}` }));
   process.exit(2);
 }
 

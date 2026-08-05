@@ -1,18 +1,19 @@
 #!/usr/bin/env node
 // node ops/swipe.mjs --alias 01 --up
 // node ops/swipe.mjs --alias 01 --x1 540 --y1 1800 --x2 540 --y2 700 --ms 350
-import { parseArgs, resolveDevice, ensureWinHelper, runWinShell } from "./_explore-lib.mjs";
+import { authorizeExplorerLease, parseArgs, resolveDevice, ensureWinHelper, runWinShell } from "./_explore-lib.mjs";
 
 const { opt, flag } = parseArgs(process.argv.slice(2));
 if (flag("--help") || flag("-h")) {
   console.log(`用法:
-  node ops/swipe.mjs --alias <01-04> --up|--down|--left|--right [--ms 350]
-  node ops/swipe.mjs --alias <01-04> --x1 N --y1 N --x2 N --y2 N [--ms 350]
+  node ops/swipe.mjs --alias <01-04> --session-file <context.json> --up|--down|--left|--right [--ms 350]
+  node ops/swipe.mjs --alias <01-04> --session-file <context.json> --x1 N --y1 N --x2 N --y2 N [--ms 350]
 默认分辨率假设 1080x2400 中部手势。stdout: SWIPE=ok`);
   process.exit(0);
 }
 const alias = opt("--alias");
 const ssh = opt("--ssh", "xhs-windows");
+const sessionFile = opt("--session-file");
 const ms = Math.max(50, Number(opt("--ms", "350")) || 350);
 if (!alias) {
   console.log("✗ need --alias");
@@ -45,6 +46,7 @@ if (![x1, y1, x2, y2].every(Number.isFinite)) {
 }
 
 try {
+  await authorizeExplorerLease(ssh, alias, sessionFile);
   const { serial } = resolveDevice(ssh, alias);
   const helper = ensureWinHelper(ssh);
   const cmd = `input swipe ${x1} ${y1} ${x2} ${y2} ${ms}`;

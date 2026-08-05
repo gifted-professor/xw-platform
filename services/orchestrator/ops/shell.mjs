@@ -2,6 +2,7 @@
 // node ops/shell.mjs --alias 01 --cmd "input swipe 540 1800 540 700 350"
 // SSH-safe via --cmd-b64 inside _win-xiaowei
 import {
+  authorizeExplorerLease,
   parseArgs,
   resolveDevice,
   ensureWinHelper,
@@ -10,7 +11,7 @@ import {
 
 const { opt, flag } = parseArgs(process.argv.slice(2));
 if (flag("--help") || flag("-h")) {
-  console.log(`用法: node ops/shell.mjs --alias <01-04> --cmd "<adb shell cmd>" [--ssh xhs-windows]
+  console.log(`用法: node ops/shell.mjs --alias <01-04> --session-file <context.json> --cmd "<adb shell cmd>"
 Explorer lab（22222）。带空格命令请整段放进 --cmd。
 stdout: SHELL=ok`);
   process.exit(0);
@@ -18,11 +19,13 @@ stdout: SHELL=ok`);
 const alias = opt("--alias");
 const cmd = opt("--cmd");
 const ssh = opt("--ssh", "xhs-windows");
+const sessionFile = opt("--session-file");
 if (!alias || !cmd) {
   console.log("✗ need --alias --cmd");
   process.exit(4);
 }
 try {
+  await authorizeExplorerLease(ssh, alias, sessionFile);
   const { serial } = resolveDevice(ssh, alias);
   const helper = ensureWinHelper(ssh);
   const j = runWinShell(ssh, serial, cmd, helper);

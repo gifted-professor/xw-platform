@@ -27,14 +27,14 @@ depends:
 
 ```bash
 # 实际执行（打开一条笔记并点赞）
-node ops/xhs-like-one.mjs --alias <01-04>
+node ops/xhs-like-one.mjs --alias <01-04> --session-file <explorer-session.json>
 
 # 只定位不点赞（dry-run）
-node ops/xhs-like-one.mjs --alias <01-04> --dry-run
+node ops/xhs-like-one.mjs --alias <01-04> --session-file <explorer-session.json> --dry-run
 
 # Windows 本地
 set XHS_LOCAL=1
-node ops/xhs-like-one.mjs --alias 01 --dry-run
+node ops/xhs-like-one.mjs --alias 01 --session-file <explorer-session.json> --dry-run
 ```
 
 ## 流程

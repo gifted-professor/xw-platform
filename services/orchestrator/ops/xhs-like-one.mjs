@@ -15,7 +15,7 @@
 import { existsSync, readFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseArgs, openWinXwSession, scpFrom } from "./_explore-lib.mjs";
+import { authorizeExplorerLease, parseArgs, openWinXwSession, scpFrom } from "./_explore-lib.mjs";
 import { bizRecord } from "./_biz-trace.mjs";
 import {
   parseFeedCards,
@@ -30,13 +30,14 @@ const PKG = "com.xingin.xhs";
 
 const { opt, flag } = parseArgs(process.argv.slice(2));
 if (flag("--help") || flag("-h")) {
-  console.log(`用法: node ops/xhs-like-one.mjs --alias <01-04> [--dry-run] [--no-force-stop] [--ssh xhs-windows]
+  console.log(`用法: node ops/xhs-like-one.mjs --alias <01-04> --session-file <context.json> [--dry-run] [--no-force-stop]
 stdout: LIKE=ok|skip|fail 等 KV`);
   process.exit(0);
 }
 
 const alias = opt("--alias");
 const ssh = opt("--ssh", "xhs-windows");
+const sessionFile = opt("--session-file");
 const dryRun = flag("--dry-run");
 const forceStop = !flag("--no-force-stop");
 if (!alias) {
@@ -109,6 +110,7 @@ async function launch() {
 
 async function main() {
   t0 = Date.now();
+  await authorizeExplorerLease(ssh, alias, sessionFile);
   s = openWinXwSession(ssh, alias);
   await s.ready;
 

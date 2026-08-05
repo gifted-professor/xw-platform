@@ -3,15 +3,16 @@
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
-import { parseArgs, resolveDevice, ensureWinHelper, runWinXiaowei, parseJsonLine, scpFrom } from "./_explore-lib.mjs";
+import { authorizeExplorerLease, parseArgs, resolveDevice, ensureWinHelper, runWinXiaowei, parseJsonLine, scpFrom } from "./_explore-lib.mjs";
 
 const { opt, flag } = parseArgs(process.argv.slice(2));
 if (flag("--help") || flag("-h")) {
-  console.log("用法: node ops/dump-ui.mjs --alias <01-04> [--out path.xml] [--ssh xhs-windows]\nstdout: DUMP=/abs/path.xml");
+  console.log("用法: node ops/dump-ui.mjs --alias <01-04> --session-file <context.json> [--out path.xml]\nstdout: DUMP=/abs/path.xml");
   process.exit(0);
 }
 const alias = opt("--alias");
 const ssh = opt("--ssh", "xhs-windows");
+const sessionFile = opt("--session-file");
 const ts = Date.now();
 const localOut = resolve(opt("--out", join(tmpdir(), "xhs-explore", `dump-${alias || "xx"}-${ts}.xml`)));
 if (!alias) {
@@ -19,6 +20,7 @@ if (!alias) {
   process.exit(4);
 }
 try {
+  await authorizeExplorerLease(ssh, alias, sessionFile);
   const { serial } = resolveDevice(ssh, alias);
   const helper = ensureWinHelper(ssh);
   const remote = `C:/Users/Public/xhs-agent-runs/_explore/dump-${alias}-${ts}.xml`;

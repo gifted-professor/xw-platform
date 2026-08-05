@@ -14,6 +14,7 @@ import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import {
+  authorizeExplorerLease,
   parseArgs,
   resolveDevice,
   ensureWinHelper,
@@ -24,11 +25,13 @@ import {
 } from "./_explore-lib.mjs";
 
 const { opt, flag } = parseArgs(process.argv.slice(2));
+const SESSION_FILE = opt("--session-file");
 
 if (flag("--help") || flag("-h")) {
   console.log(`用法: node ops/screenshot-and-analyze.mjs --alias <01-04> [选项]
 
 选项:
+  --session-file <context.json>  必填；由 xw-explore-session acquire 生成
   --ssh xhs-windows
   --local               本机直跑（Windows；也可用 XHS_LOCAL=1）
   --out <local.png>     默认 %TEMP%/xhs-explore/<alias>-<ts>.png
@@ -53,6 +56,7 @@ if (!ALIAS) {
 }
 
 try {
+  await authorizeExplorerLease(SSH, ALIAS, SESSION_FILE);
   const { serial } = resolveDevice(SSH, ALIAS);
   const helper = ensureWinHelper(SSH, "_win-screencap.mjs");
   const remotePng = `C:/Users/Public/xhs-agent-runs/_explore/shot-${ALIAS}-${TS}.png`;

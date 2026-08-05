@@ -18,7 +18,7 @@ verified:
 ## 用法
 
 ```bash
-node ops/tap.mjs --alias <01-04> --x <像素X> --y <像素Y>
+node ops/tap.mjs --alias <01-04> --session-file <explorer-session.json> --x <像素X> --y <像素Y>
 ```
 
 ## 参数
@@ -31,8 +31,8 @@ node ops/tap.mjs --alias <01-04> --x <像素X> --y <像素Y>
 
 ## 前置条件
 
-1. `node ops/explore-preflight.mjs --alias <01-04>` 通过
-2. 设备 ready=yes 且 lease=free
+1. `node ops/xw-explore-session.mjs acquire ...` 已创建正式 session context
+2. `node ops/explore-preflight.mjs --alias <01-04> --session-file <same.json>` 通过
 
 ## 注意事项
 

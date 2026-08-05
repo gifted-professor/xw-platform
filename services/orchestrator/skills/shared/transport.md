@@ -41,7 +41,7 @@ Windows ops/ 脚本（XHS_LOCAL=1 | --local | win32 自动）
 
 ```bash
 # 每个动作一次启动（Mac 经 SSH ~1.2s；Windows 本地更短）
-node ops/tap.mjs --alias 01 --x 540 --y 1200
+node ops/tap.mjs --alias 01 --session-file <explorer-session.json> --x 540 --y 1200
 ```
 
 ### Session 模式（repl）

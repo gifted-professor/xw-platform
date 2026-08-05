@@ -19,10 +19,10 @@ verified:
 
 ```bash
 # 按一次返回
-node ops/back.mjs --alias <01-04>
+node ops/back.mjs --alias <01-04> --session-file <explorer-session.json>
 
 # 按多次返回
-node ops/back.mjs --alias <01-04> --times 3
+node ops/back.mjs --alias <01-04> --session-file <explorer-session.json> --times 3
 ```
 
 ## 参数
