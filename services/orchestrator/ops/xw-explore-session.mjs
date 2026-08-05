@@ -23,6 +23,7 @@ function usage() {
   node ops/xw-explore-session.mjs acquire --alias <01-04> --actor <id> [--session-file <profile-root.json>]
   node ops/xw-explore-session.mjs status --session-file <absolute.json>
   node ops/xw-explore-session.mjs heartbeat --session-file <absolute.json>
+  node ops/xw-explore-session.mjs keepalive --session-file <absolute.json>
   node ops/xw-explore-session.mjs release --session-file <absolute.json>
 
 acquire 会创建正式 canary session lease；token 写入用户私有目录并收紧 ACL，不打印。
