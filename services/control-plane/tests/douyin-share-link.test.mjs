@@ -14,8 +14,11 @@ import {
   findImageCard,
   findImageFilter,
   findShareLinkAction,
+  hasExactSearchInput,
   hasLinkCopiedConfirmation,
+  inspectRecoveryPage,
   parseAllUiNodes,
+  recoverShareLink,
   restoreShareLink,
   shareLink,
 } from "../scripts/douyin-operator.mjs";
@@ -89,6 +92,14 @@ test("share-link semantic locators match the observed UI and fail closed on ambi
   assert.deepEqual(findShareLinkAction(doc.nodes)?.bounds, [991, 2229, 1080, 2271]);
   assert.equal(hasLinkCopiedConfirmation(doc.nodes), true);
   assert.equal(extractDouyinShareUrl(doc.nodes), "https://v.douyin.com/Abc_123/");
+
+  const duplicatedInputLabel = parseAllUiNodes(hierarchy([{
+    text: "风景",
+    desc: "风景",
+    className: "android.widget.EditText",
+    bounds: [132, 95, 910, 194],
+  }]));
+  assert.equal(hasExactSearchInput(duplicatedInputLabel.nodes, "风景"), true);
 
   const ambiguous = parseAllUiNodes(hierarchy([
     { text: "图片", className: "android.widget.Button", bounds: [200, 356, 342, 433] },
@@ -175,6 +186,68 @@ test("adapter rejects forged URL, missing restoration, or any external-share cla
   }
 });
 
+test("adapter exposes audited read-only inspection and zero-action recovery", async () => {
+  const root = mkdtempSync(join(tmpdir(), "douyin-share-recovery-adapter-"));
+  const calls = [];
+  try {
+    const shot = join(root, "recovery.png");
+    const adapter = createDouyinAdapter({
+      run: async (_exe, args) => {
+        calls.push(args);
+        if (args.includes("inspect-recovery")) {
+          return {
+            ok: true,
+            stoppedBeforeAction: true,
+            step: "recovery-inspected",
+            observation: { focus: { package: "com.miui.home", activity: ".launcher.Launcher" } },
+            evidenceFiles: [{ path: shot, kind: "screenshot", label: "douyin-recovery-inspection" }],
+          };
+        }
+        if (args.includes("share-link-recover")) {
+          return {
+            ok: true,
+            safeStateVerified: true,
+            zeroActionVerified: true,
+            step: "already-safe-main",
+            focus: { package: "com.miui.home", activity: ".launcher.Launcher" },
+            evidenceFiles: [{ path: shot, kind: "screenshot", label: "douyin-recovery-inspection" }],
+          };
+        }
+        throw new Error(`unexpected action: ${args.join(" ")}`);
+      },
+    });
+    const capability = registry.require("douyin.observe.share_link");
+    const inspected = await adapter.inspectRecovery({
+      capability,
+      device: privateDevice,
+      evidenceDirectory: root,
+      leaseAuthorization,
+      job: { jobId: "job-test", runId: "run-test" },
+    });
+    assert.equal(calls[0].includes("inspect-recovery"), true);
+    assert.equal(inspected.ok, true);
+    assert.equal(inspected.stoppedBeforeAction, true);
+    assert.equal(inspected.evidenceFiles[0].kind, "screenshot");
+
+    const recovered = await adapter.restore({
+      capability,
+      device: privateDevice,
+      params: { keyword: "风景" },
+      evidenceDirectory: root,
+      leaseAuthorization,
+      job: { jobId: "job-test", runId: "run-test" },
+      recoveryAttempt: true,
+    });
+    assert.equal(calls[1].includes("share-link-recover"), true);
+    assert.equal(recovered.ok, true);
+    assert.equal(recovered.zeroActionVerified, true);
+    assert.equal(recovered.visualConfirmationRequired, true);
+    assert.equal(recovered.evidenceRequired, true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("progress reporter appends monotonic events across execute and restore processes", () => {
   const root = mkdtempSync(join(tmpdir(), "douyin-share-progress-"));
   try {
@@ -237,7 +310,7 @@ test("operator completes the observed path without touching an external share ta
         return hierarchy([{ text: inputValue, className: "android.widget.EditText", clickable: true, bounds: [132, 95, 910, 194] }]);
       }
       if (label.startsWith("douyin-share-keyword-restored")) {
-        return hierarchy([{ text: inputValue, className: "android.widget.EditText", clickable: true, bounds: [132, 95, 910, 194] }]);
+        return hierarchy([{ text: inputValue, desc: inputValue, className: "android.widget.EditText", clickable: true, bounds: [132, 95, 910, 194] }]);
       }
       return hierarchy([{ text: inputValue, className: "android.widget.EditText", clickable: true, bounds: [132, 95, 910, 194] }]);
     },
@@ -317,6 +390,51 @@ test("restore action backs to Douyin Splash and falls back to verified system ho
   const home = await restoreShareLink(external, { wait: async () => {} });
   assert.equal(home.ok, true);
   assert.equal(home.step, "system-home-restored");
+});
+
+test("recovery inspection and recovery are screenshot-backed and zero-action", async () => {
+  const root = mkdtempSync(join(tmpdir(), "douyin-share-recovery-"));
+  const calls = [];
+  const focus = { package: "com.miui.home", activity: ".launcher.Launcher" };
+  const op = {
+    async currentFocus() {
+      calls.push("focus");
+      return focus;
+    },
+    async capturePng(path) {
+      calls.push("screen");
+      return { path, bytes: 1234, sha256: "a".repeat(64) };
+    },
+    async dumpXml() {
+      calls.push("dump");
+      return hierarchy([{ text: "桌面", bounds: [0, 0, 1080, 2400] }]);
+    },
+  };
+  try {
+    const inspected = await inspectRecoveryPage(op, { evidenceDir: root });
+    assert.equal(inspected.ok, true);
+    assert.equal(inspected.stoppedBeforeAction, true);
+    assert.equal(inspected.observation.pageClassification.pageType, "unknown");
+    assert.equal(inspected.evidenceFiles[0].kind, "screenshot");
+
+    const recovered = await recoverShareLink(op, { evidenceDir: root });
+    assert.equal(recovered.ok, true);
+    assert.equal(recovered.safeStateVerified, true);
+    assert.equal(recovered.zeroActionVerified, true);
+    assert.equal(recovered.step, "already-safe-main");
+    assert.deepEqual([...new Set(calls)].sort(), ["dump", "focus", "screen"]);
+
+    const unsafe = await recoverShareLink({
+      ...op,
+      async currentFocus() {
+        return { package: "com.example.other", activity: "OtherActivity" };
+      },
+    }, { evidenceDir: root });
+    assert.equal(unsafe.ok, false);
+    assert.equal(unsafe.zeroActionVerified, false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("restore action replaces a pasted clipboard value before leaving search results", async () => {
