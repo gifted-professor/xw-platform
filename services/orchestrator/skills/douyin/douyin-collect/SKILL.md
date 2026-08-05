@@ -41,9 +41,9 @@ depends:
 
 ```bash
 set XHS_LOCAL=1
-node ops/douyin-collect.mjs --alias 01 --dry-run
-node ops/douyin-collect.mjs --alias 01
-node ops/douyin-collect.mjs --alias 01 --dry-run --no-force-stop
+node ops/douyin-collect.mjs --alias 01 --session-file <explorer-session.json> --dry-run
+node ops/douyin-collect.mjs --alias 01 --session-file <explorer-session.json>
+node ops/douyin-collect.mjs --alias 01 --session-file <explorer-session.json> --dry-run --no-force-stop
 ```
 
 ## 流程

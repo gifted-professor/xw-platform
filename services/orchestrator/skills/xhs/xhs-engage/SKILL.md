@@ -27,16 +27,16 @@ depends:
 
 ```bash
 # 点赞+收藏
-node ops/xhs-engage-one.mjs --alias <01-04> --like --collect
+node ops/xhs-engage-one.mjs --alias <01-04> --session-file <explorer-session.json> --like --collect
 
 # 点赞+收藏+评论
-node ops/xhs-engage-one.mjs --alias <01-04> --like --collect --comment "好内容！"
+node ops/xhs-engage-one.mjs --alias <01-04> --session-file <explorer-session.json> --like --collect --comment "好内容！"
 
 # 先搜索再互动
-node ops/xhs-engage-one.mjs --alias <01-04> --search "关键词" --like --collect
+node ops/xhs-engage-one.mjs --alias <01-04> --session-file <explorer-session.json> --search "关键词" --like --collect
 
 # dry-run
-node ops/xhs-engage-one.mjs --alias <01-04> --like --collect --dry-run
+node ops/xhs-engage-one.mjs --alias <01-04> --session-file <explorer-session.json> --like --collect --dry-run
 ```
 
 ## 参数

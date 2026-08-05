@@ -21,7 +21,7 @@ const PKG = "com.ss.android.ugc.aweme";
 
 const { opt, flag } = parseArgs(process.argv.slice(2));
 if (flag("--help") || flag("-h")) {
-  console.log(`用法: node ops/douyin-follow.mjs --alias <01-04> [--dry-run] [--no-force-stop]
+  console.log(`用法: node ops/douyin-follow.mjs --alias <01-04> --session-file <context.json> [--dry-run] [--no-force-stop]
 stdout: DOUYIN_FOLLOW=ok|skip|dry-run|fail ...
 Feed 右侧栏关注；--dry-run 只定位不点。`);
   process.exit(0);
@@ -29,6 +29,8 @@ Feed 右侧栏关注；--dry-run 只定位不点。`);
 
 const alias = opt("--alias");
 const ssh = opt("--ssh", "xhs-windows");
+const sessionFile = opt("--session-file");
+if (!sessionFile) { console.log("✗ need --session-file"); process.exit(4); }
 const dryRun = flag("--dry-run");
 const forceStop = !flag("--no-force-stop");
 if (!alias) {
@@ -41,7 +43,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function runOps(args, timeoutMs = 120000) {
   return new Promise((resolve) => {
     const t0 = Date.now();
-    const p = spawn("node", args, { cwd: ROOT });
+    const childArgs = args.includes("--session-file") ? args : [...args, "--session-file", sessionFile];
+    const p = spawn("node", childArgs, { cwd: ROOT });
     let out = "";
     const timer = setTimeout(() => {
       try { p.kill("SIGKILL"); } catch { /* */ }

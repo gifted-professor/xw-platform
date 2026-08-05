@@ -28,13 +28,13 @@ depends:
 
 ```bash
 # 打开私信会话（不发消息）
-node ops/xhs-dm-open.mjs --alias <01-04>
+node ops/xhs-dm-open.mjs --alias <01-04> --session-file <explorer-session.json>
 
 # 搜索用户并打开私信
-node ops/xhs-dm-user.mjs --alias <01-04> --user "用户名" --dry-run
+node ops/xhs-dm-user.mjs --alias <01-04> --session-file <explorer-session.json> --user "用户名" --dry-run
 
 # 搜索用户并发送私信（R2，需授权）
-node ops/xhs-dm-user.mjs --alias <01-04> --user "用户名" --text "消息内容" --send
+node ops/xhs-dm-user.mjs --alias <01-04> --session-file <explorer-session.json> --user "用户名" --text "消息内容" --send
 ```
 
 ## 参数

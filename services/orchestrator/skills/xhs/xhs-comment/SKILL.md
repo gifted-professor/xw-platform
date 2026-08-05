@@ -34,7 +34,7 @@ depends:
 
 ```bash
 # lab 通道（Explorer，不算生产验收）
-node ops/xhs-comment-one.mjs --alias <01-04> --text "评论内容" --dry-run
+node ops/xhs-comment-one.mjs --alias <01-04> --session-file <explorer-session.json> --text "评论内容" --dry-run
 
 # 正道（控制面 job，需审批）
 cd /Volumes/GPFS/Users/a1234/Desktop/Coding/xhs-device-agent-routing-v1-1

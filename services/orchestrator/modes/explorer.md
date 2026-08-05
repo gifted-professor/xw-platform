@@ -38,6 +38,18 @@ node ops/explore-preflight.mjs --alias 01 --session-file $xwSession
 node ops/xw-explore-session.mjs release --session-file $xwSession
 ```
 
+跨机任务先逐台 acquire；每个 alias 必须有自己的 context，不能共享 token。集合脚本使用 `<session-dir>\<alias>.json`：
+
+```powershell
+$xwSessionDir = "$env:TEMP\xw-explore-<runId>"
+node ops/xw-explore-session.mjs acquire --alias 02 --actor <actor>-02 --session-file "$xwSessionDir\02.json"
+node ops/xw-explore-session.mjs acquire --alias 03 --actor <actor>-03 --session-file "$xwSessionDir\03.json"
+node ops/douyin-rail-set.mjs --aliases 02,03 --session-dir $xwSessionDir
+# finally：分别 release 02.json、03.json
+```
+
+控制面按设备原子互斥；不同设备可并行，同一设备始终串行。任一 acquire 失败时只释放本轮已拿到的 context，不得改用无 lease 旁路。
+
 脚本检查：17930/17920 health → agent-entry ready/lease → control devices online；**17910 为可选探测**（`ops/dump-ui|tap|focus|launch-app|screenshot` 走小薇 **22222**，不绑 17910）。见知识库 `note-17910-optional-for-explorer-ops-20260727`。
 
 也可手查：

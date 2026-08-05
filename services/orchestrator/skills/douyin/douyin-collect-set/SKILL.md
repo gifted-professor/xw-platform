@@ -30,9 +30,9 @@ depends:
 
 ```bash
 set XHS_LOCAL=1
-node ops/douyin-collect-set.mjs
-node ops/douyin-collect-set.mjs --aliases 01,02
-node ops/douyin-collect-set.mjs --aliases 01,02,04
+node ops/douyin-collect-set.mjs --session-dir <contexts-dir>
+node ops/douyin-collect-set.mjs --session-dir <contexts-dir> --aliases 01,02
+node ops/douyin-collect-set.mjs --session-dir <contexts-dir> --aliases 01,02,04
 ```
 
 ## 输出（示例）

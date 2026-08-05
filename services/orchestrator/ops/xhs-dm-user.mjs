@@ -24,7 +24,7 @@ const PKG = "com.xingin.xhs";
 
 const { opt, flag } = parseArgs(process.argv.slice(2));
 if (flag("--help") || flag("-h")) {
-  console.log(`用法: node ops/xhs-dm-user.mjs --alias <01-04> --user <昵称> [--text 你好] [--send]
+  console.log(`用法: node ops/xhs-dm-user.mjs --alias <01-04> --session-file <context.json> --user <昵称> [--text 你好] [--send]
 默认打开私信页；--send 才发送。`);
   process.exit(0);
 }
@@ -34,6 +34,8 @@ const user = opt("--user") || opt("--keyword");
 const text = opt("--text") || "你好，测试一下自动化私信～";
 const doSend = flag("--send");
 const ssh = opt("--ssh", "xhs-windows");
+const sessionFile = opt("--session-file");
+if (!sessionFile) { console.log("✗ need --session-file"); process.exit(4); }
 const forceStop = !flag("--no-force-stop");
 if (!alias || !user) {
   console.log("✗ need --alias --user");
@@ -45,7 +47,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function runOps(args, timeoutMs = 360000) {
   return new Promise((resolve) => {
     const t0 = Date.now();
-    const p = spawn("node", args, { cwd: ROOT });
+    const childArgs = args.includes("--session-file") ? args : [...args, "--session-file", sessionFile];
+    const p = spawn("node", childArgs, { cwd: ROOT });
     let out = "";
     const timer = setTimeout(() => {
       try {

@@ -30,10 +30,10 @@ changelog:
 
 ```bash
 # 实际执行
-node ops/xhs-collect-one.mjs --alias <01-04>
+node ops/xhs-collect-one.mjs --alias <01-04> --session-file <explorer-session.json>
 
 # 只定位不收藏（dry-run）
-node ops/xhs-collect-one.mjs --alias <01-04> --dry-run
+node ops/xhs-collect-one.mjs --alias <01-04> --session-file <explorer-session.json> --dry-run
 ```
 
 ## 流程

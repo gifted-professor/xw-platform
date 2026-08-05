@@ -31,14 +31,14 @@ changelog:
 
 ```bash
 # 搜索第 1 页
-node ops/xhs-search.mjs --alias <01-04> --keyword "关键词"
+node ops/xhs-search.mjs --alias <01-04> --session-file <explorer-session.json> --keyword "关键词"
 
 # 搜索多页
-node ops/xhs-search.mjs --alias <01-04> --keyword "关键词" --pages 3
+node ops/xhs-search.mjs --alias <01-04> --session-file <explorer-session.json> --keyword "关键词" --pages 3
 
 # Windows 本地
 set XHS_LOCAL=1
-node ops/xhs-search.mjs --alias 01 --keyword "关键词"
+node ops/xhs-search.mjs --alias 01 --session-file <explorer-session.json> --keyword "关键词"
 ```
 
 ## 参数

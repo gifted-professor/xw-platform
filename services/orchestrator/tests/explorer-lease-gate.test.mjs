@@ -200,3 +200,28 @@ test("every supported Explorer transport caller performs lease authorization", (
     assert.match(source, /await authorizeExplorerLease\(/, name);
   }
 });
+
+test("composite Explorer scripts propagate the same session context to child ops", () => {
+  const composites = [
+    "douyin-collect.mjs", "douyin-follow.mjs", "douyin-like.mjs", "douyin-search.mjs",
+    "xhs-collect-one.mjs", "xhs-comment-one.mjs", "xhs-dm-open.mjs", "xhs-dm-user.mjs",
+    "xhs-engage-one.mjs", "xhs-publish-draft.mjs", "xhs-publish-entry.mjs", "xhs-search.mjs",
+  ];
+  for (const name of composites) {
+    const source = readFileSync(join(ROOT, "ops", name), "utf8");
+    assert.match(source, /const sessionFile = opt\("--session-file"\)/, name);
+    assert.match(source, /childArgs.*--session-file.*sessionFile/, name);
+  }
+  for (const name of ["douyin-collect-set.mjs", "douyin-follow-set.mjs", "douyin-like-set.mjs", "douyin-rail-set.mjs"]) {
+    const source = readFileSync(join(ROOT, "ops", name), "utf8");
+    assert.match(source, /--session-dir/, name);
+    assert.match(source, /--session-file.*sessionDir/s, name);
+  }
+
+  const noContext = spawnSync(process.execPath, ["ops/douyin-search.mjs", "--alias", "02", "--keyword", "test"], {
+    cwd: ROOT,
+    encoding: "utf8",
+  });
+  assert.equal(noContext.status, 4);
+  assert.match(noContext.stdout, /session-file/);
+});
