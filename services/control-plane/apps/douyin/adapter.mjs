@@ -25,6 +25,17 @@ function operatorEnv(leaseAuthorization) {
   };
 }
 
+function evidenceFiles(output) {
+  const seen = new Set();
+  return (Array.isArray(output?.evidenceFiles) ? output.evidenceFiles : [])
+    .filter((file) => file && typeof file.path === "string" && !seen.has(file.path) && seen.add(file.path))
+    .map((file) => ({
+      path: file.path,
+      kind: file.kind || "screenshot",
+      label: file.label || "douyin",
+    }));
+}
+
 function commandArgs({ script, action, device, params = {}, evidenceDirectory = null, job = null }) {
   if (!device.runtimeId) {
     throw new ControlPlaneError("DEVICE_RUNTIME_ID_MISSING", "Douyin adapter needs a private runtime ID", { status: 503 });
@@ -42,7 +53,7 @@ function commandArgs({ script, action, device, params = {}, evidenceDirectory = 
   if (action === "share-link-restore" && typeof params.keyword === "string" && params.keyword.trim()) {
     args.push("--keyword", params.keyword.trim());
   }
-  if (action === "share-link" || action === "share-link-restore") {
+  if (["share-link", "share-link-restore", "share-link-recover", "inspect-recovery"].includes(action)) {
     if (!evidenceDirectory) {
       throw new ControlPlaneError("EVIDENCE_DIR_REQUIRED", "Douyin share-link needs an evidence directory", {
         status: 500,
@@ -205,18 +216,33 @@ export function createDouyinAdapter({ run = runJsonCommand, operatorPath = defau
       }
       return { ok: false, mode: "state" };
     },
-    async restore({ capability, device, params, evidenceDirectory, leaseAuthorization, job }) {
+    async restore({ capability, device, params, evidenceDirectory, leaseAuthorization, job, recoveryAttempt = false }) {
       if (!capability.restoration?.required) return { ok: true };
       if (capability.implementation.action === "share-link") {
         requireFile(operatorPath, capability.id);
+        const action = recoveryAttempt ? "share-link-recover" : "share-link-restore";
         const output = await run(process.execPath, commandArgs({
           script: operatorPath,
-          action: "share-link-restore",
+          action,
           device,
           params,
           evidenceDirectory,
           job,
         }), { cwd: root, timeoutMs: 90000, env: operatorEnv(leaseAuthorization) });
+        if (recoveryAttempt) {
+          return {
+            ok: output?.ok === true
+              && output?.safeStateVerified === true
+              && output?.zeroActionVerified === true,
+            step: output?.step || null,
+            focus: output?.focus || null,
+            safeStateVerified: output?.safeStateVerified === true,
+            zeroActionVerified: output?.zeroActionVerified === true,
+            evidenceRequired: true,
+            visualConfirmationRequired: true,
+            evidenceFiles: evidenceFiles(output),
+          };
+        }
         return {
           ok: output?.ok === true && output?.safeStateVerified === true,
           step: output?.step || null,
@@ -226,6 +252,24 @@ export function createDouyinAdapter({ run = runJsonCommand, operatorPath = defau
       }
       // search already backs to Splash inside the operator; restore is a soft ack.
       return { ok: true };
+    },
+    async inspectRecovery({ capability, device, evidenceDirectory, leaseAuthorization, job }) {
+      requireFile(operatorPath, capability.id);
+      const output = await run(process.execPath, commandArgs({
+        script: operatorPath,
+        action: "inspect-recovery",
+        device,
+        params: {},
+        evidenceDirectory,
+        job,
+      }), { cwd: root, timeoutMs: 60000, env: operatorEnv(leaseAuthorization) });
+      return {
+        ok: output?.ok === true && output?.stoppedBeforeAction === true,
+        step: output?.step || null,
+        stoppedBeforeAction: output?.stoppedBeforeAction === true,
+        observation: output?.observation || {},
+        evidenceFiles: evidenceFiles(output),
+      };
     },
   };
 }

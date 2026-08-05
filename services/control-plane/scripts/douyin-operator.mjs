@@ -7,6 +7,8 @@
  *   node scripts/douyin-operator.mjs --serial <serial> --transport gateway snapshot
  *   node scripts/douyin-operator.mjs --serial <serial> --transport gateway search --keyword <词>
  *   node scripts/douyin-operator.mjs --serial <serial> --transport gateway share-link --keyword <词>
+ *   node scripts/douyin-operator.mjs --serial <serial> --transport gateway inspect-recovery --evidence-dir <dir>
+ *   node scripts/douyin-operator.mjs --serial <serial> --transport gateway share-link-recover --evidence-dir <dir>
  *   node scripts/douyin-operator.mjs --serial <serial> --transport gateway like-dry-run
  *   node scripts/douyin-operator.mjs --serial <serial> --transport gateway collect-dry-run
  *   node scripts/douyin-operator.mjs --serial <serial> --transport gateway follow-dry-run
@@ -19,7 +21,7 @@ import { GatewayOperator } from "./gateway-operator.mjs";
 
 const DOUYIN_PACKAGE = "com.ss.android.ugc.aweme";
 const OPERATOR_COMMANDS = new Set([
-  "help", "start", "snapshot", "search", "share-link", "share-link-restore",
+  "help", "start", "snapshot", "search", "share-link", "share-link-restore", "share-link-recover", "inspect-recovery",
   "like-dry-run", "collect-dry-run", "follow-dry-run",
 ]);
 const SETTLE_AFTER_LAUNCH_MS = 5500;
@@ -691,16 +693,10 @@ export async function shareLink(op, keyword, { wait = settle, progress = () => {
   focus = await op.currentFocus();
   const restoredDoc = await dumpWithRetry(op, "douyin-share-keyword-restored", {
     attempts: 4,
-    accept: (doc) => (doc.nodes || []).some((node) => (
-      /EditText|AutoCompleteTextView/.test(String(node.className || ""))
-      && semanticLabel(node).trim() === text
-    )),
+    accept: (doc) => hasExactSearchInput(doc.nodes, text),
   });
   const searchRestored = focusMatches(focus, /SearchResultActivity/i)
-    && restoredDoc.nodes.some((node) => (
-      /EditText|AutoCompleteTextView/.test(String(node.className || ""))
-      && semanticLabel(node).trim() === text
-    ));
+    && hasExactSearchInput(restoredDoc.nodes, text);
   if (!searchRestored) throw new Error("douyin_share_keyword_restore_failed");
 
   let backHome = false;
@@ -747,10 +743,12 @@ function isSystemHomeFocus(focus) {
   );
 }
 
-function hasExactSearchInput(nodes, keyword) {
+export function hasExactSearchInput(nodes, keyword) {
+  const expected = String(keyword || "").trim();
+  if (!expected) return false;
   return (nodes || []).some((node) => (
     /EditText|AutoCompleteTextView/.test(String(node.className || ""))
-    && semanticLabel(node).trim() === keyword
+    && [node.text, node.contentDesc].some((value) => String(value || "").trim() === expected)
   ));
 }
 
@@ -823,6 +821,71 @@ export async function restoreShareLink(op, { keyword = null, wait = settle, maxB
     searchResultEncountered,
     keywordRestored,
     focus,
+  };
+}
+
+function sameFocus(left, right) {
+  return Boolean(left?.package && left?.activity
+    && left.package === right?.package
+    && left.activity === right?.activity);
+}
+
+function isRecoverySafeFocus(focus) {
+  return focusMatches(focus, /SplashActivity/i) || isSystemHomeFocus(focus);
+}
+
+export async function inspectRecoveryPage(op, { evidenceDir } = {}) {
+  if (!evidenceDir) throw new Error("douyin recovery inspection requires --evidence-dir");
+  mkdirSync(evidenceDir, { recursive: true });
+  const startedAt = new Date().toISOString();
+  const focusBefore = await op.currentFocus();
+  const screenshot = await op.capturePng(join(evidenceDir, `douyin-recovery-inspect-${Date.now()}.png`));
+  const doc = await dumpWithRetry(op, "douyin-recovery-inspect", { attempts: 3 });
+  const focus = await op.currentFocus();
+  const focusStable = sameFocus(focusBefore, focus);
+  const nodes = semanticSnapshot(doc);
+  return {
+    ok: focusStable,
+    step: focusStable ? "recovery-inspected" : "focus-changed-during-capture",
+    stoppedBeforeAction: true,
+    screenshot,
+    evidenceFiles: [{
+      path: screenshot.path,
+      kind: "screenshot",
+      label: "douyin-recovery-inspection",
+    }],
+    observation: {
+      schemaVersion: 1,
+      startedAt,
+      finishedAt: new Date().toISOString(),
+      focus,
+      focusBefore,
+      focusStable,
+      semanticNodeCount: nodes.length,
+      semanticLabels: nodes.map((node) => node.label).filter(Boolean).slice(0, 160),
+      pageClassification: {
+        schemaVersion: 1,
+        pageType: "unknown",
+        confidence: 0,
+        safeStateVerified: false,
+        reasons: ["visual analysis is required before recovery decisions"],
+        sources: { visual: 0, semantic: nodes.length },
+      },
+    },
+  };
+}
+
+export async function recoverShareLink(op, { evidenceDir } = {}) {
+  const inspected = await inspectRecoveryPage(op, { evidenceDir });
+  const focus = inspected.observation?.focus || null;
+  const safeStateVerified = inspected.ok === true && isRecoverySafeFocus(focus);
+  return {
+    ...inspected,
+    ok: safeStateVerified,
+    step: safeStateVerified ? "already-safe-main" : "safe-state-not-verified",
+    focus,
+    safeStateVerified,
+    zeroActionVerified: safeStateVerified,
   };
 }
 
@@ -917,6 +980,8 @@ node scripts/douyin-operator.mjs --serial <serial> --transport gateway start
 node scripts/douyin-operator.mjs --serial <serial> --transport gateway snapshot
 node scripts/douyin-operator.mjs --serial <serial> --transport gateway search --keyword <词>
 node scripts/douyin-operator.mjs --serial <serial> --transport gateway share-link --keyword <词>
+node scripts/douyin-operator.mjs --serial <serial> --transport gateway inspect-recovery --evidence-dir <dir>
+node scripts/douyin-operator.mjs --serial <serial> --transport gateway share-link-recover --evidence-dir <dir>
 node scripts/douyin-operator.mjs --serial <serial> --transport gateway like-dry-run
 node scripts/douyin-operator.mjs --serial <serial> --transport gateway collect-dry-run
 node scripts/douyin-operator.mjs --serial <serial> --transport gateway follow-dry-run
@@ -930,7 +995,7 @@ node scripts/douyin-operator.mjs --serial <serial> --transport gateway follow-dr
     throw new Error("douyin-operator only supports --transport gateway");
   }
 
-  const progressEnabled = command === "share-link" || command === "share-link-restore";
+  const progressEnabled = command === "share-link" || command === "share-link-restore" || command === "share-link-recover";
   const reporter = createProgressReporter({
     evidenceDir: progressEnabled ? arg("--evidence-dir") : null,
     runId: arg("--run-id"),
@@ -967,6 +1032,17 @@ node scripts/douyin-operator.mjs --serial <serial> --transport gateway follow-dr
       if (result.ok) reporter.complete("share_link_restore_complete");
       else reporter.fail("share_link_restore_failed");
       console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+    if (command === "share-link-recover") {
+      const result = await recoverShareLink(op, { evidenceDir: arg("--evidence-dir") });
+      if (result.ok) reporter.complete("share_link_recover_complete");
+      else reporter.fail("share_link_recover_failed");
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+    if (command === "inspect-recovery") {
+      console.log(JSON.stringify(await inspectRecoveryPage(op, { evidenceDir: arg("--evidence-dir") }), null, 2));
       return;
     }
     if (command === "like-dry-run") {
