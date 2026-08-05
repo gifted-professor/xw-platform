@@ -227,7 +227,14 @@ export class GatewayOperator {
   // FlutterBoost 关键修法（2026-07-22 E6 实证）：切 IME 后 Flutter 的 input connection 已随旧 IME
   // 销毁，commitText 会石沉大海（inputAccepted=true 但字不进字段）。必须在切 IME 后**重新聚焦**
   // （refocus 回调，一般是重点一次字段），让 Flutter 在 XwIME 名下重建 connection，再 inputText。
-  async inputTextViaXiaowei(text, { bridgeIme, priorIme, clearFirst = false, deferRestore = false, refocus = null } = {}) {
+  async inputTextViaXiaowei(text, {
+    bridgeIme,
+    priorIme,
+    clearFirst = false,
+    clearKeypresses = 48,
+    deferRestore = false,
+    refocus = null,
+  } = {}) {
     bridgeIme = bridgeIme || this.xwBridgeIme || BRIDGE_IME;
     priorIme = priorIme || (await this.currentIme());
     this._priorIme = priorIme;
@@ -251,9 +258,17 @@ export class GatewayOperator {
         audit.refocused = true;
       }
       if (clearFirst) {
-        await this.shellExec("input keyevent KEYCODE_MOVE_END " + Array(48).fill("KEYCODE_DEL").join(" "), 8000);
+        const requestedClearKeypresses = Number(clearKeypresses);
+        const boundedClearKeypresses = Number.isInteger(requestedClearKeypresses)
+          ? Math.max(1, Math.min(256, requestedClearKeypresses))
+          : 48;
+        await this.shellExec(
+          "input keyevent KEYCODE_MOVE_END " + Array(boundedClearKeypresses).fill("KEYCODE_DEL").join(" "),
+          8000,
+        );
         await new Promise((r) => setTimeout(r, 150));
         audit.cleared = true;
+        audit.clearKeypresses = boundedClearKeypresses;
       }
       const r = await this._invoke("inputText", { content: String(text) }, 12000);
       if (r.code !== 10000) throw new Error(`inputText failed: ${r.message || JSON.stringify(r)}`);

@@ -284,7 +284,7 @@ test("operator completes the observed path without touching an external share ta
   let state = "home";
   let inputValue = "";
   const semantics = [];
-  const clipboard = "8.48 复制打开抖音 https://v.douyin.com/Live_Path9/ PxF:/";
+  const clipboard = `${"抖音分享文案".repeat(16)} https://v.douyin.com/Live_Path9/ PxF:/`;
   const op = {
     async currentFocus() {
       const activity = state === "home"
@@ -334,9 +334,12 @@ test("operator completes the observed path without touching an external share ta
       else if (state === "detail" && semantic === "douyin detail share button") state = "share-panel";
       else if (state === "share-panel") state = "copied";
     },
-    async inputTextViaXiaowei(text, { refocus } = {}) {
+    async inputTextViaXiaowei(text, { refocus, clearFirst = false, clearKeypresses = 48 } = {}) {
       await refocus?.();
-      inputValue = text;
+      if (clearFirst) {
+        inputValue = inputValue.slice(0, Math.max(0, inputValue.length - clearKeypresses));
+      }
+      inputValue += text;
       return { inputAccepted: true };
     },
     async shellExec(command) {

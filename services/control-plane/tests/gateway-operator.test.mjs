@@ -143,3 +143,34 @@ test("GatewayOperator lets a bare coordinate tap pass free (no semantic = no gua
     console.error = originalError;
   }
 });
+
+test("GatewayOperator bounds an explicitly extended clear for long clipboard residue", async () => {
+  const commands = [];
+  const inputs = [];
+  let ime = "com.example.ime/.Original";
+  const op = new GatewayOperator({ serial: "runtime-01" });
+  op.currentIme = async () => ime;
+  op.setIme = async (value) => {
+    ime = value;
+    return true;
+  };
+  op.shellExec = async (command) => {
+    commands.push(command);
+    return "";
+  };
+  op._invoke = async (action, data) => {
+    inputs.push({ action, data });
+    return { code: 10000 };
+  };
+
+  const audit = await op.inputTextViaXiaowei("风景", {
+    clearFirst: true,
+    clearKeypresses: 256,
+  });
+
+  const clearCommand = commands.find((command) => command.includes("KEYCODE_MOVE_END"));
+  assert.equal((clearCommand.match(/KEYCODE_DEL/g) || []).length, 256);
+  assert.equal(audit.clearKeypresses, 256);
+  assert.deepEqual(inputs, [{ action: "inputText", data: { content: "风景" } }]);
+  assert.equal(ime, "com.example.ime/.Original");
+});
