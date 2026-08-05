@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "xhs.stall-progress.v2",
+  "title": "xhs.stall-progress.v2",
+  "type": "object",
+  "required": ["schemaId", "seq", "t", "phase"],
+  "additionalProperties": true,
+  "properties": {
+    "schemaId": { "const": "xhs.stall-progress.v2" },
+    "seq": { "type": "integer", "minimum": 1 },
+    "t": { "type": "string", "minLength": 1 },
+    "phase": { "type": "string", "minLength": 1 },
+    "runId": { "type": ["string", "null"] },
+    "jobId": { "type": ["string", "null"] },
+    "freshness": { "type": "string", "enum": ["fresh_ui", "no_fresh_ui"] },
+    "signalType": {
+      "type": ["string", "null"],
+      "enum": ["ui_stall", "progress_silence", "slow_progress", "contract_violation", null]
+    },
+    "llmEscalationRecommended": { "type": "boolean" }
+  }
+}

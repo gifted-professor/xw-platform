@@ -180,7 +180,13 @@ export function createControlPlaneRuntime({
   const overlayMode = resolveOverlayMode();
   let recipeOverlay = null;
   if (overlayMode !== "off") {
-    recipeOverlay = loadGeneratedOverlay({ featureFlag: overlayMode });
+    const overlayPath = process.env.XHS_RECIPE_OVERLAY_PATH || undefined;
+    const expectedSha256 = process.env.XHS_RECIPE_OVERLAY_SHA256 || undefined;
+    recipeOverlay = loadGeneratedOverlay({
+      featureFlag: overlayMode,
+      ...(overlayPath ? { path: overlayPath } : {}),
+      ...(expectedSha256 ? { expectedSha256 } : {}),
+    });
     control.recipeOverlay = recipeOverlay;
   }
 

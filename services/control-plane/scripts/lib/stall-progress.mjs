@@ -1,19 +1,21 @@
 /**
- * stall-progress.mjs — mid-run progress + UI-stall detection
+ * stall-progress.mjs — mid-run progress + stall detection (v2)
  *
- * Contract (north-star):
+ * Contract (G1):
  * - Persist step heartbeats under evidenceDir/progress.jsonl (survives ADAPTER_TIMEOUT).
- * - Trigger LLM escalation when dump/UI fingerprint is unchanged for stallMs
- *   (default 45s) — distinguish "slow" vs "stuck", not wall-clock timeout alone.
- * - LLM involvement = script-path failure / L1+ escalation, not normal oil.
- *
- * Zero device I/O; callers pass optional snap/fingerprint.
+ * - ui_stall: ≥2 fresh identical UI fingerprints spanning ≥ stallMs.
+ * - progress_silence: step alive past stallMs with no fresh UI/business snapshot
+ *   (never reuse a stale fingerprint to claim ui_stall).
+ * - Heartbeat timer proves process liveness during long awaits.
+ * - LLM escalation only on ui_stall / progress_silence / terminal failure — not on slow success.
  */
 import { createHash } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 export const DEFAULT_STALL_MS = Number(process.env.XIANYU_STALL_MS || 45000);
+export const DEFAULT_HEARTBEAT_MS = Number(process.env.XIANYU_HEARTBEAT_MS || 5000);
+export const PROGRESS_SCHEMA = "xhs.stall-progress.v2";
 
 export function canonicalizeLabels(nodes = []) {
   return (Array.isArray(nodes) ? nodes : [])
@@ -35,9 +37,23 @@ export function uiFingerprint(snap) {
   return createHash("sha256").update(JSON.stringify(payload)).digest("hex");
 }
 
+function emptyUiState() {
+  return {
+    fingerprint: null,
+    screenSha256: null,
+    firstFreshAt: null,
+    lastFreshAt: null,
+    freshCount: 0,
+    uiStalled: false,
+    uiStalledAt: null,
+    silenceDeclared: false,
+    silenceDeclaredAt: null,
+  };
+}
+
 /**
- * Pure stall state machine.
- * @returns {{ state, event? }} event is set when a stall is newly declared or resolved
+ * Pure UI stall state machine — only call with a *fresh* fingerprint from a new snapshot.
+ * @returns {{ state, event? }}
  */
 export function observeStall(state, {
   fingerprint,
@@ -45,33 +61,36 @@ export function observeStall(state, {
   now = Date.now(),
   stallMs = DEFAULT_STALL_MS,
   step = null,
+  fresh = true,
 } = {}) {
-  const prev = state && typeof state === "object"
-    ? state
-    : { fingerprint: null, screenSha256: null, changedAt: null, stalled: false, stalledAt: null };
+  const prev = state && typeof state === "object" ? { ...emptyUiState(), ...state } : emptyUiState();
 
-  if (!fingerprint) {
+  if (!fingerprint || fresh !== true) {
     return { state: prev, event: null };
   }
 
-  const changed = prev.fingerprint !== fingerprint
-    || (screenSha256 && prev.screenSha256 && prev.screenSha256 !== screenSha256);
+  const same = prev.fingerprint === fingerprint
+    && (!screenSha256 || !prev.screenSha256 || prev.screenSha256 === screenSha256);
 
-  if (!prev.fingerprint || changed) {
+  if (!prev.fingerprint || !same) {
     const next = {
+      ...prev,
       fingerprint,
-      screenSha256: screenSha256 || prev.screenSha256,
-      changedAt: now,
-      stalled: false,
-      stalledAt: null,
+      screenSha256: screenSha256 || null,
+      firstFreshAt: now,
+      lastFreshAt: now,
+      freshCount: 1,
+      uiStalled: false,
+      uiStalledAt: null,
     };
-    const event = prev.stalled
+    const event = prev.uiStalled
       ? {
         kind: "stall_cleared",
+        signalType: "slow_progress",
         dumpFingerprint: fingerprint,
         screenSha256: next.screenSha256,
-        unchangedMs: prev.stalledAt != null && prev.changedAt != null
-          ? Math.max(0, prev.stalledAt - prev.changedAt)
+        unchangedMs: prev.uiStalledAt != null && prev.firstFreshAt != null
+          ? Math.max(0, prev.uiStalledAt - prev.firstFreshAt)
           : null,
         step,
         llmEscalationRecommended: false,
@@ -81,39 +100,76 @@ export function observeStall(state, {
     return { state: next, event };
   }
 
-  const changedAt = prev.changedAt ?? now;
-  const unchangedMs = Math.max(0, now - changedAt);
-  if (!prev.stalled && unchangedMs >= stallMs) {
-    const next = {
-      ...prev,
-      fingerprint,
-      screenSha256: screenSha256 || prev.screenSha256,
-      stalled: true,
-      stalledAt: now,
-    };
+  const firstFreshAt = prev.firstFreshAt ?? now;
+  const freshCount = (prev.freshCount || 1) + 1;
+  const unchangedMs = Math.max(0, now - firstFreshAt);
+  const next = {
+    ...prev,
+    fingerprint,
+    screenSha256: screenSha256 || prev.screenSha256,
+    firstFreshAt,
+    lastFreshAt: now,
+    freshCount,
+  };
+
+  if (!prev.uiStalled && freshCount >= 2 && unchangedMs >= stallMs) {
+    next.uiStalled = true;
+    next.uiStalledAt = now;
     return {
       state: next,
       event: {
         kind: "stall",
+        signalType: "ui_stall",
         dumpFingerprint: fingerprint,
         screenSha256: next.screenSha256,
         unchangedMs,
         stallMs,
+        freshCount,
         step,
         llmEscalationRecommended: true,
-        diagnosisHint: "stuck_or_slow",
+        diagnosisHint: "ui_stall",
       },
     };
   }
 
-  return {
-    state: {
-      ...prev,
-      fingerprint,
-      screenSha256: screenSha256 || prev.screenSha256,
-    },
-    event: null,
-  };
+  return { state: next, event: null };
+}
+
+/**
+ * Progress silence: alive past stallMs with no fresh UI observation.
+ * Does not mutate UI stall fingerprint state.
+ */
+export function observeProgressSilence(state, {
+  now = Date.now(),
+  stallMs = DEFAULT_STALL_MS,
+  step = null,
+} = {}) {
+  const prev = state && typeof state === "object" ? { ...emptyUiState(), ...state } : emptyUiState();
+  const anchor = prev.lastFreshAt ?? prev.firstFreshAt;
+  if (anchor == null) {
+    // No UI yet — silence relative to tracker start is handled by caller via lastActivityAt.
+    return { state: prev, event: null, silenceMs: null };
+  }
+  const silenceMs = Math.max(0, now - anchor);
+  if (!prev.silenceDeclared && silenceMs >= stallMs) {
+    const next = { ...prev, silenceDeclared: true, silenceDeclaredAt: now };
+    return {
+      state: next,
+      silenceMs,
+      event: {
+        kind: "progress_silence",
+        signalType: "progress_silence",
+        dumpFingerprint: prev.fingerprint,
+        screenSha256: prev.screenSha256,
+        silenceMs,
+        stallMs,
+        step,
+        llmEscalationRecommended: true,
+        diagnosisHint: "progress_silence",
+      },
+    };
+  }
+  return { state: prev, event: null, silenceMs };
 }
 
 export function progressPathFor(evidenceDir) {
@@ -136,61 +192,188 @@ export function appendProgressLine(evidenceDir, record) {
 export function createProgressTracker({
   evidenceDir = null,
   stallMs = DEFAULT_STALL_MS,
+  heartbeatMs = DEFAULT_HEARTBEAT_MS,
   now = () => Date.now(),
+  runId = null,
+  jobId = null,
 } = {}) {
-  let stallState = { fingerprint: null, screenSha256: null, changedAt: null, stalled: false, stalledAt: null };
+  let uiState = emptyUiState();
+  let seq = 0;
+  let startedAt = now();
+  let lastActivityAt = startedAt;
+  let heartbeatTimer = null;
+  let heartbeatStep = null;
   const stallEvents = [];
   const path = progressPathFor(evidenceDir);
 
-  function note({ phase, name = null, step = null, snap = null, screenSha256 = null, ok = null, extra = null } = {}) {
-    const fingerprint = snap ? uiFingerprint(snap) : null;
-    const observed = observeStall(stallState, {
-      fingerprint: fingerprint || stallState.fingerprint,
-      screenSha256: screenSha256 || snap?.screenshot?.sha256 || null,
-      now: now(),
-      stallMs,
-      step: step || name,
-    });
-    stallState = observed.state;
-    if (observed.event) stallEvents.push(observed.event);
-
+  function writeRecord(partial) {
+    seq += 1;
+    lastActivityAt = now();
     const record = {
+      schemaId: PROGRESS_SCHEMA,
+      seq,
       t: new Date(now()).toISOString(),
+      runId,
+      jobId,
+      ...partial,
+    };
+    appendProgressLine(evidenceDir, record);
+    return record;
+  }
+
+  function note({
+    phase,
+    name = null,
+    step = null,
+    snap = null,
+    screenSha256 = null,
+    ok = null,
+    extra = null,
+    freshObservation = null,
+  } = {}) {
+    const hasFreshSnap = Boolean(snap) || freshObservation === true;
+    const fingerprint = snap ? uiFingerprint(snap) : null;
+    let event = null;
+
+    if (hasFreshSnap && fingerprint) {
+      const observed = observeStall(uiState, {
+        fingerprint,
+        screenSha256: screenSha256 || snap?.screenshot?.sha256 || null,
+        now: now(),
+        stallMs,
+        step: step || name,
+        fresh: true,
+      });
+      uiState = observed.state;
+      event = observed.event;
+      // Fresh UI clears silence latch so a later freeze can re-fire.
+      if (event?.kind === "stall_cleared" || !uiState.uiStalled) {
+        uiState = { ...uiState, silenceDeclared: false, silenceDeclaredAt: null };
+      }
+    } else {
+      // No fresh UI — may declare progress_silence; never advance ui_stall clock via stale fp.
+      const silence = observeProgressSilence(uiState, {
+        now: now(),
+        stallMs,
+        step: step || name,
+      });
+      uiState = silence.state;
+      event = silence.event;
+      if (!event && uiState.lastFreshAt == null) {
+        const silenceMs = Math.max(0, now() - startedAt);
+        if (!uiState.silenceDeclared && silenceMs >= stallMs) {
+          uiState = { ...uiState, silenceDeclared: true, silenceDeclaredAt: now() };
+          event = {
+            kind: "progress_silence",
+            signalType: "progress_silence",
+            dumpFingerprint: null,
+            screenSha256: null,
+            silenceMs,
+            stallMs,
+            step: step || name,
+            llmEscalationRecommended: true,
+            diagnosisHint: "progress_silence",
+          };
+        }
+      }
+    }
+
+    if (event) stallEvents.push(event);
+
+    const silenceMs = uiState.lastFreshAt != null
+      ? Math.max(0, now() - uiState.lastFreshAt)
+      : Math.max(0, now() - startedAt);
+
+    const escalate = Boolean(
+      event?.llmEscalationRecommended
+      || uiState.uiStalled
+      || (event?.signalType === "progress_silence"),
+    );
+
+    return writeRecord({
       phase,
       name,
       step,
       ok,
-      dumpFingerprint: fingerprint || stallState.fingerprint,
-      screenSha256: stallState.screenSha256,
-      stalled: stallState.stalled,
-      unchangedMs: stallState.changedAt != null ? Math.max(0, now() - stallState.changedAt) : null,
-      llmEscalationRecommended: Boolean(observed.event?.llmEscalationRecommended || stallState.stalled),
-      diagnosisHint: observed.event?.diagnosisHint
-        || (stallState.stalled ? "stuck_or_slow" : "progress"),
+      freshness: hasFreshSnap ? "fresh_ui" : "no_fresh_ui",
+      dumpFingerprint: hasFreshSnap ? fingerprint : uiState.fingerprint,
+      screenSha256: uiState.screenSha256,
+      stalled: uiState.uiStalled,
+      signalType: event?.signalType
+        || (uiState.uiStalled ? "ui_stall" : null),
+      unchangedMs: uiState.firstFreshAt != null && uiState.fingerprint
+        ? Math.max(0, now() - uiState.firstFreshAt)
+        : null,
+      silenceMs,
+      llmEscalationRecommended: escalate,
+      diagnosisHint: event?.diagnosisHint
+        || (uiState.uiStalled ? "ui_stall" : "progress"),
       ...(extra && typeof extra === "object" ? { extra } : {}),
-      ...(observed.event ? { stallEvent: observed.event } : {}),
-    };
-    appendProgressLine(evidenceDir, record);
-    return record;
+      ...(event ? { stallEvent: event } : {}),
+    });
+  }
+
+  function heartbeatTick() {
+    note({
+      phase: "heartbeat",
+      name: heartbeatStep,
+      step: heartbeatStep,
+      freshObservation: false,
+    });
+  }
+
+  function startHeartbeat({ name = null, intervalMs = heartbeatMs } = {}) {
+    stopHeartbeat();
+    heartbeatStep = name;
+    const ms = Math.max(50, Number(intervalMs) || heartbeatMs);
+    heartbeatTimer = setInterval(heartbeatTick, ms);
+    // Keep the timer referenced while a step await is in flight so heartbeats
+    // still fire under test runners / short-lived event loops.
+    return true;
+  }
+
+  function stopHeartbeat() {
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = null;
+    }
+    heartbeatStep = null;
   }
 
   return {
     path,
     stallMs,
     note,
-    getStallState: () => ({ ...stallState }),
+    startHeartbeat,
+    stopHeartbeat,
+    getStallState: () => ({ ...uiState }),
     getStallEvents: () => stallEvents.slice(),
+    getSeq: () => seq,
     summary() {
+      const escalate = uiState.uiStalled
+        || stallEvents.some((e) => e.signalType === "progress_silence" || e.signalType === "ui_stall");
       return {
         path,
         stallMs,
-        stalled: stallState.stalled,
-        dumpFingerprint: stallState.fingerprint,
-        screenSha256: stallState.screenSha256,
-        unchangedMs: stallState.changedAt != null ? Math.max(0, now() - stallState.changedAt) : null,
-        llmEscalationRecommended: stallState.stalled,
+        seq,
+        stalled: uiState.uiStalled,
+        dumpFingerprint: uiState.fingerprint,
+        screenSha256: uiState.screenSha256,
+        unchangedMs: uiState.firstFreshAt != null
+          ? Math.max(0, now() - uiState.firstFreshAt)
+          : null,
+        silenceMs: uiState.lastFreshAt != null
+          ? Math.max(0, now() - uiState.lastFreshAt)
+          : Math.max(0, now() - startedAt),
+        llmEscalationRecommended: escalate && (uiState.uiStalled
+          || stallEvents.some((e) => e.signalType === "progress_silence")),
         stallEvents: stallEvents.slice(),
-        diagnosisHint: stallState.stalled ? "stuck_or_slow" : "ok",
+        diagnosisHint: uiState.uiStalled
+          ? "ui_stall"
+          : (stallEvents.some((e) => e.signalType === "progress_silence")
+            ? "progress_silence"
+            : "ok"),
+        lastActivityAt: new Date(lastActivityAt).toISOString(),
       };
     },
   };

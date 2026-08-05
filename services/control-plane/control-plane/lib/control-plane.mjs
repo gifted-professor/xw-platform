@@ -18,6 +18,7 @@ import { ProtectedHumanCommit } from "./protected-human-commit.mjs";
 import { guardFinancialCommit } from "./financial-commit-classifier.mjs";
 import { acquireTransportLock as defaultAcquireTransportLock } from "./xiaowei-transport.mjs";
 import { policyModeForRequest } from "./nonpayment-autonomy-policy.mjs";
+import { buildStallVerdictFromEvidenceDir } from "../../scripts/lib/stall-verdict.mjs";
 
 const moduleDir = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(moduleDir, "..", "..");
@@ -2173,6 +2174,27 @@ export class ControlPlane {
       if (error?.ambiguous) primaryError.ambiguous = true;
     }
 
+    let stallVerdictPre = null;
+    let stallVerdictPost = null;
+    if (primaryError) {
+      try {
+        stallVerdictPre = buildStallVerdictFromEvidenceDir(context.evidenceDirectory, {
+          runId: job.runId,
+          jobId: job.jobId,
+          errorCode: primaryError.code,
+          phase: "pre-restore",
+        });
+        this.evidence.writeJson({
+          job,
+          kind: "stall_verdict",
+          label: "stall-verdict-pre-restore",
+          value: stallVerdictPre,
+        });
+      } catch {
+        stallVerdictPre = null;
+      }
+    }
+
     try {
       job = this.state.transitionJob(job.jobId, "restoring", {
         payload: { required: capability.restoration.required },
@@ -2188,6 +2210,25 @@ export class ControlPlane {
       restoreError = asControlError(error, "RESTORATION_FAILED");
     }
 
+    if (primaryError) {
+      try {
+        stallVerdictPost = buildStallVerdictFromEvidenceDir(context.evidenceDirectory, {
+          runId: job.runId,
+          jobId: job.jobId,
+          errorCode: primaryError.code,
+          phase: "post-restore",
+        });
+        this.evidence.writeJson({
+          job,
+          kind: "stall_verdict",
+          label: "stall-verdict-post-restore",
+          value: stallVerdictPost,
+        });
+      } catch {
+        stallVerdictPost = null;
+      }
+    }
+
     try {
       for (const file of collectEvidenceFiles(execution, verification, restoration)) {
         await this.evidence.attachFile({
@@ -2200,6 +2241,14 @@ export class ControlPlane {
       const summary = {
         ...resultSummary(execution, verification, restoration, primaryError),
         ...(explicitObservationReceipt ? { explicitObservationReceipt } : {}),
+        ...(stallVerdictPre || stallVerdictPost
+          ? {
+            stallVerdict: {
+              preRestore: stallVerdictPre,
+              postRestore: stallVerdictPost,
+            },
+          }
+          : {}),
       };
       this.evidence.writeJson({ job, kind: "result", label: "result", value: summary });
       if (restoreError || heartbeatError) {

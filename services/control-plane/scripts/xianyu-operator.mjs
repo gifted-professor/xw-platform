@@ -482,9 +482,11 @@ export function createStepSupervisor(op, {
   onEvent = null,
   evidenceDir = null,
   stallMs = DEFAULT_STALL_MS,
+  runId = null,
+  jobId = null,
 } = {}) {
   const events = [];
-  const progress = createProgressTracker({ evidenceDir, stallMs });
+  const progress = createProgressTracker({ evidenceDir, stallMs, runId, jobId });
   const emit = (payload, { snap = null } = {}) => {
     const progressNote = progress.note({
       phase: payload?.phase || "note",
@@ -506,6 +508,8 @@ export function createStepSupervisor(op, {
       dumpFingerprint: progressNote.dumpFingerprint,
       stalled: progressNote.stalled,
       unchangedMs: progressNote.unchangedMs,
+      silenceMs: progressNote.silenceMs,
+      signalType: progressNote.signalType,
       llmEscalationRecommended: progressNote.llmEscalationRecommended,
       diagnosisHint: progressNote.diagnosisHint,
       ...payload,
@@ -537,7 +541,16 @@ export function createStepSupervisor(op, {
     let lastError = null;
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       try {
-        lastResult = await fn({ attempt });
+        // Heartbeat during long awaits: proves liveness without claiming ui_stall.
+        progress.startHeartbeat({
+          name,
+          intervalMs: Math.min(5000, Math.max(1000, Math.floor(stallMs / 3))),
+        });
+        try {
+          lastResult = await fn({ attempt });
+        } finally {
+          progress.stopHeartbeat();
+        }
         lastError = null;
         let expectOk = true;
         let snap = null;

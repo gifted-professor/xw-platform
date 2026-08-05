@@ -10,7 +10,14 @@ param(
     [string]$RegistryCommit = "",
     [string]$WindowsRegistryCommit = "",
     [string[]]$PilotActors = @(),
-    [string[]]$PilotAliases = @()
+    [string[]]$PilotAliases = @(),
+    [ValidateSet("off", "shadow", "canary", "active")]
+    [string]$RecipeOverlayMode = "off",
+    [string]$RecipeOverlayPath = "C:\Users\Public\xhs-agent-control\generated-overlay\recipe-catalog.json",
+    [string]$RecipeOverlaySha256 = "",
+    [bool]$RequireTestReceipt = $true,
+    [bool]$RequireMainOrigin = $true,
+    [bool]$AllowDirtyWorktree = $false
 )
 
 $ErrorActionPreference = "Stop"
@@ -60,6 +67,12 @@ if ($Action -eq "Install") {
         evidenceMode = $EvidenceMode
         pilotActors = @($PilotActors)
         pilotAliases = @($PilotAliases)
+        recipeOverlayMode = $RecipeOverlayMode
+        recipeOverlayPath = $RecipeOverlayPath
+        recipeOverlaySha256 = $RecipeOverlaySha256
+        requireTestReceipt = [bool]$RequireTestReceipt
+        requireMainOrigin = [bool]$RequireMainOrigin
+        allowDirtyWorktree = [bool]$AllowDirtyWorktree
     }
     $json = $launch | ConvertTo-Json -Depth 5
     [IO.File]::WriteAllText($launchConfig, $json, (New-Object Text.UTF8Encoding($false)))
