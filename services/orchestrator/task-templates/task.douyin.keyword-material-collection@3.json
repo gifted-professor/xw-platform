@@ -1,0 +1,142 @@
+{
+  "aliases": [
+    "抖音关键词素材采集",
+    "抖音多关键词素材采集",
+    "抖音关键词图文采集并转发"
+  ],
+  "checkpointPolicy": {
+    "dedupe": true,
+    "dedupeKeyFields": [
+      "recipient",
+      "keyword",
+      "postIdentity"
+    ],
+    "enabled": true,
+    "resumeParam": "resume",
+    "storage": "outbox/work/<runId>/checkpoints/<stageId>/<itemHash>.json",
+    "uncertainEffect": "stop_unverified_do_not_resend"
+  },
+  "description": "逐个搜索抖音关键词，只选择图文，按数量去重采集，并在当次批量确认后转发给指定接收人。",
+  "effectPolicy": {
+    "confirmation": "once_per_run",
+    "kind": "external_send",
+    "quantity": {
+      "arrayParam": "keywords",
+      "numberParam": "perKeyword",
+      "operation": "multiply_length"
+    },
+    "recipientParam": "recipient",
+    "reconfirmWhen": [
+      "recipient_changed",
+      "quantity_increased",
+      "keywords_added",
+      "annotation_changed",
+      "plan_semantics_changed"
+    ]
+  },
+  "fixedConstraints": {
+    "annotationClarification": "这里的飞书字段是已验证的结构化附言格式，不代表每次重新读取飞书表格。",
+    "annotationMode": "verified_feishu_style_fields_with_current_keyword",
+    "contentType": "image_text",
+    "recipientMustResolveUniquely": true,
+    "resultMode": "share_to_friend",
+    "unknownExternalCommit": "stop"
+  },
+  "name": "抖音关键词图文采集并转发",
+  "originRunId": "run_d4d5ec87-de51-4140-bd70-115c946b56c3",
+  "parameterSchema": {
+    "properties": {
+      "dedupe": {
+        "default": true,
+        "prompt": "是否跳过已经处理过的帖子？",
+        "promptPolicy": "effect_summary",
+        "type": "boolean"
+      },
+      "keywords": {
+        "items": {
+          "type": "string"
+        },
+        "minItems": 1,
+        "prompt": "关键词是什么？多个关键词可用逗号或换行分隔。",
+        "promptPolicy": "if_missing",
+        "type": "array"
+      },
+      "perKeyword": {
+        "maximum": 100,
+        "minimum": 1,
+        "prompt": "每个关键词需要多少条？",
+        "promptPolicy": "if_missing",
+        "type": "integer"
+      },
+      "recipient": {
+        "default": "天才较瘦",
+        "prompt": "接收人是谁？",
+        "promptPolicy": "effect_summary",
+        "type": "string"
+      },
+      "resume": {
+        "default": true,
+        "prompt": "是否从同一任务的明确检查点续跑？",
+        "promptPolicy": "effect_summary",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "keywords",
+      "perKeyword"
+    ],
+    "type": "object"
+  },
+  "revision": 3,
+  "schemaId": "xhs.task-template.v1",
+  "schemaVersion": 1,
+  "status": "draft",
+  "steps": [
+    {
+      "id": "prepare_campaign",
+      "intent": "归一化关键词、数量和接收人，计算最大外部效果并建立本次检查点",
+      "kind": "workflow",
+      "params": {
+        "dedupe": "{{dedupe}}",
+        "keywords": "{{keywords}}",
+        "perKeyword": "{{perKeyword}}",
+        "recipient": "{{recipient}}",
+        "resume": "{{resume}}"
+      }
+    },
+    {
+      "dependsOn": [
+        "prepare_campaign"
+      ],
+      "id": "collect_and_forward_each_keyword",
+      "intent": "在正式 Explorer session 内逐个关键词复用已验证的图文筛选、好友精确选择、飞书同款字段附言和发送流程",
+      "kind": "workflow",
+      "params": {
+        "keywords": "{{keywords}}",
+        "perKeyword": "{{perKeyword}}",
+        "recipient": "{{recipient}}",
+        "resume": "{{resume}}"
+      },
+      "workflowId": "workflow.douyin.keyword-image-text-share-friend.v1"
+    },
+    {
+      "condition": "on_safe_ui_drift_before_external_commit",
+      "dependsOn": [
+        "collect_and_forward_each_keyword"
+      ],
+      "id": "explore_safe_gap",
+      "intent": "仅在页面漂移或已知步骤无法定位时探索安全界面；未知真实外发提交点必须停止，不旁路发送",
+      "kind": "explore"
+    },
+    {
+      "dependsOn": [
+        "collect_and_forward_each_keyword"
+      ],
+      "id": "verify_checkpoint_close",
+      "intent": "核对逐关键词完成数、保存去重检查点、释放 session 并完成 closeout",
+      "kind": "workflow"
+    }
+  ],
+  "templateId": "task.douyin.keyword-material-collection",
+  "descriptorHash": "29e144a6f5f61be6379c65b22d0ac5a3d1b8a50d425e0e3978ceab6a880a1da4"
+}

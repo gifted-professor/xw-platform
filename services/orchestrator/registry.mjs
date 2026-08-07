@@ -28,6 +28,31 @@ import { DatabaseSync } from "node:sqlite";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  ensureRecipeTables,
+  ingestRecipeCandidate,
+  recordAttempt,
+  recordVerifiedAttempt,
+  degradeRecipe,
+  evaluatePromotion,
+  listRecipes,
+  getRecipe,
+} from "./scripts/lib/recipe-catalog.mjs";
+import {
+  buildAttemptReceiptFromJob,
+  fetchControlJob,
+} from "./scripts/lib/recipe-attempt-receipt.mjs";
+import {
+  ensureStallTables,
+  enqueueStall,
+  buildL2DiagnosticPacket,
+  buildL2ShadowDecision,
+  claimNextStallItem,
+  completeStallItem,
+} from "./scripts/lib/stall-triage.mjs";
+import { compileTaskPlan } from "./scripts/lib/task-plan.mjs";
+import { loadFoundationCapabilities } from "./scripts/lib/foundation-capabilities.mjs";
+import { loadWorkflows, summarizeWorkflow } from "./scripts/lib/workflow-catalog.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -156,6 +181,10 @@ db.exec(`
     resolution=CASE WHEN needs_engineer=1 OR category='unknown' THEN NULL ELSE COALESCE(resolution, '存量知识迁移为非活动状态') END
     WHERE lifecycle IS NULL`).run(now);
 }
+
+// ---------- Recipe Catalog tables (Phase 2/3 scaffolding; additive, idempotent) ----------
+ensureRecipeTables(db);
+ensureStallTables(db);
 
 function listIdentities() {
   return db.prepare("SELECT * FROM identities ORDER BY alias").all().map((r) => ({
@@ -759,6 +788,13 @@ function summarizeCapability(capability, routingByCapability) {
   return {
     id: capability.id,
     appId: capability.appId ?? null,
+    ...(capability.description !== undefined ? { description: capability.description } : {}),
+    ...(capability.inputSchema !== undefined ? { inputSchema: capability.inputSchema } : {}),
+    ...(capability.outputSchema !== undefined ? { outputSchema: capability.outputSchema } : {}),
+    ...(capability.preconditions !== undefined ? { preconditions: capability.preconditions } : {}),
+    ...(capability.verification !== undefined ? { verification: capability.verification } : {}),
+    ...(capability.restoration !== undefined ? { restoration: capability.restoration } : {}),
+    ...(capability.composition !== undefined ? { composition: capability.composition } : {}),
     risk: capability.risk ?? null,
     maturity: capability.maturity ?? null,
     idempotency: capability.idempotency ?? null,
@@ -818,15 +854,71 @@ async function buildCapabilityCatalog() {
   };
 }
 
+function buildFoundationCapabilityCatalog() {
+  try {
+    const capabilities = loadFoundationCapabilities().sort((a, b) => a.id.localeCompare(b.id));
+    return {
+      ok: true,
+      error: null,
+      generatedAt: new Date().toISOString(),
+      count: capabilities.length,
+      capabilities,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: String(error?.message || error),
+      generatedAt: new Date().toISOString(),
+      count: 0,
+      capabilities: [],
+    };
+  }
+}
+
+function buildWorkflowCatalog() {
+  try {
+    const workflows = loadWorkflows()
+      .map((item) => summarizeWorkflow(item))
+      .sort((a, b) => a.workflowId.localeCompare(b.workflowId));
+    return {
+      ok: true,
+      error: null,
+      generatedAt: new Date().toISOString(),
+      count: workflows.length,
+      workflows,
+      note: "Workflow catalog is versioned and discoverable; session_workflow runtime may still be offline. canary_only entries are not production-runnable.",
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: String(error?.message || error),
+      generatedAt: new Date().toISOString(),
+      count: 0,
+      workflows: [],
+      note: null,
+    };
+  }
+}
+
 // ---------- 任务包（P1，只推荐不代提交）----------
 const TASK_KEYWORDS = [
-  { match: /闲鱼|xianyu|上架|发布商品|草稿/i, appId: "xianyu" },
-  { match: /小红书|xhs|评论|笔记/i, appId: "xhs" },
+  { match: /闲鱼|xianyu/i, appId: "xianyu" },
+  { match: /小红书|xhs|笔记/i, appId: "xhs" },
+  { match: /抖音|douyin/i, appId: "douyin" },
   { match: /微信|wechat|客服|会话/i, appId: "wechat" },
+  { match: /微购|weigou/i, appId: "weigou" },
   { match: /设备|device|网关|小薇|xiaowei/i, appId: "xiaowei" },
+];
+const TASK_IMPLICIT_APP_KEYWORDS = [
+  // Compatibility for legacy shorthand only after every explicit App name was
+  // checked, so "抖音草稿" cannot be stolen by an action word such as 草稿.
+  { match: /上架|发布商品|保存草稿/i, appId: "xianyu" },
 ];
 const INTENT_KEYWORDS = [
   { match: /只读|观察|快照|observe|snapshot|巡检/i, prefer: /observe/ },
+  { match: /搜索|search/i, prefer: /search/ },
+  { match: /余额|balance/i, prefer: /balance/ },
+  { match: /指标|metrics/i, prefer: /metrics/ },
   { match: /图片|image|相册/i, prefer: /image/ },
   { match: /输入|文案|描述|text/i, prefer: /input/ },
   { match: /全链|完整|full|标准链|发布|发商品|上架|不保存|no.?save/i, prefer: /full_dry_run$/ },
@@ -836,7 +928,9 @@ const INTENT_KEYWORDS = [
 
 function buildTaskPacket(taskText, catalog, entry) {
   const text = String(taskText || "");
-  const app = TASK_KEYWORDS.find((k) => k.match.test(text))?.appId ?? null;
+  const app = TASK_KEYWORDS.find((k) => k.match.test(text))?.appId
+    ?? TASK_IMPLICIT_APP_KEYWORDS.find((k) => k.match.test(text))?.appId
+    ?? null;
   const intent = INTENT_KEYWORDS.filter((k) => k.match.test(text)).map((k) => k.prefer);
   const pool = catalog.capabilities.filter((c) => (app ? c.appId === app : true));
   const readyAliases = new Set(entry.devices.filter((d) => d.state.ready).map((d) => d.alias));
@@ -846,12 +940,14 @@ function buildTaskPacket(taskText, catalog, entry) {
   let recommendations = [];
   if (intent.length) {
     const scored = routed.map((c) => {
-      let score = 0;
-      for (const rx of intent) if (rx.test(c.id)) score += 3;
+      let intentScore = 0;
+      for (const rx of intent) if (rx.test(c.id)) intentScore += 3;
+      let score = intentScore;
       if (c.policy.runnableAsJob) score += 2;       // 可直接 job 自跑优先
       if (c.risk === "R0") score += 1;
-      return { c, score };
-    }).sort((a, b) => b.score - a.score || a.c.id.localeCompare(b.c.id));
+      return { c, score, intentScore };
+    }).filter(({ intentScore }) => intentScore > 0)
+      .sort((a, b) => b.score - a.score || a.c.id.localeCompare(b.c.id));
     recommendations = scored.slice(0, 3).map(({ c, score }) => {
       const eligible = c.eligibleAliases.map((alias) => ({
         alias,
@@ -892,6 +988,23 @@ function buildTaskPacket(taskText, catalog, entry) {
   const knowledge = listKnowledge({ app: app || undefined, limit: 8 }).map((item) => ({
     id: item.id, title: item.title, category: item.category, lifecycle: item.lifecycle, verifyMode: item.verifyMode,
   }));
+  // Optional enrichment: compile TaskPlan against catalog + implemented/canary recipes (non-breaking).
+  let taskPlan = null;
+  try {
+    const recipes = listRecipes(db, { includeAll: false }).map((r) => ({
+      recipeId: r.recipeId,
+      status: r.status,
+      spec: r.spec,
+    }));
+    taskPlan = compileTaskPlan({
+      goal: text,
+      catalogCapabilities: catalog.capabilities || [],
+      recipes,
+      foundationCapabilities: loadFoundationCapabilities(),
+    });
+  } catch {
+    taskPlan = null;
+  }
   return {
     ok: true,
     task: text,
@@ -908,6 +1021,10 @@ function buildTaskPacket(taskText, catalog, entry) {
       "验证码/风控/登录墙/未知页面 → 立即停",
     ],
     knowledge,
+    taskPlan,
+    matchedRecipe: taskPlan?.matched?.recipeId
+      ? { recipeId: taskPlan.matched.recipeId, capabilityId: taskPlan.matched.capabilityId, modelTier: taskPlan.modelTier }
+      : null,
     protocol: ENTRY_PROTOCOL,
     noIntentNote,
     note: "本接口只推荐与解释，不代提交任何 job。",
@@ -1090,6 +1207,9 @@ const ENTRY_PROTOCOL = {
   ],
   cwd: "/Volumes/GPFS/Users/a1234/Desktop/Coding/xhs-device-agent-routing-v1-1（Mac 上运行；devicectl 自带 --ssh，不要手写 ssh 包裹）",
   entrypoints: {
+    foundationCatalog: "ssh xhs-windows 'curl.exe -s http://127.0.0.1:17930/api/foundation-capabilities'",
+    workflowCatalog: "ssh xhs-windows 'curl.exe -s http://127.0.0.1:17930/api/workflows'",
+    locatorStatus: "ssh xhs-windows 'node C:\\Users\\Public\\xhs-registry\\ops\\xw-locator.mjs status'",
     routePlan: "node control-plane/devicectl.mjs --ssh xhs-windows route plan --actor <actor> --capability <id>",
     job: "node control-plane/devicectl.mjs --ssh xhs-windows job submit --capability <id> --actor <actor> --idempotency-key <key> --params '<json>'",
     jobStatus: "node control-plane/devicectl.mjs --ssh xhs-windows job status --job <jobId>",
@@ -1161,6 +1281,8 @@ async function buildAgentEntry() {
     updatedAt: item.updatedAt,
   }));
   const controlDbOk = Boolean(jobs.ok && deviceJobs.ok && pending.ok && recentApprovals.ok);
+  const foundations = buildFoundationCapabilityCatalog();
+  const workflows = buildWorkflowCatalog();
   return {
     ok: true,
     schemaVersion: "xhs.agent-entry.v2",
@@ -1247,6 +1369,8 @@ async function buildAgentEntry() {
       })) : [],
     },
     blockers: blockerOverview(),
+    foundations,
+    workflows,
     knowledge,
     protocol: ENTRY_PROTOCOL,
   };
@@ -1280,6 +1404,22 @@ function renderAgentEntryMarkdown(entry) {
     ...(entry.blockers.active.length
       ? entry.blockers.active.map((item) => `- [${item.app || "infra"}] ${item.title} (${item.id})`)
       : ["- none"]),
+    "",
+    "## Discoverable foundation capabilities",
+    "",
+    ...(entry.foundations?.capabilities?.length
+      ? entry.foundations.capabilities.map((item) =>
+          `- ${item.id} | ${item.title} | status=${item.status} | execution=${item.executionStatus} | directRun=${yn(item.directRun)} | entry=\`${item.entry}\``)
+      : [`- unavailable${entry.foundations?.error ? `: ${entry.foundations.error}` : ""}`]),
+    "- catalog: `GET /api/foundation-capabilities`; `/xw skills` merges this catalog with formal capabilities, recipes, workflows, and foundation.",
+    "",
+    "## Discoverable workflows",
+    "",
+    ...(entry.workflows?.workflows?.length
+      ? entry.workflows.workflows.map((item) =>
+          `- ${item.workflowId} | ${item.title} | app=${item.appId} | status=${item.status} | maturity=${item.maturity} | entry=${item.entry} | directRun=${yn(item.directRun)} | tapAuthorized=${yn(item.tapAuthorized)}`)
+      : [`- unavailable${entry.workflows?.error ? `: ${entry.workflows.error}` : ""}`]),
+    "- catalog: `GET /api/workflows`; session_workflow multi-action descriptors (not single-job recipes). canary_only ≠ production-ready.",
     "",
     "## Device occupancy",
     "",
@@ -1811,6 +1951,47 @@ const server = http.createServer(async (req, res) => {
       if (alias) items = items.filter((c) => c.eligibleAliases.includes(alias));
       return sendJson(res, 200, { ...catalog, count: items.length, capabilities: items }, { "cache-control": "no-store" });
     }
+    if (req.method === "GET" && url.pathname === "/api/foundation-capabilities") {
+      const catalog = buildFoundationCapabilityCatalog();
+      return sendJson(res, catalog.ok ? 200 : 503, catalog, { "cache-control": "no-store" });
+    }
+    const foundationMatch = url.pathname.match(/^\/api\/foundation-capabilities\/([^/]+)$/);
+    if (req.method === "GET" && foundationMatch) {
+      const catalog = buildFoundationCapabilityCatalog();
+      if (!catalog.ok) return sendJson(res, 503, catalog, { "cache-control": "no-store" });
+      const wanted = decodeURIComponent(foundationMatch[1]);
+      const found = catalog.capabilities.find((item) => item.id === wanted);
+      if (!found) return sendJson(res, 404, { ok: false, error: `foundation capability not found: ${wanted}` });
+      return sendJson(res, 200, { ok: true, capability: found }, { "cache-control": "no-store" });
+    }
+    if (req.method === "GET" && url.pathname === "/api/workflows") {
+      const catalog = buildWorkflowCatalog();
+      const app = url.searchParams.get("app");
+      const status = url.searchParams.get("status");
+      const includeAll = url.searchParams.get("includeAll") === "1";
+      let items = catalog.workflows;
+      if (app) items = items.filter((item) => item.appId === app);
+      if (status) items = items.filter((item) => item.status === status);
+      else if (!includeAll) {
+        // Default list still returns canary/candidate for discovery, but callers must not
+        // treat directRun=false as production-runnable (see catalog note + maturity).
+        items = items.filter((item) => item.status !== "retired" && item.status !== "disabled");
+      }
+      return sendJson(res, catalog.ok ? 200 : 503, {
+        ...catalog,
+        count: items.length,
+        workflows: items,
+      }, { "cache-control": "no-store" });
+    }
+    const workflowMatch = url.pathname.match(/^\/api\/workflows\/([^/]+)$/);
+    if (req.method === "GET" && workflowMatch) {
+      const catalog = buildWorkflowCatalog();
+      if (!catalog.ok) return sendJson(res, 503, catalog, { "cache-control": "no-store" });
+      const wanted = decodeURIComponent(workflowMatch[1]);
+      const found = catalog.workflows.find((item) => item.workflowId === wanted);
+      if (!found) return sendJson(res, 404, { ok: false, error: `workflow not found: ${wanted}` });
+      return sendJson(res, 200, { ok: true, workflow: found }, { "cache-control": "no-store" });
+    }
     const capMatch = url.pathname.match(/^\/api\/capabilities\/([^/]+)$/);
     if (req.method === "GET" && capMatch) {
       const catalog = await buildCapabilityCatalog();
@@ -1824,6 +2005,170 @@ const server = http.createServer(async (req, res) => {
       if (!task) return sendJson(res, 400, { ok: false, error: "task query parameter is required, e.g. /api/task-packet?task=闲鱼三机no-save验证" });
       const [catalog, entry] = await Promise.all([buildCapabilityCatalog(), buildAgentEntry()]);
       return sendJson(res, 200, buildTaskPacket(task, catalog, entry), { "cache-control": "no-store" });
+    }
+    // ---------- Recipe Catalog + TaskPlan (Phase 2/3 scaffolding) ----------
+    if (req.method === "GET" && url.pathname === "/api/recipes") {
+      const status = url.searchParams.get("status") || undefined;
+      const includeAll = url.searchParams.get("all") === "1" || url.searchParams.get("includeAll") === "1";
+      const recipes = listRecipes(db, { status, includeAll });
+      return sendJson(res, 200, { ok: true, count: recipes.length, recipes }, { "cache-control": "no-store" });
+    }
+    const recipeMatch = url.pathname.match(/^\/api\/recipes\/([^/]+)$/);
+    if (req.method === "GET" && recipeMatch) {
+      const recipe = getRecipe(db, decodeURIComponent(recipeMatch[1]));
+      return sendJson(res, 200, { ok: true, recipe }, { "cache-control": "no-store" });
+    }
+    if (req.method === "POST" && url.pathname === "/api/recipes/ingest") {
+      if (readOnlyRole(role)) return sendJson(res, 403, { ok: false, error: "observer/operator is read-only" });
+      const body = await readBody(req);
+      const created = ingestRecipeCandidate(db, {
+        spec: body.spec || body,
+        originRunId: body.originRunId,
+        actor: body.actor || (role === "human" ? `human:${HUMAN_ACTOR}` : `agent:${role}`),
+      });
+      return sendJson(res, 201, { ok: true, recipe: created });
+    }
+    if (req.method === "POST" && url.pathname === "/api/recipes/attempts") {
+      if (readOnlyRole(role)) return sendJson(res, 403, { ok: false, error: "observer/operator is read-only" });
+      const body = await readBody(req);
+      const recipeId = body.recipeId;
+      const revision = body.revision;
+      const jobId = body.jobId;
+      const runId = body.runId;
+      if (!recipeId || !revision || !jobId || !runId) {
+        return sendJson(res, 400, { ok: false, error: "recipeId, revision, jobId, runId are required" });
+      }
+      // Reject client-trusted booleans at the API boundary.
+      if (body.verificationOk != null || body.restorationOk != null || body.result != null) {
+        return sendJson(res, 400, {
+          ok: false,
+          error: "client verificationOk/restorationOk/result are not accepted; server verifies from control-plane",
+        });
+      }
+      let jobPayload;
+      try {
+        jobPayload = await fetchControlJob(jobId, { controlBase: CONTROL });
+      } catch (e) {
+        return sendJson(res, e.status || 502, { ok: false, error: e.message, code: e.code });
+      }
+      let recipe;
+      try {
+        recipe = getRecipe(db, recipeId);
+      } catch (e) {
+        return sendJson(res, e.status || 404, { ok: false, error: e.message });
+      }
+      const version = recipe.versions.find((v) => Number(v.revision) === Number(revision))
+        || (Number(recipe.latest.revision) === Number(revision) ? recipe.latest : null);
+      if (!version) {
+        return sendJson(res, 404, { ok: false, error: `recipe revision not found: ${recipeId}@${revision}` });
+      }
+      const spec = version.spec || {};
+      const expectedCapabilityId = spec?.executor?.capabilityId || null;
+      const receipt = buildAttemptReceiptFromJob(jobPayload, {
+        recipeId,
+        revision,
+        descriptorHash: version.descriptorHash || spec.descriptorHash || null,
+        expectedCapabilityId,
+        expectedRunId: runId,
+        workerWindowId: body.workerWindowId || null,
+        releaseId: body.releaseId || null,
+        gitCommit: body.gitCommit || null,
+      });
+      if (!receipt.ok) {
+        return sendJson(res, 409, { ok: false, error: receipt.message, code: receipt.code, receipt });
+      }
+      const attempt = recordVerifiedAttempt(db, {
+        recipeId,
+        revision,
+        runId,
+        jobId,
+        workerWindowId: body.workerWindowId || null,
+        receipt,
+      });
+      return sendJson(res, 201, { ok: true, attempt, receipt: receipt.receipt });
+    }
+    if (req.method === "POST" && url.pathname === "/api/recipes/degrade") {
+      if (readOnlyRole(role)) {
+        return sendJson(res, 403, { ok: false, error: "observer/operator cannot degrade recipes" });
+      }
+      const body = await readBody(req);
+      try {
+        const out = degradeRecipe(db, {
+          recipeId: body.recipeId,
+          revision: body.revision,
+          reason: body.reason || "manual_degrade",
+          actor: role === "human" ? `human:${HUMAN_ACTOR}` : "legacy",
+          receiptHash: body.receiptHash,
+        });
+        return sendJson(res, 200, { ok: true, ...out });
+      } catch (e) {
+        return sendJson(res, e.status || 400, { ok: false, error: e.message });
+      }
+    }
+    if (req.method === "POST" && url.pathname === "/api/recipes/evaluate") {
+      if (readOnlyRole(role)) return sendJson(res, 403, { ok: false, error: "observer/operator is read-only" });
+      const body = await readBody(req);
+      try {
+        const out = evaluatePromotion(db, body.recipeId, body.revision);
+        return sendJson(res, 200, { ok: true, ...out });
+      } catch (e) {
+        return sendJson(res, e.status || 400, { ok: false, error: e.message });
+      }
+    }
+    if (req.method === "POST" && url.pathname === "/api/stall/enqueue") {
+      if (readOnlyRole(role)) return sendJson(res, 403, { ok: false, error: "observer/operator is read-only" });
+      const body = await readBody(req);
+      const packet = body.packet || buildL2DiagnosticPacket(body);
+      const item = enqueueStall(db, {
+        runId: body.runId || packet.runId,
+        jobId: body.jobId || packet.jobId,
+        verdictHash: body.verdictHash || packet.stallVerdict?.hash,
+        packet,
+      });
+      return sendJson(res, 201, { ok: true, item, packet });
+    }
+    if (req.method === "POST" && url.pathname === "/api/stall/shadow-decide") {
+      if (readOnlyRole(role)) return sendJson(res, 403, { ok: false, error: "observer/operator is read-only" });
+      const body = await readBody(req);
+      const claimed = claimNextStallItem(db);
+      if (!claimed) return sendJson(res, 200, { ok: true, empty: true });
+      let packet = claimed.packet_json ? JSON.parse(claimed.packet_json) : null;
+      if (!packet) {
+        packet = buildL2DiagnosticPacket({
+          runId: claimed.run_id,
+          jobId: claimed.job_id,
+          stallVerdict: body.stallVerdict || null,
+        });
+      }
+      const decision = buildL2ShadowDecision(packet);
+      completeStallItem(db, claimed.queue_id, { decision });
+      return sendJson(res, 200, { ok: true, queueId: claimed.queue_id, packet, decision });
+    }
+    if (req.method === "POST" && url.pathname === "/api/task-plans") {
+      if (readOnlyRole(role)) return sendJson(res, 403, { ok: false, error: "observer/operator is read-only" });
+      const body = await readBody(req);
+      const goal = body.goal || body.task || "";
+      if (!goal) return sendJson(res, 400, { ok: false, error: "goal is required" });
+      let catalogCapabilities = [];
+      try {
+        const catalog = await buildCapabilityCatalog();
+        catalogCapabilities = catalog.capabilities || [];
+      } catch {
+        catalogCapabilities = [];
+      }
+      const recipes = listRecipes(db, { includeAll: false }).map((r) => ({
+        recipeId: r.recipeId,
+        status: r.status,
+        spec: r.spec,
+      }));
+      const plan = compileTaskPlan({
+        goal,
+        catalogCapabilities,
+        recipes,
+        foundationCapabilities: loadFoundationCapabilities(),
+        mode: body.mode,
+      });
+      return sendJson(res, 200, { ok: true, plan }, { "cache-control": "no-store" });
     }
     if (req.method === "GET" && url.pathname === "/watchdog") {
       const wdDir = path.join(__dirname, "watchdog");

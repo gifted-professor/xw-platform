@@ -513,10 +513,58 @@ export function findCommentBox(xml) {
   return findBtn(xml, "commentBox");
 }
 
+/** 省市区等地点标签（评论行里的系统 meta，不是正文）。 */
+const REGION_LABEL =
+  /^(北京|天津|上海|重庆|河北|山西|辽宁|吉林|黑龙江|江苏|浙江|安徽|福建|江西|山东|河南|湖北|湖南|广东|海南|四川|贵州|云南|陕西|甘肃|青海|台湾|内蒙古|广西|西藏|宁夏|新疆|香港|澳门|海外)(省|市|自治区|特别行政区)?$/;
+
+/**
+ * 是否为评论区系统文案/元信息（非真人评论正文）。
+ * 例：「2天前」「广东」「回复」「评论」「展开 12 条回复」等。
+ */
+export function isSystemCommentChrome(text) {
+  const t = String(text || "").trim();
+  if (!t) return true;
+  if (/^\d+$/.test(t)) return true;
+  if (
+    /^(关注|已关注|回关|相互关注|点赞|已点赞|收藏|已收藏|评论|分享|说点什么|说点什么\.\.\.|评论框|发送|发布|下一步|返回|首页|消息|我|展开|收起|查看更多评论|作者|置顶|回复|赞|抢首评|首评)$/.test(
+      t,
+    )
+  ) {
+    return true;
+  }
+  if (/^共\s*\d+\s*条评论$/.test(t)) return true;
+  if (/让大家听到你的声音/.test(t)) return true;
+  if (/^-?\s*到底了\s*-?$/.test(t)) return true;
+  if (/^说点什么/.test(t)) return true;
+  // 时间戳 / 地点 / 回复控件拼在一起：「2天前 广东 回复」
+  if (/^\d+\s*(秒|分钟|小时|天|周|个月|年)前(\s|$)/.test(t)) return true;
+  if (/^(刚刚|昨天|前天)(\s|$)/.test(t)) return true;
+  if (REGION_LABEL.test(t)) return true;
+  if (/^(展开|收起)?\s*\d+\s*条?回复$/.test(t)) return true;
+  // 纯 meta 拼接：时间 + 可选地区 + 回复
+  if (
+    /^(?:\d+\s*(?:秒|分钟|小时|天|周|个月|年)前|刚刚|昨天|前天)(?:\s+[^\s]{1,8})?\s*回复$/.test(t)
+  ) {
+    return true;
+  }
+  if (/回复$/.test(t) && t.length <= 28 && !/[。！？!?.…]/.test(t)) {
+    const stripped = t
+      .replace(/\d+\s*(秒|分钟|小时|天|周|个月|年)前/g, "")
+      .replace(/刚刚|昨天|前天/g, "")
+      .replace(/回复/g, "")
+      .replace(/\s+/g, "");
+    if (!stripped || REGION_LABEL.test(stripped)) return true;
+  }
+  if (/^#\S+(?:\s+#\S+){1,}$/.test(t) && !/[。！？!?.，,]/.test(t)) return true; // 话题串
+  return false;
+}
+
 /**
  * 解析 detail 页评论区。纯启发式，不强求完美。
  * count 来自 content-desc「评论 N」；box 是评论框坐标；
- * items 每条尽量配 user（短 text）+ text（正文 ≥4）+ likes（纯数字）+ y。
+ * items 每条尽量配 user（短 text）+ text（正文 ≥4）+ likes（数字或 desc「点赞 N」）+ y。
+ *
+ * 已知限制：很多评论行的点赞数不在 a11y（仅空 icon），此时 likes=null。
  */
 export function parseComments(xml) {
   if (!xml) return { count: null, box: null, items: [] };
@@ -535,14 +583,39 @@ export function parseComments(xml) {
   const box = boxRaw ? { x: boxRaw.x, y: boxRaw.y } : null;
 
   const uiLabel =
-    /^(关注|已关注|回关|相互关注|点赞|已点赞|收藏|已收藏|评论|分享|说点什么|评论框|发送|发布|下一步|返回|首页|消息|我|展开|收起|查看更多评论|作者|置顶|回复)$/;
+    /^(关注|已关注|回关|相互关注|点赞|已点赞|收藏|已收藏|评论|分享|说点什么|评论框|发送|发布|下一步|返回|首页|消息|我|展开|收起|查看更多评论|作者|置顶|回复|赞|抢首评|首评)$/;
   const shortTexts = nodes.filter(
-    (n) => n.text && n.text.length >= 1 && n.text.length <= 20 && !uiLabel.test(n.text) && !/^\d+$/.test(n.text),
+    (n) =>
+      n.text &&
+      n.text.length >= 1 &&
+      n.text.length <= 20 &&
+      !uiLabel.test(n.text) &&
+      !isSystemCommentChrome(n.text) &&
+      !/^\d+$/.test(n.text),
   );
-  const likeNodes = nodes.filter((n) => n.text && /^\d+$/.test(n.text));
+
+  // likes: plain digits OR content-desc「点赞 N」（底栏/评论行）
+  const likeNodes = [];
+  for (const n of nodes) {
+    if (n.text && /^\d+$/.test(n.text) && n.cy < 2200) {
+      likeNodes.push({ ...n, likes: Number(n.text) });
+      continue;
+    }
+    const dm = String(n.desc || "").match(/^点赞\s*(\d+)$/);
+    if (dm && n.cy < 2200) likeNodes.push({ ...n, likes: Number(dm[1]) });
+  }
 
   const bodyCands = nodes
-    .filter((n) => n.text && n.text.length >= 4 && !uiLabel.test(n.text) && !/^\d+$/.test(n.text))
+    .filter(
+      (n) =>
+        n.text &&
+        n.text.trim().length >= 6 &&
+        !uiLabel.test(n.text) &&
+        !isSystemCommentChrome(n.text) &&
+        !/^\d+$/.test(n.text) &&
+        // 排除单独用户名当正文（短、无标点/表情句）
+        !(n.text.length <= 12 && !/[。！？!?，,….~～]|\[.+R\]/.test(n.text) && n.cx < 500),
+    )
     .sort((a, b) => a.cy - b.cy || a.cx - b.cx);
 
   const seen = new Set();
@@ -552,20 +625,22 @@ export function parseComments(xml) {
     if (seen.has(key)) continue;
     seen.add(key);
 
-    // 用户名：同 y 带附近、更靠左的短 text
     const userCand = shortTexts
-      .filter((s) => Math.abs(s.cy - n.cy) <= 80 && s.cx < n.cx + 40 && s.text !== n.text)
+      .filter((s) => Math.abs(s.cy - n.cy) <= 100 && s.cx < n.cx + 40 && s.text !== n.text)
       .sort((a, b) => Math.abs(a.cy - n.cy) - Math.abs(b.cy - n.cy) || a.cx - b.cx)[0];
 
-    // 点赞数：同 y 带附近、更靠右的纯数字
+    // 点赞：同评论块下方/右侧；优先靠近正文 y，且偏右（>700）
     const likesCand = likeNodes
-      .filter((s) => Math.abs(s.cy - n.cy) <= 60 && s.cx >= n.cx - 20)
+      .filter((s) => {
+        const dy = s.cy - n.cy;
+        return dy >= -40 && dy <= 140 && s.cx >= Math.min(n.cx, 700);
+      })
       .sort((a, b) => Math.abs(a.cy - n.cy) - Math.abs(b.cy - n.cy) || b.cx - a.cx)[0];
 
     items.push({
       user: userCand?.text || "",
-      text: n.text.slice(0, 200),
-      likes: likesCand ? Number(likesCand.text) : null,
+      text: n.text.slice(0, 200).trim(),
+      likes: likesCand ? likesCand.likes : null,
       y: n.cy,
     });
   }

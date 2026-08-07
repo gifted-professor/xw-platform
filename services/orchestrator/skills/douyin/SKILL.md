@@ -74,7 +74,7 @@ verified: false
 | 我 Tab | ✅ | 资料 + 服务条 | 钱包只观察，不进支付 |
 | 设置页 | ✅ | 列表 text | 不进支付设置 |
 | 评论面板 | ✅ | 半屏列表 | 挂 SplashActivity，back 关 |
-| 分享面板 | ✅ | 好友头像 + 底栏横滑动作 | 取消关闭，不真分享/私信 |
+| 分享面板 | ✅ | 好友头像 + 底栏横滑动作 | 探索可只观察；**真分享好友**见 [`share-friend`](douyin-share-friend/SKILL.md)（已授权） |
 | 长按菜单 | ✅ | 中部长按（swipe 同点 1.5s） | 无下载；有清屏/识别图片/倍速等 |
 | 图搜（识别图片） | ✅ | `VisualSearchActivity` | 长按→识别图片；综合/商品 |
 | 清屏播放 | ✅ | 长按→清屏播放 | 专注模式；退出/暂停/倍速/全屏 |
@@ -137,6 +137,7 @@ verified: false
 | follow-set | ✅ 已固化 [`douyin-follow-set`](douyin-follow-set/SKILL.md) | ✅ dry-run 多机 | 自主 | 默认 01,02；勿加 04 |
 | dm | ✅ 1:1 真发通 @02 | ✅ | 已授权真发 | 列表点 desc 行（勿点顶栏故事圈）；发前清草稿；面板有红包/转账=红线不点 |
 | dm-history | ✅ 可持续上滑采集 | ✅ 只读 | 自主 | 逐屏 dump 拼接；非一键全量 |
+| share-friend | ✅ 已固化 [`douyin-share-friend`](douyin-share-friend/SKILL.md) v1.0 | ✅ 真发 @01 | **已授权真发** | 路径 B 默认；名字+已选中；KW 守卫；~44–52s/帖；**非**控制面 capability |
 | publish/shoot | 拍摄入口已摸 | 🔴 | **红线** | 只到拒绝权限，不上传 |
 
 > 业务脚本固化后接 `bizRecord({op:"douyin-<op>",...})`，进 biz evidence（见 `ops/_biz-trace.mjs`）。探索期无 ops 脚本 → 无 biz 证据属正常（见 `ops/proposal-TEMPLATE.md` §6）。
@@ -147,7 +148,8 @@ verified: false
 |------|------|
 | 支付 / 进钱包操作 / 支付设置 | 资金安全 |
 | 拍摄 / 上传 / 开直播 / 真发布 | 不可逆外发 |
-| 真发评论 / 真发私信 | 需人审批 |
+| 真发评论 / 真发私信 / 真分享给好友 | 需人审批；例外仅「已授权」派工（见 comment / dm / **share-friend**） |
+| 分享好友盲点最左槽位 / 未确认「已选中」 | 易进群或发错人 |
 | 硬闯相机权限选「允许」再拍 | 同拍摄红线 |
 | 完善账号安全弹窗点「去完善」 | 改账号信息，仅人 |
 | 遇验证码/风控继续点 | 账号安全 |
@@ -174,6 +176,7 @@ node ops/dump-ui.mjs --alias 01 --session-file <explorer-session.json>
 | 长按菜单 | 中部 `input swipe x y x y 1500`；下载不在此 |
 | 保存视频 | 分享→横滑「保存本地」（常灰）；帧图：分享→生成图片→保存至相册 |
 | 搜索 | tap 搜索 → input-text → tap 搜索按钮 |
+| **分享好友（路径 B）** | `ops/douyin-share-friend-harvest.mjs` + session；见 [`douyin-share-friend`](douyin-share-friend/SKILL.md) |
 | 拍摄 | 拒绝权限；关闭退出 |
 
 ## 还没细挖（下一轮探索）

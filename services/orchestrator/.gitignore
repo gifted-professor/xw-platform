@@ -41,3 +41,21 @@ watchdog/launchd.err.log
 
 # 本地数据库（非源码）
 aionui-backend.db
+
+# Windows deploy instance runtime / scratch (do not commit)
+outbox/
+backups/
+tmp-know/
+.cursor/
+begin_task.json
+*.tmp.json
+tmp-*.json
+test.txt
+find_xw.txt
+l1-alert-body.json
+run_begin.ps1
+
+# Windows probe / scratch ops (not source)
+ops/_probe*.mjs
+ops/_tmp*.mjs
+ops/_tmp-*.mjs

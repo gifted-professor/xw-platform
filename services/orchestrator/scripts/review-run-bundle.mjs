@@ -8,15 +8,23 @@
  *   node scripts/review-run-bundle.mjs <bundleDir>
  */
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { readBundle, verifyBundleSeal } from "./lib/evidence-contract.mjs";
 import { canonicalJson, createRepairProposal, proposalKnowledgeEnvelope, sha256 } from "./lib/repair-proposal.mjs";
+import { readAndVerifyTaskCloseoutBundle } from "./lib/task-closeout-contract.mjs";
 
 const SHA256 = /^[0-9a-f]{64}$/;
 const SHA40 = /^[0-9a-f]{40}$/;
+const EXPLORER_SCHEMA_IDS = new Set(["xhs.explorer-run.v1"]);
+const CLOSEOUT_MANIFEST_SCHEMA_IDS = new Set(["xhs.task-closeout-manifest.v1"]);
+const HISTORICAL_MANIFEST_SCHEMA_IDS = new Set([
+  "xhs.explorer-run.v0",
+  "xhs.task-closeout-manifest.v0",
+  "xhs.evidence-v1",
+]);
 
 function claim(id, ok, detail) {
   return { id, status: ok ? "pass" : "fail", detail };
@@ -29,9 +37,16 @@ function safeRelativePath(value) {
     && !value.split("/").includes("..");
 }
 
+function isCloseoutBundleDir(dir) {
+  return existsSync(join(dir, "closeout.v1.json"))
+    && existsSync(join(dir, "manifest.json"))
+    && existsSync(join(dir, "manifest.sha256"));
+}
+
 export function reviewRunBundle(dir, { reviewedAt = new Date().toISOString(), targetSkillBinding } = {}) {
   const aggregate = readAggregateManifest(dir);
   if (aggregate) return reviewAggregateRepairBundle(dir, aggregate, { reviewedAt, targetSkillBinding });
+  if (isCloseoutBundleDir(dir)) return reviewCloseoutBundle(dir, { reviewedAt });
   const bundle = readBundle(dir);
   const claims = [];
   const reviewDebt = bundle.debt.map((item) => ({ ...item }));
@@ -60,9 +75,15 @@ export function reviewRunBundle(dir, { reviewedAt = new Date().toISOString(), ta
   else fail("bundle-seal", seal.reason ?? "v1 seal unavailable", "BUNDLE_SEAL_INVALID");
 
   const manifest = bundle.manifest;
-  const schemaOk = manifest?.schemaId === "xhs.explorer-run.v1" && manifest?.schemaVersion === 1;
-  if (schemaOk) pass("manifest-schema", "xhs.explorer-run.v1@1");
-  else fail("manifest-schema", "expected xhs.explorer-run.v1 schemaVersion=1", "MANIFEST_SCHEMA_INVALID");
+  const schemaId = manifest?.schemaId;
+  const schemaVersion = manifest?.schemaVersion;
+  if (EXPLORER_SCHEMA_IDS.has(schemaId) && schemaVersion === 1) {
+    pass("manifest-schema", `${schemaId}@${schemaVersion}`);
+  } else if (HISTORICAL_MANIFEST_SCHEMA_IDS.has(schemaId)) {
+    fail("manifest-schema", `historical schema ${schemaId} is readable but not review-passable`, "MANIFEST_SCHEMA_HISTORICAL");
+  } else {
+    fail("manifest-schema", "expected xhs.explorer-run.v1 schemaVersion=1", "MANIFEST_SCHEMA_INVALID");
+  }
 
   const runId = typeof manifest?.runId === "string" && manifest.runId.startsWith("run_") ? manifest.runId : null;
   if (runId) pass("run-id", runId);
@@ -162,6 +183,84 @@ export function reviewRunBundle(dir, { reviewedAt = new Date().toISOString(), ta
     receipt,
     repairProposals,
     knowledgeEntries: repairProposals.map(proposalKnowledgeEnvelope),
+  };
+}
+
+function reviewCloseoutBundle(dir, { reviewedAt }) {
+  const claims = [];
+  const reviewDebt = [];
+  const fail = (id, detail, code = id.toUpperCase().replaceAll("-", "_")) => {
+    claims.push(claim(id, false, detail));
+    reviewDebt.push({ layer: "review", code, cause: detail });
+  };
+  const pass = (id, detail) => claims.push(claim(id, true, detail));
+
+  const verified = readAndVerifyTaskCloseoutBundle(dir);
+  const manifestSha256 = verified.manifestSha256 ?? "0".repeat(64);
+  if (verified.ok) {
+    pass("bundle-kind", "closeout");
+    pass("bundle-seal", `manifest.sha256:${manifestSha256}`);
+    pass("manifest-readable", `sha256:${manifestSha256}`);
+  } else {
+    fail("bundle-kind", "closeout bundle failed mechanical verification", "CLOSEOUT_BUNDLE_INVALID");
+    fail("bundle-seal", (verified.errors ?? []).map((item) => item.message).join("; ") || "closeout seal invalid", "CLOSEOUT_SEAL_INVALID");
+    for (const error of verified.errors ?? []) {
+      reviewDebt.push({ layer: "closeout", code: "CLOSEOUT_CONTRACT_INVALID", cause: `${error.path}: ${error.message}` });
+    }
+  }
+
+  const manifest = verified.manifest;
+  const closeout = verified.closeout;
+  const schemaId = manifest?.schemaId;
+  if (verified.ok && CLOSEOUT_MANIFEST_SCHEMA_IDS.has(schemaId) && manifest?.schemaVersion === 1) {
+    pass("manifest-schema", `${schemaId}@${manifest.schemaVersion}`);
+  } else if (HISTORICAL_MANIFEST_SCHEMA_IDS.has(schemaId)) {
+    fail("manifest-schema", `historical schema ${schemaId} is readable but not review-passable`, "MANIFEST_SCHEMA_HISTORICAL");
+  } else if (!verified.ok) {
+    fail("manifest-schema", "closeout manifest schema unavailable", "MANIFEST_SCHEMA_INVALID");
+  } else {
+    fail("manifest-schema", "expected xhs.task-closeout-manifest.v1 schemaVersion=1", "MANIFEST_SCHEMA_INVALID");
+  }
+
+  const runId = typeof (manifest?.runId ?? closeout?.runId) === "string"
+    && String(manifest?.runId ?? closeout?.runId).startsWith("run_")
+    ? (manifest?.runId ?? closeout?.runId)
+    : null;
+  if (runId) pass("run-id", runId);
+  else fail("run-id", "manifest/closeout runId must start with run_", "RUN_ID_INVALID");
+
+  const producerCommit = SHA40.test(manifest?.producerCommit ?? closeout?.producer?.commit ?? "")
+    ? (manifest?.producerCommit ?? closeout?.producer?.commit)
+    : null;
+  if (producerCommit) pass("producer-commit", producerCommit);
+  else fail("producer-commit", "producerCommit must be a full 40-hex SHA", "PRODUCER_COMMIT_INVALID");
+
+  for (const field of ["effects", "artifacts", "evidenceDebt", "candidates"]) {
+    if (Array.isArray(closeout?.[field])) pass(`closeout-${field}`, `${closeout[field].length} item(s)`);
+    else if (verified.ok) fail(`closeout-${field}`, `closeout.${field} must be an array`, `CLOSEOUT_${field.toUpperCase()}_INVALID`);
+    else fail(`closeout-${field}`, "closeout unavailable", `CLOSEOUT_${field.toUpperCase()}_INVALID`);
+  }
+
+  const claimsOk = claims.every((item) => item.status === "pass");
+  const receipt = {
+    schemaId: "xhs.review-receipt.v1",
+    schemaVersion: 1,
+    reviewId: `review_${manifestSha256.slice(0, 16)}`,
+    runId: runId ?? "run_invalid",
+    manifestSha256,
+    producerCommit: producerCommit ?? "0".repeat(40),
+    reviewedAt,
+    claims,
+    evidenceDebt: reviewDebt,
+    findings: [],
+    bundleKind: "closeout",
+  };
+  return {
+    ok: claimsOk && reviewDebt.length === 0,
+    receipt,
+    repairProposals: [],
+    knowledgeEntries: [],
+    closeout: closeout ?? null,
   };
 }
 

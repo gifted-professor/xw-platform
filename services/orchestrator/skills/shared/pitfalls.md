@@ -184,6 +184,22 @@
 
 **来源**：`tmp-know/EXPLORE-DOUYIN-MAX-PLAYBOOK-20260801.md`
 
+### pitfall-douyin-share-friend-no-fixed-slot-20260806
+
+**问题**：分享面板好友行最左常是群（如「抖音旅群」）；固定槽位/盲点第一格会发错对象。
+
+**规则**：只 dump 匹配好友**名字**再 tap；发送前 desc 必须含「已选中」。路径 B 默认见 [`douyin-share-friend`](../douyin/douyin-share-friend/SKILL.md)。
+
+**来源**：`recipe-douyin-share-friend-harvest-20260806`
+
+### pitfall-douyin-search-kw-drift-related-20260806
+
+**问题**：开帖/返回后顶栏搜索框会被相关搜改写（如 `喀纳斯 live图` → `新疆喀纳斯禾木村` / `赛里木湖周边城市`），列表已不是本轮 keyword。
+
+**规则**：每页与回列表后读顶栏 EditText；不匹配则 `KW_MISMATCH` → 同词重搜，禁止继续采。`douyin-share-friend-harvest` 已内置 `ensureKeywordQueue`。
+
+**来源**：`recipe-douyin-share-friend-harvest-20260806`；share-friend-run-1786003963148.jsonl
+
 ---
 
 ## 新增坑点模板

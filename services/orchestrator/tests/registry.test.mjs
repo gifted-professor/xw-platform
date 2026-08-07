@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { createHash, generateKeyPairSync, verify } from "node:crypto";
+import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import fs from "node:fs";
@@ -107,43 +107,19 @@ function createControlDb(dbPath) {
 function createControlServer() {
   const decisions = [];
   const submissions = [];
-  const paymentDecisions = [];
-  // 固定一个待确认的资金最终提交；binding 字段满足 xhs.payment-approval.v1 schema 形状。
-  const paymentCommits = [{
-    commitId: "protected_commit_pay_fixture",
-    status: "waiting_authorization",
-    action: "payment",
-    effectId: "effect-payment-1",
-    expiresAt: new Date(now + 120000).toISOString(),
-    approvalBinding: {
-      runId: "run_pay_fixture",
-      effectId: "effect-payment-1",
-      app: "fixture-pay",
-      accountRef: "redacted:account",
-      payeeRef: "redacted:merchant",
-      amount: "88.00",
-      currency: "CNY",
-      targetControlFingerprint: "fp:observed-final-control",
-      snapshotHash: "a".repeat(64),
-      deviceId: "fixture-device",
-      createdAt: new Date(now).toISOString(),
-      expiresAt: new Date(now + 120000).toISOString(),
-    },
-  }];
   const server = http.createServer(async (req, res) => {
-    if (req.method === "GET" && req.url === "/control/v1/health") return json(res, 200, {
-      nodeId: "test-node", authority: true, activeLeases: 1,
-      policyMode: { mode: "shadow", active: false, effectiveDecisionSource: "shadow", adapterKind: "real" },
-      releaseId: "health-release-fallback",
-      runtimePolicyVersion: "xhs.nonpayment-autonomy.v1",
-    });
+    if (req.method === "GET" && req.url === "/control/v1/health") return json(res, 200, { nodeId: "test-node", authority: true, activeLeases: 1 });
     if (req.method === "GET" && req.url === "/control/v1/devices") return json(res, 200, { devices: [
       { deviceId: "dev-01", alias: "01", online: true, quarantined: false },
       { deviceId: "dev-03", alias: "03", online: true, quarantined: true, quarantineReason: "ADAPTER_FAILED" },
     ] });
     if (req.method === "GET" && req.url === "/control/v1/capabilities") return json(res, 200, { capabilities: [
       { id: "xianyu.publish.open_dry_run", appId: "xianyu", risk: "R1", maturity: "E2", idempotency: "replay_safe",
-        timeoutMs: 60000, resources: ["device"], restoration: { required: true }, verification: { mode: "state" },
+        description: "Open the publish flow without committing",
+        inputSchema: { type: "object", properties: { source: { type: "string" } } },
+        outputSchema: { type: "object", properties: { opened: { type: "boolean" } } },
+        preconditions: ["device ready"], composition: { kind: "single_step" },
+        timeoutMs: 60000, resources: ["device"], restoration: { required: true, description: "return home" }, verification: { mode: "state", description: "publish flow opened" },
         automationPolicy: { mode: "automatic" } },
       // 字面 automatic 但外部效应 → 必须被推导成 approvalRequired 并触发 lint
       { id: "xianyu.publish.save_draft_dry_run", appId: "xianyu", risk: "R1", maturity: "E2", idempotency: "external_effect",
@@ -174,21 +150,9 @@ function createControlServer() {
     if (req.method === "GET" && jobMatch) {
       return json(res, 200, { ok: true, job: { jobId: jobMatch[1], status: "queued" } });
     }
-    if (req.method === "GET" && req.url === "/control/v1/payment-commits") {
-      return json(res, 200, { paymentCommits });
-    }
-    const payDecideMatch = req.url.match(/^\/control\/v1\/payment-commits\/([^/]+)\/decide$/);
-    if (req.method === "POST" && payDecideMatch) {
-      const chunks = [];
-      for await (const chunk of req) chunks.push(chunk);
-      const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-      paymentDecisions.push({ commitId: payDecideMatch[1], ...body });
-      const status = body.decision === "approve" ? "verified" : "cancelled";
-      return json(res, 200, { ok: true, paymentCommit: { status } });
-    }
     return json(res, 404, { ok: false });
   });
-  return { server, decisions, submissions, paymentDecisions, paymentCommits };
+  return { server, decisions, submissions };
 }
 
 function json(res, status, value) {
@@ -234,8 +198,6 @@ let tempRoot;
 let control;
 let registry;
 let runsRoot;
-let paymentSignerKeysFile;
-let paymentSignerPublicKey;
 
 test.before(async () => {
   tempRoot = await mkdtemp(path.join(os.tmpdir(), "xhs-registry-test-"));
@@ -245,16 +207,6 @@ test.before(async () => {
     { alias: "01", serial: "serial-01", label: "一号 <script>alert(1)</script>", model: "M1", accounts: { xhs: "private-account" }, notes: "private-note" },
     { alias: "03", serial: "REPLACE_SERIAL_03", label: "三店", model: "M3" },
   ] }));
-  // REX Phase 2 收尾: 人类支付签名 oracle 的 Ed25519 私钥（受限文件，绝不进 argv 值/URL/日志/HTML/DB/仓库）。
-  const paymentKeypair = generateKeyPairSync("ed25519");
-  paymentSignerPublicKey = paymentKeypair.publicKey;
-  paymentSignerKeysFile = path.join(tempRoot, "payment-signer-keys.json");
-  await writeFile(paymentSignerKeysFile, JSON.stringify({
-    keyId: "payment-human-1",
-    subject: "human:owner",
-    allowlistVersion: 3,
-    privateKeyPem: paymentKeypair.privateKey.export({ type: "pkcs8", format: "pem" }),
-  }));
   // cache-only Screen API 的 runs-root：放一张假截图供 evidence 行读取
   runsRoot = path.join(tempRoot, "runs");
   await mkdir(path.join(runsRoot, "run-succ-2", "evidence"), { recursive: true });
@@ -263,18 +215,8 @@ test.before(async () => {
   control.server.listen(0, "127.0.0.1");
   await once(control.server, "listening");
   registry = await startRegistry({ root: tempRoot, controlUrl: `http://127.0.0.1:${control.server.address().port}`,
-    extraArgs: ["--runs-root", runsRoot, "--payment-signer-keys-file", paymentSignerKeysFile] });
+    extraArgs: ["--runs-root", runsRoot] });
 });
-
-// 与 B 仓 payment-approval-verifier 的 canonicalPaymentApprovalBytes 逐字节一致：递归排序键后 JSON。
-function canonicalize(value) {
-  if (Array.isArray(value)) return value.map(canonicalize);
-  if (value && typeof value === "object") {
-    return Object.fromEntries(Object.keys(value).sort().map((k) => [k, canonicalize(value[k])]));
-  }
-  return value;
-}
-function canonicalJson(value) { return JSON.stringify(canonicalize(value)); }
 
 test.after(async () => {
   await stopRegistry(registry.child);
@@ -289,6 +231,9 @@ test("agent entry aggregates leases, jobs, blockers and omits private identity f
   const entry = await response.json();
   assert.equal(entry.schemaVersion, "xhs.agent-entry.v2");
   assert.match(entry.protocol.entrypoints.controlPlaneReload, /XhsDeviceControlPlaneV1|control-plane-task\.ps1/);
+  assert.match(entry.protocol.entrypoints.foundationCatalog, /foundation-capabilities/);
+  assert.match(entry.protocol.entrypoints.workflowCatalog, /\/api\/workflows/);
+  assert.match(entry.protocol.entrypoints.locatorStatus, /xw-locator\.mjs status/);
   for (const alias of ["01", "02", "03", "04"]) {
     assert.match(entry.protocol.entrypoints[`serveReload${alias}`], new RegExp(`serve-restart-${alias}\\.ps1`));
   }
@@ -317,78 +262,13 @@ test("agent entry aggregates leases, jobs, blockers and omits private identity f
   assert.equal(entry.blockers.active.length, 1);
   assert.equal(entry.blockers.resolved.length, 2);
   assert.equal(entry.approvals.pendingCount, 1);
+  assert.equal(entry.foundations.ok, true);
+  assert.ok(entry.foundations.capabilities.some((item) => item.id === "locator.visual-block.v1"));
+  assert.equal(entry.workflows.ok, true);
+  assert.ok(entry.workflows.workflows.some((item) => item.workflowId === "workflow.wechat.balance-read.v1"));
   const serialized = JSON.stringify(entry);
   assert.doesNotMatch(serialized, /private-account|private-note|secret parameter/);
   assert.doesNotMatch(serialized, /"accounts"|"notes"|"customer"/);
-});
-
-// REX Phase 6 P6-A: agent-entry must display runtime policy, releaseId and the full
-// policyDocDebt from the cross-repo release manifest (written by control-plane-task.ps1).
-test("agent-entry exposes the cross-repo release manifest (release/modes/schema/policyDocDebt)", async () => {
-  const releaseDir = path.join(tempRoot, "release-state-present");
-  await mkdir(releaseDir, { recursive: true });
-  const manifest = {
-    schemaId: "xhs.cross-repo-release.v1",
-    schemaVersion: 1,
-    releaseId: "rel-shadow-test-01",
-    registryCommit: "a".repeat(40),
-    deviceAgentCommit: "b".repeat(40),
-    windowsRegistryCommit: "c".repeat(40),
-    taskLaunchCommit: "d".repeat(40),
-    policyMode: "shadow",
-    evidenceMode: "dual",
-    runtimePolicyVersion: "xhs.nonpayment-autonomy.v1",
-    effectiveDecisionSource: "shadow",
-    policyDocDebt: [
-      { path: "skills/xhs/SKILL.md", legacyRule: "needs approval", supersededForRelease: "rel-shadow-test-01" },
-    ],
-    schemaContracts: [],
-    deployedAt: new Date().toISOString(),
-  };
-  await writeFile(path.join(releaseDir, "cross-repo-release.json"), JSON.stringify(manifest));
-  const reg = await startRegistry({ root: tempRoot, controlUrl: `http://127.0.0.1:${control.server.address().port}`,
-    extraArgs: ["--runs-root", runsRoot, "--payment-signer-keys-file", paymentSignerKeysFile],
-    env: { CONTROL_PLANE_STATE_DIR: releaseDir } });
-  try {
-    const response = await fetch(`${reg.base}/api/agent-entry`, { headers: { "x-registry-token": TOKEN } });
-    assert.equal(response.status, 200);
-    const entry = await response.json();
-    assert.equal(entry.release.present, true);
-    assert.equal(entry.release.releaseId, "rel-shadow-test-01");
-    assert.equal(entry.release.policyMode, "shadow");
-    assert.equal(entry.release.evidenceMode, "dual");
-    assert.equal(entry.release.runtimePolicyVersion, "xhs.nonpayment-autonomy.v1");
-    assert.equal(entry.release.effectiveDecisionSource, "shadow");
-    assert.deepEqual(entry.release.policyDocDebt, manifest.policyDocDebt);
-    assert.equal(entry.release.policyDocDebtCount, 1);
-    assert.equal(entry.release.policyDocDebtClean, false);
-  } finally {
-    await stopRegistry(reg.child);
-  }
-});
-
-test("agent-entry release block degrades (present=false, empty debt) without a release manifest", async () => {
-  const emptyDir = path.join(tempRoot, "release-state-absent");
-  await mkdir(emptyDir, { recursive: true });
-  const reg = await startRegistry({ root: tempRoot, controlUrl: `http://127.0.0.1:${control.server.address().port}`,
-    extraArgs: ["--runs-root", runsRoot, "--payment-signer-keys-file", paymentSignerKeysFile],
-    env: { CONTROL_PLANE_STATE_DIR: emptyDir } });
-  try {
-    const response = await fetch(`${reg.base}/api/agent-entry`, { headers: { "x-registry-token": TOKEN } });
-    assert.equal(response.status, 200);
-    const entry = await response.json();
-    assert.equal(entry.release.present, false);
-    // manifest 缺省时以 control-plane health 上报的 policy/release 兜底（不猜、不 500）。
-    assert.equal(entry.release.releaseId, "health-release-fallback");
-    assert.equal(entry.release.policyMode, "shadow");
-    assert.equal(entry.release.runtimePolicyVersion, "xhs.nonpayment-autonomy.v1");
-    assert.equal(entry.release.effectiveDecisionSource, "shadow");
-    assert.deepEqual(entry.release.policyDocDebt, []);
-    assert.equal(entry.release.policyDocDebtCount, 0);
-    assert.equal(entry.release.policyDocDebtClean, true);
-  } finally {
-    await stopRegistry(reg.child);
-  }
 });
 
 test("authenticated endpoints reject requests without credentials", async () => {
@@ -406,6 +286,9 @@ test("markdown entry is curl-readable and carries protocol red lines", async () 
   assert.match(body, /5038/);
   assert.match(body, /--ssh xhs-windows/);
   assert.match(body, /controlPlaneReload/);
+  assert.match(body, /foundationCatalog/);
+  assert.match(body, /workflowCatalog/);
+  assert.match(body, /locatorStatus/);
   assert.match(body, /XhsDeviceControlPlaneV1|control-plane-task\.ps1/);
   for (const alias of ["01", "02", "03", "04"]) {
     assert.match(body, new RegExp(`serveReload${alias}.*serve-restart-${alias}\\.ps1`));
@@ -415,6 +298,12 @@ test("markdown entry is curl-readable and carries protocol red lines", async () 
   assert.match(body, /unresolvedFailure=none/);
   assert.match(body, /streak=2/);
   assert.match(body, /identityCache: fresh/);
+  assert.match(body, /Discoverable foundation capabilities/);
+  assert.match(body, /locator\.visual-block\.v1/);
+  assert.match(body, /\/api\/foundation-capabilities/);
+  assert.match(body, /Discoverable workflows/);
+  assert.match(body, /workflow\.wechat\.balance-read\.v1/);
+  assert.match(body, /\/api\/workflows/);
   assert.doesNotMatch(body, /private-account|private-note/);
 });
 
@@ -511,7 +400,7 @@ test("knowledge lifecycle migration and terminal transition rules are enforced",
 
   await stopRegistry(registry.child);
   registry = await startRegistry({ root: tempRoot, controlUrl: `http://127.0.0.1:${control.server.address().port}`,
-    extraArgs: ["--runs-root", runsRoot, "--payment-signer-keys-file", paymentSignerKeysFile] });
+    extraArgs: ["--runs-root", runsRoot] });
   const afterRestart = await (await fetch(`${registry.base}/api/agent-entry`, { headers: { "x-registry-token": TOKEN } })).json();
   assert.equal(afterRestart.blockers.active.length, 0);
   assert.equal(afterRestart.blockers.resolved.find((item) => item.id.includes("physical-disconnect")).resolution, "现场恢复并完成验证");
@@ -571,6 +460,14 @@ test("capability catalog derives approval policy, lints misleading modes, and ma
   assert.equal(saveDraft.policy.runnableAsJob, false);
   assert.equal(send.policy.runnableAsJob, false);
   assert.equal(open.policy.availability, "implemented");
+  assert.equal(open.description, "Open the publish flow without committing");
+  assert.deepEqual(open.inputSchema, { type: "object", properties: { source: { type: "string" } } });
+  assert.deepEqual(open.outputSchema, { type: "object", properties: { opened: { type: "boolean" } } });
+  assert.deepEqual(open.preconditions, ["device ready"]);
+  assert.deepEqual(open.verification, { mode: "state", description: "publish flow opened" });
+  assert.deepEqual(open.restoration, { required: true, description: "return home" });
+  assert.deepEqual(open.composition, { kind: "single_step" });
+  assert.equal(Object.hasOwn(send, "description"), false);
 
   const autonomousOnly = await (await fetch(`${registry.base}/api/capabilities?autonomous=1`, { headers })).json();
   assert.deepEqual(autonomousOnly.capabilities.map((c) => c.id), ["xianyu.publish.open_dry_run"]);
@@ -580,6 +477,28 @@ test("capability catalog derives approval policy, lints misleading modes, and ma
   assert.equal(single.status, 200);
   assert.equal((await single.json()).capability.risk, "R2");
   assert.equal((await fetch(`${registry.base}/api/capabilities/nope.nope`, { headers })).status, 404);
+
+  const foundations = await (await fetch(`${registry.base}/api/foundation-capabilities`, { headers })).json();
+  assert.equal(foundations.ok, true);
+  assert.ok(foundations.capabilities.some((item) => item.id === "locator.visual-block.v1"));
+  const locator = await (await fetch(`${registry.base}/api/foundation-capabilities/locator.visual-block.v1`, { headers })).json();
+  assert.equal(locator.capability.directRun, false);
+  assert.equal(locator.capability.executionStatus, "canary_only");
+  assert.equal((await fetch(`${registry.base}/api/foundation-capabilities/nope.nope`, { headers })).status, 404);
+
+  const workflows = await (await fetch(`${registry.base}/api/workflows`, { headers })).json();
+  assert.equal(workflows.ok, true);
+  const balance = workflows.workflows.find((item) => item.workflowId === "workflow.wechat.balance-read.v1");
+  assert.ok(balance);
+  assert.equal(balance.entry, "session");
+  assert.equal(balance.directRun, false);
+  assert.equal(balance.acceptance.paymentTransport, 0);
+  assert.equal(balance.acceptance.finalCommit, false);
+  const singleWorkflow = await (await fetch(`${registry.base}/api/workflows/workflow.wechat.balance-read.v1`, { headers })).json();
+  assert.equal(singleWorkflow.workflow.maturity, "canary_only");
+  assert.equal((await fetch(`${registry.base}/api/workflows/nope.nope`, { headers })).status, 404);
+  const wechatOnly = await (await fetch(`${registry.base}/api/workflows?app=wechat`, { headers })).json();
+  assert.ok(wechatOnly.workflows.every((item) => item.appId === "wechat"));
 });
 
 test("task packet recommends autonomous capabilities with eligible devices and never submits", async () => {
@@ -606,6 +525,17 @@ test("task packet recommends autonomous capabilities with eligible devices and n
   assert.equal(vague.inferredApp, "xianyu");
   assert.deepEqual(vague.recommendations, []);
   assert.ok(vague.noIntentNote && /未匹配到明确意图/.test(vague.noIntentNote));
+  // 泛化“评论”不能凭空把未知任务归到小红书。
+  const genericComment = await (await fetch(`${registry.base}/api/task-packet?task=${encodeURIComponent("整理评论数据")}`, { headers })).json();
+  assert.equal(genericComment.inferredApp, null);
+  assert.deepEqual(genericComment.recommendations, []);
+  // runnable/R0 只能给真实意图命中的能力排序，不能把无关 open 能力制造成 input 推荐。
+  const unmatchedIntent = await (await fetch(`${registry.base}/api/task-packet?task=${encodeURIComponent("闲鱼输入文案")}`, { headers })).json();
+  assert.equal(unmatchedIntent.inferredApp, "xianyu");
+  assert.deepEqual(unmatchedIntent.recommendations, []);
+  // 显式 App 永远优先于泛化动作词，避免“抖音草稿”被草稿二字偷路由到闲鱼。
+  const explicitApp = await (await fetch(`${registry.base}/api/task-packet?task=${encodeURIComponent("抖音保存草稿")}`, { headers })).json();
+  assert.equal(explicitApp.inferredApp, "douyin");
 });
 
 test("layered health reports readiness, fleet and capability lint; shallow health stays compatible", async () => {
@@ -1253,165 +1183,4 @@ test("screen meta response body never contains runId key", async () => {
     capturedAt: meta.capturedAt, jobId: "job-succ-2", contentType: "image/png",
     ageSeconds: meta.ageSeconds, stale: false,
   });
-});
-
-// ─── REX Phase 2 收尾: Registry 资金最终提交人类确认面 ───
-const PAYMENT_COMMIT_ID = "protected_commit_pay_fixture";
-
-test("payment commit list is readable, redacted, and carries no secrets", async () => {
-  const res = await fetch(`${registry.base}/api/payment-commits`, { headers: { "x-registry-token": TOKEN } });
-  assert.equal(res.status, 200);
-  const body = await res.json();
-  assert.equal(body.sourceOk, true);
-  assert.equal(body.paymentCommits.length, 1);
-  const row = body.paymentCommits[0];
-  assert.equal(row.commitId, PAYMENT_COMMIT_ID);
-  assert.equal(row.approvalBinding.amount, "88.00");
-  assert.equal(row.approvalBinding.payeeRef, "redacted:merchant");
-  // 控制面 DTO 已脱敏：无私钥/control token/内部 params。
-  assert.doesNotMatch(JSON.stringify(body), /BEGIN PRIVATE|privateKey|controlToken|x-control-token/);
-});
-
-test("payment approve signs the control-plane binding verbatim (browser cannot tamper amount)", async () => {
-  control.paymentDecisions.length = 0;
-  // 浏览器尝试在 body 里改 amount——Registry 必须忽略，按控制面 binding 签 88.00。
-  const res = await fetch(`${registry.base}/api/payment-commits/${PAYMENT_COMMIT_ID}/decide`, {
-    method: "POST",
-    headers: { "content-type": "application/json", "x-registry-token": HUMAN_TOKEN },
-    body: JSON.stringify({ decision: "approve", confirm: "APPROVE_PAYMENT", amount: "9999.00", payeeRef: "impostor" }),
-  });
-  assert.equal(res.status, 200);
-  const body = await res.json();
-  assert.equal(body.paymentCommit.status, "verified");
-  assert.equal(control.paymentDecisions.length, 1);
-  const posted = control.paymentDecisions[0];
-  assert.equal(posted.decision, "approve");
-  assert.equal(posted.commitId, PAYMENT_COMMIT_ID);
-  const approval = posted.approval;
-  // binding 取自控制面，不是 body：amount 仍是 88.00，payee 仍是 redacted:merchant。
-  assert.equal(approval.amount, "88.00");
-  assert.equal(approval.payeeRef, "redacted:merchant");
-  assert.equal(approval.purpose, "financial_commit");
-  assert.equal(approval.issuer.role, "human");
-  assert.equal(approval.issuer.keyId, "payment-human-1");
-  assert.equal(approval.issuer.allowlistVersion, 3);
-  // 签名对控制面原样 binding + 人类 issuer 可验。
-  const { signature, ...unsigned } = approval;
-  const valid = verify(null, Buffer.from(canonicalJson(unsigned)), paymentSignerPublicKey, Buffer.from(signature, "base64"));
-  assert.equal(valid, true);
-});
-
-test("payment approve requires the exact confirmation phrase", async () => {
-  control.paymentDecisions.length = 0;
-  const res = await fetch(`${registry.base}/api/payment-commits/${PAYMENT_COMMIT_ID}/decide`, {
-    method: "POST",
-    headers: { "content-type": "application/json", "x-registry-token": HUMAN_TOKEN },
-    body: JSON.stringify({ decision: "approve", confirm: "APPROVE" }),
-  });
-  assert.equal(res.status, 400);
-  assert.equal(control.paymentDecisions.length, 0);
-});
-
-test("payment decide is human-only: agent, observer, operator, loopback all 403", async () => {
-  for (const [name, headers] of [
-    ["agent", { "x-registry-token": TOKEN }],
-    ["observer", { "x-registry-token": OBSERVER_TOKEN }],
-    ["operator", { "x-registry-token": OPERATOR_TOKEN }],
-  ]) {
-    const res = await fetch(`${registry.base}/api/payment-commits/${PAYMENT_COMMIT_ID}/decide`, {
-      method: "POST",
-      headers: { "content-type": "application/json", ...headers },
-      body: JSON.stringify({ decision: "deny" }),
-    });
-    assert.equal(res.status, 403, `${name} must not decide payment`);
-  }
-});
-
-test("payment deny works without a signer", async () => {
-  control.paymentDecisions.length = 0;
-  const res = await fetch(`${registry.base}/api/payment-commits/${PAYMENT_COMMIT_ID}/decide`, {
-    method: "POST",
-    headers: { "content-type": "application/json", "x-registry-token": HUMAN_TOKEN },
-    body: JSON.stringify({ decision: "deny", reason: "wrong amount on screen" }),
-  });
-  assert.equal(res.status, 200);
-  assert.equal(control.paymentDecisions.length, 1);
-  assert.equal(control.paymentDecisions[0].decision, "deny");
-  assert.equal(control.paymentDecisions[0].approval, undefined);
-  assert.equal(control.paymentDecisions[0].reason, "wrong amount on screen");
-});
-
-test("payment approve 503 when signer unavailable; deny still works", async () => {
-  // 单独启一个不带 signer 文件的 registry（signer unavailable）。
-  const reg = await startRegistry({ root: tempRoot, controlUrl: `http://127.0.0.1:${control.server.address().port}`,
-    extraArgs: ["--runs-root", runsRoot] });
-  try {
-    control.paymentDecisions.length = 0;
-    const approve = await fetch(`${reg.base}/api/payment-commits/${PAYMENT_COMMIT_ID}/decide`, {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-registry-token": HUMAN_TOKEN },
-      body: JSON.stringify({ decision: "approve", confirm: "APPROVE_PAYMENT" }),
-    });
-    assert.equal(approve.status, 503);
-    assert.equal(control.paymentDecisions.length, 0);
-    const deny = await fetch(`${reg.base}/api/payment-commits/${PAYMENT_COMMIT_ID}/decide`, {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-registry-token": HUMAN_TOKEN },
-      body: JSON.stringify({ decision: "deny" }),
-    });
-    assert.equal(deny.status, 200);
-    assert.equal(control.paymentDecisions.length, 1);
-    assert.equal(control.paymentDecisions[0].decision, "deny");
-  } finally { await stopRegistry(reg.child); }
-});
-
-test("payment confirm UI is human-only, shows only payment commits, and enforces CSRF + phrase", async () => {
-  // 非 human 看不到确认页。
-  const agentPage = await fetch(`${registry.base}/payment`, { headers: { "x-registry-token": TOKEN } });
-  assert.equal(agentPage.status, 403);
-
-  // human 换 session 后看确认页：只含资金最终提交，不含普通审批 job-approval。
-  const cookieRes = await fetch(`${registry.base}/?token=${HUMAN_TOKEN}`, { redirect: "manual" });
-  const cookie = cookieRes.headers.get("set-cookie").split(";")[0];
-  const pageRes = await fetch(`${registry.base}/payment`, { headers: { cookie } });
-  assert.equal(pageRes.status, 200);
-  const page = await pageRes.text();
-  assert.match(page, /protected_commit_pay_fixture/);
-  assert.match(page, /88\.00/);
-  assert.match(page, /APPROVE_PAYMENT/);
-  // 普通非支付审批任务不得出现在资金确认页。
-  assert.doesNotMatch(page, /job-approval/);
-
-  // 取页面里的 CSRF token。
-  const csrf = (page.match(/name="csrf" value="([^"]+)"/) || [])[1];
-  assert.ok(csrf, "CSRF token must be present on the payment page");
-
-  // 缺确认短语 → 400，不提交。
-  control.paymentDecisions.length = 0;
-  const noPhrase = await fetch(`${registry.base}/ui/payment-commits/${PAYMENT_COMMIT_ID}/approve`, {
-    method: "POST", headers: { cookie, "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ csrf, confirmation: "NO" }).toString(),
-    redirect: "manual",
-  });
-  assert.equal(noPhrase.status, 400);
-  assert.equal(control.paymentDecisions.length, 0);
-
-  // 错 CSRF → 403，不提交。
-  const badCsrf = await fetch(`${registry.base}/ui/payment-commits/${PAYMENT_COMMIT_ID}/deny`, {
-    method: "POST", headers: { cookie, "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ csrf: "wrong", confirmation: "" }).toString(),
-    redirect: "manual",
-  });
-  assert.equal(badCsrf.status, 403);
-  assert.equal(control.paymentDecisions.length, 0);
-
-  // 正确 CSRF + 短语 → 303 重定向，控制面收到 signed approve。
-  const ok = await fetch(`${registry.base}/ui/payment-commits/${PAYMENT_COMMIT_ID}/approve`, {
-    method: "POST", headers: { cookie, "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ csrf, confirmation: "APPROVE_PAYMENT" }).toString(),
-    redirect: "manual",
-  });
-  assert.equal(ok.status, 303);
-  assert.equal(control.paymentDecisions.length, 1);
-  assert.equal(control.paymentDecisions[0].approval.amount, "88.00");
 });

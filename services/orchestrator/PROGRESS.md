@@ -1,6 +1,167 @@
 # xhs-registry 进度
 
-> 最后更新：2026-08-05 抖音「搜索图片→复制分享链接」explore→repair→run 首次正式闭环
+> 最后更新：2026-08-08 P1 L1–L4 完成：四机微信服务页余额只读 **4/4 accepted**（零支付 / 0 lease）
+
+## 2026-08-08 P1 live canary L1–L4（非支付；人授权：不碰支付可不请示）
+
+### L1 单机无动作 session
+- run `run_2298c50a-9d42-43a9-841f-419717f6914f` on **01**
+- acquire → lease 控制面可见 → status → release → **0 lease**
+
+### L2 双机 / L3 四机无动作并发
+- 脚本：`ops/xw-session-canary-noop.mjs`
+- L2 **2/2**；L3 **4/4**；终态 0 lease/job
+
+### L4 微信余额只读 session_workflow — **4/4 accepted**
+路径：服务页 `MallIndexUIv2` 上「钱包」旁金额；**不开钱包、不点支付**（与 2026-08-06 实证一致）。
+
+实现要点：
+- actions：`launch_app` → `screen`（微信 dump 常空）
+- `scripts/lib/wechat-balance-ocr.py` + `wechat-balance-extract.mjs`（PaddleOCR 裁剪；金额唯一 fail-closed）
+- **设备 I/O 后立刻 release，再离线 OCR**（避免 60s canary lease 被 OCR 拖死）
+- release 失败诚实记 `releaseError`
+
+验收：
+- 单机 01：`run_62310c4f-…` completed，leaseCount=0
+- 四机：`run_67f6b14a-845c-40c8-9854-4f728b229549` **4/4 accepted**，`paymentTransport=0` / `finalCommit=false`，终态 0 lease、4/4 ready/free
+- 金额仅存 run ledger / mission result，**不写公共 knowledge**
+
+### 下一步
+- 可选：余额路径 recipe 化、OCR 冷启动优化；`/xw task run` 自然语言完整接线
+
+## 2026-08-08 registry reload（P1 workflow catalog 上线 live 只读）
+
+**闸门**：reload 前 `activeLeases=0`、pending=0、activeJobs=0、01–04 ready/free。  
+**动作**：`schtasks /End` + `/Run` `XhsDeviceRegistry`（首次 `Stop-Process` 被拒后改用计划任务终止；端口释放后再拉起）。  
+**PID**：`8392` → `54520`。备份：`backups/registry-reload-20260808-005209`。
+
+**live 验收**：
+- `GET /api/health` 200
+- `GET /api/workflows` 200，`workflow.wechat.balance-read.v1`（canary_only / entry=session / directRun=false / paymentTransport=0 / finalCommit=false）
+- `GET /api/workflows/workflow.wechat.balance-read.v1` 200
+- agent-entry 含 `workflows.ok=true` 与 `protocol.entrypoints.workflowCatalog`
+- agent-entry.md 含「Discoverable workflows」段
+- 终态仍 0 lease / 0 running job / 0 pending；四机 ready/free
+
+**未做**：未碰设备、未 begin session canary、未改控制面。
+
+## 2026-08-08 `/xw` 多设备编排 P1a–P1d（离线实现；零碰机）
+
+**结论**：不重做 P0；P1 切入 session_workflow。**仍不能**把四机 session 编排当生产已上线。
+
+### P1a（入口 + 契约）
+- `.agents/skills/xw` ≡ `.codex/skills/xw`；普通 task 不加载 Repair Inbox。
+- 设计稿 P1 契约落稿：`docs/plans/2026-08-06-xw-multi-device-orchestration-v2.md`。
+
+### P1b（Workflow Catalog + TaskPlan v2 联合类型）
+- `contracts/workflows.v1.json` + `scripts/lib/workflow-catalog.mjs`（首条
+  `workflow.wechat.balance-read.v1`，`canary_only` / `entry=session` /
+  `capabilityId=xiaowei.explorer.primitive` / `paymentTransport=0` / `finalCommit=false`）。
+- TaskPlan v2：`executor.kind ∈ {typed_job, session_workflow}`；session 强制 `allowReassign=false`、
+  固定 alias、shardKey 含 alias；schema 同步。
+- Registry：`GET /api/workflows`、`GET /api/workflows/:id`；agent-entry / markdown 发现 workflows。
+- `/xw skills` 合并 capability / recipe / workflow / foundation；canary workflow 默认隐藏，`--all` 可见。
+
+### P1c（SessionWorkflowWorker + 去全局 pin）
+- `scripts/lib/session-workflow-worker.mjs`：JIT acquire → 确定性 action 幂等键 → business gate →
+  `finally release`；`MissionWorkerRouter` 按 kind 分发。
+- `ControlPlaneHttpClient` 增加 session acquire/action/release/lease-visible。
+- `ops/_explore-session-action.mjs`：`pinnedIdentity` 改为 **按 sessionId** 的 Map，消除同进程四机互踩。
+- `xw-mission run` 使用 Router（typed + session）。
+- `loadLiveFleet` 为 ready/free 机附加 `xiaowei.explorer.primitive`（session 入口）。
+
+### P1d（部分：task → plan 编译）
+- `ops/xw-task.mjs compile-workflow|plan-workflow`：自然语言/workflowId → 完整 TaskPlan v2，
+  **零碰机**；`executionReady` 对 canary 仍为 false。
+- **未做**：自动 begin 父 run + `--execute` 真机；模板 draft 路径仍 `task_executor_binding_required`。
+
+### 离线验收（本机）
+- workflow + session worker + orchestrator + typed + mission CLI：**37/37** pass。
+- 另跑 `xw-task` compile-workflow 与 registry 集成测；registry 仅既有 flaky
+  `observer cold-cache singleflight`（got 0 READ，与本轮无关）可能失败。
+
+### 明确未做 / 红线
+- 未碰 01–04、未 claim Repair、未 reload 生产 registry 计划任务（源码已改，部署另开）。
+- 未宣称 production 微信余额；`tapAuthorized=false`；首轮 canary 仍须人授权后分层 L1→L4。
+
+### 下一步
+- 部署/重载 registry 使 live `GET /api/workflows` 生效（需 activeLeases=0 窗口）。
+- 独立复验后单机 canary（L1 无动作 session → 再谈余额）。
+- P1e 补强余额 extract validator；P1d 完整 `/xw task run` 确认后 begin→mission。
+
+## 2026-08-07 `locator.visual-block.v1` foundation P0（Registry 已重载）
+
+新增版本化目录 `contracts/foundation-capabilities.v1.json`、严格 loader、只读统一入口
+`ops/xw-locator.mjs` 与 Registry `GET /api/foundation-capabilities[/<id>]`。`/api/agent-entry`、
+`agent-entry.md` 和 `/xw skills` 现在都能发现 `locator.visual-block.v1`；`/xw locator` 可直接做离线截图
+或正式 Explorer session 截图的图层块准备/`blockId` 核验。Registry 已在四机全空闲时重载，live catalog
+与 agent-entry 均返回该 foundation。
+
+TaskPlan v1 与 Task Template 对 Explore、workflow 和 implemented recipe 自动声明 bundled locator dependency，
+但激活条件固定为 `when_semantic_bounds_missing_or_ambiguous`，正常 semantic bounds 路径不增加视觉开销。
+`ops/xw-task.mjs prepare` 保持纯本地补参；`plan` 现会逐阶段调用 live `/api/task-plans`，返回明确的
+stage plan、foundation dependency 与不可执行原因，Registry 不可读时 fail closed。
+同时修复 App 隔离：小红书任务不会匹配抖音能力；只有 App 名而无动作语义也不能拿同 App 无关能力凑数。
+live 复核“小红书搜索 ai额度 最近一天 前4条链接”现在正确落 L2 Explore，推荐为空，并携带
+`locator.visual-block.v1` dependency。
+
+定位信任顺序统一为：**semantic bounds → 同一 Explorer session 的 trusted capture 截图图层块 →
+fail closed**。Vision 只提供/选择可审计的 `blockId`，不得把裸坐标直接升级为点击授权。
+
+当前能力边界仅为**定位与验证**，固定 `tapAuthorized=false`；自动实点仍是 canary，并须对当次 trusted
+capture 取得不可复用的 one-shot permit。视觉算法已有 02/03/04 六次可逆实点 canary 证据与离线
+**38/38**；本轮基础能力/Task/CLI 测试 **26/26**、Registry 定向 **6/6**、`/xw skills`
+self-test **8/8**。全仓 Node 基线 **160/162**，
+两项既有失败分别为缺失 `knowledge-seed-feishu-to-xianyu-20260728.json` fixture 与 observer cold-cache
+singleflight 期望 1 次读取、实际 0 次，与本轮改动无关。Resolver 源码仍位于未收编 visual worktree，
+因此生产自动实点和主仓分发尚未完成。新增交付制度：任何拟复用能力若未注册到正式 capability、
+status=`implemented` 的 recipe 或 foundation catalog，就不算交付完成；knowledge、Markdown、脚本与
+单次 Explorer 成功只能作为候选证据。
+
+## 2026-08-06 `/xw task` 多设备 Lead/Worker P0（4/4 live）
+
+在既有 Task Template 之下新增通用执行内核：`xhs.task-plan.v2` 将父任务展开为
+node/shard/attempt；单一 Lead 按 live capability、ready/lease 和 placement 动态派发最多 4 个
+typed-job Worker；同机并发固定为 1，不同设备允许重叠。父 run 直接复用 xw closeout runId，状态、
+append-only events、assignment、attempt receipt 和 deterministic reducer 结果均耐久化到
+`outbox/work/<runId>/orchestration/`。P0 只接受 `effectClass=none` 的 implemented、automatic、
+read_only/replay_safe 能力；每次 submit 前重新读取 capability catalog 与 route plan，拒绝外部效果、
+审批、错机和活动 lease。支持明确失败后的换机重试、能力级故障学习、单 Lead 锁、崩溃后沿原
+attempt/job 续跑、ambiguous job 只对账不重提，以及 receipt 全字段 fencing/create-or-compare。
+
+离线相关套件 **43/43**；独立代码复验最终 **PASS**。正式 P0 canary 使用一个父 TaskRun
+`run_b764ff3b-147e-49ed-8f96-856e88e53fa6` 动态派出 4 个 R0 job：01
+`douyin.observe.snapshot`，02/03/04 各 `xhs.observe.metrics`。四个 assignment 在 10ms 内产生，
+四个 attempt 的运行区间均从 `15:35:46Z` 开始并真实重叠；结果 **4/4 accepted、0 failed、
+0 blocked、0 ambiguous**，且 reducer 固定按 nodeIndex/shardIndex/itemIndex 汇总，不受完成先后影响。
+终态 agent-entry 为 01–04 全部 ready/free、activeLeases=0、runningJobs=0、pendingApprovals=0。
+
+边界：这是只读 typed-job P0，不等于已实现 session Worker、外部效果授权/预算账本、同接收人
+effect lane 或把 draft 的“抖音关键词真实转发”模板晋级 implemented；这些仍属于后续 P1/P2。
+
+## 2026-08-06 `/xw task` 长任务设计与本地目录原型（draft，零碰机）
+
+新增 `/xw task` 高层：Task Template 保存稳定流程、参数定义、外部效果预算与检查点策略；Task Run 绑定
+本次参数、计划、确认范围和 closeout runId。用户无需选择 Run/Explore，每个阶段在运行前独立解析；未知
+安全步骤可局部 Explore，未知真实外发提交点必须停止。新增不可变文件目录 `task-templates/`、只读/本地
+参数工具 `ops/xw-task.mjs`、契约实现 `scripts/lib/task-template.mjs`、设计稿
+`docs/plans/2026-08-06-xw-task-design.md`，并更新 xw Skill 与长任务 reference。
+
+首个模板最新 revision 3 为 **draft**：规范名“抖音关键词图文采集并转发”，旧称“抖音关键词素材采集”
+作为别名；必填关键词与每词数量，接收人默认“天才较瘦”，固定仅图文、真实转发、飞书同款字段附言，
+支持 run-scoped checkpoint 与去重。三关键词 × 每词 30 条的本地 plan 正确预览最多 90 条，但显式返回
+`executionReady=false / nextAction=review_template`。已给现有单关键词 runner 增加显式
+`--checkpoint-file`，供后续按 run 隔离续跑；本轮未创建 job/session/lease，未打开 App，未外发。
+
+验证：Task Template + 现有 TaskPlan 合计 **15/15**，xw closeout 自检 **32/32**；通用 Skill validator
+仍只报既有 `disable-model-invocation` 旧 frontmatter 键（保留以免改变调用语义）。激活 implemented revision
+前仍需 workflowId 实现绑定、模拟验收、live 阶段解析与用户另行批准的首轮设备试跑。
+
+## 2026-08-06 xw 证据式 Windows 自动收编 v1（source-only）
+
+新增 `ops/xw-auto-adopt.mjs` + `scripts/lib/xw-adoption-policy.mjs`：closeout 后可对显式 harvest bundle 做本机收编判定，不再固定要求 Mac 前置审核。闸门为：closure completed、全部 checks pass、无 blocker/remaining work、无中高 evidence debt、完成率 ≥95% 且用户确认（或样本 ≥20 且完成率 ≥98%）、终态 lease/job/残留进程/未解决失败均为 0、无支付/资金 transport/final commit。任一不满足即 `review_required`，不放宽以后真实外发/删除/支付的逐次权限。
+
+首个实证：抖音三关键词图文转发 run `run_7e38e44a-f99e-42e5-bd05-98b03a5c26a8` 为 60/60、用户确认、终态干净；本地 adoption decision 已落 `outbox/adopted/<runId>/adoption.v1.json`，`localAdoption=accepted`、`macReview=not_required`。策略单测 5/5，并验证重复 adopt 返回 `already_adopted`。当前为 Registry source-only 流程改进；未改控制面、未部署/reload、未新增设备动作入口。
 
 ## 2026-08-05 Explorer lease → session_action fencing（source-only，尚未部署）
 

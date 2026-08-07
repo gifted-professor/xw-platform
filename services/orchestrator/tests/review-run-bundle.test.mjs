@@ -6,6 +6,11 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { reviewRunBundle } from "../scripts/review-run-bundle.mjs";
+import {
+  currentTaskCloseoutContractSha256,
+  canonicalJson,
+  sha256Bytes,
+} from "../scripts/lib/task-closeout-contract.mjs";
 
 const tmp = mkdtempSync(join(tmpdir(), "rex-review-run-"));
 test.after(() => rmSync(tmp, { recursive: true, force: true }));
@@ -18,8 +23,72 @@ function canonicalize(value) {
   return value;
 }
 
-function canonicalJson(value) {
-  return JSON.stringify(canonicalize(value));
+function writeCloseoutBundle(name, { tamperSeal = false } = {}) {
+  const dir = join(tmp, name);
+  mkdirSync(dir, { recursive: true });
+  const contractSha = currentTaskCloseoutContractSha256();
+  const commit = "a".repeat(40);
+  const observation = { status: "not_applicable", observedAt: null, evidenceRefs: [] };
+  const closeout = {
+    schemaId: "xhs.task-closeout.v1",
+    schemaVersion: 1,
+    taskId: "task_closeout_review",
+    runId: "run_closeout_review_1",
+    actor: "windows:test",
+    machine: { id: "DESKTOP-TEST", platform: "windows" },
+    mode: "explorer",
+    startedAt: "2026-08-04T00:00:00.000Z",
+    endedAt: "2026-08-04T00:01:00.000Z",
+    producer: {
+      name: "xw-closeout",
+      version: "1",
+      commit,
+      scriptSha256: "b".repeat(64),
+      contractSha256: contractSha,
+    },
+    sources: [{
+      repo: "xhs-registry",
+      branch: "main",
+      head: commit,
+      worktree: "clean",
+      changedFiles: [],
+      commit,
+      ahead: 0,
+      behind: 0,
+      pushed: true,
+    }],
+    checks: [],
+    runtime: { deployment: observation, reload: observation, serve: observation },
+    deviceRefs: {
+      devices: [],
+      runs: ["run_closeout_review_1"],
+      jobs: [],
+      sessions: [],
+      leases: [],
+      evidenceRefs: [],
+    },
+    effects: [],
+    artifacts: [],
+    candidates: [],
+    closure: { status: "completed", completed: ["done"], remainingWork: [], blockers: [] },
+    claims: [],
+    evidenceDebt: [],
+    acceptanceConditions: [],
+  };
+  const closeoutBytes = Buffer.from(`${canonicalJson(closeout)}\n`);
+  writeFileSync(join(dir, "closeout.v1.json"), closeoutBytes);
+  const manifest = {
+    schemaId: "xhs.task-closeout-manifest.v1",
+    schemaVersion: 1,
+    runId: closeout.runId,
+    producerCommit: commit,
+    contractSha256: contractSha,
+    files: [{ path: "closeout.v1.json", sha256: sha256Bytes(closeoutBytes), bytes: closeoutBytes.length }],
+  };
+  const manifestBytes = Buffer.from(`${canonicalJson(manifest)}\n`);
+  writeFileSync(join(dir, "manifest.json"), manifestBytes);
+  writeFileSync(join(dir, "manifest.sha256"), `${tamperSeal ? "0".repeat(64) : sha256Bytes(manifestBytes)}\n`);
+  return dir;
 }
 
 function writeBundle(name, overrides = {}, events = [{ runId: "run_review_1", producerCommit: "a".repeat(40), kind: "observe" }]) {
@@ -295,4 +364,24 @@ test("aggregate review bundle is hash-checked and reproducibly emits a Skill-bou
   assert.equal(first.repairProposals.length, 1);
   assert.equal(first.repairProposals[0].proposalId, second.repairProposals[0].proposalId);
   assert.deepEqual(first.repairProposals[0].target.skillBinding, options.targetSkillBinding);
+});
+
+test("valid closeout bundle produces a bound review receipt", () => {
+  const dir = writeCloseoutBundle("closeout-valid");
+  const result = reviewRunBundle(dir, { reviewedAt: "2026-08-04T12:00:00.000Z" });
+  assert.equal(result.ok, true);
+  assert.equal(result.receipt.schemaId, "xhs.review-receipt.v1");
+  assert.equal(result.receipt.runId, "run_closeout_review_1");
+  assert.equal(result.receipt.bundleKind, "closeout");
+  assert.ok(result.receipt.claims.every((item) => item.status === "pass"));
+  assert.equal(result.repairProposals.length, 0);
+});
+
+test("tampered closeout seal fails review without mutating closeout bytes", () => {
+  const dir = writeCloseoutBundle("closeout-seal-bad", { tamperSeal: true });
+  const before = readFileSync(join(dir, "closeout.v1.json"));
+  const result = reviewRunBundle(dir);
+  assert.equal(result.ok, false);
+  assert.ok(result.receipt.claims.some((item) => item.id === "bundle-seal" && item.status === "fail"));
+  assert.deepEqual(readFileSync(join(dir, "closeout.v1.json")), before);
 });

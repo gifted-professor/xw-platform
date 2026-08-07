@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "xhs.work-receipt.v1",
+  "title": "XW worker attempt receipt",
+  "type": "object",
+  "required": ["schemaId", "schemaVersion", "taskRunId", "planHash", "nodeId", "nodeIndex", "shardId", "shardIndex", "shardKey", "attemptId", "attemptIndex", "workerId", "alias", "capabilityId", "technicalStatus", "businessStatus", "startedAt", "finishedAt"],
+  "properties": {
+    "schemaId": { "const": "xhs.work-receipt.v1" },
+    "schemaVersion": { "const": 1 },
+    "taskRunId": { "type": "string", "minLength": 1 },
+    "planHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "nodeId": { "type": "string" },
+    "nodeIndex": { "type": "integer", "minimum": 0 },
+    "shardId": { "type": "string" },
+    "shardIndex": { "type": "integer", "minimum": 0 },
+    "shardKey": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "attemptId": { "type": "string" },
+    "attemptIndex": { "type": "integer", "minimum": 0 },
+    "workerId": { "type": "string" },
+    "alias": { "enum": ["01", "02", "03", "04"] },
+    "capabilityId": { "type": "string" },
+    "technicalStatus": { "enum": ["succeeded", "failed", "blocked", "ambiguous"] },
+    "businessStatus": { "enum": ["accepted", "rejected", "not_evaluated", "ambiguous"] },
+    "retryable": { "type": "boolean" },
+    "jobId": { "type": ["string", "null"] },
+    "runId": { "type": ["string", "null"] },
+    "output": {},
+    "error": {},
+    "startedAt": { "type": "string", "format": "date-time" },
+    "finishedAt": { "type": "string", "format": "date-time" }
+  },
+  "additionalProperties": true
+}

@@ -1,0 +1,167 @@
+{
+  "aliases": [
+    "抖音关键词图文采集并转发",
+    "抖音多关键词素材采集"
+  ],
+  "checkpointPolicy": {
+    "dedupe": true,
+    "dedupeKeyFields": [
+      "recipient",
+      "keyword",
+      "postIdentity"
+    ],
+    "enabled": true,
+    "resumeParam": "resume",
+    "storage": "outbox/work/<runId>/checkpoints/<stageId>/<itemHash>.json",
+    "uncertainEffect": "stop_unverified_do_not_resend"
+  },
+  "description": "逐个搜索抖音关键词，只选择图文，按数量去重采集；可保存或批量转发给指定接收人。",
+  "effectPolicy": {
+    "confirmation": "once_per_run",
+    "enabledWhen": {
+      "equals": "share_to_friend",
+      "param": "resultMode"
+    },
+    "kind": "external_send",
+    "quantity": {
+      "arrayParam": "keywords",
+      "numberParam": "perKeyword",
+      "operation": "multiply_length"
+    },
+    "recipientParam": "recipient",
+    "reconfirmWhen": [
+      "recipient_changed",
+      "quantity_increased",
+      "keywords_added",
+      "annotation_changed",
+      "plan_semantics_changed"
+    ]
+  },
+  "name": "抖音关键词素材采集",
+  "originRunId": "run_d4d5ec87-de51-4140-bd70-115c946b56c3",
+  "parameterSchema": {
+    "properties": {
+      "annotationMode": {
+        "default": "original_feishu_fields_with_keyword",
+        "enum": [
+          "original_feishu_fields_with_keyword"
+        ],
+        "prompt": "附言是否继续使用原飞书字段并附当前搜索词？",
+        "promptPolicy": "effect_summary",
+        "type": "string"
+      },
+      "contentType": {
+        "default": "image_text",
+        "enum": [
+          "image_text"
+        ],
+        "prompt": "内容类型。",
+        "promptPolicy": "effect_summary",
+        "type": "string"
+      },
+      "dedupe": {
+        "default": true,
+        "prompt": "是否跳过已经处理过的帖子？",
+        "promptPolicy": "effect_summary",
+        "type": "boolean"
+      },
+      "keywords": {
+        "items": {
+          "type": "string"
+        },
+        "minItems": 1,
+        "prompt": "关键词是什么？多个关键词可用逗号或换行分隔。",
+        "promptPolicy": "if_missing",
+        "type": "array"
+      },
+      "perKeyword": {
+        "maximum": 100,
+        "minimum": 1,
+        "prompt": "每个关键词需要多少条？",
+        "promptPolicy": "if_missing",
+        "type": "integer"
+      },
+      "recipient": {
+        "default": "天才较瘦",
+        "prompt": "接收人是谁？",
+        "promptPolicy": "effect_summary",
+        "type": "string"
+      },
+      "resultMode": {
+        "default": "share_to_friend",
+        "enum": [
+          "share_to_friend",
+          "save_only"
+        ],
+        "prompt": "结果处理方式是转发好友还是只保存？",
+        "promptPolicy": "effect_summary",
+        "type": "string"
+      },
+      "resume": {
+        "default": true,
+        "prompt": "是否从同一任务的明确检查点续跑？",
+        "promptPolicy": "effect_summary",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "keywords",
+      "perKeyword"
+    ],
+    "type": "object"
+  },
+  "revision": 2,
+  "schemaId": "xhs.task-template.v1",
+  "schemaVersion": 1,
+  "status": "implemented",
+  "steps": [
+    {
+      "id": "prepare_campaign",
+      "intent": "归一化关键词、数量、接收人和附言参数，计算最大外部效果并建立检查点",
+      "kind": "workflow",
+      "params": {
+        "annotationMode": "{{annotationMode}}",
+        "dedupe": "{{dedupe}}",
+        "keywords": "{{keywords}}",
+        "perKeyword": "{{perKeyword}}",
+        "recipient": "{{recipient}}",
+        "resultMode": "{{resultMode}}",
+        "resume": "{{resume}}"
+      }
+    },
+    {
+      "dependsOn": [
+        "prepare_campaign"
+      ],
+      "id": "collect_each_keyword",
+      "intent": "在正式 Explorer session 内逐个关键词复用已验证的抖音图文筛选、好友精确选择、附言和发送流程",
+      "kind": "workflow",
+      "params": {
+        "annotationMode": "{{annotationMode}}",
+        "keywords": "{{keywords}}",
+        "perKeyword": "{{perKeyword}}",
+        "recipient": "{{recipient}}",
+        "resume": "{{resume}}"
+      }
+    },
+    {
+      "condition": "on_safe_ui_drift_before_external_commit",
+      "dependsOn": [
+        "collect_each_keyword"
+      ],
+      "id": "explore_safe_gap",
+      "intent": "仅在页面漂移或已知步骤无法定位时探索安全界面；未知真实外发提交点必须停止，不旁路发送",
+      "kind": "explore"
+    },
+    {
+      "dependsOn": [
+        "collect_each_keyword"
+      ],
+      "id": "verify_checkpoint_close",
+      "intent": "核对逐关键词完成数、保存去重检查点、释放 session、closeout 并按证据式自动收编",
+      "kind": "workflow"
+    }
+  ],
+  "templateId": "task.douyin.keyword-material-collection",
+  "descriptorHash": "da915cf824ff3e1287c292d0cdece66a59dfba5753bbcce37ac5a55da4d49fab"
+}

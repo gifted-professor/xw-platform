@@ -22,7 +22,13 @@ const ALLOWED_PRIMITIVES = new Set([
   "input_text",
 ]);
 
-let pinnedIdentity = null;
+// Per-session identity pin (not process-global). Concurrent multi-device workers
+// in one process each have a different sessionId and must not collide.
+const pinnedIdentityBySessionId = new Map();
+
+export function resetExplorerSessionActionPinsForTests() {
+  pinnedIdentityBySessionId.clear();
+}
 
 function actionError(code, message, status = 409) {
   return Object.assign(new Error(message), { code, status });
@@ -145,13 +151,15 @@ export async function executeExplorerSessionAction({
     throw actionError("EXPLORER_SESSION_TOKEN_MISSING", "session context is missing token", 400);
   }
   const identity = explorerSessionIdentity(authorization);
-  if (pinnedIdentity === null) pinnedIdentity = identity;
-  else assertExplorerSessionIdentity(pinnedIdentity, authorization);
+  const sessionId = authorization.session.sessionId;
+  const pinned = pinnedIdentityBySessionId.get(sessionId);
+  if (!pinned) pinnedIdentityBySessionId.set(sessionId, identity);
+  else assertExplorerSessionIdentity(pinned, authorization);
 
   const key = idempotencyKey || `explorer-${params.primitive}-${randomUUID()}`;
   const control = String(controlBase || DEFAULT_CONTROL_BASE).replace(/\/$/, "");
   const payload = await requestJson(
-    `${control}/control/v1/sessions/${encodeURIComponent(authorization.session.sessionId)}/actions`,
+    `${control}/control/v1/sessions/${encodeURIComponent(sessionId)}/actions`,
     {
       method: "POST",
       body: {
@@ -190,20 +198,32 @@ export async function executeExplorerSessionAction({
 }
 
 export function copyExplorerEvidence(result, relativeName, localOut) {
+  const candidates = [];
   const evidenceDir = result?.storage?.evidenceDirectory;
-  if (!evidenceDir) {
-    throw actionError("EXPLORER_EVIDENCE_MISSING", "session action did not return evidenceDirectory", 502);
+  if (evidenceDir) {
+    candidates.push(`${String(evidenceDir).replace(/[/\\]+$/, "")}/${relativeName}`);
   }
-  const source = `${String(evidenceDir).replace(/[/\\]+$/, "")}/${relativeName}`.replace(/\//g, "\\");
-  if (!existsSync(source)) {
-    // also try posix join for non-Windows test fixtures
-    const alt = `${String(evidenceDir).replace(/[/\\]+$/, "")}/${relativeName}`;
-    if (!existsSync(alt)) {
-      throw actionError("EXPLORER_EVIDENCE_MISSING", `evidence file missing: ${relativeName}`, 502);
+  const runDir = result?.storage?.runDirectory;
+  if (runDir) {
+    candidates.push(`${String(runDir).replace(/[/\\]+$/, "")}/${relativeName}`);
+  }
+  if (result?.output?.path && String(relativeName).toLowerCase() === "screen.png") {
+    candidates.push(String(result.output.path));
+  }
+  let source = null;
+  for (const c of candidates) {
+    const win = String(c).replace(/\//g, "\\");
+    if (existsSync(win)) {
+      source = win;
+      break;
     }
-    mkdirSync(dirname(localOut), { recursive: true });
-    copyFileSync(alt, localOut);
-    return localOut;
+    if (existsSync(c)) {
+      source = c;
+      break;
+    }
+  }
+  if (!source) {
+    throw actionError("EXPLORER_EVIDENCE_MISSING", `evidence file missing: ${relativeName}`, 502);
   }
   mkdirSync(dirname(localOut), { recursive: true });
   copyFileSync(source, localOut);

@@ -1,0 +1,28 @@
+{
+  "goal": "四个逻辑 WorkUnit 动态分配到四台设备",
+  "requestKey": "fixture-four-worker-authoring",
+  "execution": {
+    "maxWorkers": 4,
+    "allowReassign": true,
+    "maxAttemptsPerShard": 2
+  },
+  "nodes": [
+    {
+      "nodeId": "observe",
+      "executor": {
+        "kind": "typed_job",
+        "capabilityId": "xhs.observe.metrics",
+        "appId": "xhs",
+        "replaySafety": "read_only",
+        "effectClass": "none",
+        "resources": ["device"]
+      },
+      "shards": [
+        { "params": { "keyword": "a" } },
+        { "params": { "keyword": "b" } },
+        { "params": { "keyword": "c" } },
+        { "params": { "keyword": "d" } }
+      ]
+    }
+  ]
+}

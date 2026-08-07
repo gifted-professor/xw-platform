@@ -149,6 +149,20 @@ vision 同一目标 2 次失败：
 
 **已知（Hermes 2026-07-27 实机 01）**：VLM（如 mimo-v2.5）对**绝对像素** Y 系统性偏低——XHS 底栏 dump Y=2279 vs vision Y=949 → **ΔY=−1330px**（ratioY≈0.416）；微购约 −160~−179px。X 偏差较小。**不是**单纯截图缩放，换模型也难当主眼；有 bounds 时**禁止**用 vision 像素。知识库：`pitfall-vision-vlm-y-bias-20260727`。优先 dump/语义；dump 空时 vision 限次且宜出区域描述而非裸坐标。
 
+### 跨 App 视觉区域 Locator
+
+`locator.visual-block.v1` 是 `/xw skills` 可发现的 foundation，用于弱语义页面的**定位与验证**：
+
+1. 先用 semantic/dump bounds；能够唯一定位时禁止降级 Vision。
+2. semantic 不足时，只接受**同一个 Explorer session** 产生并可追溯到当前 trusted capture 的截图图层块。
+3. Vision 只返回/选择 `blockId`；不得把模型裸坐标当成点击授权。
+4. 两层都不能证明唯一目标时 fail closed。
+
+当前契约固定 `tapAuthorized=false`。Locator 可被 Explore、workflow、implemented recipe 或 TaskPlan
+自动声明为依赖，但它本身不授权自动实点。自动实点仍属于 canary，必须针对当次 trusted capture
+取得 one-shot permit；permit 不得跨截图、session、设备或目标复用。没有 permit 时只允许定位、截图
+标注和验证，不得宣称“生产自动点击已完成”。
+
 ---
 
 ## 6. 成功判据
@@ -162,6 +176,10 @@ vision 同一目标 2 次失败：
 | **C** | 该 App dump 能力 ✅/⚠️/❌ 已记录 |
 
 超时/预算用尽：写 knowledge `status=aborted` + 原因 → **受控结束**，不算成功。
+
+探索成功不等于可复用能力交付完成。凡声称“以后 Task/agent 可自动复用”的能力，必须注册为正式
+capability、status=`implemented` 的 recipe，或 foundation catalog 条目；只留 knowledge、Markdown、
+脚本、坐标或单次截图证据，均只能算候选。
 
 ---
 
