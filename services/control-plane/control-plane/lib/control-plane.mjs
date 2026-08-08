@@ -19,7 +19,7 @@ import { ProtectedHumanCommit } from "./protected-human-commit.mjs";
 import { guardFinancialCommit } from "./financial-commit-classifier.mjs";
 import { acquireTransportLock as defaultAcquireTransportLock } from "./xiaowei-transport.mjs";
 import { policyModeForRequest } from "./nonpayment-autonomy-policy.mjs";
-import { recheckImplementationIntegrity } from "./runtime-integrity.mjs";
+import { assertExpectedImplementationAtSubmit, recheckImplementationIntegrity } from "./runtime-integrity.mjs";
 import {
   assertProductionBypassClosed,
 } from "./transport-action-authorization.mjs";
@@ -1044,8 +1044,18 @@ export class ControlPlane {
     capabilityId,
     params = {},
     canary = false,
+    expectedCapabilityContractHash = undefined,
+    expectedCapabilityContractHashAlgorithm = undefined,
+    expectedImplementationClosureHash = undefined,
   }) {
     const capability = this.capabilities.validateParams(capabilityId, params);
+    // RI-04 submit lock: compare Worker's bound expected hashes before any Job/operation row.
+    assertExpectedImplementationAtSubmit({
+      liveCapability: capability,
+      expectedCapabilityContractHash,
+      expectedCapabilityContractHashAlgorithm,
+      expectedImplementationClosureHash,
+    });
     const routeRequest = this.#pilotPlacement({ actorId, deviceId, placement });
     const route = this.policyMode?.pilotOnly
       ? this.state.planPlacement({

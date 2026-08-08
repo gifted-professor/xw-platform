@@ -209,6 +209,9 @@ function makeDecision({
       commitBoundary: effect.commitBoundary,
     },
     capabilityContractHash: capability.capabilityContractHash || null,
+    capabilityContractHashAlgorithm: capability.capabilityContractHash
+      ? (capability.capabilityContractHashAlgorithm || "legacy_algorithm_unknown")
+      : null,
     implementationClosureHash: capability.implementation?.implementationClosureHash
       || capability.implementationClosureHash
       || null,

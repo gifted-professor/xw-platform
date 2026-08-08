@@ -4,6 +4,7 @@
 
 import { canonicalJson, sha256 } from "./canonical.mjs";
 import { ControlPlaneError } from "./errors.mjs";
+import { CAPABILITY_CONTRACT_HASH_ALGORITHM_V2 } from "./runtime-integrity.mjs";
 
 const LEGAL = new Map([
   ["none|na|automatic", true],
@@ -150,6 +151,7 @@ export function attachNormalizedEffect(capability) {
     ...capability,
     normalizedEffect,
     capabilityContractHash,
+    capabilityContractHashAlgorithm: CAPABILITY_CONTRACT_HASH_ALGORITHM_V2,
     externalEffect: isBusinessEffectClass(normalizedEffect.class),
   };
 }
