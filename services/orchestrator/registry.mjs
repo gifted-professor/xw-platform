@@ -728,9 +728,9 @@ function listDeviceJobStatus(windowPerDevice = DEVICE_JOB_WINDOW) {
   }, { ok: false, error: "control.db 暂不可读", window: win, perDevice: {} });
 }
 
-// ---------- 能力库（P1）----------
-// 控制面 /control/v1/capabilities 不返回 externalEffect/approvalRequired，registry 按控制面
-// policy.mjs 同款规则本地推导，避免 save_draft_dry_run 这类「标 automatic 实则需审批」误导 agent。
+// ---------- 能力库（Foundation PR1）----------
+// 停止本地推导 approvalRequired/autonomous/runnableAsJob 作为授权真源。
+// 授权只在 Control Plane；这里只暴露静态事实 + authorizationHint。
 const EXTERNAL_RISK = new Set(["R2", "R3"]);
 const EXTERNAL_IDEMPOTENCY = new Set(["external_effect", "ambiguous_on_timeout"]);
 const LOW_MATURITY = new Set(["E0", "E1"]);
@@ -739,47 +739,49 @@ function derivePolicy(capability) {
   const mode = capability.automationPolicy?.mode ?? null;
   const canaryOnlyFlag = capability.automationPolicy?.canaryOnly === true;
   const availability = capability.availability ?? "implemented";
-  const externalEffect = EXTERNAL_RISK.has(capability.risk) || EXTERNAL_IDEMPOTENCY.has(capability.idempotency);
-  const approvalRequired = externalEffect || mode === "approval_required" || availability === "approval_gated";
+  // externalEffect remains a static business-effect description, not an approval signal
+  const externalEffect = EXTERNAL_RISK.has(capability.risk) || EXTERNAL_IDEMPOTENCY.has(capability.idempotency)
+    || (capability.normalizedEffect && ["social", "publish", "payment", "delete"].includes(capability.normalizedEffect.class));
   const canaryRequired = LOW_MATURITY.has(capability.maturity) || canaryOnlyFlag || availability === "canary_only";
   const labOnly = mode === "lab_only";
   const disabled = mode === "disabled";
   const available = availability === "implemented";
-  // autonomous = 无需人工审批（审批维度）；但未必能直接 job 自跑——见 runnableAsJob
-  const autonomous = !approvalRequired && !labOnly && !disabled;
-  // runnableAsJob = 可直接 devicectl job submit 自跑（已实现 + 免审批 + 非 lab + 非 disabled + 非 canary-only）
-  const runnableAsJob = available && !approvalRequired && !labOnly && !disabled && !canaryRequired;
-  // runnableAsCanarySession = 需要 canary session 才能跑（低成熟度 / canary_only availability）
-  const runnableAsCanarySession = (available || availability === "canary_only") && !approvalRequired && !labOnly && !disabled && canaryRequired;
+  // Implementation support hints (NOT authorization). Consumers must not treat null as allow/block.
+  // Business-effect capabilities are still "implemented", but task-packet does not hand out a
+  // naive job skeleton for them — Control Plane decides allow/block/wait on submit.
+  const supportJob = available && !labOnly && !disabled && !canaryRequired && !externalEffect;
+  const supportCanarySession = (available || availability === "canary_only") && !labOnly && !disabled && canaryRequired;
   return {
     mode,
     availability,
     externalEffect,
-    approvalRequired,
+    // deprecated authorization fields — always null (Foundation freeze)
+    approvalRequired: null,
+    autonomous: null,
+    runnableAsJob: null,
+    runnableAsCanarySession: null,
+    legacyAuthorizationFieldsDeprecated: true,
+    authorizationHint: "context_required",
     canaryRequired,
     labOnly,
     disabled,
-    autonomous,
-    runnableAsJob,
-    runnableAsCanarySession,
+    // non-authorization support hints for UI only
+    implementationSupport: {
+      job: supportJob,
+      canarySession: supportCanarySession,
+    },
   };
 }
 
-// 启动/请求期不变量检查：策略字面值与实际推导不一致时亮红灯（控制塔与 API 都显示）
 function capabilityLint(capability, policy) {
   const warnings = [];
-  if (policy.mode === "automatic" && policy.approvalRequired) {
-    warnings.push(`automationPolicy.mode=automatic 但 idempotency=${capability.idempotency}/risk=${capability.risk} 推导出需人工审批——字面值有误导性`);
-  }
   if (policy.externalEffect && capability.restoration?.required === false) {
     warnings.push("有外部效应且不要求 restoration——副作用不会被自动回收");
   }
   if (policy.canaryRequired && policy.mode === "automatic") {
-    warnings.push(`maturity=${capability.maturity} 需 canary session，automatic 模式下 job 直提会被拒`);
+    warnings.push(`maturity=${capability.maturity} 需 canary session，automatic 模式下 job 直提可能被 CP 拒绝`);
   }
-  if (policy.autonomous && !policy.runnableAsJob) {
-    warnings.push(`autonomous=true 但 availability=${policy.availability} 实际不可直接 job 自跑——task-packet 不会生成 job 骨架`);
-  }
+  warnings.push("authorization: 仅 Control Plane 决策；policy.approvalRequired/runnableAsJob 已废弃为 null");
   return warnings;
 }
 
@@ -802,6 +804,8 @@ function summarizeCapability(capability, routingByCapability) {
     resources: capability.resources ?? [],
     restorationRequired: capability.restoration?.required ?? null,
     verificationMode: capability.verification?.mode ?? null,
+    normalizedEffect: capability.normalizedEffect ?? null,
+    capabilityContractHash: capability.capabilityContractHash ?? null,
     policy,
     lint: capabilityLint(capability, policy),
     eligibleAliases: routingByCapability.get(capability.id) ?? [],
@@ -943,7 +947,8 @@ function buildTaskPacket(taskText, catalog, entry) {
       let intentScore = 0;
       for (const rx of intent) if (rx.test(c.id)) intentScore += 3;
       let score = intentScore;
-      if (c.policy.runnableAsJob) score += 2;       // 可直接 job 自跑优先
+      // implementationSupport is a static support hint, NOT Control Plane authorization
+      if (c.policy.implementationSupport?.job) score += 2;
       if (c.risk === "R0") score += 1;
       return { c, score, intentScore };
     }).filter(({ intentScore }) => intentScore > 0)
@@ -957,18 +962,27 @@ function buildTaskPacket(taskText, catalog, entry) {
       }));
       const why = [
         app ? `App 匹配 ${app}` : "未指定 App",
-        c.policy.runnableAsJob ? "可直接 job 自跑（已实现+免审批+非 canary）" : c.policy.runnableAsCanarySession ? "需 canary session（低成熟度/canary_only）" : c.policy.approvalRequired ? "需人工审批（human token）" : `availability=${c.policy.availability}，暂不可跑`,
+        c.policy.implementationSupport?.job
+          ? "实现可用（job 入口；最终 allow/block 由 Control Plane 决定）"
+          : c.policy.implementationSupport?.canarySession
+            ? "需 canary session（低成熟度/canary_only）"
+            : c.policy.externalEffect
+              ? "业务外效：授权由 Control Plane 按 pilot/policy 决定（非本地人审推导）"
+              : `availability=${c.policy.availability}，实现支持有限`,
         `路由允许：${c.eligibleAliases.join("/")}`,
+        "authorizationHint=context_required",
       ];
-      // 只对 runnableAsJob 生成 job submit 骨架；canary session 给 canary 提示；其余不给骨架（避免误导提交后被拒）
+      // Skeleton only for static implementationSupport.job; CP still re-authorizes on submit.
       let submitSkeleton = null;
       let submitNote = null;
-      if (c.policy.runnableAsJob) {
+      if (c.policy.implementationSupport?.job) {
         submitSkeleton = `node control-plane/devicectl.mjs --ssh xhs-windows job submit --actor <actor> --capability ${c.id} --device <deviceId 见 /api/devices> --idempotency-key <唯一键> --params '<json>'`;
-      } else if (c.policy.runnableAsCanarySession) {
+      } else if (c.policy.implementationSupport?.canarySession) {
         submitNote = "需先建立 canary session 再提交（见控制面 canary 文档），不可直接 job submit";
       } else {
-        submitNote = `不可直接提交：${c.policy.approvalRequired ? "需人工审批" : c.policy.labOnly ? "lab_only" : c.policy.disabled ? "disabled" : `availability=${c.policy.availability}`}`;
+        submitNote = c.policy.externalEffect
+          ? "业务外效：不因 R2 本地推导审批；提交后由 Control Plane 按 policyMode/pilot 返回 allow/block/wait"
+          : `不可直接提交：${c.policy.labOnly ? "lab_only" : c.policy.disabled ? "disabled" : `availability=${c.policy.availability}`}`;
       }
       return {
         capabilityId: c.id,
@@ -1936,7 +1950,13 @@ const server = http.createServer(async (req, res) => {
           })),
         },
         approvals: { ok: entry.approvals.sourceOk, pendingCount: entry.approvals.pendingCount, humanTokenEnforced: !LEGACY_AUTH },
-        capabilities: { ok: catalog.ok, count: catalog.count, autonomousCount: catalog.capabilities.filter((c) => c.policy.autonomous).length, lintWarnings: catalog.lintWarnings },
+        capabilities: {
+          ok: catalog.ok,
+          count: catalog.count,
+          // implementationSupport.job count (not authorization autonomous)
+          autonomousCount: catalog.capabilities.filter((c) => c.policy.implementationSupport?.job).length,
+          lintWarnings: catalog.lintWarnings,
+        },
         degraded,
       });
     }
@@ -1947,7 +1967,8 @@ const server = http.createServer(async (req, res) => {
       const alias = url.searchParams.get("alias");
       let items = catalog.capabilities;
       if (app) items = items.filter((c) => c.appId === app);
-      if (autonomousOnly) items = items.filter((c) => c.policy.autonomous);
+      // ?autonomous=1 kept for wire compatibility; means implementationSupport.job, not CP allow
+      if (autonomousOnly) items = items.filter((c) => c.policy.implementationSupport?.job);
       if (alias) items = items.filter((c) => c.eligibleAliases.includes(alias));
       return sendJson(res, 200, { ...catalog, count: items.length, capabilities: items }, { "cache-control": "no-store" });
     }

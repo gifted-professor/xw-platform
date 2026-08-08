@@ -240,9 +240,9 @@ export function validateTaskPlanV2(plan) {
     if (!text(executor?.appId)) issue(errors, `${path}.executor.appId`, "is required");
     if (!REPLAY_SAFETY.has(executor?.replaySafety)) issue(errors, `${path}.executor.replaySafety`, "is invalid");
     if (!EFFECT_CLASSES.has(executor?.effectClass)) issue(errors, `${path}.executor.effectClass`, "is invalid");
-    if (executor?.effectClass !== "none") {
-      issue(errors, `${path}.executor.effectClass`, "external effects are outside current orchestration scope");
-    }
+    // Foundation PR1: raw effectClass is a non-authoritative assertion only.
+    // Live Capability Contract + ExecutionPlan binder decide real effect; forged
+    // none-vs-business mismatches fail at bind (PLAN_CONTRACT_MISMATCH), not schema.
     if (!Array.isArray(executor?.resources)) issue(errors, `${path}.executor.resources`, "must be string[]");
     if (executor?.kind === "session_workflow") {
       if (!text(executor.workflowId)) issue(errors, `${path}.executor.workflowId`, "is required for session_workflow");
