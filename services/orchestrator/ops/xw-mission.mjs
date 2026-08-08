@@ -2,6 +2,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createTaskPlanV2, validateTaskPlanV2 } from "../scripts/lib/task-plan-v2.mjs";
+import { bindTaskPlanToLiveCapabilities } from "../scripts/lib/task-plan-capability-binding.mjs";
 import { OrchestrationStore } from "../scripts/lib/orchestration-store.mjs";
 import { ControlPlaneHttpClient, TypedJobWorker } from "../scripts/lib/typed-job-worker.mjs";
 import { MissionWorkerRouter, SessionWorkflowWorker } from "../scripts/lib/session-workflow-worker.mjs";
@@ -79,16 +80,42 @@ export async function loadLiveFleet({ registryUrl = "http://127.0.0.1:17930/", t
 }
 
 function usage() {
-  return `xw-mission — generic Lead/Worker P0 orchestrator
+  return `xw-mission — Foundation recommended Agent Runtime entry
 
   create   --input <plan-authoring.json>
-  validate --plan <plan.v2.json>
-  preflight (--plan <plan.v2.json> | --input <plan-authoring.json>)
+  validate --plan <plan.v2.json>          # local raw schema only
+  bind     --plan <plan.v2.json> [--registry-url ...]
+           # Raw Plan → ExecutionPlan via live Catalog (no authorization)
+  preflight (--plan <plan.v2.json> | --input <plan-authoring.json>) [--actor <actor>]
+           # validate + bind + fleet eligibility (advisory)
   run      (--plan <plan.v2.json> | --input <plan-authoring.json>) --run <closeout-run-id> --actor <actor> --execute
   status   --run <closeout-run-id>
 
 run refuses to submit jobs unless --execute is explicit.
-Accepts typed_job and session_workflow plans (effectClass=none). session_workflow runtime is still canary-bound.`;
+Foundation: bind is required before preflight/run; Scheduler only sees raw plan work units after bind succeeds.
+session_workflow actions come from catalog only (no params.actions injection).`;
+}
+
+async function loadCapabilityCatalog(registryUrl) {
+  const result = await fetchJson(new URL("api/capabilities", registryUrl));
+  return result.capabilities || [];
+}
+
+async function loadAndBindPlan({ planPath, inputPath, registryUrl, requireBind = true }) {
+  if (!planPath && !inputPath) throw new Error("--plan or --input is required");
+  if (planPath && inputPath) throw new Error("use only one of --plan or --input");
+  const plan = planPath ? readJson(planPath) : createTaskPlanV2(readJson(inputPath));
+  const errors = validateTaskPlanV2(plan);
+  if (errors.length) {
+    const err = new Error(`invalid plan: ${JSON.stringify(errors)}`);
+    err.code = "TASK_PLAN_SCHEMA_INVALID";
+    err.details = errors;
+    throw err;
+  }
+  if (!requireBind) return { plan, executionPlan: null, executionPlanHash: null };
+  const catalog = await loadCapabilityCatalog(registryUrl);
+  const bound = bindTaskPlanToLiveCapabilities(plan, catalog);
+  return { plan, ...bound };
 }
 
 async function main(argv = process.argv.slice(2)) {
@@ -112,20 +139,40 @@ async function main(argv = process.argv.slice(2)) {
     if (planPath && inputPath) throw new Error("use only one of --plan or --input");
     const plan = planPath ? readJson(planPath) : createTaskPlanV2(readJson(inputPath));
     const errors = validateTaskPlanV2(plan);
-    console.log(JSON.stringify({ ok: errors.length === 0, errors }, null, 2));
+    console.log(JSON.stringify({ ok: errors.length === 0, errors, note: "local raw schema only; use bind for live contracts" }, null, 2));
     if (errors.length) process.exitCode = 1;
     return;
   }
 
+  if (command === "bind") {
+    const registryUrl = option(argv, "--registry-url", "http://127.0.0.1:17930/");
+    const bound = await loadAndBindPlan({
+      planPath: option(argv, "--plan"),
+      inputPath: option(argv, "--input"),
+      registryUrl,
+      requireBind: true,
+    });
+    console.log(JSON.stringify({
+      ok: true,
+      schemaId: bound.executionPlan.schemaId,
+      executionPlanHash: bound.executionPlanHash,
+      constraints: bound.executionPlan.constraints,
+      nodes: bound.executionPlan.nodes,
+      warnings: bound.warnings || [],
+      note: "ExecutionPlan is not authorization; Control Plane decides allow/block/wait on submit",
+    }, null, 2));
+    return;
+  }
+
   if (command === "preflight") {
-    const planPath = option(argv, "--plan");
-    const inputPath = option(argv, "--input");
-    if (!planPath && !inputPath) throw new Error("--plan or --input is required");
-    if (planPath && inputPath) throw new Error("use only one of --plan or --input");
-    const plan = planPath ? readJson(planPath) : createTaskPlanV2(readJson(inputPath));
-    const errors = validateTaskPlanV2(plan);
-    if (errors.length) throw new Error(`invalid plan: ${JSON.stringify(errors)}`);
-    const devices = await loadLiveFleet({ registryUrl: option(argv, "--registry-url", "http://127.0.0.1:17930/") });
+    const registryUrl = option(argv, "--registry-url", "http://127.0.0.1:17930/");
+    const { plan, executionPlan, executionPlanHash } = await loadAndBindPlan({
+      planPath: option(argv, "--plan"),
+      inputPath: option(argv, "--input"),
+      registryUrl,
+      requireBind: true,
+    });
+    const devices = await loadLiveFleet({ registryUrl });
     const workUnits = plan.nodes.flatMap((node) => node.shards.map((shard) => {
       const allowed = new Set(shard.placement.eligibleAliases || []);
       const aliases = devices
@@ -134,11 +181,20 @@ async function main(argv = process.argv.slice(2)) {
         .filter((device) => !shard.placement.alias || device.alias === shard.placement.alias)
         .filter((device) => allowed.size === 0 || allowed.has(device.alias))
         .map((device) => device.alias);
-      return { nodeId: node.nodeId, shardId: shard.shardId, capabilityId: node.executor.capabilityId, catalogEligibleAliases: aliases };
+      const boundNode = executionPlan.nodes.find((n) => n.nodeId === node.nodeId);
+      return {
+        nodeId: node.nodeId,
+        shardId: shard.shardId,
+        capabilityId: node.executor.capabilityId,
+        capabilityContractHash: boundNode?.capabilityContractHash || null,
+        placementConstraint: boundNode?.placementConstraint || null,
+        catalogEligibleAliases: aliases,
+      };
     }));
     console.log(JSON.stringify({
       ok: workUnits.every((unit) => unit.catalogEligibleAliases.length > 0),
-      note: "catalog eligibility is not capability runtime health; route/job receipts remain authoritative",
+      executionPlanHash,
+      note: "bind + catalog eligibility are advisory; Control Plane route/job remain authoritative",
       devices: devices.map(({ capabilityIds, ...device }) => ({ ...device, safeCapabilityCount: capabilityIds.length })),
       workUnits,
     }, null, 2));
@@ -162,13 +218,14 @@ async function main(argv = process.argv.slice(2)) {
     const actorId = required(argv, "--actor");
     const taskPath = join("C:\\Users\\Public\\xhs-registry\\outbox\\work", taskRunId, "task.json");
     if (!existsSync(taskPath)) throw new Error("explicit runId is not an active xw closeout run");
-    const planPath = option(argv, "--plan");
-    const inputPath = option(argv, "--input");
-    if (!planPath && !inputPath) throw new Error("--plan or --input is required");
-    if (planPath && inputPath) throw new Error("use only one of --plan or --input");
-    const plan = planPath ? readJson(planPath) : createTaskPlanV2(readJson(inputPath));
-    const errors = validateTaskPlanV2(plan);
-    if (errors.length) throw new Error(`invalid plan: ${JSON.stringify(errors)}`);
+    const registryUrl = option(argv, "--registry-url", "http://127.0.0.1:17930/");
+    // Foundation: bind live contracts before Scheduler; ExecutionPlan is not authorization.
+    const { plan, executionPlan, executionPlanHash } = await loadAndBindPlan({
+      planPath: option(argv, "--plan"),
+      inputPath: option(argv, "--input"),
+      registryUrl,
+      requireBind: true,
+    });
     const client = new ControlPlaneHttpClient({ baseUrl: option(argv, "--control-url", "http://127.0.0.1:17920/") });
     const pollMs = Number(option(argv, "--poll-ms", 1000));
     const typedJobWorker = new TypedJobWorker({ client, actorId, pollMs });
@@ -178,11 +235,13 @@ async function main(argv = process.argv.slice(2)) {
     const result = await runTaskOrchestrator({
       taskRunId,
       plan,
-      fleetProvider: () => loadLiveFleet({ registryUrl: option(argv, "--registry-url", "http://127.0.0.1:17930/") }),
+      executionPlan,
+      executionPlanHash,
+      fleetProvider: () => loadLiveFleet({ registryUrl }),
       worker,
       store,
     });
-    console.log(JSON.stringify(result, null, 2));
+    console.log(JSON.stringify({ ...result, executionPlanHash }, null, 2));
     if (result.status !== "completed") process.exitCode = 2;
     return;
   }

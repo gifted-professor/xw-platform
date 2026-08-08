@@ -35,11 +35,19 @@
 - routing：`foundation-pr1-core` + core/placement/mission/adapters/freedom **82 pass**
 - registry：`registry` + binder + task-plan **51 pass**
 
-## 故意未做（后续 PR1 切片 / PR2+）
+## PR1b（第二切片，同分支）
+
+| 模块 | 状态 |
+|---|---|
+| `session-workflow-worker` | 只执行 catalog `workflow.actions`；拒 `params.actions` / `actionOverrides`（INV-07） |
+| action operationKey | 去掉 attemptIndex |
+| `xw-mission bind` | Raw → ExecutionPlan（live Catalog） |
+| `xw-mission preflight/run` | 强制先 bind |
+
+## 故意未做（后续 / PR2+）
 
 - 全量 Mandatory capability 显式 `effect` 字段（当前 legacy derive）
-- Workflow SessionWorker runtime 硬闸（binder 已拒 params.actions）
-- xw-mission 强制只吃 ExecutionPlan
+- OrchestrationStore 原子 run-manifest.v2
 - INV-10 dispatch recheck、TypedTransport、tcb.manifest（PR2/PR3）
 - Pilot 激活 / 真机 canary（PR4）
 
