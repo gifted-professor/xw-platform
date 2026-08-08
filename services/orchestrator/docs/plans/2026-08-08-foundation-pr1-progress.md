@@ -44,12 +44,20 @@
 | `xw-mission bind` | Raw → ExecutionPlan（live Catalog） |
 | `xw-mission preflight/run` | 强制先 bind |
 
-## 故意未做（后续 / PR2+）
+## PR1c（第三切片）
 
-- 全量 Mandatory capability 显式 `effect` 字段（当前 legacy derive）
-- OrchestrationStore 原子 run-manifest.v2
-- INV-10 dispatch recheck、TypedTransport、tcb.manifest（PR2/PR3）
+| 模块 | 状态 |
+|---|---|
+| 全部 apps/*/capabilities.json | 显式 `effect` / `exposure` / `invocationPolicy` / `lifecycle` |
+| capability.schema.json | 支持 effect/exposure/invocationPolicy/lifecycle |
+| OrchestrationStore | 原子 `run-manifest.v2.json`（fsync+rename）+ stable operationKey |
+| task-orchestrator | init 传入 ExecutionPlan hash |
+
+## 故意未做（PR2+）
+
+- INV-10 dispatch recheck、TypedTransport、tcb.manifest
 - Pilot 激活 / 真机 canary（PR4）
+- Skill policy lint 窄 CI
 
 ## 不碰机
 

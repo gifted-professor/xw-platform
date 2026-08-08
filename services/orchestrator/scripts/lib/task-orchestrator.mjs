@@ -119,7 +119,15 @@ function assertReceiptFencing(receipt, assignment, activeJob = null) {
   return receipt;
 }
 
-export async function runTaskOrchestrator({ taskRunId, plan, fleetProvider, worker, store }) {
+export async function runTaskOrchestrator({
+  taskRunId,
+  plan,
+  executionPlan = null,
+  executionPlanHash = null,
+  fleetProvider,
+  worker,
+  store,
+}) {
   assertTaskPlanV2(plan);
   if (!taskRunId) throw new Error("taskRunId is required");
   if (typeof fleetProvider !== "function") throw new Error("fleetProvider is required");
@@ -129,12 +137,21 @@ export async function runTaskOrchestrator({ taskRunId, plan, fleetProvider, work
   const releaseLeadLock = typeof store.acquireLeadLock === "function" ? store.acquireLeadLock(plan.planHash) : () => {};
   try {
 
-  let state = ensureWorkUnits(plan, store.init(plan));
+  // Foundation: init writes run-manifest.v2 atomically before scheduler advances
+  let state = ensureWorkUnits(plan, store.init(plan, {
+    executionPlan,
+    executionPlanHash: executionPlanHash || executionPlan?.executionPlanHash || null,
+  }));
   if (state.planHash !== plan.planHash) throw new Error("TASK_RUN_PLAN_CONFLICT");
   state.capabilityBlocks = [...(state.capabilityBlocks || [])];
   state.status = "running";
   store.writeState(state);
-  store.appendEvent({ type: "task_started", taskRunId, planHash: plan.planHash });
+  store.appendEvent({
+    type: "task_started",
+    taskRunId,
+    planHash: plan.planHash,
+    executionPlanHash: executionPlanHash || executionPlan?.executionPlanHash || null,
+  });
 
   const units = planUnits(plan);
   const active = new Map();
