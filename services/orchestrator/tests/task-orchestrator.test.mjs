@@ -75,10 +75,11 @@ test("task plan v2 is deterministic and rejects tampering", () => {
   assert.match(JSON.stringify(validateTaskPlanV2(first)), /planHash/);
 });
 
-test("P0 plan fails closed on external effects and worker count above four", () => {
-  assert.throws(() => planWith({
+test("Foundation: raw plan may assert external_effect; worker count above four still fails", () => {
+  // effectClass is a non-authoritative assertion; live Contract bind decides real effect.
+  assert.doesNotThrow(() => planWith({
     nodes: [{ nodeId: "send", executor: { ...executor("cap.a"), effectClass: "external_effect" }, shards: [{ params: {} }] }],
-  }), /external effects are outside current orchestration scope|outside P0/);
+  }));
   assert.throws(() => planWith({
     nodes: [{ nodeId: "read", executor: executor("cap.a"), shards: [{ params: {} }] }],
     execution: { maxWorkers: 5 },

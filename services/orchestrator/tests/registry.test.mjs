@@ -441,24 +441,23 @@ test("capability catalog derives approval policy, lints misleading modes, and ma
   const open = catalog.capabilities.find((c) => c.id === "xianyu.publish.open_dry_run");
   const saveDraft = catalog.capabilities.find((c) => c.id === "xianyu.publish.save_draft_dry_run");
   const send = catalog.capabilities.find((c) => c.id === "xhs.comment.send");
-  // R1 + replay_safe + automatic → agent 可自跑
-  assert.equal(open.policy.autonomous, true);
-  assert.equal(open.policy.approvalRequired, false);
+  // Foundation: authorization fields are null; implementationSupport is static only
+  assert.equal(open.policy.approvalRequired, null);
+  assert.equal(open.policy.autonomous, null);
+  assert.equal(open.policy.runnableAsJob, null);
+  assert.equal(open.policy.authorizationHint, "context_required");
+  assert.equal(open.policy.implementationSupport.job, true);
   assert.deepEqual(open.eligibleAliases, ["01", "03"]);
-  // 字面 automatic 但 external_effect → 推导为需审批，且必须 lint 出来
-  assert.equal(saveDraft.policy.approvalRequired, true);
-  assert.equal(saveDraft.policy.autonomous, false);
-  assert.ok(saveDraft.lint.some((w) => /误导性/.test(w)));
+  // external_effect stays a static fact; no local approval derivation
+  assert.equal(saveDraft.policy.externalEffect, true);
+  assert.equal(saveDraft.policy.approvalRequired, null);
+  assert.equal(saveDraft.policy.implementationSupport.job, false);
   assert.ok(saveDraft.lint.some((w) => /副作用不会被自动回收/.test(w)));
+  assert.ok(saveDraft.lint.some((w) => /authorization/.test(w)));
   assert.deepEqual(saveDraft.eligibleAliases, ["01"]);
-  // R2 → 外部效应 + 需审批
   assert.equal(send.policy.externalEffect, true);
-  assert.equal(send.policy.approvalRequired, true);
+  assert.equal(send.policy.approvalRequired, null);
   assert.ok(catalog.lintWarnings.length >= 1);
-  // runnableAsJob：已实现+免审批+非 canary 才能给 job 骨架；save_draft/send 不可直接 job 自跑
-  assert.equal(open.policy.runnableAsJob, true);
-  assert.equal(saveDraft.policy.runnableAsJob, false);
-  assert.equal(send.policy.runnableAsJob, false);
   assert.equal(open.policy.availability, "implemented");
   assert.equal(open.description, "Open the publish flow without committing");
   assert.deepEqual(open.inputSchema, { type: "object", properties: { source: { type: "string" } } });
@@ -507,19 +506,20 @@ test("task packet recommends autonomous capabilities with eligible devices and n
   const packet = await (await fetch(`${registry.base}/api/task-packet?task=${encodeURIComponent("闲鱼打开页面 dry-run 验证")}`, { headers })).json();
   assert.equal(packet.inferredApp, "xianyu");
   assert.equal(packet.recommendations[0].capabilityId, "xianyu.publish.open_dry_run");
-  assert.equal(packet.recommendations[0].policy.autonomous, true);
+  assert.equal(packet.recommendations[0].policy.implementationSupport.job, true);
+  assert.equal(packet.recommendations[0].policy.authorizationHint, "context_required");
   const dev01 = packet.recommendations[0].eligibleDevices.find((d) => d.alias === "01");
   assert.equal(dev01.routed, true);
   assert.equal(dev01.ready, false); // 01 有活跃 lease，不 ready
   assert.match(packet.recommendations[0].submitSkeleton, /--ssh xhs-windows job submit/);
   assert.ok(packet.acceptance.length >= 2 && packet.stopConditions.length >= 2);
   assert.equal(packet.note.includes("不代提交"), true);
-  // save_draft 任务：草稿意图匹配 save_draft_dry_run，但它 approvalRequired → 不可直接 job，给 submitNote 不给骨架
+  // save_draft：implementationSupport.job=false → 无骨架；note 说明外效由 CP 决策
   const draftPacket = await (await fetch(`${registry.base}/api/task-packet?task=${encodeURIComponent("闲鱼保存草稿")}`, { headers })).json();
   const draftRec = draftPacket.recommendations.find((r) => r.capabilityId === "xianyu.publish.save_draft_dry_run");
   assert.ok(draftRec, "save_draft 应出现在推荐里（路由到 01）");
   assert.equal(draftRec.submitSkeleton, null);
-  assert.ok(draftRec.submitNote && /需人工审批/.test(draftRec.submitNote));
+  assert.ok(draftRec.submitNote && /Control Plane|业务外效/.test(draftRec.submitNote));
   // 无意图匹配不瞎猜：只给 app 不给意图 → 空推荐 + noIntentNote
   const vague = await (await fetch(`${registry.base}/api/task-packet?task=${encodeURIComponent("闲鱼")}`, { headers })).json();
   assert.equal(vague.inferredApp, "xianyu");

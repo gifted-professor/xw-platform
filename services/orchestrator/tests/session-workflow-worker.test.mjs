@@ -82,23 +82,22 @@ function fakeSessionClient({ balancesByAlias = {}, failReleaseAlias = null } = {
   };
 }
 
-test("action idempotency keys are stable for the same attempt", () => {
+test("action idempotency keys are stable and omit attemptIndex", () => {
   const a = actionIdempotencyKey({
     taskRunId: "run_x",
     shardKey: "a".repeat(64),
     actionIndex: 0,
-    attemptIndex: 1,
     actionId: "launch_wechat",
   });
   const b = actionIdempotencyKey({
     taskRunId: "run_x",
     shardKey: "a".repeat(64),
     actionIndex: 0,
-    attemptIndex: 1,
     actionId: "launch_wechat",
   });
   assert.equal(a, b);
   assert.match(a, /^m2:run_x:/);
+  assert.equal(a.includes(":a1"), false);
 });
 
 test("workflow business validator accepts focus.package and enforces payment zeros", () => {
@@ -196,8 +195,6 @@ test("SessionWorkflowWorker always releases on failure and blocks unauthorized t
     requestKey: "sw-tap-block",
     nodes: [compileWorkflowNodeAuthoring(getWorkflow("workflow.wechat.balance-read.v1"), { aliases: ["02"] })],
   });
-  // override executor actions via params
-  plan.nodes[0].shards[0].params = { actions: [{ actionId: "tap_wallet", primitive: "tap", params: { x: 1, y: 2 } }] };
   const receipt = await worker.execute({
     taskRunId: "run_sw_tap",
     planHash: plan.planHash,
@@ -210,6 +207,30 @@ test("SessionWorkflowWorker always releases on failure and blocks unauthorized t
   });
   assert.equal(receipt.technicalStatus, "failed");
   assert.equal(receipt.error.code, "TAP_NOT_AUTHORIZED");
+  assert.equal(client.sessions.size, 0);
+});
+
+test("SessionWorkflowWorker rejects params.actions injection (INV-07)", async () => {
+  const client = fakeSessionClient({ balancesByAlias: { "01": "1.00" } });
+  const worker = new SessionWorkflowWorker({ client, actorId: "fixture-actor" });
+  const plan = createTaskPlanV2({
+    goal: "inject blocked",
+    requestKey: "sw-inject-block",
+    nodes: [compileWorkflowNodeAuthoring(getWorkflow("workflow.wechat.balance-read.v1"), { aliases: ["01"] })],
+  });
+  plan.nodes[0].shards[0].params = { actions: [{ actionId: "evil_tap", primitive: "tap", params: { x: 1, y: 2 } }] };
+  const receipt = await worker.execute({
+    taskRunId: "run_sw_inject",
+    planHash: plan.planHash,
+    node: plan.nodes[0],
+    shard: plan.nodes[0].shards[0],
+    attemptId: "att_inject",
+    attemptIndex: 1,
+    workerId: "w3",
+    alias: "01",
+  });
+  assert.equal(receipt.technicalStatus, "failed");
+  assert.equal(receipt.error.code, "WORKFLOW_CONTRACT_UNBOUND");
   assert.equal(client.sessions.size, 0);
 });
 

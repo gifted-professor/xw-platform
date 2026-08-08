@@ -7,8 +7,32 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export function actionIdempotencyKey({ taskRunId, shardKey, actionIndex, attemptIndex, actionId }) {
-  return `m2:${taskRunId}:${String(shardKey).slice(0, 20)}:act${actionIndex}:${actionId}:a${attemptIndex}`;
+/**
+ * Stable action operation key. Foundation INV-03/07: no attemptIndex in the key
+ * (attemptId remains log/receipt-only).
+ */
+export function actionIdempotencyKey({ taskRunId, shardKey, actionIndex, actionId }) {
+  return `m2:${taskRunId}:${String(shardKey).slice(0, 20)}:act${actionIndex}:${actionId}`;
+}
+
+/**
+ * INV-07: only catalog/ExecutionPlan workflow actions may run.
+ * Reject shard.params.actions / actionOverrides / primitive_steps injection.
+ */
+export function resolveWorkflowActions(workflow, shardParams = {}) {
+  if (shardParams && typeof shardParams === "object") {
+    if (Array.isArray(shardParams.actions) || shardParams.actionOverrides || shardParams.primitive_steps) {
+      throw Object.assign(
+        new Error("workflow runtime must not inject actions/actionOverrides/primitive_steps"),
+        { code: "WORKFLOW_CONTRACT_UNBOUND" },
+      );
+    }
+  }
+  const actions = workflow?.actions;
+  if (!Array.isArray(actions) || actions.length === 0) {
+    throw Object.assign(new Error("workflow has no actions"), { code: "WORKFLOW_ACTIONS_EMPTY" });
+  }
+  return actions;
 }
 
 /**
@@ -209,12 +233,7 @@ export class SessionWorkflowWorker {
         alias: assignment.alias,
       });
 
-      const actions = Array.isArray(assignment.shard.params?.actions)
-        ? assignment.shard.params.actions
-        : workflow.actions;
-      if (!Array.isArray(actions) || actions.length === 0) {
-        throw Object.assign(new Error("workflow has no actions"), { code: "WORKFLOW_ACTIONS_EMPTY" });
-      }
+      const actions = resolveWorkflowActions(workflow, assignment.shard.params);
 
       const actionRefs = [];
       let lastOutput = {};
@@ -235,7 +254,6 @@ export class SessionWorkflowWorker {
           taskRunId: assignment.taskRunId,
           shardKey: assignment.shard.shardKey,
           actionIndex,
-          attemptIndex: assignment.attemptIndex,
           actionId,
         });
         const result = await this.client.sessionAction({
@@ -247,7 +265,7 @@ export class SessionWorkflowWorker {
           params: {
             primitive,
             ...(action.params && typeof action.params === "object" ? action.params : {}),
-            ...(assignment.shard.params?.actionOverrides?.[actionId] || {}),
+            // INV-07: no actionOverrides merge
           },
         });
         const jobId = result?.jobId || result?.job?.jobId || null;
