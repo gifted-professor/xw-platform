@@ -46,7 +46,6 @@ export function validateWorkReceiptV2(receipt) {
     "executionPlanHash",
     "capabilityContractHashAlgorithm",
     "operationKey",
-    "authorizationDecisionId",
     "terminalStatus",
     "nodeId",
     "shardId",
@@ -59,8 +58,8 @@ export function validateWorkReceiptV2(receipt) {
   ]) {
     if (!text(receipt[key])) add(key, "is required");
   }
-  // Integrity hashes + job/run ids are required keys; null allowed for legacy/notSent.
-  for (const key of ["capabilityContractHash", "implementationClosureHash", "jobId", "controlPlaneRunId"]) {
+  // Integrity hashes + job/run/auth ids are required keys; null allowed for legacy/notSent.
+  for (const key of ["capabilityContractHash", "implementationClosureHash", "jobId", "controlPlaneRunId", "authorizationDecisionId"]) {
     if (!Object.prototype.hasOwnProperty.call(receipt, key) || !nullableText(receipt[key])) {
       add(key, "must be string or null");
     }
@@ -177,10 +176,11 @@ export function createWorkReceiptV2({
       ?? bound.implementationClosureHash
       ?? null,
     operationKey: integrity.operationKey || assignment.operationKey || `m2:${assignment.taskRunId}:${assignment.shard.shardKey}`,
-    authorizationDecisionId: integrity.authorizationDecisionId
-      || job.authorization?.decisionId
-      || assignment.authorizationDecisionId
-      || "unbound",
+    authorizationDecisionId: Object.prototype.hasOwnProperty.call(integrity, "authorizationDecisionId")
+      ? integrity.authorizationDecisionId
+      : (job.authorization?.decisionId
+        || assignment.authorizationDecisionId
+        || null),
     jobId: jobIdRaw == null || jobIdRaw === "" ? (integrity.jobId ?? null) : String(jobIdRaw),
     controlPlaneRunId: runIdRaw == null || runIdRaw === ""
       ? (integrity.controlPlaneRunId ?? null)

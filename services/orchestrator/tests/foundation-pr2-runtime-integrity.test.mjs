@@ -153,10 +153,11 @@ test("RI-05: WorkReceipt v1 still validates; v2 carries integrity proof", () => 
     error: { code: "IMPLEMENTATION_CONTRACT_CHANGED", notSent: true, details: { notSent: true, phase: "resume" } },
     startedAt: "2026-08-08T00:00:00.000Z",
     finishedAt: "2026-08-08T00:00:01.000Z",
-    integrity: { jobId: null, controlPlaneRunId: null, authorizationDecisionId: "unbound" },
+    integrity: { jobId: null, controlPlaneRunId: null, authorizationDecisionId: null },
   });
   assert.equal(notSent.jobId, null);
   assert.equal(notSent.controlPlaneRunId, null);
+  assert.equal(notSent.authorizationDecisionId, null);
 });
 
 test("TypedTransport fake injection works without raw device channel", async () => {

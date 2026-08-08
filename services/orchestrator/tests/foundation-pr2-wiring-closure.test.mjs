@@ -82,13 +82,18 @@ function fakeCp({ liveHashes, onSubmit, onGetJob } = {}) {
       },
       async submitJob(input) {
         calls.submit += 1;
+        calls.lastSubmit = input;
         if (onSubmit) return onSubmit(input);
         return {
           job: {
             jobId: "job_wiring_1",
             runId: "cp_run_wiring_1",
             status: "succeeded",
-            authorization: { decisionId: "auth_wiring_1" },
+            authorization: { decision: "allow", decisionId: "auth_job_final" },
+            operationKey: input.idempotencyKey,
+            capabilityContractHash: liveHashes.contract,
+            implementationClosureHash: liveHashes.closure,
+            capabilityContractHashAlgorithm: CAPABILITY_CONTRACT_HASH_ALGORITHM_V2,
             verification: { ok: true },
             restoration: { ok: true },
             output: { packageName: "com.xingin.xhs", items: [{ id: "1" }] },
@@ -103,6 +108,8 @@ function fakeCp({ liveHashes, onSubmit, onGetJob } = {}) {
             jobId,
             runId: "cp_run_wiring_1",
             status: "succeeded",
+            authorization: { decision: "allow", decisionId: "auth_job_final" },
+            operationKey: calls.lastSubmit?.idempotencyKey || null,
             verification: { ok: true },
             restoration: { ok: true },
             output: { packageName: "com.xingin.xhs", items: [{ id: "1" }] },
@@ -183,12 +190,18 @@ test("fake CP E2E normal: bound=live → one submit → WorkReceipt v2", async (
     assert.equal(result.status, "completed");
     assert.equal(calls.submit, 1);
     assert.equal(calls.getJob, 0);
+    assert.equal(calls.lastSubmit.idempotencyKey, `m2:run_ok:${plan.nodes[0].shards[0].shardKey}`);
+    assert.equal(calls.lastSubmit.idempotencyKey.includes(":a"), false);
+    assert.equal(calls.lastSubmit.expectedCapabilityContractHash, contractA);
+    assert.equal(calls.lastSubmit.expectedImplementationClosureHash, closureA);
     const receipts = store.loadReceipts();
     assert.equal(receipts.length, 1);
     assert.equal(receipts[0].schemaId, "xhs.work-receipt.v2");
     assert.equal(receipts[0].capabilityContractHash, contractA);
     assert.equal(receipts[0].implementationClosureHash, closureA);
     assert.equal(receipts[0].capabilityContractHashAlgorithm, CAPABILITY_CONTRACT_HASH_ALGORITHM_V2);
+    assert.equal(receipts[0].operationKey, calls.lastSubmit.idempotencyKey);
+    assert.equal(receipts[0].authorizationDecisionId, "auth_job_final");
     assert.equal(receipts[0].jobId, "job_wiring_1");
     assert.equal(receipts[0].controlPlaneRunId, "cp_run_wiring_1");
   } finally {
@@ -225,6 +238,7 @@ test("fake CP E2E pre-submit drift: submit=0 getJob=0 notSent v2", async () => {
     assert.equal(receipts[0].error.notSent ?? receipts[0].error.details?.notSent, true);
     assert.equal(receipts[0].jobId, null);
     assert.equal(receipts[0].controlPlaneRunId, null);
+    assert.equal(receipts[0].authorizationDecisionId, null);
     assert.ok(["failed", "partial", "blocked"].includes(result.status));
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -261,6 +275,170 @@ test("fake CP E2E resume drift: getJob=0 submit=0 notSent", async () => {
   assert.equal(receipt.error.notSent ?? receipt.error.details?.notSent, true);
   assert.equal(receipt.jobId, null);
   assert.equal(receipt.controlPlaneRunId, null);
+  assert.equal(receipt.authorizationDecisionId, null);
+});
+
+test("tampered ExecutionPlan content with stale hash is rejected", async () => {
+  const plan = makePlan("tamper-hash");
+  const bound = bindFixturePlan(plan, catalog({ contract: contractA, closure: closureA }));
+  bound.executionPlan.nodes[0] = {
+    ...bound.executionPlan.nodes[0],
+    retryClass: "replay_safe",
+  };
+  // Keep old hash intentionally.
+  const root = mkdtempSync(join(tmpdir(), "wiring-tamper-"));
+  try {
+    const store = new OrchestrationStore({ taskRunId: "run_tamper", workRoot: root });
+    let assignments = 0;
+    await assert.rejects(
+      () => runTaskOrchestrator({
+        taskRunId: "run_tamper",
+        plan,
+        ...bound,
+        fleetProvider: async () => [],
+        worker: { async execute() { assignments += 1; throw new Error("must not run"); } },
+        store,
+      }),
+      (e) => e.code === "EXECUTION_PLAN_HASH_MISMATCH",
+    );
+    assert.equal(assignments, 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Raw multi-worker business plan is forced to single assignment by ExecutionPlan constraints", async () => {
+  const plan = createTaskPlanV2({
+    goal: "business force",
+    requestKey: "biz-force",
+    execution: { maxWorkers: 4, allowReassign: true, maxAttemptsPerShard: 3 },
+    nodes: [{
+      nodeId: "n1",
+      executor: {
+        kind: "typed_job",
+        capabilityId: "xianyu.publish.full_dry_run",
+        appId: "xianyu",
+        effectClass: "external_effect",
+        replaySafety: "replay_safe",
+      },
+      shards: [{ params: { saveDraft: false }, placement: { alias: "01" } }],
+    }],
+  });
+  const bound = bindFixturePlan(plan, {
+    "xianyu.publish.full_dry_run": {
+      capabilityContractHash: contractA,
+      capabilityContractHashAlgorithm: CAPABILITY_CONTRACT_HASH_ALGORITHM_V2,
+      implementationClosureHash: closureA,
+      normalizedEffect: { class: "publish", phase: "prepare", commitBoundary: "automatic" },
+      idempotency: "replay_safe",
+    },
+  });
+  assert.equal(bound.executionPlan.constraints.maxWorkers, 1);
+  assert.equal(bound.executionPlan.constraints.allowReassign, false);
+  assert.equal(bound.executionPlan.constraints.maxAttemptsPerShard, 1);
+
+  const root = mkdtempSync(join(tmpdir(), "wiring-biz-"));
+  try {
+    const store = new OrchestrationStore({ taskRunId: "run_biz", workRoot: root });
+    const seen = [];
+    await runTaskOrchestrator({
+      taskRunId: "run_biz",
+      plan,
+      ...bound,
+      fleetProvider: async () => ["01", "02", "03", "04"].map((alias) => ({
+        alias, online: true, ready: true, lease: "free",
+        quarantined: false, unresolvedFailure: null,
+        capabilityIds: ["xianyu.publish.full_dry_run"],
+      })),
+      worker: {
+        async execute(assignment) {
+          seen.push(assignment);
+          const now = new Date().toISOString();
+          const { createWorkReceipt } = await import("../scripts/lib/work-receipt.mjs");
+          return createWorkReceipt({
+            assignment,
+            technicalStatus: "failed",
+            businessStatus: "not_evaluated",
+            retryable: true,
+            error: { code: "ADAPTER_HTTP_UNAVAILABLE", message: "fixture" },
+            startedAt: now,
+            finishedAt: now,
+          });
+        },
+      },
+      store,
+    });
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].alias, "01");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("submit TOCTOU: expected hashes sent; fake CP rejecting drift yields 0 job", async () => {
+  const plan = makePlan("e2e-toctou");
+  const bound = bindFixturePlan(plan, catalog({ contract: contractA, closure: closureA }));
+  const { client, calls } = fakeCp({
+    liveHashes: { contract: contractA, closure: closureA },
+    onSubmit(input) {
+      assert.equal(input.expectedCapabilityContractHash, contractA);
+      assert.equal(input.expectedImplementationClosureHash, closureA);
+      const err = Object.assign(new Error("capability contract changed at submit"), {
+        code: "IMPLEMENTATION_CONTRACT_CHANGED",
+        details: { notSent: true, phase: "submit" },
+      });
+      throw err;
+    },
+  });
+  const worker = new TypedJobWorker({ client, actorId: "wiring", pollMs: 0 });
+  const root = mkdtempSync(join(tmpdir(), "wiring-toctou-"));
+  try {
+    const store = new OrchestrationStore({ taskRunId: "run_toctou", workRoot: root });
+    await runTaskOrchestrator({
+      taskRunId: "run_toctou",
+      plan,
+      ...bound,
+      fleetProvider: async () => [{
+        alias: "01", online: true, ready: true, lease: "free",
+        quarantined: false, unresolvedFailure: null,
+        capabilityIds: ["xhs.observe.fixture"],
+      }],
+      worker,
+      store,
+    });
+    assert.equal(calls.submit, 1);
+    assert.equal(calls.getJob, 0);
+    const receipt = store.loadReceipts()[0];
+    assert.equal(receipt.error.code, "IMPLEMENTATION_CONTRACT_CHANGED");
+    assert.equal(receipt.jobId, null);
+    assert.equal(receipt.authorizationDecisionId, null);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("parent-directory symlink in closure path fails closed", () => {
+  const root = mkdtempSync(join(tmpdir(), "closure-parent-link-"));
+  try {
+    const outside = mkdtempSync(join(tmpdir(), "closure-outside-"));
+    writeFileSync(join(outside, "adapter.mjs"), "export const x = 1;\n", "utf8");
+    mkdirSync(join(root, "apps"), { recursive: true });
+    try {
+      symlinkSync(outside, join(root, "apps", "runtime-link"));
+    } catch (error) {
+      if (error?.code === "EPERM" || error?.code === "EACCES") return;
+      throw error;
+    }
+    assert.throws(
+      () => computeImplementationClosureFromFiles({
+        rootDir: root,
+        paths: ["apps/runtime-link/adapter.mjs"],
+      }),
+      (e) => e.code === "IMPLEMENTATION_CLOSURE_SYMLINK",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("assignment carries boundNode from orchestrator (not raw hashes)", async () => {

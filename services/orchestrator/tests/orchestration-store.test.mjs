@@ -77,12 +77,14 @@ test("buildRunManifest rejects unbound ExecutionPlan", () => {
       plan,
       executionPlan: {
         schemaId: EXECUTION_PLAN_SCHEMA_ID,
+        schemaVersion: 1,
         executionPlanHash: "e".repeat(64),
         sourcePlanHash: "f".repeat(64),
         nodes: [{ nodeId: "n1" }],
+        constraints: { maxWorkers: 1, allowReassign: false, maxAttemptsPerShard: 1 },
       },
     }),
-    (e) => e.code === "EXECUTION_PLAN_SOURCE_MISMATCH",
+    (e) => e.code === "EXECUTION_PLAN_HASH_MISMATCH" || e.code === "EXECUTION_PLAN_SOURCE_MISMATCH",
   );
 });
 

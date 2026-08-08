@@ -111,10 +111,30 @@ export function assertResumeIntegrity({ boundNode, liveCapability }) {
     id: boundNode?.capabilityId,
     capabilityContractHash: boundNode?.capabilityContractHash || null,
     implementationClosureHash: boundNode?.implementationClosureHash || null,
+    capabilityContractHashAlgorithm: boundNode?.capabilityContractHashAlgorithm || null,
   };
-  return assertImplementationIntegrity({
+  const result = assertImplementationIntegrity({
     boundCapability,
     liveCapability,
     phase: "resume",
   });
+  const boundAlgo = boundNode?.capabilityContractHashAlgorithm || null;
+  const liveAlgo = liveCapability?.capabilityContractHashAlgorithm || null;
+  if (Boolean(boundAlgo) !== Boolean(liveAlgo)) {
+    throw fail("IMPLEMENTATION_CONTRACT_CHANGED", "capabilityContractHashAlgorithm presence drift at resume", {
+      phase: "resume",
+      notSent: true,
+      boundAlgo,
+      liveAlgo,
+    });
+  }
+  if (boundAlgo && liveAlgo && boundAlgo !== liveAlgo) {
+    throw fail("IMPLEMENTATION_CONTRACT_CHANGED", "capabilityContractHashAlgorithm drift at resume", {
+      phase: "resume",
+      notSent: true,
+      boundAlgo,
+      liveAlgo,
+    });
+  }
+  return result;
 }

@@ -116,25 +116,36 @@ export function computeImplementationClosureFromFiles({ rootDir, paths }) {
   const entries = [];
   for (const raw of paths) {
     const posixPath = toPosixRepoPath(rootDir, raw);
-    const abs = resolve(rootDir, ...posixPath.split("/"));
-    let st;
-    try {
-      st = lstatSync(abs);
-    } catch (err) {
-      throw fail("IMPLEMENTATION_CLOSURE_MISSING", `missing runtime dependency: ${posixPath}`, {
-        path: posixPath,
-        cause: err?.code || String(err),
-      });
+    // Walk every path segment; reject parent-directory symlinks as well as leaf links.
+    const segments = posixPath.split("/").filter(Boolean);
+    let cursor = resolve(rootDir);
+    for (let i = 0; i < segments.length; i += 1) {
+      cursor = resolve(cursor, segments[i]);
+      let st;
+      try {
+        st = lstatSync(cursor);
+      } catch (err) {
+        throw fail("IMPLEMENTATION_CLOSURE_MISSING", `missing runtime dependency: ${posixPath}`, {
+          path: posixPath,
+          cause: err?.code || String(err),
+        });
+      }
+      if (st.isSymbolicLink()) {
+        throw fail("IMPLEMENTATION_CLOSURE_SYMLINK", `symlink not allowed in closure path: ${segments.slice(0, i + 1).join("/")}`, {
+          path: posixPath,
+          segment: segments.slice(0, i + 1).join("/"),
+        });
+      }
+      if (i < segments.length - 1 && !st.isDirectory()) {
+        throw fail("IMPLEMENTATION_CLOSURE_NOT_FILE", `path segment is not a directory: ${segments.slice(0, i + 1).join("/")}`, {
+          path: posixPath,
+        });
+      }
+      if (i === segments.length - 1 && !st.isFile()) {
+        throw fail("IMPLEMENTATION_CLOSURE_NOT_FILE", `not a file: ${posixPath}`, { path: posixPath });
+      }
     }
-    // PR2: fail closed on symlinks — never follow out-of-repo targets into the TCB.
-    if (st.isSymbolicLink()) {
-      throw fail("IMPLEMENTATION_CLOSURE_SYMLINK", `symlink not allowed in closure: ${posixPath}`, {
-        path: posixPath,
-      });
-    }
-    if (!st.isFile()) {
-      throw fail("IMPLEMENTATION_CLOSURE_NOT_FILE", `not a file: ${posixPath}`, { path: posixPath });
-    }
+    const abs = resolve(rootDir, ...segments);
     entries.push({ path: posixPath, sha256: hashFileContent(readFileSync(abs)) });
   }
   const document = buildImplementationClosureDocument(entries);

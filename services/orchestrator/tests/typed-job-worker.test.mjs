@@ -26,6 +26,7 @@ function assignment({ acceptance, expectedApp } = {}) {
     planHash: plan.planHash,
     node: plan.nodes[0],
     shard: plan.nodes[0].shards[0],
+    operationKey: `m2:run_worker_fixture:${plan.nodes[0].shards[0].shardKey}`,
     alias: "02",
     workerId: "worker-1",
     attemptIndex: 0,
@@ -54,11 +55,38 @@ function safeClient(client) {
       const defaults = {
         decision: "dispatchable",
         selectedDevice: { alias: input.placement.alias },
-        externalEffect: false,
-        approvalRequired: false,
         activeLease: false,
+        authorization: { decision: "allow", decisionId: "auth_fixture_preview" },
       };
-      return { route: { ...defaults, ...(response?.route || {}), selectedDevice: response?.route?.selectedDevice || defaults.selectedDevice } };
+      return {
+        route: {
+          ...defaults,
+          ...(response?.route || {}),
+          selectedDevice: response?.route?.selectedDevice || defaults.selectedDevice,
+          authorization: Object.prototype.hasOwnProperty.call(response?.route || {}, "authorization")
+            ? response.route.authorization
+            : defaults.authorization,
+        },
+      };
+    },
+    async submitJob(input) {
+      const response = client.submitJob ? await client.submitJob(input) : { job: { jobId: "job_default", status: "succeeded" } };
+      const job = response?.job || response;
+      if (job && !job.authorization) {
+        job.authorization = { decision: "allow", decisionId: "auth_job_fixture" };
+      }
+      if (job && !job.operationKey && input?.idempotencyKey) {
+        job.operationKey = input.idempotencyKey;
+      }
+      return response?.job ? response : { job };
+    },
+    async getJob(jobId) {
+      const response = client.getJob ? await client.getJob(jobId) : { job: { jobId, status: "succeeded" } };
+      const job = response?.job || response;
+      if (job && !job.authorization) {
+        job.authorization = { decision: "allow", decisionId: "auth_job_fixture" };
+      }
+      return response?.job ? response : { job };
     },
   };
 }
@@ -67,7 +95,17 @@ test("typed-job worker routes, submits, polls and business-validates", async () 
   const calls = [];
   const client = {
     async routePlan(input) { calls.push(["route", input]); return { route: { alias: "02" } }; },
-    async submitJob(input) { calls.push(["submit", input]); return { job: { jobId: "job_fixture", status: "queued" } }; },
+    async submitJob(input) {
+      calls.push(["submit", input]);
+      return {
+        job: {
+          jobId: "job_fixture",
+          status: "queued",
+          authorization: { decision: "allow", decisionId: "auth_job_fixture" },
+          operationKey: input.idempotencyKey,
+        },
+      };
+    },
     async getJob(jobId) {
       calls.push(["status", jobId]);
       return {
@@ -75,6 +113,8 @@ test("typed-job worker routes, submits, polls and business-validates", async () 
           jobId,
           runId: "run_leaf_fixture",
           status: "succeeded",
+          authorization: { decision: "allow", decisionId: "auth_job_fixture" },
+          operationKey: `m2:run_worker_fixture:${assignment().shard.shardKey}`,
           verification: { ok: true },
           restoration: { ok: true },
           output: { packageName: "com.xingin.xhs", items: [{ postIdentity: "p1", title: "title", author: "author" }] },
@@ -83,12 +123,14 @@ test("typed-job worker routes, submits, polls and business-validates", async () 
     },
   };
   const worker = new TypedJobWorker({ client: safeClient(client), actorId: "fixture", pollMs: 0 });
-  const receipt = await worker.execute(assignment({ acceptance: { minItems: 1, requiredFields: ["postIdentity", "title", "author"] } }));
+  const next = assignment({ acceptance: { minItems: 1, requiredFields: ["postIdentity", "title", "author"] } });
+  const receipt = await worker.execute(next);
   assert.equal(receipt.technicalStatus, "succeeded");
   assert.equal(receipt.businessStatus, "accepted");
   assert.equal(receipt.alias, "02");
   assert.equal(calls[0][1].placement.alias, "02");
-  assert.match(calls[1][1].idempotencyKey, /^m2:run_worker_fixture:/);
+  assert.equal(calls[1][1].idempotencyKey, next.operationKey);
+  assert.equal(calls[1][1].idempotencyKey.includes(":a"), false);
 });
 
 test("technical success with wrong app is a business rejection", async () => {
@@ -171,7 +213,7 @@ test("live capability gate proves catalog presence and appId; does not re-derive
   assert.equal(receipt.error, null);
 });
 
-test("missing live catalog and unsafe placement both stop before submit", async () => {
+test("missing live catalog and missing/blocked authorization stop before submit", async () => {
   let submitCalls = 0;
   const missingCatalog = new TypedJobWorker({
     client: {
@@ -184,21 +226,44 @@ test("missing live catalog and unsafe placement both stop before submit", async 
   assert.equal(noCatalogReceipt.error.code, "CAPABILITY_NOT_PROVEN");
   assert.equal(submitCalls, 0);
 
-  const unsafeRoute = new TypedJobWorker({
+  const missingAuth = new TypedJobWorker({
     client: safeClient({
       async routePlan(input) {
-        return { route: {
-          decision: "blocked",
-          selectedDevice: { alias: input.placement.alias },
-          activeLease: false,
-        } };
+        return {
+          route: {
+            decision: "dispatchable",
+            selectedDevice: { alias: input.placement.alias },
+            activeLease: false,
+            authorization: null,
+          },
+        };
       },
       async submitJob() { submitCalls += 1; return {}; },
     }),
     actorId: "fixture",
   });
-  const unsafeRouteReceipt = await unsafeRoute.execute(assignment());
-  assert.equal(unsafeRouteReceipt.error.code, "ROUTE_POLICY_MISMATCH");
+  const missingAuthReceipt = await missingAuth.execute(assignment());
+  assert.equal(missingAuthReceipt.error.code, "ROUTE_AUTHORIZATION_MISSING");
+  assert.equal(submitCalls, 0);
+
+  const blockedAuth = new TypedJobWorker({
+    client: safeClient({
+      async routePlan(input) {
+        return {
+          route: {
+            decision: "dispatchable",
+            selectedDevice: { alias: input.placement.alias },
+            activeLease: false,
+            authorization: { decision: "block", decisionId: "auth_blocked" },
+          },
+        };
+      },
+      async submitJob() { submitCalls += 1; return {}; },
+    }),
+    actorId: "fixture",
+  });
+  const blockedReceipt = await blockedAuth.execute(assignment());
+  assert.equal(blockedReceipt.error.code, "ROUTE_POLICY_MISMATCH");
   assert.equal(submitCalls, 0);
 });
 
@@ -278,7 +343,7 @@ test("resume without a bound job reuses the same attempt idempotency key and rev
   nextAssignment.resumeJobId = null;
   const receipt = await worker.execute(nextAssignment);
   assert.equal(routeCalls, 1);
-  assert.match(submittedKey, /:a0$/);
+  assert.equal(submittedKey, nextAssignment.operationKey);
   assert.equal(receipt.jobId, "job_recovered_by_key");
 });
 

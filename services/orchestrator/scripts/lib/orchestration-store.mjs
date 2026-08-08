@@ -12,7 +12,7 @@ import {
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
-import { isExecutionPlan } from "./task-plan-capability-binding.mjs";
+import { assertExecutionPlan, isExecutionPlan } from "./task-plan-capability-binding.mjs";
 
 function safeSegment(value, label) {
   const text = String(value || "");
@@ -60,9 +60,7 @@ export function buildRunManifest({
   if (!isExecutionPlan(executionPlan)) {
     throw codeError("EXECUTION_PLAN_REQUIRED", "buildRunManifest requires a bound ExecutionPlan");
   }
-  if (executionPlan.sourcePlanHash !== plan.planHash) {
-    throw codeError("EXECUTION_PLAN_SOURCE_MISMATCH", "executionPlan.sourcePlanHash must equal plan.planHash");
-  }
+  assertExecutionPlan(executionPlan, plan);
   const workUnits = [];
   for (const node of plan.nodes || []) {
     const bound = executionPlan.nodes?.find((n) => n.nodeId === node.nodeId) || null;
