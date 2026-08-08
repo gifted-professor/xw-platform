@@ -52,7 +52,10 @@ git diff --check → LF warning only on unrelated plan md
 4. concurrent observer singleflight — 需对照是否 flaky
 5. repair filesystem/Git verifiers — 需对照 main
 
-**合并门：当前全量回归未绿，暂不批准 merge。**
+**合并门（2026-08-08 降门）：** 不再要求 Windows 全量 0 fail。  
+**通过条件：** PR1 语义相关失败清零（见 `2026-08-08-foundation-pr1-merge-gate.md`）。  
+main 同债 ~31（routing）+ 环境 flaky（registry）不挡 merge。  
+顺序仍：routing #40 → registry #3；中间禁止部署 / 切 pilot。
 
 ## Invariant 对照（PR1 声称范围）
 

@@ -232,5 +232,5 @@ export function copyExplorerEvidence(result, relativeName, localOut) {
 
 /** Reset pinned identity between tests. */
 export function resetExplorerActionPin() {
-  pinnedIdentity = null;
+  pinnedIdentityBySessionId.clear();
 }
