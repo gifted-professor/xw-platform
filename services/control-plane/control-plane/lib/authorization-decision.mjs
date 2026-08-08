@@ -209,6 +209,12 @@ function makeDecision({
       commitBoundary: effect.commitBoundary,
     },
     capabilityContractHash: capability.capabilityContractHash || null,
+    implementationClosureHash: capability.implementation?.implementationClosureHash
+      || capability.implementationClosureHash
+      || null,
+    tcbManifestRef: capability.implementation?.tcbManifestRef
+      || capability.tcbManifestRef
+      || null,
     // compatibility projection (deprecated; not an authority)
     approvalRequired: decision === "wait_human_commit",
     externalEffect: isBusinessEffectClass(effect.class),

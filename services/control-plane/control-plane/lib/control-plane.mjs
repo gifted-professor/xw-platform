@@ -19,6 +19,7 @@ import { ProtectedHumanCommit } from "./protected-human-commit.mjs";
 import { guardFinancialCommit } from "./financial-commit-classifier.mjs";
 import { acquireTransportLock as defaultAcquireTransportLock } from "./xiaowei-transport.mjs";
 import { policyModeForRequest } from "./nonpayment-autonomy-policy.mjs";
+import { recheckImplementationIntegrity } from "./runtime-integrity.mjs";
 import { buildStallVerdictFromEvidenceDir } from "../../scripts/lib/stall-verdict.mjs";
 import { returnDeviceHome, shouldReturnHomeAfterJob } from "./return-home.mjs";
 
@@ -2067,6 +2068,23 @@ export class ControlPlane {
     try {
       for (const job of this.state.nextQueuedJobs()) {
         if (this.activeJobs.has(job.deviceId)) continue;
+
+        // INV-10 / RI-04: recheck bound vs live implementation before lease or Adapter I/O.
+        const liveCapability = this.capabilities.get(job.capability?.id || job.capabilityId);
+        const integrity = recheckImplementationIntegrity({
+          boundCapability: job.capability,
+          liveCapability,
+          phase: "dispatch",
+        });
+        if (!integrity.ok) {
+          this.state.transitionJob(job.jobId, "failed", {
+            errorCode: "IMPLEMENTATION_CONTRACT_CHANGED",
+            result: { notSent: true, integrity },
+            payload: { notSent: true, phase: "dispatch" },
+          });
+          continue;
+        }
+
         let lease;
         try {
           lease = this.state.acquireLease({
