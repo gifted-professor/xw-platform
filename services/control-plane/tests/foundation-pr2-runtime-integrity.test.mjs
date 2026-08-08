@@ -97,3 +97,22 @@ test("RI-04: legacy jobs without closure still match when contract hashes agree"
   assert.equal(result.ok, true);
   assert.equal(result.legacy, true);
 });
+
+test("RI-04: asymmetric null→present closure fails closed (catalog gained TCB after bind)", () => {
+  const bound = attachNormalizedEffect(baseCap());
+  const live = attachNormalizedEffect(baseCap({
+    implementation: {
+      adapter: "test",
+      action: "noop",
+      implementationClosureHash: "e".repeat(64),
+    },
+  }));
+  const result = recheckImplementationIntegrity({
+    boundCapability: bound,
+    liveCapability: live,
+    phase: "dispatch",
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "IMPLEMENTATION_CONTRACT_CHANGED");
+  assert.equal(result.details.notSent, true);
+});

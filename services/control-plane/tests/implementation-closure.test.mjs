@@ -127,13 +127,55 @@ test("TCB manifest validates and verifies against root; drift fails IMPLEMENTATI
   }
 });
 
-test("TCB manifest rejects absolute/Windows paths in declaration", () => {
-  const bad = validateTcbManifest({
+test("TCB manifest rejects absolute/Windows paths and ../ segments; allows v1..0.mjs style names", () => {
+  const badAbs = validateTcbManifest({
     schemaId: "xhs.tcb.manifest.v1",
     schemaVersion: 1,
     manifestId: "bad",
     implementationClosureHash: "a".repeat(64),
     paths: ["C:\\Users\\Public\\xhs-routing-v1-1\\apps\\xianyu\\adapter.mjs"],
   });
-  assert.equal(bad.ok, false);
+  assert.equal(badAbs.ok, false);
+
+  const badDotDot = validateTcbManifest({
+    schemaId: "xhs.tcb.manifest.v1",
+    schemaVersion: 1,
+    manifestId: "bad",
+    implementationClosureHash: "a".repeat(64),
+    paths: ["apps/../secret.mjs"],
+  });
+  assert.equal(badDotDot.ok, false);
+
+  const okDotsInName = validateTcbManifest({
+    schemaId: "xhs.tcb.manifest.v1",
+    schemaVersion: 1,
+    manifestId: "ok",
+    implementationClosureHash: "a".repeat(64),
+    paths: ["apps/xianyu/v1..0.mjs"],
+  });
+  assert.equal(okDotsInName.ok, true);
+
+  const doc = buildImplementationClosureDocument([
+    { path: "apps/xianyu/v1..0.mjs", sha256: "a".repeat(64) },
+  ]);
+  assert.equal(doc.entries[0].path, "apps/xianyu/v1..0.mjs");
 });
+
+/** Golden vector shared with registry twin — must stay byte-identical across repos. */
+const GOLDEN_CLOSURE_HASH = "14b9231325de0d86433a871bf19a659fb2b6a2a15051d82e03adc9b1eb30fad6";
+
+test("RI-01 cross-repo golden: same fixture bytes yield pinned closure hash", () => {
+  const root = fixtureRoot();
+  try {
+    const { implementationClosureHash, document } = computeImplementationClosureFromFiles({
+      rootDir: root,
+      paths: ["apps/xianyu/adapter.mjs", "apps/xianyu/helper.mjs"],
+    });
+    assert.equal(implementationClosureHash, GOLDEN_CLOSURE_HASH);
+    assert.equal(document.entries[0].sha256, "4c2488e1d089991c07dcfb1398e4746e7cf669ed008e8726866675f1a6bec9b8");
+    assert.equal(document.entries[1].sha256, "979613b99cf4a596c5481e22bace9d140ef67e2e6b9fe1e7d989ca0f456837a1");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+

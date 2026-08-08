@@ -11,6 +11,7 @@ import {
   computeImplementationClosureFromFiles,
   computeImplementationClosureHash,
   buildImplementationClosureDocument,
+  isCanonicalRepoRelativePath,
 } from "./implementation-closure.mjs";
 
 export const TCB_MANIFEST_SCHEMA_ID = "xhs.tcb.manifest.v1";
@@ -34,8 +35,8 @@ export function validateTcbManifest(manifest) {
   if (!Array.isArray(manifest.paths) || manifest.paths.length === 0) errors.push("paths must be a non-empty array");
   else {
     for (const p of manifest.paths) {
-      if (typeof p !== "string" || !p || p.includes("\\") || p.startsWith("/") || p.includes("..")) {
-        errors.push(`path must be repo-relative POSIX without ..: ${p}`);
+      if (typeof p !== "string" || !isCanonicalRepoRelativePath(p)) {
+        errors.push(`path must be repo-relative POSIX without .. segments: ${p}`);
       }
     }
     if (new Set(manifest.paths).size !== manifest.paths.length) errors.push("paths must be unique");
