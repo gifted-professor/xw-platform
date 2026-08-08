@@ -15,6 +15,25 @@ test("repository capabilities use the unified E0-E4 manifest", () => {
   assert.equal(registry.listPublic().some((item) => Object.hasOwn(item, "implementation")), false);
 });
 
+test("Foundation: every live capability has explicit effect and contract hash", () => {
+  const registry = CapabilityRegistry.load(fileURLToPath(new URL("../apps", import.meta.url)));
+  for (const cap of registry.capabilities) {
+    assert.ok(cap.effect, `${cap.id} missing effect`);
+    assert.ok(cap.normalizedEffect?.class, `${cap.id} missing normalizedEffect`);
+    assert.equal(cap.normalizedEffect.legacyDerived, false, `${cap.id} should not legacy-derive`);
+    assert.match(cap.capabilityContractHash || "", /^[0-9a-f]{64}$/);
+    assert.ok(["public", "internal"].includes(cap.exposure || "public"));
+  }
+  const fullDry = registry.require("xianyu.publish.full_dry_run");
+  assert.equal(fullDry.normalizedEffect.class, "publish");
+  assert.equal(fullDry.normalizedEffect.phase, "prepare");
+  const comment = registry.require("xhs.comment.send");
+  assert.equal(comment.exposure, "internal");
+  assert.equal(comment.normalizedEffect.class, "social");
+  // internal capabilities must not appear in public catalog
+  assert.equal(registry.listPublic().some((c) => c.id === "xhs.comment.send"), false);
+});
+
 test("standing-grant collect is schema-bound and cannot enter the ordinary job lane", () => {
   const registry = CapabilityRegistry.load(fileURLToPath(new URL("../apps", import.meta.url)));
   const collect = registry.require("xhs.collect.standing_grant");

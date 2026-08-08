@@ -9,9 +9,18 @@
       "versionRange": "observed",
       "maturity": "E2",
       "risk": "R0",
-      "resources": ["device", "transport:xiaowei:22222"],
-      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
-      "outputSchema": { "type": "object" },
+      "resources": [
+        "device",
+        "transport:xiaowei:22222"
+      ],
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object"
+      },
       "preconditions": [
         "Douyin is installed on the device",
         "GatewayOperator lease is available via control-plane job"
@@ -26,14 +35,32 @@
       },
       "timeoutMs": 120000,
       "idempotency": "read_only",
-      "automationPolicy": { "mode": "automatic" },
-      "implementation": { "adapter": "douyin", "action": "snapshot" },
+      "automationPolicy": {
+        "mode": "automatic"
+      },
+      "implementation": {
+        "adapter": "douyin",
+        "action": "snapshot"
+      },
       "evidence": [
         "skills/douyin/SKILL.md",
         "skills/douyin/douyin-like/SKILL.md (v1.0 verified @01 dry-run path uses same launch+dump)",
         "skills/douyin/douyin-search/SKILL.md (v1.0 verified @01)"
       ],
-      "availability": "implemented"
+      "availability": "implemented",
+      "effect": {
+        "class": "none",
+        "phase": "na",
+        "commitBoundary": "automatic"
+      },
+      "exposure": "public",
+      "invocationPolicy": {
+        "allowedModes": [
+          "job",
+          "session"
+        ]
+      },
+      "lifecycle": "implemented"
     },
     {
       "schemaVersion": 1,
@@ -43,16 +70,27 @@
       "versionRange": "observed",
       "maturity": "E2",
       "risk": "R0",
-      "resources": ["device", "transport:xiaowei:22222"],
+      "resources": [
+        "device",
+        "transport:xiaowei:22222"
+      ],
       "inputSchema": {
         "type": "object",
         "properties": {
-          "keyword": { "type": "string", "minLength": 1, "maxLength": 40 }
+          "keyword": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 40
+          }
         },
-        "required": ["keyword"],
+        "required": [
+          "keyword"
+        ],
         "additionalProperties": false
       },
-      "outputSchema": { "type": "object" },
+      "outputSchema": {
+        "type": "object"
+      },
       "preconditions": [
         "Douyin is installed on the device",
         "search is explore-only: never opens a result card or pages deeper"
@@ -67,13 +105,31 @@
       },
       "timeoutMs": 120000,
       "idempotency": "replay_safe",
-      "automationPolicy": { "mode": "automatic" },
-      "implementation": { "adapter": "douyin", "action": "search" },
+      "automationPolicy": {
+        "mode": "automatic"
+      },
+      "implementation": {
+        "adapter": "douyin",
+        "action": "search"
+      },
       "evidence": [
         "skills/douyin/douyin-search/SKILL.md (v1.0 verified @01)",
         "tmp-know/ACCEPTANCE-DOUYIN-SEARCH.md"
       ],
-      "availability": "implemented"
+      "availability": "implemented",
+      "effect": {
+        "class": "none",
+        "phase": "na",
+        "commitBoundary": "automatic"
+      },
+      "exposure": "public",
+      "invocationPolicy": {
+        "allowedModes": [
+          "job",
+          "session"
+        ]
+      },
+      "lifecycle": "implemented"
     },
     {
       "schemaVersion": 1,
@@ -83,31 +139,65 @@
       "versionRange": "observed",
       "maturity": "E2",
       "risk": "R1",
-      "resources": ["device", "transport:xiaowei:22222"],
+      "resources": [
+        "device",
+        "transport:xiaowei:22222"
+      ],
       "inputSchema": {
         "type": "object",
         "properties": {
-          "keyword": { "type": "string", "minLength": 1, "maxLength": 40 }
+          "keyword": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 40
+          }
         },
-        "required": ["keyword"],
+        "required": [
+          "keyword"
+        ],
         "additionalProperties": false
       },
       "outputSchema": {
         "type": "object",
         "properties": {
-          "ok": { "type": "boolean" },
-          "text": { "type": "string" },
-          "url": { "type": "string" },
-          "copied": { "type": "boolean" },
-          "openedDetail": { "type": "boolean" },
-          "searchRestored": { "type": "boolean" },
-          "backHome": { "type": "boolean" },
-          "stoppedBeforeExternalShare": { "type": "boolean" },
-          "externalShareTriggered": { "type": "boolean" }
+          "ok": {
+            "type": "boolean"
+          },
+          "text": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "copied": {
+            "type": "boolean"
+          },
+          "openedDetail": {
+            "type": "boolean"
+          },
+          "searchRestored": {
+            "type": "boolean"
+          },
+          "backHome": {
+            "type": "boolean"
+          },
+          "stoppedBeforeExternalShare": {
+            "type": "boolean"
+          },
+          "externalShareTriggered": {
+            "type": "boolean"
+          }
         },
         "required": [
-          "ok", "text", "url", "copied", "openedDetail", "searchRestored", "backHome",
-          "stoppedBeforeExternalShare", "externalShareTriggered"
+          "ok",
+          "text",
+          "url",
+          "copied",
+          "openedDetail",
+          "searchRestored",
+          "backHome",
+          "stoppedBeforeExternalShare",
+          "externalShareTriggered"
         ],
         "additionalProperties": true
       },
@@ -126,14 +216,32 @@
       },
       "timeoutMs": 300000,
       "idempotency": "replay_safe",
-      "automationPolicy": { "mode": "automatic" },
-      "implementation": { "adapter": "douyin", "action": "share-link" },
+      "automationPolicy": {
+        "mode": "automatic"
+      },
+      "implementation": {
+        "adapter": "douyin",
+        "action": "share-link"
+      },
       "evidence": [
         "registry knowledge: explore-douyin-search-image-share-link-20260805",
         "tests/douyin-share-link.test.mjs"
       ],
       "availability": "implemented",
-      "description": "Search a keyword, open the first visible image result, and return its public Douyin short link without sharing externally."
+      "description": "Search a keyword, open the first visible image result, and return its public Douyin short link without sharing externally.",
+      "effect": {
+        "class": "reversible",
+        "phase": "na",
+        "commitBoundary": "automatic"
+      },
+      "exposure": "public",
+      "invocationPolicy": {
+        "allowedModes": [
+          "job",
+          "session"
+        ]
+      },
+      "lifecycle": "implemented"
     },
     {
       "schemaVersion": 1,
@@ -143,9 +251,18 @@
       "versionRange": "observed",
       "maturity": "E2",
       "risk": "R0",
-      "resources": ["device", "transport:xiaowei:22222"],
-      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
-      "outputSchema": { "type": "object" },
+      "resources": [
+        "device",
+        "transport:xiaowei:22222"
+      ],
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object"
+      },
       "preconditions": [
         "Douyin feed is reachable after launch",
         "dry-run only: locate like rail button, never tap"
@@ -154,16 +271,37 @@
         "mode": "state",
         "description": "like button located with likeState and locatedNotTapped=true"
       },
-      "restoration": { "required": false, "description": "no UI mutation; leaves Douyin on feed" },
+      "restoration": {
+        "required": false,
+        "description": "no UI mutation; leaves Douyin on feed"
+      },
       "timeoutMs": 90000,
       "idempotency": "replay_safe",
-      "automationPolicy": { "mode": "automatic" },
-      "implementation": { "adapter": "douyin", "action": "like-dry-run" },
+      "automationPolicy": {
+        "mode": "automatic"
+      },
+      "implementation": {
+        "adapter": "douyin",
+        "action": "like-dry-run"
+      },
       "evidence": [
         "skills/douyin/douyin-like/SKILL.md",
         "tmp-know/ACCEPTANCE-DOUYIN-LIKE.md"
       ],
-      "availability": "implemented"
+      "availability": "implemented",
+      "effect": {
+        "class": "none",
+        "phase": "na",
+        "commitBoundary": "automatic"
+      },
+      "exposure": "public",
+      "invocationPolicy": {
+        "allowedModes": [
+          "job",
+          "session"
+        ]
+      },
+      "lifecycle": "implemented"
     },
     {
       "schemaVersion": 1,
@@ -173,9 +311,18 @@
       "versionRange": "observed",
       "maturity": "E2",
       "risk": "R0",
-      "resources": ["device", "transport:xiaowei:22222"],
-      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
-      "outputSchema": { "type": "object" },
+      "resources": [
+        "device",
+        "transport:xiaowei:22222"
+      ],
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object"
+      },
       "preconditions": [
         "Douyin feed is reachable after launch",
         "dry-run only: locate collect rail button, never tap"
@@ -184,16 +331,37 @@
         "mode": "state",
         "description": "collect button located with collectState and locatedNotTapped=true"
       },
-      "restoration": { "required": false, "description": "no UI mutation; leaves Douyin on feed" },
+      "restoration": {
+        "required": false,
+        "description": "no UI mutation; leaves Douyin on feed"
+      },
       "timeoutMs": 90000,
       "idempotency": "replay_safe",
-      "automationPolicy": { "mode": "automatic" },
-      "implementation": { "adapter": "douyin", "action": "collect-dry-run" },
+      "automationPolicy": {
+        "mode": "automatic"
+      },
+      "implementation": {
+        "adapter": "douyin",
+        "action": "collect-dry-run"
+      },
       "evidence": [
         "skills/douyin/douyin-collect/SKILL.md",
         "tmp-know/ACCEPTANCE-DOUYIN-COLLECT.md"
       ],
-      "availability": "implemented"
+      "availability": "implemented",
+      "effect": {
+        "class": "none",
+        "phase": "na",
+        "commitBoundary": "automatic"
+      },
+      "exposure": "public",
+      "invocationPolicy": {
+        "allowedModes": [
+          "job",
+          "session"
+        ]
+      },
+      "lifecycle": "implemented"
     },
     {
       "schemaVersion": 1,
@@ -203,9 +371,18 @@
       "versionRange": "observed",
       "maturity": "E2",
       "risk": "R0",
-      "resources": ["device", "transport:xiaowei:22222"],
-      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
-      "outputSchema": { "type": "object" },
+      "resources": [
+        "device",
+        "transport:xiaowei:22222"
+      ],
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object"
+      },
       "preconditions": [
         "Douyin feed is reachable after launch",
         "dry-run only: locate follow rail button, never tap"
@@ -214,16 +391,37 @@
         "mode": "state",
         "description": "follow button located with followState and locatedNotTapped=true"
       },
-      "restoration": { "required": false, "description": "no UI mutation; leaves Douyin on feed" },
+      "restoration": {
+        "required": false,
+        "description": "no UI mutation; leaves Douyin on feed"
+      },
       "timeoutMs": 90000,
       "idempotency": "replay_safe",
-      "automationPolicy": { "mode": "automatic" },
-      "implementation": { "adapter": "douyin", "action": "follow-dry-run" },
+      "automationPolicy": {
+        "mode": "automatic"
+      },
+      "implementation": {
+        "adapter": "douyin",
+        "action": "follow-dry-run"
+      },
       "evidence": [
         "skills/douyin/douyin-follow/SKILL.md",
         "tmp-know/ACCEPTANCE-DOUYIN-COLLECT-FOLLOW.md"
       ],
-      "availability": "implemented"
+      "availability": "implemented",
+      "effect": {
+        "class": "none",
+        "phase": "na",
+        "commitBoundary": "automatic"
+      },
+      "exposure": "public",
+      "invocationPolicy": {
+        "allowedModes": [
+          "job",
+          "session"
+        ]
+      },
+      "lifecycle": "implemented"
     }
   ]
 }
