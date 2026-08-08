@@ -38,26 +38,47 @@ export function assertImplementationIntegrity({ boundCapability, liveCapability,
   const liveContract = contractOf(liveCapability);
   const boundClosure = closureOf(boundCapability);
   const liveClosure = closureOf(liveCapability);
+  const capabilityId = boundCapability.id || liveCapability.id || null;
 
+  // Contract presence must be symmetric (no fail-open when one side truncates metadata).
+  if (Boolean(boundContract) !== Boolean(liveContract)) {
+    throw fail("IMPLEMENTATION_CONTRACT_CHANGED", `capabilityContractHash presence drift at ${phase}`, {
+      phase,
+      notSent: true,
+      capabilityId,
+      boundContract,
+      liveContract,
+    });
+  }
   if (boundContract && liveContract && boundContract !== liveContract) {
     throw fail("IMPLEMENTATION_CONTRACT_CHANGED", `capabilityContractHash drift at ${phase}`, {
       phase,
       notSent: true,
-      capabilityId: boundCapability.id || liveCapability.id || null,
+      capabilityId,
       boundContract,
       liveContract,
     });
   }
 
+  // Closure presence must be symmetric; both absent → legacy skip.
   if (!boundClosure && !liveClosure) {
     return { ok: true, legacy: true };
+  }
+  if (Boolean(boundClosure) !== Boolean(liveClosure)) {
+    throw fail("IMPLEMENTATION_CONTRACT_CHANGED", `implementationClosureHash presence drift at ${phase}`, {
+      phase,
+      notSent: true,
+      capabilityId,
+      boundClosure,
+      liveClosure,
+    });
   }
 
   if (!implementationClosureMatches(boundClosure, liveClosure)) {
     throw fail("IMPLEMENTATION_CONTRACT_CHANGED", `implementationClosureHash drift at ${phase}`, {
       phase,
       notSent: true,
-      capabilityId: boundCapability.id || liveCapability.id || null,
+      capabilityId,
       boundClosure,
       liveClosure,
     });
@@ -90,10 +111,30 @@ export function assertResumeIntegrity({ boundNode, liveCapability }) {
     id: boundNode?.capabilityId,
     capabilityContractHash: boundNode?.capabilityContractHash || null,
     implementationClosureHash: boundNode?.implementationClosureHash || null,
+    capabilityContractHashAlgorithm: boundNode?.capabilityContractHashAlgorithm || null,
   };
-  return assertImplementationIntegrity({
+  const result = assertImplementationIntegrity({
     boundCapability,
     liveCapability,
     phase: "resume",
   });
+  const boundAlgo = boundNode?.capabilityContractHashAlgorithm || null;
+  const liveAlgo = liveCapability?.capabilityContractHashAlgorithm || null;
+  if (Boolean(boundAlgo) !== Boolean(liveAlgo)) {
+    throw fail("IMPLEMENTATION_CONTRACT_CHANGED", "capabilityContractHashAlgorithm presence drift at resume", {
+      phase: "resume",
+      notSent: true,
+      boundAlgo,
+      liveAlgo,
+    });
+  }
+  if (boundAlgo && liveAlgo && boundAlgo !== liveAlgo) {
+    throw fail("IMPLEMENTATION_CONTRACT_CHANGED", "capabilityContractHashAlgorithm drift at resume", {
+      phase: "resume",
+      notSent: true,
+      boundAlgo,
+      liveAlgo,
+    });
+  }
+  return result;
 }

@@ -1,6 +1,15 @@
 # xhs-registry 进度
 
-> 最后更新：2026-08-08 P1 L1–L4 完成：四机微信服务页余额只读 **4/4 accepted**（零支付 / 0 lease）
+> 最后更新：2026-08-08 Foundation PR2 **wiring closure** 源码补丁待 review（未部署）
+
+## 2026-08-08 Foundation PR2 wiring closure（post-merge hotfix）
+
+**问题**：PR2/PR3 已合入 main，但 Orchestrator 仍可裸跑 Raw TaskPlan、assignment 未带 `boundNode`、Worker 仍本地判权、Receipt v2 未接线、单边 hash 可 fail-open。
+
+**动作**：分支 `foundation/pr2-wiring-closure` 强制 ExecutionPlan、boundNode assignment、Worker 单裁判、v2 receipt + notSent null jobIds、presence 对称、symlink/路径规范化、algorithm 传播；fake CP E2E 覆盖 normal/drift/resume。
+
+**证据**：见 `docs/plans/2026-08-08-foundation-pr2-wiring-closure.md`。  
+**红线**：0 Windows deploy · 0 Pilot · 不进 PR4 直至本补丁 review 通过。
 
 ## 2026-08-08 P1 live canary L1–L4（非支付；人授权：不碰支付可不请示）
 

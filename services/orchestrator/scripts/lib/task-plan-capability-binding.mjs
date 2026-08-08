@@ -1,16 +1,105 @@
 /**
- * Raw TaskPlan → ExecutionPlan binder (Foundation PR1).
+ * Raw TaskPlan → ExecutionPlan binder (Foundation PR1/PR2).
  * Binds live capability contracts; does NOT authorize.
  * ExecutionPlan carries placement constraints only (no final deviceId).
  */
 
-import { createHash } from "node:crypto";
-import { canonicalize, canonicalJson, sha256, validateTaskPlanV2 } from "./task-plan-v2.mjs";
+import { sha256, validateTaskPlanV2 } from "./task-plan-v2.mjs";
+import { resolveCapabilityContractHashAlgorithm } from "./capability-contract-hash.mjs";
 
 export const EXECUTION_PLAN_SCHEMA_ID = "xhs.execution-plan.v2";
+export const BUSINESS_EFFECT_CLASSES = Object.freeze(["social", "publish", "payment", "delete"]);
 
-function planHash(value) {
-  return sha256(value);
+function codeError(code, message, details) {
+  return Object.assign(new Error(message), { code, details });
+}
+
+function hex64(value) {
+  return typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+}
+
+function isBusiness(cls) {
+  return BUSINESS_EFFECT_CLASSES.includes(cls);
+}
+
+export function isBusinessEffectPlan(executionPlan) {
+  return (executionPlan?.nodes || []).some((n) => n?.normalizedEffect && isBusiness(n.normalizedEffect.class));
+}
+
+/** Hash body excludes executionPlanHash (same preimage Binder uses). */
+export function computeExecutionPlanHash(executionPlan) {
+  if (!executionPlan || typeof executionPlan !== "object") {
+    throw codeError("EXECUTION_PLAN_INVALID", "executionPlan must be an object");
+  }
+  const {
+    executionPlanHash: _drop,
+    ...body
+  } = executionPlan;
+  return sha256(body);
+}
+
+export function isExecutionPlan(value) {
+  return Boolean(value && value.schemaId === EXECUTION_PLAN_SCHEMA_ID && value.executionPlanHash);
+}
+
+/**
+ * Strict ExecutionPlan gate: schema + canonical hash recompute + plan topology parity.
+ */
+export function assertExecutionPlan(executionPlan, plan = null) {
+  if (!isExecutionPlan(executionPlan)) {
+    throw codeError("EXECUTION_PLAN_REQUIRED", "bound ExecutionPlan is required");
+  }
+  if (executionPlan.schemaVersion !== 1) {
+    throw codeError("EXECUTION_PLAN_INVALID", "executionPlan.schemaVersion must be 1");
+  }
+  if (!Array.isArray(executionPlan.nodes) || executionPlan.nodes.length === 0) {
+    throw codeError("EXECUTION_PLAN_INVALID", "executionPlan.nodes required");
+  }
+  const nodeIds = executionPlan.nodes.map((n) => n?.nodeId);
+  if (nodeIds.some((id) => !id) || new Set(nodeIds).size !== nodeIds.length) {
+    throw codeError("EXECUTION_PLAN_INVALID", "executionPlan nodeId must be unique and present");
+  }
+  if (!executionPlan.constraints || typeof executionPlan.constraints !== "object") {
+    throw codeError("EXECUTION_PLAN_INVALID", "executionPlan.constraints required");
+  }
+  for (const node of executionPlan.nodes) {
+    if (node.capabilityContractHash != null && !hex64(node.capabilityContractHash)) {
+      throw codeError("EXECUTION_PLAN_INVALID", `bad capabilityContractHash on ${node.nodeId}`);
+    }
+    if (node.implementationClosureHash != null && !hex64(node.implementationClosureHash)) {
+      throw codeError("EXECUTION_PLAN_INVALID", `bad implementationClosureHash on ${node.nodeId}`);
+    }
+  }
+
+  const recomputed = computeExecutionPlanHash(executionPlan);
+  if (recomputed !== executionPlan.executionPlanHash) {
+    throw codeError("EXECUTION_PLAN_HASH_MISMATCH", "executionPlanHash does not match canonical content", {
+      expected: recomputed,
+      actual: executionPlan.executionPlanHash,
+    });
+  }
+
+  if (plan) {
+    if (executionPlan.sourcePlanHash !== plan.planHash) {
+      throw codeError("EXECUTION_PLAN_SOURCE_MISMATCH", "executionPlan.sourcePlanHash must equal plan.planHash");
+    }
+    const rawIds = (plan.nodes || []).map((n) => n.nodeId);
+    if (rawIds.length !== nodeIds.length || rawIds.some((id, i) => id !== nodeIds[i] && !nodeIds.includes(id))) {
+      const rawSet = new Set(rawIds);
+      const boundSet = new Set(nodeIds);
+      for (const id of rawSet) {
+        if (!boundSet.has(id)) throw codeError("EXECUTION_PLAN_NODE_MISSING", `ExecutionPlan missing node ${id}`);
+      }
+      for (const id of boundSet) {
+        if (!rawSet.has(id)) throw codeError("EXECUTION_PLAN_INVALID", `ExecutionPlan has extra node ${id}`);
+      }
+    }
+    if (rawIds.length !== nodeIds.length || ![...rawIds].every((id) => nodeIds.includes(id))) {
+      throw codeError("EXECUTION_PLAN_INVALID", "ExecutionPlan nodes must match Raw Plan node set exactly");
+    }
+  }
+
+  return executionPlan;
 }
 
 /**
@@ -34,23 +123,20 @@ export function bindTaskPlanToLiveCapabilities(rawPlan, liveCatalog) {
   for (const node of plan.nodes || []) {
     const executor = node.executor || {};
     if (executor.kind === "session_workflow") {
-      // Workflow runtime injection of actions/actionOverrides is banned (INV-07).
       const shardParams = (node.shards || []).map((s) => s.params || {});
       const injected = node.params?.actions || node.params?.actionOverrides
         || executor.actions || executor.actionOverrides || executor.primitive_steps
         || shardParams.some((p) => p.actions || p.actionOverrides || p.primitive_steps);
       if (injected) {
-        const err = new Error("WORKFLOW_CONTRACT_UNBOUND");
-        err.code = "WORKFLOW_CONTRACT_UNBOUND";
-        err.details = { nodeId: node.nodeId, reason: "runtime actions/actionOverrides/primitive_steps forbidden" };
-        throw err;
+        throw codeError("WORKFLOW_CONTRACT_UNBOUND", "runtime actions/actionOverrides/primitive_steps forbidden", {
+          nodeId: node.nodeId,
+        });
       }
       nodes.push({
         nodeId: node.nodeId,
         kind: "session_workflow",
         workflowId: executor.workflowId,
         placementConstraint: extractPlacementConstraint(node),
-        // effect/retry from raw only as assertion fields — not authority until workflow catalog bind (later)
         expectedEffectClass: executor.effectClass || null,
         expectedReplaySafety: executor.replaySafety || null,
       });
@@ -59,37 +145,21 @@ export function bindTaskPlanToLiveCapabilities(rawPlan, liveCatalog) {
 
     const capabilityId = executor.capabilityId;
     if (!capabilityId || !byId.has(capabilityId)) {
-      const err = new Error("NO_EXECUTOR_BINDING");
-      err.code = "NO_EXECUTOR_BINDING";
-      err.details = { nodeId: node.nodeId, capabilityId };
-      throw err;
+      throw codeError("NO_EXECUTOR_BINDING", "capability not in live catalog", { nodeId: node.nodeId, capabilityId });
     }
     const cap = byId.get(capabilityId);
     if (cap.runnable === false || cap.availability === "classification_required" || cap.lifecycle === "draft") {
-      const err = new Error("EFFECT_CLASSIFICATION_REQUIRED");
-      err.code = "EFFECT_CLASSIFICATION_REQUIRED";
-      err.details = { capabilityId };
-      throw err;
+      throw codeError("EFFECT_CLASSIFICATION_REQUIRED", "capability not runnable", { capabilityId });
     }
 
     const liveEffect = cap.normalizedEffect || null;
     const liveRetry = mapIdempotencyToRetry(cap.idempotency);
-    // Raw self-reported effect/retry are assertions only
-    if (executor.effectClass && liveEffect) {
-      const rawIsBusiness = executor.effectClass === "external_effect";
-      const liveIsBusiness = liveEffect.class && ["social", "publish", "payment", "delete"].includes(liveEffect.class);
-      if (rawIsBusiness !== liveIsBusiness && executor.effectClass === "none" && liveIsBusiness) {
-        const err = new Error("PLAN_CONTRACT_MISMATCH");
-        err.code = "PLAN_CONTRACT_MISMATCH";
-        err.details = { capabilityId, raw: executor.effectClass, live: liveEffect };
-        throw err;
-      }
-    }
-    if (executor.replaySafety && liveRetry && executor.replaySafety !== liveRetry && executor.replaySafety === "read_only" && liveRetry !== "read_only") {
-      const err = new Error("PLAN_CONTRACT_MISMATCH");
-      err.code = "PLAN_CONTRACT_MISMATCH";
-      err.details = { capabilityId, field: "replaySafety", raw: executor.replaySafety, live: liveRetry };
-      throw err;
+    assertRawEffectMatchesLive(executor, liveEffect, capabilityId);
+    assertRawRetryMatchesLive(executor, liveRetry, capabilityId);
+
+    const placementConstraint = extractPlacementConstraint(node);
+    if (liveEffect && isBusiness(liveEffect.class)) {
+      assertBusinessShardsShareFixedAlias(node, placementConstraint);
     }
 
     nodes.push({
@@ -98,35 +168,84 @@ export function bindTaskPlanToLiveCapabilities(rawPlan, liveCatalog) {
       capabilityId,
       appId: cap.appId || executor.appId || null,
       capabilityContractHash: cap.capabilityContractHash || null,
+      capabilityContractHashAlgorithm: resolveCapabilityContractHashAlgorithm(cap),
       implementationClosureHash: cap.implementationClosureHash
         || cap.implementation?.implementationClosureHash
         || null,
       tcbManifestRef: cap.tcbManifestRef || cap.implementation?.tcbManifestRef || null,
       normalizedEffect: liveEffect,
       retryClass: liveRetry,
-      placementConstraint: extractPlacementConstraint(node),
-      // ExecutionPlan does NOT include final deviceId
+      placementConstraint,
     });
   }
 
-  const executionPlan = {
+  const hasBusiness = nodes.some((n) => n.normalizedEffect && isBusiness(n.normalizedEffect.class));
+  const rawMaxWorkers = plan.execution?.maxWorkers ?? plan.maxWorkers ?? 4;
+  const rawMaxAttempts = plan.execution?.maxAttemptsPerShard ?? plan.maxAttemptsPerShard ?? 2;
+  const rawAllowReassign = plan.execution?.allowReassign;
+  const constraints = hasBusiness
+    ? { maxWorkers: 1, allowReassign: false, maxAttemptsPerShard: 1 }
+    : {
+        maxWorkers: rawMaxWorkers,
+        allowReassign: typeof rawAllowReassign === "boolean" ? rawAllowReassign : true,
+        maxAttemptsPerShard: rawMaxAttempts,
+      };
+
+  const executionPlanBody = {
     schemaId: EXECUTION_PLAN_SCHEMA_ID,
     schemaVersion: 1,
     sourcePlanHash: plan.planHash || null,
     nodes,
-    constraints: {
-      // business effect plans must use single worker — enforced when any business node present
-      maxWorkers: nodes.some((n) => n.normalizedEffect && isBusiness(n.normalizedEffect.class)) ? 1 : (plan.maxWorkers || 4),
-      allowReassign: !nodes.some((n) => n.normalizedEffect && isBusiness(n.normalizedEffect.class)),
-      maxAttemptsPerShard: nodes.some((n) => n.normalizedEffect && isBusiness(n.normalizedEffect.class)) ? 1 : (plan.maxAttemptsPerShard || 2),
-    },
+    constraints,
   };
-  const executionPlanHash = planHash(executionPlan);
+  const executionPlanHash = computeExecutionPlanHash(executionPlanBody);
   return {
-    executionPlan: { ...executionPlan, executionPlanHash },
+    executionPlan: { ...executionPlanBody, executionPlanHash },
     executionPlanHash,
     warnings,
   };
+}
+
+function assertRawEffectMatchesLive(executor, liveEffect, capabilityId) {
+  if (!executor.effectClass || !liveEffect) return;
+  const rawIsBusiness = executor.effectClass === "external_effect";
+  const liveIsBusiness = liveEffect.class && isBusiness(liveEffect.class);
+  if (rawIsBusiness !== liveIsBusiness) {
+    throw codeError("PLAN_CONTRACT_MISMATCH", "raw effectClass assertion mismatches live normalizedEffect", {
+      capabilityId,
+      raw: executor.effectClass,
+      live: liveEffect,
+    });
+  }
+}
+
+function assertRawRetryMatchesLive(executor, liveRetry, capabilityId) {
+  if (!executor.replaySafety || !liveRetry) return;
+  if (executor.replaySafety !== liveRetry) {
+    throw codeError("PLAN_CONTRACT_MISMATCH", "raw replaySafety assertion mismatches live retryClass", {
+      capabilityId,
+      field: "replaySafety",
+      raw: executor.replaySafety,
+      live: liveRetry,
+    });
+  }
+}
+
+function assertBusinessShardsShareFixedAlias(node, placementConstraint) {
+  const aliases = (node.shards || []).map((shard) => shard.placement?.alias || null);
+  const fixed = placementConstraint?.alias || null;
+  if (!fixed) {
+    throw codeError("EXECUTION_PLAN_PLACEMENT_MISMATCH", "business effect node requires fixed alias", {
+      nodeId: node.nodeId,
+    });
+  }
+  if (aliases.some((alias) => alias !== fixed)) {
+    throw codeError("EXECUTION_PLAN_PLACEMENT_MISMATCH", "business effect shards must share one fixed alias", {
+      nodeId: node.nodeId,
+      expected: fixed,
+      aliases,
+    });
+  }
 }
 
 function catalogToMap(liveCatalog) {
@@ -140,7 +259,6 @@ function catalogToMap(liveCatalog) {
 }
 
 function extractPlacementConstraint(node) {
-  // Prefer first shard placement (TaskPlanV2 stores placement on shards)
   const shardPlacement = node.shards?.[0]?.placement || {};
   const placement = node.placement || shardPlacement || {};
   if (placement.alias) return { alias: String(placement.alias) };
@@ -155,12 +273,4 @@ function mapIdempotencyToRetry(idem) {
   if (idem === "replay_safe") return "replay_safe";
   if (idem === "ambiguous_on_timeout") return "ambiguous_on_timeout";
   return "external_effect";
-}
-
-function isBusiness(cls) {
-  return ["social", "publish", "payment", "delete"].includes(cls);
-}
-
-export function isExecutionPlan(value) {
-  return Boolean(value && value.schemaId === EXECUTION_PLAN_SCHEMA_ID && value.executionPlanHash);
 }

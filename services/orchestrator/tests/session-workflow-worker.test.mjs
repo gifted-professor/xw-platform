@@ -14,6 +14,7 @@ import { createTaskPlanV2 } from "../scripts/lib/task-plan-v2.mjs";
 import { compileWorkflowNodeAuthoring, getWorkflow } from "../scripts/lib/workflow-catalog.mjs";
 import { OrchestrationStore } from "../scripts/lib/orchestration-store.mjs";
 import { runTaskOrchestrator } from "../scripts/lib/task-orchestrator.mjs";
+import { bindFixturePlan } from "./helpers/bind-fixture-plan.mjs";
 import { resetExplorerSessionActionPinsForTests } from "../ops/_explore-session-action.mjs";
 import {
   assertExplorerSessionIdentity,
@@ -280,6 +281,7 @@ test("four concurrent session workers use distinct sessions without identity pin
     const result = await runTaskOrchestrator({
       taskRunId: "run_sw_four",
       plan,
+      ...bindFixturePlan(plan),
       fleetProvider: () => ["01", "02", "03", "04"].map((alias) => ({
         alias,
         online: true,

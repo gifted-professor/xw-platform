@@ -12,11 +12,16 @@ import {
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
+import { assertExecutionPlan, isExecutionPlan } from "./task-plan-capability-binding.mjs";
 
 function safeSegment(value, label) {
   const text = String(value || "");
   if (!/^[a-zA-Z0-9._-]+$/.test(text)) throw new Error(`${label} has unsafe path characters`);
   return text;
+}
+
+function codeError(code, message) {
+  return Object.assign(new Error(message), { code });
 }
 
 /** write temp → fsync → atomic rename */
@@ -37,7 +42,9 @@ function atomicJson(path, value) {
 const BUSINESS_EFFECT_CLASSES = new Set(["social", "publish", "payment", "delete"]);
 
 /**
- * Build Foundation run-manifest.v2 work units from raw plan + optional ExecutionPlan.
+ * Build Foundation run-manifest.v2 work units from raw plan + ExecutionPlan.
+ * New runs MUST supply a bound ExecutionPlan (INV-07). Durable readers of old
+ * manifests remain separate — this factory does not create unbound runs.
  * operationKey is stable: m2:{taskRunId}:{shardKey} (no attemptIndex).
  */
 export function buildRunManifest({
@@ -50,9 +57,16 @@ export function buildRunManifest({
 } = {}) {
   if (!taskRunId) throw new Error("taskRunId is required");
   if (!plan?.planHash) throw new Error("plan.planHash is required");
+  if (!isExecutionPlan(executionPlan)) {
+    throw codeError("EXECUTION_PLAN_REQUIRED", "buildRunManifest requires a bound ExecutionPlan");
+  }
+  assertExecutionPlan(executionPlan, plan);
   const workUnits = [];
   for (const node of plan.nodes || []) {
-    const bound = executionPlan?.nodes?.find((n) => n.nodeId === node.nodeId) || null;
+    const bound = executionPlan.nodes?.find((n) => n.nodeId === node.nodeId) || null;
+    if (!bound) {
+      throw codeError("EXECUTION_PLAN_NODE_MISSING", `ExecutionPlan missing node ${node.nodeId}`);
+    }
     for (const shard of node.shards || []) {
       const alias = shard.placement?.alias || bound?.placementConstraint?.alias || null;
       workUnits.push({
@@ -63,10 +77,11 @@ export function buildRunManifest({
         alias,
         // final deviceId is resolved at preflight/run assignment time; null here is intentional
         deviceId: null,
-        capabilityId: node.executor?.capabilityId || null,
-        capabilityContractHash: bound?.capabilityContractHash || null,
-        implementationClosureHash: bound?.implementationClosureHash || null,
-        normalizedEffect: bound?.normalizedEffect || null,
+        capabilityId: node.executor?.capabilityId || bound.capabilityId || null,
+        capabilityContractHash: bound.capabilityContractHash || null,
+        capabilityContractHashAlgorithm: bound.capabilityContractHashAlgorithm || null,
+        implementationClosureHash: bound.implementationClosureHash || null,
+        normalizedEffect: bound.normalizedEffect || null,
       });
     }
   }
@@ -75,7 +90,7 @@ export function buildRunManifest({
     schemaVersion: 1,
     taskRunId,
     planHash: plan.planHash,
-    executionPlanHash: executionPlanHash || executionPlan?.executionPlanHash || null,
+    executionPlanHash: executionPlanHash || executionPlan.executionPlanHash,
     runtimeReleaseId,
     runtimeTreeHash,
     workUnits,

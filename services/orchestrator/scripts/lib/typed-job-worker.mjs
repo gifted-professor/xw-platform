@@ -1,5 +1,6 @@
-import { createWorkReceipt } from "./work-receipt.mjs";
+import { createTerminalWorkReceipt, isIntegrityBoundAssignment } from "./work-receipt.mjs";
 import { assertResumeIntegrity, RESUME_POLICY } from "./runtime-integrity.mjs";
+import { CAPABILITY_CONTRACT_HASH_ALGORITHM_LEGACY } from "./capability-contract-hash.mjs";
 
 const TERMINAL = new Set(["succeeded", "failed", "ambiguous", "recovery_required", "cancelled", "waiting_approval"]);
 
@@ -228,13 +229,12 @@ export class TypedJobWorker {
     }
     const response = await this.client.getCapabilities();
     const capability = (response?.capabilities || response?.data?.capabilities || []).find((item) => item.id === executor.capabilityId);
-    if (!capability) throw Object.assign(new Error(`capability ${executor.capabilityId} is not in the live catalog`), { code: "CAPABILITY_NOT_PROVEN" });
-    const safe = capability.availability === "implemented"
-      && ["read_only", "replay_safe"].includes(capability.idempotency)
-      && capability.automationPolicy?.mode === "automatic"
-      && !["R2", "R3"].includes(capability.risk);
-    if (!safe || capability.appId !== executor.appId) {
-      throw Object.assign(new Error(`capability ${executor.capabilityId} is not P0-safe or app binding changed`), { code: "POLICY_MISMATCH" });
+    if (!capability) {
+      throw Object.assign(new Error(`capability ${executor.capabilityId} is not in the live catalog`), { code: "CAPABILITY_NOT_PROVEN" });
+    }
+    // Control Plane is the sole authorizer. Worker only proves identity + app binding.
+    if (capability.appId !== executor.appId) {
+      throw Object.assign(new Error(`capability ${executor.capabilityId} app binding changed`), { code: "CAPABILITY_MISMATCH" });
     }
     return capability;
   }
@@ -243,36 +243,133 @@ export class TypedJobWorker {
     const route = routeResponse?.route || routeResponse?.data?.route;
     if (!route) throw Object.assign(new Error("route plan did not return a route"), { code: "ROUTE_NOT_PROVEN" });
     const selectedAlias = route.selectedDevice?.alias || route.alias || null;
-    const safe = route.decision === "dispatchable"
+    const auth = route.authorization;
+    if (!auth || auth.decision == null) {
+      throw Object.assign(new Error("route authorization decision missing"), { code: "ROUTE_AUTHORIZATION_MISSING" });
+    }
+    if (auth.decision !== "allow") {
+      throw Object.assign(new Error(`route authorization is ${auth.decision}, expected allow`), { code: "ROUTE_POLICY_MISMATCH" });
+    }
+    if (typeof auth.decisionId !== "string" || auth.decisionId.length === 0) {
+      throw Object.assign(new Error("route authorization.decisionId missing"), { code: "ROUTE_AUTHORIZATION_MISSING" });
+    }
+    const placementDecision = route.placement?.decision || route.decision;
+    const safe = placementDecision === "dispatchable"
       && selectedAlias === assignment.alias
-      && route.externalEffect === false
-      && route.approvalRequired === false
       && route.activeLease === false;
     if (!safe) {
-      throw Object.assign(new Error(`route plan is not P0-dispatchable for alias ${assignment.alias}`), { code: "ROUTE_POLICY_MISMATCH" });
+      throw Object.assign(new Error(`route placement is not dispatchable for alias ${assignment.alias}`), { code: "ROUTE_POLICY_MISMATCH" });
     }
     return route;
+  }
+
+  receipt(input) {
+    return createTerminalWorkReceipt(input);
+  }
+
+  boundIntegrity(assignment) {
+    const bound = assignment.boundNode || {};
+    return {
+      capabilityId: assignment.node.executor.capabilityId,
+      capabilityContractHash: bound.capabilityContractHash
+        ?? assignment.capabilityContractHash
+        ?? null,
+      implementationClosureHash: bound.implementationClosureHash
+        ?? assignment.implementationClosureHash
+        ?? null,
+      capabilityContractHashAlgorithm: bound.capabilityContractHashAlgorithm
+        ?? assignment.capabilityContractHashAlgorithm
+        ?? (bound.capabilityContractHash ? CAPABILITY_CONTRACT_HASH_ALGORITHM_LEGACY : null),
+      retryClass: bound.retryClass || null,
+      normalizedEffect: bound.normalizedEffect || null,
+    };
+  }
+
+  retryClassOf(assignment) {
+    if (isIntegrityBoundAssignment(assignment)) {
+      return assignment.boundNode?.retryClass || null;
+    }
+    return assignment.node?.executor?.replaySafety || null;
+  }
+
+  isReplaySafe(assignment) {
+    return ["read_only", "replay_safe"].includes(this.retryClassOf(assignment));
+  }
+
+  finalAuthorizationDecisionId(job, previewDecisionId = null) {
+    const finalId = job?.authorization?.decisionId || null;
+    if (typeof finalId === "string" && finalId.length > 0) return finalId;
+    // Pre-submit / notSent paths have no Job AuthorizationDecision.
+    if (!job?.jobId && !job?.id) return null;
+    return previewDecisionId || null;
+  }
+
+  assertJobIntegritySnapshot(job, assignment, bound) {
+    if (!isIntegrityBoundAssignment(assignment)) return;
+    const auth = job.authorization || {};
+    if (auth.decision && auth.decision !== "allow") {
+      throw Object.assign(new Error("job authorization decision is not allow"), { code: "ROUTE_POLICY_MISMATCH" });
+    }
+    if (auth.decisionId != null && (typeof auth.decisionId !== "string" || !auth.decisionId)) {
+      throw Object.assign(new Error("job authorization.decisionId invalid"), { code: "ROUTE_AUTHORIZATION_MISSING" });
+    }
+    const jobContract = job.capabilityContractHash || job.capability?.capabilityContractHash || null;
+    const jobClosure = job.implementationClosureHash
+      || job.capability?.implementationClosureHash
+      || job.capability?.implementation?.implementationClosureHash
+      || null;
+    const jobAlgo = job.capabilityContractHashAlgorithm
+      || job.capability?.capabilityContractHashAlgorithm
+      || null;
+    if (bound.capabilityContractHash && jobContract && jobContract !== bound.capabilityContractHash) {
+      throw Object.assign(new Error("job capabilityContractHash drifted from boundNode"), {
+        code: "IMPLEMENTATION_CONTRACT_CHANGED",
+        details: { notSent: false, phase: "post_submit" },
+      });
+    }
+    if (bound.implementationClosureHash && jobClosure && jobClosure !== bound.implementationClosureHash) {
+      throw Object.assign(new Error("job implementationClosureHash drifted from boundNode"), {
+        code: "IMPLEMENTATION_CONTRACT_CHANGED",
+        details: { notSent: false, phase: "post_submit" },
+      });
+    }
+    if (bound.capabilityContractHashAlgorithm && jobAlgo
+      && bound.capabilityContractHashAlgorithm !== jobAlgo) {
+      throw Object.assign(new Error("job capabilityContractHashAlgorithm drifted from boundNode"), {
+        code: "IMPLEMENTATION_CONTRACT_CHANGED",
+        details: { notSent: false, phase: "post_submit" },
+      });
+    }
+    const jobOp = job.operationKey || job.idempotencyKey || null;
+    if (jobOp && assignment.operationKey && jobOp !== assignment.operationKey) {
+      throw Object.assign(new Error("job operationKey does not match assignment.operationKey"), {
+        code: "OPERATION_KEY_MISMATCH",
+      });
+    }
   }
 
   async execute(assignment) {
     const startedAt = new Date().toISOString();
     let job = {};
     let phase = "pre_submit";
+    let previewAuthorizationDecisionId = null;
     try {
       const capabilityId = assignment.node.executor.capabilityId;
       const liveCapability = await this.assertLiveCapability(assignment.node.executor);
-      // RI-04 resume fail-closed: bound ExecutionPlan node vs live catalog.
-      if (this.resumePolicy.mode === "fail_closed"
-        && (assignment.resumeJobId || assignment.node?.capabilityContractHash || assignment.node?.implementationClosureHash)) {
+      const bound = this.boundIntegrity(assignment);
+
+      if (this.resumePolicy.mode === "fail_closed" && isIntegrityBoundAssignment(assignment)) {
         assertResumeIntegrity({
           boundNode: {
             capabilityId,
-            capabilityContractHash: assignment.node.capabilityContractHash || null,
-            implementationClosureHash: assignment.node.implementationClosureHash || null,
+            capabilityContractHash: bound.capabilityContractHash,
+            implementationClosureHash: bound.implementationClosureHash,
+            capabilityContractHashAlgorithm: bound.capabilityContractHashAlgorithm,
           },
           liveCapability,
         });
       }
+
       const common = {
         actorId: this.actorId,
         capabilityId,
@@ -283,20 +380,25 @@ export class TypedJobWorker {
         phase = "submitted";
         job = unwrapJob(await this.client.getJob(assignment.resumeJobId));
       } else {
-        // A resumed attempt without a bound job still crosses a fresh submit
-        // boundary. Re-check the current route in case policy, placement, or
-        // device occupancy changed while the Lead was down.
-        this.assertSafeRoute(await this.client.routePlan(common), assignment);
+        if (!assignment.operationKey) {
+          throw Object.assign(new Error("assignment.operationKey is required"), { code: "OPERATION_KEY_REQUIRED" });
+        }
+        const route = this.assertSafeRoute(await this.client.routePlan(common), assignment);
+        previewAuthorizationDecisionId = route.authorization?.decisionId || null;
         phase = "submitting";
         const submitted = await this.client.submitJob({
           ...common,
-          idempotencyKey: `m2:${assignment.taskRunId}:${assignment.shard.shardKey.slice(0, 20)}:a${assignment.attemptIndex}`,
+          idempotencyKey: assignment.operationKey,
+          expectedCapabilityContractHash: bound.capabilityContractHash,
+          expectedCapabilityContractHashAlgorithm: bound.capabilityContractHashAlgorithm,
+          expectedImplementationClosureHash: bound.implementationClosureHash,
         });
         job = unwrapJob(submitted);
         phase = "submitted";
       }
       const jobId = job.jobId || job.id;
       if (!jobId) throw Object.assign(new Error("control plane did not return jobId"), { code: "JOB_ID_MISSING" });
+      this.assertJobIntegritySnapshot(job, assignment, bound);
       await assignment.onProgress?.({ type: "job_bound", jobId, runId: job.runId || null, status: job.status || null });
       const selectedAlias = job.routeDecision?.selectedDevice?.alias || job.selectedDevice?.alias || null;
       if (selectedAlias && selectedAlias !== assignment.alias) {
@@ -305,16 +407,13 @@ export class TypedJobWorker {
       if (job.capabilityId && job.capabilityId !== capabilityId) {
         throw Object.assign(new Error(`control plane returned capability ${job.capabilityId}, expected ${capabilityId}`), { code: "CAPABILITY_MISMATCH" });
       }
-      if (job.externalEffect === true || job.approvalRequired === true) {
-        throw Object.assign(new Error("P0 worker refuses external-effect or approval-gated jobs"), { code: "UNEXPECTED_EXTERNAL_EFFECT" });
-      }
 
       const pollDeadline = Date.now() + this.pollTimeoutMs;
       let lastPollError = null;
       while (!TERMINAL.has(job.status)) {
         if (Date.now() >= pollDeadline) {
           const finishedAt = new Date().toISOString();
-          return createWorkReceipt({
+          return this.receipt({
             assignment,
             technicalStatus: "ambiguous",
             businessStatus: "ambiguous",
@@ -324,6 +423,7 @@ export class TypedJobWorker {
             error: { code: "JOB_POLL_TIMEOUT", message: lastPollError?.message || "job did not reach a terminal state before the worker deadline" },
             startedAt,
             finishedAt,
+            integrity: { authorizationDecisionId: this.finalAuthorizationDecisionId(job, previewAuthorizationDecisionId) },
           });
         }
         await sleep(this.pollMs);
@@ -337,9 +437,10 @@ export class TypedJobWorker {
 
       const finishedAt = new Date().toISOString();
       const output = jobOutput(job);
+      const authId = this.finalAuthorizationDecisionId(job, previewAuthorizationDecisionId);
       if (job.status === "ambiguous" || job.status === "recovery_required") {
         const terminalError = jobError(job);
-        return createWorkReceipt({
+        return this.receipt({
           assignment,
           technicalStatus: "ambiguous",
           businessStatus: "ambiguous",
@@ -349,38 +450,40 @@ export class TypedJobWorker {
           error: terminalError || { code: String(job.status).toUpperCase(), message: `job ended ${job.status}` },
           startedAt,
           finishedAt,
+          integrity: { authorizationDecisionId: authId },
         });
       }
       if (job.status !== "succeeded") {
         const terminalError = jobError(job);
         const code = terminalError?.code || String(job.status).toUpperCase();
-        const replaySafe = ["read_only", "replay_safe"].includes(assignment.node.executor.replaySafety);
-        return createWorkReceipt({
+        return this.receipt({
           assignment,
           technicalStatus: job.status === "waiting_approval" ? "blocked" : "failed",
           businessStatus: "not_evaluated",
-          retryable: replaySafe && !STOP_CODES.test(code),
+          retryable: this.isReplaySafe(assignment) && !STOP_CODES.test(code),
           job,
           output,
           error: terminalError || { code, message: `job ended ${job.status}` },
           startedAt,
           finishedAt,
+          integrity: { authorizationDecisionId: authId },
         });
       }
 
       const verification = job.verification ?? job.result?.verification;
       const restoration = job.restoration ?? job.result?.restoration;
       if (verification?.ok === false || restoration?.ok === false) {
-        return createWorkReceipt({
+        return this.receipt({
           assignment,
           technicalStatus: "failed",
           businessStatus: "not_evaluated",
-          retryable: ["read_only", "replay_safe"].includes(assignment.node.executor.replaySafety),
+          retryable: this.isReplaySafe(assignment),
           job,
           output,
           error: { code: verification?.ok === false ? "VERIFICATION_FAILED" : "RESTORATION_FAILED", message: "control-plane verification/restoration failed" },
           startedAt,
           finishedAt,
+          integrity: { authorizationDecisionId: authId },
         });
       }
 
@@ -394,32 +497,59 @@ export class TypedJobWorker {
       const businessCheck = appCheck.ok
         ? (validator ? await validator({ assignment, output, job, acceptance }) : validateBusinessOutput({ acceptance, output }))
         : appCheck;
-      return createWorkReceipt({
+      return this.receipt({
         assignment,
         technicalStatus: "succeeded",
         businessStatus: businessCheck.ok ? "accepted" : "rejected",
-        retryable: !businessCheck.ok && ["read_only", "replay_safe"].includes(assignment.node.executor.replaySafety),
+        retryable: !businessCheck.ok && this.isReplaySafe(assignment),
         job,
         output,
         error: businessCheck.ok ? null : businessCheck,
         startedAt,
         finishedAt,
+        integrity: { authorizationDecisionId: authId },
       });
     } catch (error) {
       const finishedAt = new Date().toISOString();
       const code = error?.code || "WORKER_EXCEPTION";
-      const replaySafe = ["read_only", "replay_safe"].includes(assignment.node.executor.replaySafety);
       const crossedUncertainSubmitBoundary = phase === "submitting" || phase === "submitted";
-      return createWorkReceipt({
+      const notSent = error?.details?.notSent === true
+        || phase === "pre_submit"
+        || code === "IMPLEMENTATION_CONTRACT_CHANGED" && !(job?.jobId || job?.id);
+      const errorPayload = {
+        code: crossedUncertainSubmitBoundary && code !== "IMPLEMENTATION_CONTRACT_CHANGED"
+          ? "JOB_SUBMIT_UNCERTAIN"
+          : code,
+        message: error?.message || String(error),
+      };
+      if (error?.details && typeof error.details === "object") {
+        errorPayload.details = error.details;
+        if (error.details.notSent != null) errorPayload.notSent = error.details.notSent;
+        if (error.details.phase != null) errorPayload.phase = error.details.phase;
+      } else if (notSent && code === "IMPLEMENTATION_CONTRACT_CHANGED") {
+        errorPayload.notSent = true;
+        errorPayload.details = { notSent: true, phase: error?.details?.phase || "resume" };
+      }
+      return this.receipt({
         assignment,
-        technicalStatus: crossedUncertainSubmitBoundary ? "ambiguous" : "failed",
-        businessStatus: crossedUncertainSubmitBoundary ? "ambiguous" : "not_evaluated",
-        retryable: !crossedUncertainSubmitBoundary && replaySafe && !STOP_CODES.test(code),
-        job,
+        technicalStatus: crossedUncertainSubmitBoundary && code !== "IMPLEMENTATION_CONTRACT_CHANGED"
+          ? "ambiguous"
+          : "failed",
+        businessStatus: crossedUncertainSubmitBoundary && code !== "IMPLEMENTATION_CONTRACT_CHANGED"
+          ? "ambiguous"
+          : "not_evaluated",
+        retryable: !crossedUncertainSubmitBoundary && code !== "IMPLEMENTATION_CONTRACT_CHANGED"
+          && this.isReplaySafe(assignment) && !STOP_CODES.test(code),
+        job: notSent ? {} : job,
         output: jobOutput(job),
-        error: { code: crossedUncertainSubmitBoundary ? "JOB_SUBMIT_UNCERTAIN" : code, message: error?.message || String(error) },
+        error: errorPayload,
         startedAt,
         finishedAt,
+        integrity: {
+          authorizationDecisionId: notSent ? null : this.finalAuthorizationDecisionId(job, previewAuthorizationDecisionId),
+          jobId: notSent ? null : undefined,
+          controlPlaneRunId: notSent ? null : undefined,
+        },
       });
     }
   }
