@@ -24,6 +24,7 @@ const catalog = [
     id: "xianyu.publish.full_dry_run",
     appId: "xianyu",
     capabilityContractHash: contractA,
+    capabilityContractHashAlgorithm: "xhs.capability-contract.sha256-canonical-json.v2",
     implementationClosureHash: closureA,
     tcbManifestRef: "tcb.xianyu.prepare",
     normalizedEffect: { class: "publish", phase: "prepare", commitBoundary: "automatic" },
@@ -38,14 +39,19 @@ function assignmentFixture(over = {}) {
     planHash: "1".repeat(64),
     executionPlanHash: "2".repeat(64),
     capabilityContractHash: contractA,
+    capabilityContractHashAlgorithm: "xhs.capability-contract.sha256-canonical-json.v2",
     implementationClosureHash: closureA,
     operationKey: "m2:run_pr2:shard",
     authorizationDecisionId: "auth_1",
+    boundNode: {
+      nodeId: "n1",
+      capabilityContractHash: contractA,
+      capabilityContractHashAlgorithm: "xhs.capability-contract.sha256-canonical-json.v2",
+      implementationClosureHash: closureA,
+    },
     node: {
       nodeId: "n1",
       nodeIndex: 0,
-      capabilityContractHash: contractA,
-      implementationClosureHash: closureA,
       executor: { capabilityId: "xianyu.publish.full_dry_run", appId: "xianyu" },
     },
     shard: { shardId: "s0", shardIndex: 0, shardKey: "shard" },
@@ -135,8 +141,22 @@ test("RI-05: WorkReceipt v1 still validates; v2 carries integrity proof", () => 
   assert.equal(v2.schemaId, "xhs.work-receipt.v2");
   assert.equal(v2.implementationClosureHash, closureA);
   assert.equal(v2.capabilityContractHash, contractA);
+  assert.equal(v2.capabilityContractHashAlgorithm, "xhs.capability-contract.sha256-canonical-json.v2");
   assert.equal(v2.reconcileRequired, false);
   assert.equal(readWorkReceipt(v2).controlPlaneRunId, "cp_run_1");
+
+  const notSent = createWorkReceiptV2({
+    assignment,
+    technicalStatus: "failed",
+    businessStatus: "not_evaluated",
+    job: {},
+    error: { code: "IMPLEMENTATION_CONTRACT_CHANGED", notSent: true, details: { notSent: true, phase: "resume" } },
+    startedAt: "2026-08-08T00:00:00.000Z",
+    finishedAt: "2026-08-08T00:00:01.000Z",
+    integrity: { jobId: null, controlPlaneRunId: null, authorizationDecisionId: "unbound" },
+  });
+  assert.equal(notSent.jobId, null);
+  assert.equal(notSent.controlPlaneRunId, null);
 });
 
 test("TypedTransport fake injection works without raw device channel", async () => {

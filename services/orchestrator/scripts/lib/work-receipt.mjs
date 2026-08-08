@@ -10,6 +10,10 @@ function hex64(value) {
   return typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
 }
 
+function nullableText(value) {
+  return value === null || text(value);
+}
+
 export function validateWorkReceipt(receipt) {
   const errors = [];
   const add = (path, message) => errors.push({ path, message });
@@ -40,12 +44,9 @@ export function validateWorkReceiptV2(receipt) {
     "taskRunId",
     "planHash",
     "executionPlanHash",
-    "capabilityContractHash",
-    "implementationClosureHash",
+    "capabilityContractHashAlgorithm",
     "operationKey",
     "authorizationDecisionId",
-    "jobId",
-    "controlPlaneRunId",
     "terminalStatus",
     "nodeId",
     "shardId",
@@ -58,8 +59,17 @@ export function validateWorkReceiptV2(receipt) {
   ]) {
     if (!text(receipt[key])) add(key, "is required");
   }
-  for (const key of ["planHash", "executionPlanHash", "capabilityContractHash", "implementationClosureHash"]) {
+  // Integrity hashes + job/run ids are required keys; null allowed for legacy/notSent.
+  for (const key of ["capabilityContractHash", "implementationClosureHash", "jobId", "controlPlaneRunId"]) {
+    if (!Object.prototype.hasOwnProperty.call(receipt, key) || !nullableText(receipt[key])) {
+      add(key, "must be string or null");
+    }
+  }
+  for (const key of ["planHash", "executionPlanHash"]) {
     if (receipt[key] != null && !hex64(receipt[key])) add(key, "must be 64 hex");
+  }
+  for (const key of ["capabilityContractHash", "implementationClosureHash"]) {
+    if (receipt[key] != null && !hex64(receipt[key])) add(key, "must be 64 hex or null");
   }
   for (const key of ["nodeIndex", "shardIndex", "attemptIndex"]) {
     if (!Number.isInteger(receipt[key]) || receipt[key] < 0) add(key, "must be a non-negative integer");
@@ -87,6 +97,11 @@ export function assertWorkReceiptV2(receipt) {
 
 export function receiptAccepted(receipt) {
   return receipt?.technicalStatus === "succeeded" && receipt?.businessStatus === "accepted";
+}
+
+/** True when assignment carries ExecutionPlan integrity binding (emit v2). */
+export function isIntegrityBoundAssignment(assignment) {
+  return Boolean(assignment?.boundNode && assignment?.executionPlanHash);
 }
 
 /** v1 factory — keep required fields unchanged (RI-05 compatibility). */
@@ -121,7 +136,7 @@ export function createWorkReceipt({ assignment, technicalStatus, businessStatus,
 
 /**
  * WorkReceipt v2 — proves which implementation ran (RI-05).
- * Does not mutate v1 required shape; callers opt in explicitly.
+ * jobId / controlPlaneRunId may be null for pre-submit integrity failures (notSent).
  */
 export function createWorkReceiptV2({
   assignment,
@@ -139,19 +154,37 @@ export function createWorkReceiptV2({
 }) {
   const status = terminalStatus || technicalStatus;
   const reconcile = reconcileRequired ?? (status === "ambiguous" || technicalStatus === "ambiguous");
+  const bound = assignment.boundNode || {};
+  const jobIdRaw = job.jobId || job.id;
+  const runIdRaw = job.runId;
   const receipt = {
     schemaId: "xhs.work-receipt.v2",
     schemaVersion: 2,
     taskRunId: assignment.taskRunId,
     planHash: assignment.planHash,
-    executionPlanHash: integrity.executionPlanHash || assignment.executionPlanHash || assignment.boundPlanHash || "",
+    executionPlanHash: integrity.executionPlanHash || assignment.executionPlanHash || assignment.boundPlanHash,
     runtimeReleaseId: integrity.runtimeReleaseId || assignment.runtimeReleaseId || null,
-    capabilityContractHash: integrity.capabilityContractHash || assignment.capabilityContractHash || assignment.node?.capabilityContractHash || "",
-    implementationClosureHash: integrity.implementationClosureHash || assignment.implementationClosureHash || assignment.node?.implementationClosureHash || "",
+    capabilityContractHash: integrity.capabilityContractHash
+      ?? assignment.capabilityContractHash
+      ?? bound.capabilityContractHash
+      ?? null,
+    capabilityContractHashAlgorithm: integrity.capabilityContractHashAlgorithm
+      || assignment.capabilityContractHashAlgorithm
+      || bound.capabilityContractHashAlgorithm
+      || "legacy_algorithm_unknown",
+    implementationClosureHash: integrity.implementationClosureHash
+      ?? assignment.implementationClosureHash
+      ?? bound.implementationClosureHash
+      ?? null,
     operationKey: integrity.operationKey || assignment.operationKey || `m2:${assignment.taskRunId}:${assignment.shard.shardKey}`,
-    authorizationDecisionId: integrity.authorizationDecisionId || job.authorization?.decisionId || assignment.authorizationDecisionId || "",
-    jobId: String(job.jobId || job.id || integrity.jobId || ""),
-    controlPlaneRunId: String(job.runId || integrity.controlPlaneRunId || ""),
+    authorizationDecisionId: integrity.authorizationDecisionId
+      || job.authorization?.decisionId
+      || assignment.authorizationDecisionId
+      || "unbound",
+    jobId: jobIdRaw == null || jobIdRaw === "" ? (integrity.jobId ?? null) : String(jobIdRaw),
+    controlPlaneRunId: runIdRaw == null || runIdRaw === ""
+      ? (integrity.controlPlaneRunId ?? null)
+      : String(runIdRaw),
     terminalStatus: status,
     reconcileRequired: Boolean(reconcile),
     nodeId: assignment.node.nodeId,
@@ -173,6 +206,14 @@ export function createWorkReceiptV2({
     finishedAt,
   };
   return assertWorkReceiptV2(receipt);
+}
+
+/** Emit v2 for integrity-bound assignments; v1 only for explicit legacy. */
+export function createTerminalWorkReceipt(input) {
+  if (isIntegrityBoundAssignment(input.assignment)) {
+    return createWorkReceiptV2(input);
+  }
+  return createWorkReceipt(input);
 }
 
 /** Read either v1 or v2; never require v2 fields on v1 documents. */

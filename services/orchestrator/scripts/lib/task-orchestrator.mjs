@@ -1,9 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { assertTaskPlanV2 } from "./task-plan-v2.mjs";
+import { isExecutionPlan } from "./task-plan-capability-binding.mjs";
 import { assertWorkReceipt, receiptAccepted } from "./work-receipt.mjs";
 import { reduceMission } from "./mission-reducer.mjs";
 
 const FINAL_UNIT_STATES = new Set(["succeeded", "failed", "blocked", "ambiguous"]);
+
+function codeError(code, message) {
+  return Object.assign(new Error(message), { code });
+}
 
 function deviceAlias(device) {
   return String(device.alias || device.deviceAlias || device.slot || "");
@@ -25,8 +30,20 @@ function unitKey(node, shard) {
   return `${node.nodeId}:${shard.shardId}`;
 }
 
-function planUnits(plan) {
-  return plan.nodes.flatMap((node) => node.shards.map((shard) => ({ node, shard, key: unitKey(node, shard) })));
+/** Bind raw topology nodes to ExecutionPlan authority by nodeId. */
+function planUnits(plan, executionPlan) {
+  return plan.nodes.flatMap((rawNode) => {
+    const boundNode = executionPlan.nodes.find((candidate) => candidate.nodeId === rawNode.nodeId);
+    if (!boundNode) {
+      throw codeError("EXECUTION_PLAN_NODE_MISSING", `ExecutionPlan missing node ${rawNode.nodeId}`);
+    }
+    return rawNode.shards.map((shard) => ({
+      node: rawNode,
+      boundNode,
+      shard,
+      key: unitKey(rawNode, shard),
+    }));
+  });
 }
 
 function dependenciesAccepted(plan, state, node) {
@@ -44,9 +61,9 @@ function dependenciesTerminalButRejected(plan, state, node) {
   });
 }
 
-function ensureWorkUnits(plan, state) {
+function ensureWorkUnits(plan, executionPlan, state) {
   const next = { ...state, workUnits: { ...(state.workUnits || {}) }, receiptRefs: [...(state.receiptRefs || [])] };
-  for (const { node, shard, key } of planUnits(plan)) {
+  for (const { node, shard, key } of planUnits(plan, executionPlan)) {
     const previous = next.workUnits[key];
     next.workUnits[key] = previous
       ? {
@@ -96,6 +113,25 @@ function normalizeFleet(result) {
   throw new Error("fleetProvider must return devices[]");
 }
 
+function buildAssignment({ taskRunId, plan, executionPlan, unit, alias, workerId, attemptIndex, attemptId }) {
+  return {
+    taskRunId,
+    planHash: plan.planHash,
+    executionPlanHash: executionPlan.executionPlanHash,
+    node: unit.node,
+    boundNode: unit.boundNode,
+    shard: unit.shard,
+    capabilityContractHash: unit.boundNode.capabilityContractHash || null,
+    capabilityContractHashAlgorithm: unit.boundNode.capabilityContractHashAlgorithm || null,
+    implementationClosureHash: unit.boundNode.implementationClosureHash || null,
+    operationKey: `m2:${taskRunId}:${unit.shard.shardKey}`,
+    alias,
+    workerId,
+    attemptIndex,
+    attemptId,
+  };
+}
+
 function assertReceiptFencing(receipt, assignment, activeJob = null) {
   const expected = {
     taskRunId: assignment.taskRunId,
@@ -115,7 +151,9 @@ function assertReceiptFencing(receipt, assignment, activeJob = null) {
     if (receipt[key] !== value) throw new Error(`WORK_RECEIPT_FENCING_MISMATCH field=${key}`);
   }
   if (activeJob?.jobId && receipt.jobId !== activeJob.jobId) throw new Error("WORK_RECEIPT_FENCING_MISMATCH field=jobId");
-  if (activeJob?.runId && receipt.runId !== activeJob.runId) throw new Error("WORK_RECEIPT_FENCING_MISMATCH field=runId");
+  if (activeJob?.runId && (receipt.runId || receipt.controlPlaneRunId) !== activeJob.runId) {
+    throw new Error("WORK_RECEIPT_FENCING_MISMATCH field=runId");
+  }
   return receipt;
 }
 
@@ -134,13 +172,25 @@ export async function runTaskOrchestrator({
   if (!worker || typeof worker.execute !== "function") throw new Error("worker.execute is required");
   if (!store) throw new Error("store is required");
 
+  // INV-07: raw TaskPlan cannot bypass the binder.
+  if (!isExecutionPlan(executionPlan)) {
+    throw codeError("EXECUTION_PLAN_REQUIRED", "runTaskOrchestrator requires a bound ExecutionPlan");
+  }
+  if (executionPlan.sourcePlanHash !== plan.planHash) {
+    throw codeError("EXECUTION_PLAN_SOURCE_MISMATCH", "executionPlan.sourcePlanHash must equal plan.planHash");
+  }
+  const resolvedExecutionPlanHash = executionPlanHash || executionPlan.executionPlanHash;
+  if (resolvedExecutionPlanHash !== executionPlan.executionPlanHash) {
+    throw codeError("EXECUTION_PLAN_SOURCE_MISMATCH", "executionPlanHash does not match ExecutionPlan");
+  }
+
   const releaseLeadLock = typeof store.acquireLeadLock === "function" ? store.acquireLeadLock(plan.planHash) : () => {};
   try {
 
   // Foundation: init writes run-manifest.v2 atomically before scheduler advances
-  let state = ensureWorkUnits(plan, store.init(plan, {
+  let state = ensureWorkUnits(plan, executionPlan, store.init(plan, {
     executionPlan,
-    executionPlanHash: executionPlanHash || executionPlan?.executionPlanHash || null,
+    executionPlanHash: resolvedExecutionPlanHash,
   }));
   if (state.planHash !== plan.planHash) throw new Error("TASK_RUN_PLAN_CONFLICT");
   state.capabilityBlocks = [...(state.capabilityBlocks || [])];
@@ -150,10 +200,10 @@ export async function runTaskOrchestrator({
     type: "task_started",
     taskRunId,
     planHash: plan.planHash,
-    executionPlanHash: executionPlanHash || executionPlan?.executionPlanHash || null,
+    executionPlanHash: resolvedExecutionPlanHash,
   });
 
-  const units = planUnits(plan);
+  const units = planUnits(plan, executionPlan);
   const active = new Map();
   const busyAliases = new Set();
   const busyWorkers = new Set();
@@ -263,16 +313,16 @@ export async function runTaskOrchestrator({
         if (busyAliases.has(record.inflight.alias)) continue;
         const workerId = record.inflight.workerId || allocateWorkerId();
         if (!workerId) break;
-        startWork(unit, {
+        startWork(unit, buildAssignment({
           taskRunId,
-          planHash: plan.planHash,
-          node: unit.node,
-          shard: unit.shard,
+          plan,
+          executionPlan,
+          unit,
           alias: record.inflight.alias,
           workerId,
           attemptIndex: record.inflight.attemptIndex,
           attemptId: record.inflight.attemptId,
-        }, { resume: true });
+        }), { resume: true });
         dispatched = true;
       }
 
@@ -295,16 +345,16 @@ export async function runTaskOrchestrator({
         const alias = deviceAlias(device);
         const record = state.workUnits[unit.key];
         const attemptIndex = record.attemptCount;
-        const assignment = {
+        const assignment = buildAssignment({
           taskRunId,
-          planHash: plan.planHash,
-          node: unit.node,
-          shard: unit.shard,
+          plan,
+          executionPlan,
+          unit,
           alias,
           workerId,
           attemptIndex,
           attemptId: `attempt_${unit.shard.shardKey.slice(0, 16)}_${attemptIndex}_${randomUUID().slice(0, 8)}`,
-        };
+        });
         startWork(unit, assignment);
         dispatched = true;
       }

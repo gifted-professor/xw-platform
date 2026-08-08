@@ -7,6 +7,7 @@ import { computeTaskPlanHash, createTaskPlanV2, validateTaskPlanV2 } from "../sc
 import { createWorkReceipt } from "../scripts/lib/work-receipt.mjs";
 import { OrchestrationStore } from "../scripts/lib/orchestration-store.mjs";
 import { runTaskOrchestrator } from "../scripts/lib/task-orchestrator.mjs";
+import { bindFixturePlan } from "./helpers/bind-fixture-plan.mjs";
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -60,6 +61,23 @@ async function withStore(fn) {
   }
 }
 
+function bind(plan) {
+  return bindFixturePlan(plan);
+}
+
+async function runBound(opts) {
+  const bound = opts.executionPlan ? {
+    executionPlan: opts.executionPlan,
+    executionPlanHash: opts.executionPlanHash || opts.executionPlan.executionPlanHash,
+  } : bind(opts.plan);
+  return runTaskOrchestrator({ ...opts, ...bound });
+}
+
+function initBound(store, plan) {
+  const { executionPlan, executionPlanHash } = bind(plan);
+  return store.init(plan, { executionPlan, executionPlanHash });
+}
+
 test("task plan v2 is deterministic and rejects tampering", () => {
   const input = {
     goal: "four work units",
@@ -109,7 +127,7 @@ test("four heterogeneous work units overlap but reduce in plan order", async () 
   });
   let active = 0;
   let peak = 0;
-  const result = await runTaskOrchestrator({
+  const result = await runBound({
     taskRunId: "run_fixture",
     plan,
     fleetProvider: async () => fleet(),
@@ -141,7 +159,7 @@ test("same device never runs two heavy work units concurrently", async () => wit
   });
   const activeAliases = new Set();
   let duplicateAlias = false;
-  const result = await runTaskOrchestrator({
+  const result = await runBound({
     taskRunId: "run_fixture",
     plan,
     fleetProvider: async () => fleet(["cap.a"]),
@@ -166,7 +184,7 @@ test("retryable failure is dynamically reassigned to another device", async () =
     execution: { maxWorkers: 4, allowReassign: true, maxAttemptsPerShard: 2 },
   });
   const aliases = [];
-  const result = await runTaskOrchestrator({
+  const result = await runBound({
     taskRunId: "run_fixture",
     plan,
     fleetProvider: async () => fleet(["cap.a"]),
@@ -201,7 +219,7 @@ test("Lead learns capability-specific failure from receipts and avoids that devi
     execution: { maxWorkers: 1, allowReassign: true, maxAttemptsPerShard: 1 },
   });
   const aliases = [];
-  const result = await runTaskOrchestrator({
+  const result = await runBound({
     taskRunId: "run_fixture",
     plan,
     fleetProvider: async () => fleet(["cap.a"]),
@@ -233,7 +251,7 @@ test("Lead learns capability-specific failure from receipts and avoids that devi
 test("capability readiness is required; device ready alone is not enough", async () => withStore(async (store) => {
   const plan = planWith({ nodes: [{ nodeId: "blocked", executor: executor("cap.missing"), shards: [{ params: {} }] }] });
   let executions = 0;
-  const result = await runTaskOrchestrator({
+  const result = await runBound({
     taskRunId: "run_fixture",
     plan,
     fleetProvider: async () => fleet(["cap.a"]),
@@ -253,7 +271,7 @@ test("dependent node waits for all parent shards and blocks on rejected parent",
     ],
   });
   let reduceRan = false;
-  const result = await runTaskOrchestrator({
+  const result = await runBound({
     taskRunId: "run_fixture",
     plan,
     fleetProvider: async () => fleet(["cap.a", "cap.b"]),
@@ -299,7 +317,7 @@ test("resume uses explicit receipt refs and does not repeat accepted work", asyn
     attemptIndex: 0,
     attemptId: "attempt_resume_0",
   };
-  const state = store.init(plan);
+  const state = initBound(store, plan);
   const ref = store.writeReceipt(accepted(firstAssignment, { items: [{ index: 0 }] }));
   state.workUnits = {
     [`resume:${firstShard.shardId}`]: {
@@ -319,7 +337,7 @@ test("resume uses explicit receipt refs and does not repeat accepted work", asyn
   state.receiptRefs = [ref];
   store.writeState(state);
   const executed = [];
-  const result = await runTaskOrchestrator({
+  const result = await runBound({
     taskRunId: "run_fixture",
     plan,
     fleetProvider: async () => fleet(["cap.a"]),
@@ -339,7 +357,7 @@ test("resume uses explicit receipt refs and does not repeat accepted work", asyn
 test("crash recovery resumes the same in-flight attempt and bound job", async () => withStore(async (store) => {
   const plan = planWith({ nodes: [{ nodeId: "crash", executor: executor("cap.a"), shards: [{ params: {} }] }] });
   const shard = plan.nodes[0].shards[0];
-  const state = store.init(plan);
+  const state = initBound(store, plan);
   state.status = "running";
   state.workUnits = {
     [`crash:${shard.shardId}`]: {
@@ -360,7 +378,7 @@ test("crash recovery resumes the same in-flight attempt and bound job", async ()
   };
   store.writeState(state);
   const observed = [];
-  const result = await runTaskOrchestrator({
+  const result = await runBound({
     taskRunId: "run_fixture",
     plan,
     fleetProvider: async () => [],
@@ -388,7 +406,7 @@ test("crash recovery resumes the same in-flight attempt and bound job", async ()
 
 test("ambiguous job keeps reconciliation binding and later resolves without resubmit", async () => withStore(async (store) => {
   const plan = planWith({ nodes: [{ nodeId: "reconcile", executor: executor("cap.a"), shards: [{ params: {} }] }] });
-  const first = await runTaskOrchestrator({
+  const first = await runBound({
     taskRunId: "run_fixture",
     plan,
     fleetProvider: async () => fleet(["cap.a"]),
@@ -416,7 +434,7 @@ test("ambiguous job keeps reconciliation binding and later resolves without resu
   assert.equal(pending.inflight.attemptIndex, 1);
 
   let resumedJobId = null;
-  const second = await runTaskOrchestrator({
+  const second = await runBound({
     taskRunId: "run_fixture",
     plan,
     fleetProvider: async () => [],
@@ -438,7 +456,7 @@ test("ambiguous job keeps reconciliation binding and later resolves without resu
 
 test("same task run refuses a different plan hash", async () => withStore(async (store, root) => {
   const first = planWith({ nodes: [{ nodeId: "a", executor: executor("cap.a"), shards: [{ params: { v: 1 } }] }] });
-  store.init(first);
+  initBound(store, first);
   const second = planWith({ nodes: [{ nodeId: "a", executor: executor("cap.a"), shards: [{ params: { v: 2 } }] }] });
   assert.throws(() => store.init(second), /TASK_RUN_PLAN_CONFLICT/);
   const onDisk = JSON.parse(readFileSync(join(root, "run_fixture", "orchestration", "plan.v2.json"), "utf8"));
@@ -450,7 +468,7 @@ test("single Lead lock rejects concurrent parent writers", async () => withStore
   const release = store.acquireLeadLock(plan.planHash);
   try {
     await assert.rejects(
-      runTaskOrchestrator({
+      runBound({
         taskRunId: "run_fixture",
         plan,
         fleetProvider: async () => fleet(["cap.a"]),
@@ -467,7 +485,7 @@ test("single Lead lock rejects concurrent parent writers", async () => withStore
 test("receipt fencing rejects forged assignment fields and job binding", async () => withStore(async (store) => {
   const plan = planWith({ nodes: [{ nodeId: "fence", executor: executor("cap.a"), shards: [{ params: {} }] }] });
   await assert.rejects(
-    runTaskOrchestrator({
+    runBound({
       taskRunId: "run_fixture",
       plan,
       fleetProvider: async () => fleet(["cap.a"]),
@@ -488,7 +506,7 @@ test("receipt fencing rejects forged assignment fields and job binding", async (
 
 test("attempt receipt is create-or-compare and cannot be overwritten", async () => withStore(async (store) => {
   const plan = planWith({ nodes: [{ nodeId: "receipt", executor: executor("cap.a"), shards: [{ params: {} }] }] });
-  store.init(plan);
+  initBound(store, plan);
   const nextAssignment = {
     taskRunId: "run_fixture",
     planHash: plan.planHash,

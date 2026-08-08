@@ -38,12 +38,12 @@
 - Golden cross-repo RI-01 hash pin (`14b92313…`)
 - Asymmetric null→present closure recheck coverage
 
-## 合入后 backlog（PR3+）
+## 合入后 backlog（已部分被 wiring closure 吸收）
 
-- live capabilities 挂真实 TCB（可选最小 xianyu prepare）
-- Adapter import lint CI / fake-CP pump 集成测
-- Mandatory Capability 晋升与假 hash 清零审计
-- **PR3**：TypedTransport 物理边界 / transportActionAuthorization / purpose 矩阵
+- ~~Orchestrator / boundNode / Worker 本地判权 / Receipt v2 接线~~ → 见 `2026-08-08-foundation-pr2-wiring-closure.md`
+- live capabilities 挂真实 TCB（可选最小 xianyu prepare）仍非 merge prerequisite
+- Routing twin：对照补 contract presence / algorithm 传播（若尚未）
+- **PR4**：DeployShadow / Pilot — **禁止**，直至 wiring closure review 通过且明确开闸
 
 ## 红线仍守
 

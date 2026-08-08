@@ -138,7 +138,7 @@ test("worker preserves live control-plane errorCode for Lead capability health",
   assert.equal(receipt.retryable, true);
 });
 
-test("live capability policy gate rejects approval or external-effect capabilities before route", async () => {
+test("live capability gate proves catalog presence and appId; does not re-derive risk policy", async () => {
   let routed = false;
   const client = {
     async getCapabilities() {
@@ -152,16 +152,26 @@ test("live capability policy gate rejects approval or external-effect capabiliti
       }] };
     },
     async routePlan() { routed = true; return {}; },
-    async submitJob() { throw new Error("must not submit"); },
+    async submitJob() {
+      return {
+        job: {
+          jobId: "job_r2_allowed_by_cp",
+          status: "succeeded",
+          output: { packageName: "com.xingin.xhs", items: [{ id: 1 }] },
+          verification: { ok: true },
+          restoration: { ok: true },
+        },
+      };
+    },
   };
   const worker = new TypedJobWorker({ client: safeClient(client), actorId: "fixture", pollMs: 0 });
   const receipt = await worker.execute(assignment());
-  assert.equal(routed, false);
-  assert.equal(receipt.error.code, "POLICY_MISMATCH");
-  assert.equal(receipt.retryable, false);
+  assert.equal(routed, true);
+  assert.equal(receipt.technicalStatus, "succeeded");
+  assert.equal(receipt.error, null);
 });
 
-test("missing live catalog and unsafe route both stop before submit", async () => {
+test("missing live catalog and unsafe placement both stop before submit", async () => {
   let submitCalls = 0;
   const missingCatalog = new TypedJobWorker({
     client: {
@@ -178,10 +188,8 @@ test("missing live catalog and unsafe route both stop before submit", async () =
     client: safeClient({
       async routePlan(input) {
         return { route: {
-          decision: "dispatchable",
+          decision: "blocked",
           selectedDevice: { alias: input.placement.alias },
-          externalEffect: true,
-          approvalRequired: true,
           activeLease: false,
         } };
       },

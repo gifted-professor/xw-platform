@@ -6,6 +6,7 @@
 
 import { createHash } from "node:crypto";
 import { canonicalize, canonicalJson, sha256, validateTaskPlanV2 } from "./task-plan-v2.mjs";
+import { resolveCapabilityContractHashAlgorithm } from "./capability-contract-hash.mjs";
 
 export const EXECUTION_PLAN_SCHEMA_ID = "xhs.execution-plan.v2";
 
@@ -98,6 +99,7 @@ export function bindTaskPlanToLiveCapabilities(rawPlan, liveCatalog) {
       capabilityId,
       appId: cap.appId || executor.appId || null,
       capabilityContractHash: cap.capabilityContractHash || null,
+      capabilityContractHashAlgorithm: resolveCapabilityContractHashAlgorithm(cap),
       implementationClosureHash: cap.implementationClosureHash
         || cap.implementation?.implementationClosureHash
         || null,
