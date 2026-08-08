@@ -20,6 +20,11 @@ import { guardFinancialCommit } from "./financial-commit-classifier.mjs";
 import { acquireTransportLock as defaultAcquireTransportLock } from "./xiaowei-transport.mjs";
 import { policyModeForRequest } from "./nonpayment-autonomy-policy.mjs";
 import { recheckImplementationIntegrity } from "./runtime-integrity.mjs";
+import {
+  assertProductionBypassClosed,
+} from "./transport-action-authorization.mjs";
+import { createAuthorizedTypedTransport } from "./typed-transport.mjs";
+import { computeCapabilityContractHash } from "./capability-effect.mjs";
 import { buildStallVerdictFromEvidenceDir } from "../../scripts/lib/stall-verdict.mjs";
 import { returnDeviceHome, shouldReturnHomeAfterJob } from "./return-home.mjs";
 
@@ -2144,6 +2149,67 @@ export class ControlPlane {
     }
   }
 
+  /**
+   * Mint a one-time transport authority for the current job phase (Foundation PR3).
+   * Production write bypass is closed before issue.
+   */
+  #mintJobTransportAuth(job, lease, purpose) {
+    assertProductionBypassClosed({ purpose });
+    const capability = job.capability || {};
+    const operationKey = job.operationKey || job.idempotencyKey || job.jobId;
+    let capabilityContractHash = capability.capabilityContractHash || null;
+    if (!capabilityContractHash || !/^[a-f0-9]{64}$/.test(capabilityContractHash)) {
+      // Legacy job snapshots may predate stamped hashes; derive the same contract hash as registry load.
+      try {
+        capabilityContractHash = computeCapabilityContractHash(capability);
+      } catch {
+        capabilityContractHash = null;
+      }
+    }
+    if (!capabilityContractHash || !/^[a-f0-9]{64}$/.test(capabilityContractHash)) {
+      throw new ControlPlaneError(
+        "TRANSPORT_AUTH_CONTRACT_REQUIRED",
+        "capabilityContractHash required to mint transport authority",
+        { status: 409, details: { purpose, jobId: job.jobId } },
+      );
+    }
+    return this.state.issueTransportActionAuthorization({
+      kind: "capability_job",
+      purpose,
+      jobId: job.jobId,
+      runId: job.runId,
+      leaseId: lease.leaseId,
+      deviceId: job.deviceId,
+      operationKey,
+      capabilityContractHash,
+      implementationClosureHash: capability.implementation?.implementationClosureHash
+        || capability.implementationClosureHash
+        || null,
+      jobStatus: job.status,
+      source: "capability_job",
+    });
+  }
+
+  #jobTypedTransport(job, lease) {
+    return createAuthorizedTypedTransport({
+      defaultDeviceId: job.deviceId,
+      defaultLeaseId: lease.leaseId,
+      consume: (args) => this.state.consumeTransportActionAuthorization(args),
+      underlyingInvoke: async (request) => {
+        // Phase 1: no generic device channel here — adapters still use leaseAuthorization
+        // for Gateway/Xiaowei until each adapter migrates to typed actions. This boundary
+        // still enforces one-time auth before any adapter-declared transport call.
+        return {
+          ok: true,
+          purpose: request.purpose,
+          action: request.action || null,
+          deferred: true,
+          note: "authorized; underlying device I/O remains adapter-owned until full TypedTransport migration",
+        };
+      },
+    });
+  }
+
   async #runJob(initialJob, { lease, releaseLease, onVerified = null }) {
     let job = this.state.requireJob(initialJob.jobId);
     let execution;
@@ -2172,6 +2238,7 @@ export class ControlPlane {
         deviceId: job.deviceId,
         controlUrl: this.operatorControlUrl,
       },
+      typedTransport: this.#jobTypedTransport(job, lease),
     };
     const heartbeat = setInterval(() => {
       try {
@@ -2199,14 +2266,26 @@ export class ControlPlane {
       const ctx = this.#adapterEffectContext(job, capability, financialCommit, jobPolicyMode);
       context.effect = ctx.effect; context.payment = ctx.payment; context.debt = ctx.debt;
       authorizedContext.effect = ctx.effect; authorizedContext.payment = ctx.payment; authorizedContext.debt = ctx.debt;
+      // Foundation PR3: mint one-time execute transport authority before Adapter I/O.
+      const executeAuth = this.#mintJobTransportAuth(job, lease, "execute");
+      authorizedContext.transportToken = executeAuth.token;
+      authorizedContext.transportAuthorization = executeAuth.authorization;
       execution = await adapter.execute(authorizedContext);
       if (heartbeatError) throw heartbeatError;
 
       job = this.state.transitionJob(job.jobId, "verifying");
       this.evidence.appendEvent(job.runId, { type: "job.verifying", jobId: job.jobId, createdAt: new Date().toISOString() });
-      verification = adapter.verify
-        ? await adapter.verify({ ...context, execution })
-        : { ok: true, mode: "none" };
+      if (adapter.verify) {
+        const verifyAuth = this.#mintJobTransportAuth(job, lease, "verify");
+        verification = await adapter.verify({
+          ...context,
+          execution,
+          transportToken: verifyAuth.token,
+          typedTransport: authorizedContext.typedTransport,
+        });
+      } else {
+        verification = { ok: true, mode: "none" };
+      }
       if (verification?.ok === false) {
         const error = new ControlPlaneError("VERIFICATION_FAILED", "capability postcondition was not verified", {
           status: 409,
@@ -2278,9 +2357,18 @@ export class ControlPlane {
         payload: { required: capability.restoration.required },
       });
       this.evidence.appendEvent(job.runId, { type: "job.restoring", jobId: job.jobId, createdAt: new Date().toISOString() });
-      restoration = adapter.restore
-        ? await adapter.restore({ ...authorizedContext, execution, verification, error: primaryError })
-        : { ok: !capability.restoration.required };
+      if (adapter.restore) {
+        const restoreAuth = this.#mintJobTransportAuth(job, lease, "restore");
+        restoration = await adapter.restore({
+          ...authorizedContext,
+          execution,
+          verification,
+          error: primaryError,
+          transportToken: restoreAuth.token,
+        });
+      } else {
+        restoration = { ok: !capability.restoration.required };
+      }
       if (capability.restoration.required && restoration?.ok === false) {
         throw new ControlPlaneError("RESTORATION_FAILED", "adapter restoration failed", { status: 409 });
       }
@@ -2289,9 +2377,12 @@ export class ControlPlane {
       if (shouldReturnHomeAfterJob({ recoveryAttempt: false, capability })) {
         let returnHome;
         try {
+          const homeAuth = this.#mintJobTransportAuth(job, lease, "return_home");
           returnHome = await returnDeviceHome({
             device,
             leaseAuthorization: authorizedContext.leaseAuthorization,
+            transportToken: homeAuth.token,
+            typedTransport: authorizedContext.typedTransport,
           });
         } catch (error) {
           returnHome = {

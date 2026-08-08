@@ -9,6 +9,7 @@ import { createXhsAdapter } from "../apps/xhs/adapter.mjs";
 import { createXianyuAdapter } from "../apps/xianyu/adapter.mjs";
 import { createXiaoweiAdapter } from "../apps/xiaowei/adapter.mjs";
 import { createVisionAdapter } from "../apps/vision/adapter.mjs";
+import { XiaoweiTransport } from "./lib/xiaowei-transport.mjs";
 import { CapabilityRegistry } from "./lib/capability-registry.mjs";
 import { AdapterRegistry, ControlPlane } from "./lib/control-plane.mjs";
 import { EvidenceStore } from "./lib/evidence-store.mjs";
@@ -141,7 +142,7 @@ export function createControlPlaneRuntime({
       createXianyuAdapter(),
       createDouyinAdapter(),
       createWechatAdapter(),
-      createXiaoweiAdapter(),
+      createXiaoweiAdapter({ transport: new XiaoweiTransport() }),
       createVisionAdapter(),
     ]);
   // REX Phase 5 B7 / Phase 7: production policy mode from the pinned launch config. shadow
