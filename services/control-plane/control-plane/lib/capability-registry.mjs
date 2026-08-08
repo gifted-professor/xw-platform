@@ -239,6 +239,9 @@ export class CapabilityRegistry {
         adapter: implementation?.adapter,
         normalizedEffect: capability.normalizedEffect || null,
         capabilityContractHash: capability.capabilityContractHash || null,
+        capabilityContractHashAlgorithm: capability.capabilityContractHash
+          ? (capability.capabilityContractHashAlgorithm || "legacy_algorithm_unknown")
+          : null,
         implementationClosureHash: implementation?.implementationClosureHash || null,
         tcbManifestRef: implementation?.tcbManifestRef || null,
         authorizationHint: "context_required",
