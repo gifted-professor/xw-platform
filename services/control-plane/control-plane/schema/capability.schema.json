@@ -91,9 +91,42 @@
         "observed",
         "approval_gated",
         "dependency_pending",
-        "dependency_pending_wechat_ocr"
+        "dependency_pending_wechat_ocr",
+        "classification_required"
       ]
     },
-    "description": { "type": "string" }
+    "description": { "type": "string" },
+    "effect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["class", "phase", "commitBoundary"],
+      "properties": {
+        "class": { "enum": ["none", "reversible", "social", "publish", "payment", "delete"] },
+        "phase": { "enum": ["na", "prepare", "final", "trash"] },
+        "commitBoundary": { "enum": ["automatic", "protected_human_commit"] }
+      }
+    },
+    "exposure": { "enum": ["public", "internal"] },
+    "invocationPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "allowedModes": {
+          "type": "array",
+          "items": { "enum": ["job", "session", "mission_effect", "composite_action"] },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "parentCapabilityIds": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        }
+      }
+    },
+    "lifecycle": {
+      "enum": ["draft", "canary_only", "implemented", "deprecated", "retired"]
+    },
+    "financialCommit": { "type": "boolean" }
   }
 }

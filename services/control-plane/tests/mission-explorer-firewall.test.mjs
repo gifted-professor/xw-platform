@@ -115,7 +115,7 @@ test("Effect Firewall classifies reversible, social, payment, and stop surfaces"
   assert.equal(firewall.classify({ declaredIntent: "screenshot", snapshot: freshSurface("observation"), target: boundTarget }, mission).decision, "auto");
   assert.equal(firewall.classify({ declaredIntent: "tap", snapshot: freshSurface("social-effect", { effectAction: "follow" }), observedTargetFingerprint: boundTarget }, mission).decision, "ecp");
   assert.equal(firewall.classify({ declaredIntent: "tap", snapshot: freshSurface("payment"), observedTargetFingerprint: boundTarget }, mission).decision, "phc");
-  assert.equal(firewall.classify({ declaredIntent: "tap", snapshot: freshSurface("publish"), observedTargetFingerprint: boundTarget }, mission).decision, "ecp");
+  assert.equal(firewall.classify({ declaredIntent: "tap", snapshot: freshSurface("publish"), observedTargetFingerprint: boundTarget }, mission).decision, "phc");
   assert.equal(firewall.classify({ declaredIntent: "tap", snapshot: freshSurface("delete"), observedTargetFingerprint: boundTarget }, mission).decision, "phc");
   assert.equal(firewall.classify({ declaredIntent: "tap", snapshot: freshSurface("risk-control"), observedTargetFingerprint: boundTarget }, mission).decision, "blocked");
   assert.equal(firewall.classify({ declaredIntent: "tap", snapshot: freshSurface("captcha"), observedTargetFingerprint: boundTarget }, mission).decision, "blocked");
@@ -357,7 +357,7 @@ test("REX P5a: payment/risk-control/login/captcha/publish/delete stay fail-close
   const firewall = new EffectFirewall();
   const mission = activeMission();
   assert.equal(firewall.classify({ declaredIntent: "tap", snapshot: freshSurface("payment"), observedTargetFingerprint: BOUND }, mission, { policyMode: NONPAY_POLICY }).decision, "phc");
-  assert.equal(firewall.classify({ declaredIntent: "tap", snapshot: freshSurface("publish"), observedTargetFingerprint: BOUND }, mission, { policyMode: NONPAY_POLICY }).decision, "ecp");
+  assert.equal(firewall.classify({ declaredIntent: "tap", snapshot: freshSurface("publish"), observedTargetFingerprint: BOUND }, mission, { policyMode: NONPAY_POLICY }).decision, "phc");
   assert.equal(firewall.classify({ declaredIntent: "tap", snapshot: freshSurface("delete"), observedTargetFingerprint: BOUND }, mission, { policyMode: NONPAY_POLICY }).decision, "phc");
   for (const s of ["risk-control", "login", "captcha"]) {
     assert.equal(

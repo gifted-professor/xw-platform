@@ -7,7 +7,7 @@
   {
     "name": "enter checkout",
     "input": { "actionClass": "financial_prepare", "knownCapability": false, "resourceAvailable": true },
-    "expected": { "decision": "dispatch_explorer", "humanApprovalRequired": false, "paymentHold": false }
+    "expected": { "decision": "typed_capability_required", "humanApprovalRequired": false, "paymentHold": false }
   },
   {
     "name": "ordinary social effect",
@@ -17,7 +17,7 @@
   {
     "name": "unknown operation",
     "input": { "actionClass": "unknown", "knownCapability": false, "resourceAvailable": true },
-    "expected": { "decision": "dispatch_explorer", "humanApprovalRequired": false, "paymentHold": false }
+    "expected": { "decision": "typed_capability_required", "humanApprovalRequired": false, "paymentHold": false }
   },
   {
     "name": "busy device",

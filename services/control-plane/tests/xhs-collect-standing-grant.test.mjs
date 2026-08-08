@@ -41,10 +41,10 @@ test("note-detail receipt producer is a separate automatic read-only R0 capabili
   assert.equal(observeNote.implementation.adapter, "xhs");
   assert.equal(observeNote.implementation.action, "observeOpenNoteDetail");
   assert.deepEqual(observeNote.inputSchema.required ?? [], []);
-  assert.deepEqual(evaluateCapabilityPolicy(observeNote, { invocation: "session" }), {
-    approvalRequired: false,
-    externalEffect: false,
-  });
+  const policy = evaluateCapabilityPolicy(observeNote, { invocation: "session" });
+  assert.equal(policy.approvalRequired, false);
+  assert.equal(policy.externalEffect, false);
+  assert.equal(policy.decision, "allow");
 });
 
 test("note-detail producer derives the target only from the resumed activity intent", async () => {

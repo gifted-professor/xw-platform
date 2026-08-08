@@ -9,18 +9,55 @@
       "versionRange": "observed:9.10.113",
       "maturity": "E3",
       "risk": "R0",
-      "resources": ["device", "transport:xiaowei:22222"],
-      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
-      "outputSchema": { "type": "object" },
-      "preconditions": ["xiaowei.exe is in the interactive Windows session"],
-      "verification": { "mode": "state", "description": "vendor success and device array" },
-      "restoration": { "required": false, "description": "read-only" },
+      "resources": [
+        "device",
+        "transport:xiaowei:22222"
+      ],
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object"
+      },
+      "preconditions": [
+        "xiaowei.exe is in the interactive Windows session"
+      ],
+      "verification": {
+        "mode": "state",
+        "description": "vendor success and device array"
+      },
+      "restoration": {
+        "required": false,
+        "description": "read-only"
+      },
       "timeoutMs": 8000,
       "idempotency": "read_only",
-      "automationPolicy": { "mode": "automatic" },
-      "implementation": { "adapter": "xiaowei", "action": "list" },
-      "evidence": ["origin/feat/xiaowei-full-device-api"],
-      "availability": "implemented"
+      "automationPolicy": {
+        "mode": "automatic"
+      },
+      "implementation": {
+        "adapter": "xiaowei",
+        "action": "list"
+      },
+      "evidence": [
+        "origin/feat/xiaowei-full-device-api"
+      ],
+      "availability": "implemented",
+      "effect": {
+        "class": "none",
+        "phase": "na",
+        "commitBoundary": "automatic"
+      },
+      "exposure": "public",
+      "invocationPolicy": {
+        "allowedModes": [
+          "job",
+          "session"
+        ]
+      },
+      "lifecycle": "implemented"
     },
     {
       "schemaVersion": 1,
@@ -30,26 +67,72 @@
       "versionRange": "observed:9.10.113",
       "maturity": "E1",
       "risk": "R1",
-      "resources": ["device", "transport:xiaowei:22222"],
+      "resources": [
+        "device",
+        "transport:xiaowei:22222"
+      ],
       "inputSchema": {
         "type": "object",
         "properties": {
-          "action": { "type": "string", "enum": ["list", "Screen", "imeList"] },
-          "data": { "type": "object" }
+          "action": {
+            "type": "string",
+            "enum": [
+              "list",
+              "Screen",
+              "imeList"
+            ]
+          },
+          "data": {
+            "type": "object"
+          }
         },
-        "required": ["action"],
+        "required": [
+          "action"
+        ],
         "additionalProperties": false
       },
-      "outputSchema": { "type": "object" },
-      "preconditions": ["exclusive canary session", "allowlisted action"],
-      "verification": { "mode": "custom", "description": "vendor success plus action-specific observation" },
-      "restoration": { "required": false, "description": "lab caller must choose only a bounded reversible action" },
+      "outputSchema": {
+        "type": "object"
+      },
+      "preconditions": [
+        "exclusive canary session",
+        "allowlisted action"
+      ],
+      "verification": {
+        "mode": "custom",
+        "description": "vendor success plus action-specific observation"
+      },
+      "restoration": {
+        "required": false,
+        "description": "lab caller must choose only a bounded reversible action"
+      },
       "timeoutMs": 30000,
       "idempotency": "replay_safe",
-      "automationPolicy": { "mode": "lab_only", "canaryOnly": true },
-      "implementation": { "adapter": "xiaowei", "action": "raw" },
-      "evidence": ["origin/feat/xiaowei-full-device-api"],
-      "availability": "canary_only"
+      "automationPolicy": {
+        "mode": "lab_only",
+        "canaryOnly": true
+      },
+      "implementation": {
+        "adapter": "xiaowei",
+        "action": "raw"
+      },
+      "evidence": [
+        "origin/feat/xiaowei-full-device-api"
+      ],
+      "availability": "canary_only",
+      "effect": {
+        "class": "reversible",
+        "phase": "na",
+        "commitBoundary": "automatic"
+      },
+      "exposure": "public",
+      "invocationPolicy": {
+        "allowedModes": [
+          "job",
+          "session"
+        ]
+      },
+      "lifecycle": "canary_only"
     },
     {
       "schemaVersion": 1,
@@ -59,45 +142,151 @@
       "versionRange": "observed:9.10.113",
       "maturity": "E1",
       "risk": "R1",
-      "resources": ["device", "transport:xiaowei:22222"],
+      "resources": [
+        "device",
+        "transport:xiaowei:22222"
+      ],
       "inputSchema": {
         "type": "object",
         "properties": {
           "primitive": {
             "type": "string",
-            "enum": ["screen", "dump_ui", "focus", "tap", "swipe", "back", "launch_app", "input_text"]
+            "enum": [
+              "screen",
+              "dump_ui",
+              "focus",
+              "tap",
+              "swipe",
+              "back",
+              "launch_app",
+              "input_text"
+            ]
           },
-          "x": { "type": "integer", "minimum": 0, "maximum": 4096 },
-          "y": { "type": "integer", "minimum": 0, "maximum": 4096 },
-          "x1": { "type": "integer", "minimum": 0, "maximum": 4096 },
-          "y1": { "type": "integer", "minimum": 0, "maximum": 4096 },
-          "x2": { "type": "integer", "minimum": 0, "maximum": 4096 },
-          "y2": { "type": "integer", "minimum": 0, "maximum": 4096 },
-          "durationMs": { "type": "integer", "minimum": 50, "maximum": 5000 },
-          "times": { "type": "integer", "minimum": 1, "maximum": 5 },
-          "package": { "type": "string", "minLength": 1, "maxLength": 200 },
-          "activity": { "type": "string", "minLength": 1, "maxLength": 300 },
-          "forceStop": { "type": "boolean" },
-          "text": { "type": "string", "minLength": 1, "maxLength": 500 },
-          "refocusX": { "type": "integer", "minimum": 0, "maximum": 4096 },
-          "refocusY": { "type": "integer", "minimum": 0, "maximum": 4096 },
-          "clearFirst": { "type": "boolean" },
-          "enter": { "type": "boolean" },
-          "deferRestore": { "type": "boolean" }
+          "x": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4096
+          },
+          "y": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4096
+          },
+          "x1": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4096
+          },
+          "y1": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4096
+          },
+          "x2": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4096
+          },
+          "y2": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4096
+          },
+          "durationMs": {
+            "type": "integer",
+            "minimum": 50,
+            "maximum": 5000
+          },
+          "times": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5
+          },
+          "package": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "activity": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          },
+          "forceStop": {
+            "type": "boolean"
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "refocusX": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4096
+          },
+          "refocusY": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4096
+          },
+          "clearFirst": {
+            "type": "boolean"
+          },
+          "enter": {
+            "type": "boolean"
+          },
+          "deferRestore": {
+            "type": "boolean"
+          }
         },
-        "required": ["primitive"],
+        "required": [
+          "primitive"
+        ],
         "additionalProperties": false
       },
-      "outputSchema": { "type": "object" },
-      "preconditions": ["exclusive canary session", "bounded Explorer primitive"],
-      "verification": { "mode": "custom", "description": "primitive-specific bounded observation" },
-      "restoration": { "required": false, "description": "caller must choose only bounded reversible primitives" },
+      "outputSchema": {
+        "type": "object"
+      },
+      "preconditions": [
+        "exclusive canary session",
+        "bounded Explorer primitive"
+      ],
+      "verification": {
+        "mode": "custom",
+        "description": "primitive-specific bounded observation"
+      },
+      "restoration": {
+        "required": false,
+        "description": "caller must choose only bounded reversible primitives"
+      },
       "timeoutMs": 60000,
       "idempotency": "replay_safe",
-      "automationPolicy": { "mode": "lab_only", "canaryOnly": true },
-      "implementation": { "adapter": "xiaowei", "action": "explorer_primitive" },
-      "evidence": ["HANDOFF-2026-08-05-xw-explorer-session-fencing"],
-      "availability": "canary_only"
+      "automationPolicy": {
+        "mode": "lab_only",
+        "canaryOnly": true
+      },
+      "implementation": {
+        "adapter": "xiaowei",
+        "action": "explorer_primitive"
+      },
+      "evidence": [
+        "HANDOFF-2026-08-05-xw-explorer-session-fencing"
+      ],
+      "availability": "canary_only",
+      "effect": {
+        "class": "reversible",
+        "phase": "na",
+        "commitBoundary": "automatic"
+      },
+      "exposure": "public",
+      "invocationPolicy": {
+        "allowedModes": [
+          "job",
+          "session"
+        ]
+      },
+      "lifecycle": "canary_only"
     }
   ]
 }

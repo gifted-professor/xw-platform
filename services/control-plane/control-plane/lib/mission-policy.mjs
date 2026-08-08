@@ -3,7 +3,9 @@ import { ControlPlaneError } from "./errors.mjs";
 
 export const MISSION_SCHEMA_VERSION = 1;
 export const SOCIAL_ACTIONS = new Set(["follow", "like", "collect", "comment", "dm"]);
-export const RELEASEABLE_ACTIONS = new Set(["publish", "delete"]);
+// Foundation Freeze: publish/delete final are permanent protected — no allow_within_scope release.
+// Kept as empty set so schema readers that still list policy keys do not release final actions.
+export const RELEASEABLE_ACTIONS = new Set([]);
 export const PROTECTED_ACTIONS = new Set(["payment", "publish", "delete"]);
 export const SNAPSHOT_MAX_AGE_MS = 5 * 60 * 1000;
 
@@ -121,8 +123,10 @@ export function validateMissionPolicy(input) {
   }
   const actions = requireStringArray(scope.actions, "scope.actions");
   for (const action of actions) {
-    if (PROTECTED_ACTIONS.has(action) && !RELEASEABLE_ACTIONS.has(action)) {
-      // payment may never appear in scope.actions; publish/delete may, to release them.
+    // payment may never appear in scope.actions.
+    // publish/delete may still be listed for budget/context, but evaluateMissionEffect
+    // always returns phc (Foundation freeze — no allow_within_scope release).
+    if (action === "payment") {
       throw new ControlPlaneError(
         "ACTION_NOT_AUTHORIZABLE",
         `${action} cannot be declared inside scope.actions`,
@@ -318,17 +322,12 @@ export function evaluateMissionEffect(mission, { action, target }, { now = Date.
     return { decision: "phc", reason: "PAYMENT_HUMAN_COMMIT" };
   }
 
+  // Foundation INV-01: publish/delete final always protected; allow_within_scope cannot release.
   if (action === "publish") {
-    if (mission.policy?.publish === "allow_within_scope") {
-      return scopeOrTargetViolation(mission, action, target) ?? { decision: "ecp", reason: "PUBLISH_RELEASED" };
-    }
-    return { decision: "phc", reason: "PUBLISH_HUMAN_COMMIT" };
+    return { decision: "phc", reason: "PROTECTED_COMMIT_REQUIRED", code: "PROTECTED_COMMIT_REQUIRED" };
   }
   if (action === "delete") {
-    if (mission.policy?.delete === "allow_within_scope") {
-      return scopeOrTargetViolation(mission, action, target) ?? { decision: "ecp", reason: "DELETE_RELEASED" };
-    }
-    return { decision: "phc", reason: "DELETE_HUMAN_COMMIT" };
+    return { decision: "phc", reason: "PROTECTED_COMMIT_REQUIRED", code: "PROTECTED_COMMIT_REQUIRED" };
   }
 
   // social effects (follow/like/collect/comment/dm) and any other declared action.

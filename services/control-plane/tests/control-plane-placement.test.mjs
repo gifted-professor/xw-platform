@@ -174,7 +174,10 @@ test("real nonpayment pilot pins the named actor to alias 01 while other actors 
 
     const otherPlan = f.control.planRoute({ actorId: "other", capabilityId: effect.id, deviceId: f.devices[1].deviceId });
     assert.equal(otherPlan.selectedDeviceId, f.devices[1].deviceId);
-    assert.equal(otherPlan.approvalRequired, true);
+    // Foundation: out-of-scope pilot is block, not ordinary approval
+    assert.equal(otherPlan.authorization?.decision, "block");
+    assert.equal(otherPlan.authorization?.reasonCode, "AUTONOMY_PILOT_SCOPE_MISS");
+    assert.equal(otherPlan.approvalRequired, false);
 
     const pilotJob = f.control.submitJob({
       idempotencyKey: "pilot-effect",
@@ -184,15 +187,15 @@ test("real nonpayment pilot pins the named actor to alias 01 while other actors 
     assert.equal(pilotJob.job.deviceId, f.devices[0].deviceId);
     assert.equal(pilotJob.job.approvalRequired, false);
 
-    const otherJob = f.control.submitJob({
-      idempotencyKey: "other-effect",
-      actorId: "other",
-      deviceId: f.devices[1].deviceId,
-      capabilityId: effect.id,
-    });
-    assert.equal(otherJob.job.deviceId, f.devices[1].deviceId);
-    assert.equal(otherJob.job.status, "waiting_approval");
-    assert.equal(otherJob.job.approvalRequired, true);
+    assert.throws(
+      () => f.control.submitJob({
+        idempotencyKey: "other-effect",
+        actorId: "other",
+        deviceId: f.devices[1].deviceId,
+        capabilityId: effect.id,
+      }),
+      (err) => err.code === "AUTONOMY_PILOT_SCOPE_MISS" && err.status === 403,
+    );
     await f.control.waitForJob(pilotJob.job.jobId);
   } finally {
     await f.close();
@@ -451,7 +454,7 @@ test("v1 SQLite state migrates additively and preserves legacy idempotency", () 
 
   const state = new StateStore({ dbPath });
   try {
-    assert.equal(state.db.prepare("PRAGMA user_version").get().user_version, 13);
+    assert.equal(state.db.prepare("PRAGMA user_version").get().user_version, 14);
     assert.ok(state.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='standing_grant_canaries'").get());
     assert.ok(state.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='discovery_runs'").get());
     assert.ok(state.db.prepare("PRAGMA table_info(jobs)").all().some((column) => column.name === "placement_decision_json"));

@@ -9,18 +9,54 @@
       "versionRange": "observed",
       "maturity": "E3",
       "risk": "R0",
-      "resources": ["device"],
-      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
-      "outputSchema": { "type": "object" },
-      "preconditions": ["fast-operator loopback serve is online"],
-      "verification": { "mode": "state", "description": "serve returns a metrics object" },
-      "restoration": { "required": false, "description": "read-only" },
+      "resources": [
+        "device"
+      ],
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object"
+      },
+      "preconditions": [
+        "fast-operator loopback serve is online"
+      ],
+      "verification": {
+        "mode": "state",
+        "description": "serve returns a metrics object"
+      },
+      "restoration": {
+        "required": false,
+        "description": "read-only"
+      },
       "timeoutMs": 5000,
       "idempotency": "read_only",
-      "automationPolicy": { "mode": "automatic" },
-      "implementation": { "adapter": "xhs", "action": "metrics" },
-      "evidence": ["docs/device-task-handoffs/2026-07-20-task-runner-plan.md"],
-      "availability": "implemented"
+      "automationPolicy": {
+        "mode": "automatic"
+      },
+      "implementation": {
+        "adapter": "xhs",
+        "action": "metrics"
+      },
+      "evidence": [
+        "docs/device-task-handoffs/2026-07-20-task-runner-plan.md"
+      ],
+      "availability": "implemented",
+      "effect": {
+        "class": "none",
+        "phase": "na",
+        "commitBoundary": "automatic"
+      },
+      "exposure": "public",
+      "invocationPolicy": {
+        "allowedModes": [
+          "job",
+          "session"
+        ]
+      },
+      "lifecycle": "implemented"
     },
     {
       "schemaVersion": 1,
@@ -30,18 +66,55 @@
       "versionRange": "observed",
       "maturity": "E3",
       "risk": "R0",
-      "resources": ["device"],
-      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
-      "outputSchema": { "type": "object" },
-      "preconditions": ["XHS is on a feed page", "fast-operator serve is online"],
-      "verification": { "mode": "state", "description": "fresh hierarchy parses into a card array" },
-      "restoration": { "required": false, "description": "observation does not change UI state" },
+      "resources": [
+        "device"
+      ],
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object"
+      },
+      "preconditions": [
+        "XHS is on a feed page",
+        "fast-operator serve is online"
+      ],
+      "verification": {
+        "mode": "state",
+        "description": "fresh hierarchy parses into a card array"
+      },
+      "restoration": {
+        "required": false,
+        "description": "observation does not change UI state"
+      },
       "timeoutMs": 20000,
       "idempotency": "read_only",
-      "automationPolicy": { "mode": "automatic" },
-      "implementation": { "adapter": "xhs", "action": "feedCards" },
-      "evidence": ["docs/device-task-handoffs/2026-07-19-fast-operator-bypass-plan.md"],
-      "availability": "implemented"
+      "automationPolicy": {
+        "mode": "automatic"
+      },
+      "implementation": {
+        "adapter": "xhs",
+        "action": "feedCards"
+      },
+      "evidence": [
+        "docs/device-task-handoffs/2026-07-19-fast-operator-bypass-plan.md"
+      ],
+      "availability": "implemented",
+      "effect": {
+        "class": "none",
+        "phase": "na",
+        "commitBoundary": "automatic"
+      },
+      "exposure": "public",
+      "invocationPolicy": {
+        "allowedModes": [
+          "job",
+          "session"
+        ]
+      },
+      "lifecycle": "implemented"
     },
     {
       "schemaVersion": 1,
@@ -51,22 +124,55 @@
       "versionRange": "observed",
       "maturity": "E3",
       "risk": "R0",
-      "resources": ["device", "transport:xiaowei:22222"],
+      "resources": [
+        "device",
+        "transport:xiaowei:22222"
+      ],
       "inputSchema": {
         "type": "object",
         "properties": {},
         "additionalProperties": false
       },
-      "outputSchema": { "type": "object" },
-      "preconditions": ["XHS is already on a note detail surface with a stable activity intent locator"],
-      "verification": { "mode": "state", "description": "device parser derives stable page and target fingerprints from the resumed note intent" },
-      "restoration": { "required": false, "description": "observation does not change device state" },
+      "outputSchema": {
+        "type": "object"
+      },
+      "preconditions": [
+        "XHS is already on a note detail surface with a stable activity intent locator"
+      ],
+      "verification": {
+        "mode": "state",
+        "description": "device parser derives stable page and target fingerprints from the resumed note intent"
+      },
+      "restoration": {
+        "required": false,
+        "description": "observation does not change device state"
+      },
       "timeoutMs": 20000,
       "idempotency": "read_only",
-      "automationPolicy": { "mode": "automatic" },
-      "implementation": { "adapter": "xhs", "action": "observeOpenNoteDetail" },
-      "evidence": ["docs/plans/2026-07-30-explicit-target-phase1-implementation-batches.md"],
-      "availability": "implemented"
+      "automationPolicy": {
+        "mode": "automatic"
+      },
+      "implementation": {
+        "adapter": "xhs",
+        "action": "observeOpenNoteDetail"
+      },
+      "evidence": [
+        "docs/plans/2026-07-30-explicit-target-phase1-implementation-batches.md"
+      ],
+      "availability": "implemented",
+      "effect": {
+        "class": "none",
+        "phase": "na",
+        "commitBoundary": "automatic"
+      },
+      "exposure": "public",
+      "invocationPolicy": {
+        "allowedModes": [
+          "job",
+          "session"
+        ]
+      },
+      "lifecycle": "implemented"
     },
     {
       "schemaVersion": 1,
@@ -76,25 +182,68 @@
       "versionRange": "observed",
       "maturity": "E2",
       "risk": "R0",
-      "resources": ["device", "transport:xiaowei:22222"],
+      "resources": [
+        "device",
+        "transport:xiaowei:22222"
+      ],
       "inputSchema": {
         "type": "object",
         "properties": {
-          "selector": { "type": "string", "enum": ["any"] },
-          "index": { "type": "integer", "minimum": 0, "maximum": 20 }
+          "selector": {
+            "type": "string",
+            "enum": [
+              "any"
+            ]
+          },
+          "index": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 20
+          }
         },
         "additionalProperties": false
       },
-      "outputSchema": { "type": "object" },
-      "preconditions": ["XHS is installed", "a formal control-plane session and visible lease are active"],
-      "verification": { "mode": "state", "description": "a visible feed card opens and the device parser emits a stable note-detail receipt" },
-      "restoration": { "required": false, "description": "navigation intentionally leaves the selected note open for a subsequent governed action" },
+      "outputSchema": {
+        "type": "object"
+      },
+      "preconditions": [
+        "XHS is installed",
+        "a formal control-plane session and visible lease are active"
+      ],
+      "verification": {
+        "mode": "state",
+        "description": "a visible feed card opens and the device parser emits a stable note-detail receipt"
+      },
+      "restoration": {
+        "required": false,
+        "description": "navigation intentionally leaves the selected note open for a subsequent governed action"
+      },
       "timeoutMs": 40000,
       "idempotency": "replay_safe",
-      "automationPolicy": { "mode": "automatic" },
-      "implementation": { "adapter": "xhs", "action": "openFeedNote" },
-      "evidence": ["formal feed-to-note navigation and sealed observation receipt"],
-      "availability": "implemented"
+      "automationPolicy": {
+        "mode": "automatic"
+      },
+      "implementation": {
+        "adapter": "xhs",
+        "action": "openFeedNote"
+      },
+      "evidence": [
+        "formal feed-to-note navigation and sealed observation receipt"
+      ],
+      "availability": "implemented",
+      "effect": {
+        "class": "none",
+        "phase": "na",
+        "commitBoundary": "automatic"
+      },
+      "exposure": "public",
+      "invocationPolicy": {
+        "allowedModes": [
+          "job",
+          "session"
+        ]
+      },
+      "lifecycle": "implemented"
     },
     {
       "schemaVersion": 1,
@@ -104,23 +253,64 @@
       "versionRange": "observed",
       "maturity": "E3",
       "risk": "R1",
-      "resources": ["device", "transport:xiaowei:22222"],
+      "resources": [
+        "device",
+        "transport:xiaowei:22222"
+      ],
       "inputSchema": {
         "type": "object",
-        "properties": { "text": { "type": "string", "minLength": 1, "maxLength": 80 } },
-        "required": ["text"],
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          }
+        },
+        "required": [
+          "text"
+        ],
         "additionalProperties": false
       },
-      "outputSchema": { "type": "object" },
-      "preconditions": ["an XHS note with a comment box is open"],
-      "verification": { "mode": "text_scan", "description": "fresh editor text contains the probe and no send action occurs" },
-      "restoration": { "required": true, "description": "clear the editor, restore the original IME, and return to feed" },
+      "outputSchema": {
+        "type": "object"
+      },
+      "preconditions": [
+        "an XHS note with a comment box is open"
+      ],
+      "verification": {
+        "mode": "text_scan",
+        "description": "fresh editor text contains the probe and no send action occurs"
+      },
+      "restoration": {
+        "required": true,
+        "description": "clear the editor, restore the original IME, and return to feed"
+      },
       "timeoutMs": 60000,
       "idempotency": "replay_safe",
-      "automationPolicy": { "mode": "automatic" },
-      "implementation": { "adapter": "xhs", "action": "inputTextDryRun" },
-      "evidence": ["docs/device-task-handoffs/2026-07-20-slice2-comment-autonomy.md"],
-      "availability": "implemented"
+      "automationPolicy": {
+        "mode": "automatic"
+      },
+      "implementation": {
+        "adapter": "xhs",
+        "action": "inputTextDryRun"
+      },
+      "evidence": [
+        "docs/device-task-handoffs/2026-07-20-slice2-comment-autonomy.md"
+      ],
+      "availability": "implemented",
+      "effect": {
+        "class": "reversible",
+        "phase": "na",
+        "commitBoundary": "automatic"
+      },
+      "exposure": "public",
+      "invocationPolicy": {
+        "allowedModes": [
+          "job",
+          "session"
+        ]
+      },
+      "lifecycle": "implemented"
     },
     {
       "schemaVersion": 1,
@@ -130,23 +320,68 @@
       "versionRange": "observed",
       "maturity": "E2",
       "risk": "R2",
-      "resources": ["device", "transport:xiaowei:22222"],
+      "resources": [
+        "device",
+        "transport:xiaowei:22222"
+      ],
       "inputSchema": {
         "type": "object",
-        "properties": { "text": { "type": "string", "minLength": 1, "maxLength": 80 } },
-        "required": ["text"],
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          }
+        },
+        "required": [
+          "text"
+        ],
         "additionalProperties": false
       },
-      "outputSchema": { "type": "object" },
-      "preconditions": ["a selected XHS note is open", "explicit human approval exists"],
-      "verification": { "mode": "custom", "description": "count delta +1 or fresh text scan confirms the new comment" },
-      "restoration": { "required": true, "description": "restore IME and return to feed without resending" },
+      "outputSchema": {
+        "type": "object"
+      },
+      "preconditions": [
+        "a selected XHS note is open",
+        "explicit human approval exists"
+      ],
+      "verification": {
+        "mode": "custom",
+        "description": "count delta +1 or fresh text scan confirms the new comment"
+      },
+      "restoration": {
+        "required": true,
+        "description": "restore IME and return to feed without resending"
+      },
       "timeoutMs": 90000,
       "idempotency": "ambiguous_on_timeout",
-      "automationPolicy": { "mode": "approval_required", "transactionSafe": false },
-      "implementation": { "adapter": "xhs", "action": "commentOnOpenNote" },
-      "evidence": ["docs/device-task-handoffs/2026-07-20-slice2-comment-autonomy.md"],
-      "availability": "approval_gated"
+      "automationPolicy": {
+        "mode": "approval_required",
+        "transactionSafe": false
+      },
+      "implementation": {
+        "adapter": "xhs",
+        "action": "commentOnOpenNote"
+      },
+      "evidence": [
+        "docs/device-task-handoffs/2026-07-20-slice2-comment-autonomy.md"
+      ],
+      "availability": "approval_gated",
+      "effect": {
+        "class": "social",
+        "phase": "final",
+        "commitBoundary": "automatic"
+      },
+      "exposure": "internal",
+      "invocationPolicy": {
+        "allowedModes": [
+          "composite_action"
+        ],
+        "parentCapabilityIds": [
+          "xhs.comment.bound_send"
+        ]
+      },
+      "lifecycle": "canary_only"
     },
     {
       "schemaVersion": 1,
@@ -156,25 +391,73 @@
       "versionRange": "observed",
       "maturity": "E2",
       "risk": "R2",
-      "resources": ["device", "transport:xiaowei:22222"],
+      "resources": [
+        "device",
+        "transport:xiaowei:22222"
+      ],
       "inputSchema": {
         "type": "object",
-        "required": ["observationReceiptId", "targetFingerprint"],
+        "required": [
+          "observationReceiptId",
+          "targetFingerprint"
+        ],
         "properties": {
-          "observationReceiptId": { "type": "string", "minLength": 1, "maxLength": 256 },
-          "targetFingerprint": { "type": "string", "minLength": 1, "maxLength": 256 }
+          "observationReceiptId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "targetFingerprint": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          }
         },
         "additionalProperties": false
       },
-      "outputSchema": { "type": "object" },
-      "preconditions": ["governed Standing Grant Mission ECP has bound a fresh explicit observation receipt", "XHS is on the exact NoteDetailActivity or DetailFeedActivity target surface", "initial favorite state is explicitly uncollected"],
-      "verification": { "mode": "custom", "description": "favorite state transitions from uncollected to collected, or the verified count changes" },
-      "restoration": { "required": true, "description": "only undo the collect sent by this capability and return to feed; ambiguity requires recovery" },
+      "outputSchema": {
+        "type": "object"
+      },
+      "preconditions": [
+        "governed Standing Grant Mission ECP has bound a fresh explicit observation receipt",
+        "XHS is on the exact NoteDetailActivity or DetailFeedActivity target surface",
+        "initial favorite state is explicitly uncollected"
+      ],
+      "verification": {
+        "mode": "custom",
+        "description": "favorite state transitions from uncollected to collected, or the verified count changes"
+      },
+      "restoration": {
+        "required": true,
+        "description": "only undo the collect sent by this capability and return to feed; ambiguity requires recovery"
+      },
       "timeoutMs": 90000,
       "idempotency": "ambiguous_on_timeout",
-      "automationPolicy": { "mode": "approval_required" },
-      "implementation": { "adapter": "xhs", "action": "collectOnOpenNote" },
-      "evidence": ["ui-dump-before", "ui-dump-after", "collect-state-transition", "restoration-state"]
+      "automationPolicy": {
+        "mode": "approval_required"
+      },
+      "implementation": {
+        "adapter": "xhs",
+        "action": "collectOnOpenNote"
+      },
+      "evidence": [
+        "ui-dump-before",
+        "ui-dump-after",
+        "collect-state-transition",
+        "restoration-state"
+      ],
+      "effect": {
+        "class": "social",
+        "phase": "final",
+        "commitBoundary": "automatic"
+      },
+      "exposure": "internal",
+      "invocationPolicy": {
+        "allowedModes": [
+          "mission_effect"
+        ]
+      },
+      "lifecycle": "implemented"
     }
   ]
 }

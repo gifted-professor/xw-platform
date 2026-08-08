@@ -151,7 +151,7 @@ test("evaluateMissionEffect classifies scope and policy without typed action IDs
   }
 });
 
-test("explicitly released publish/delete run the ECP, not the PHC", () => {
+test("publish/delete stay PHC even when policy allow_within_scope (Foundation PR1)", () => {
   const root = tempRoot();
   const { state, runtime } = setup(join(root, "control.db"));
   try {
@@ -162,9 +162,10 @@ test("explicitly released publish/delete run the ECP, not the PHC", () => {
       policy: { publish: "allow_within_scope", delete: "allow_within_scope" },
     });
     const target = "target-hash-aaa";
-    assert.equal(runtime.evaluateMissionEffect(mission, { action: "publish", target }).decision, "ecp");
-    assert.equal(runtime.evaluateMissionEffect(mission, { action: "delete", target }).decision, "ecp");
-    assert.equal(runtime.evaluateMissionEffect(mission, { action: "publish", target: "other" }).decision, "scope_violation");
+    assert.equal(runtime.evaluateMissionEffect(mission, { action: "publish", target }).decision, "phc");
+    assert.equal(runtime.evaluateMissionEffect(mission, { action: "delete", target }).decision, "phc");
+    // Out-of-scope publish still PHC (INV-01): never soft-release via scope_violation→ECP path.
+    assert.equal(runtime.evaluateMissionEffect(mission, { action: "publish", target: "other" }).decision, "phc");
   } finally {
     state.close();
     rmSync(root, { recursive: true, force: true });

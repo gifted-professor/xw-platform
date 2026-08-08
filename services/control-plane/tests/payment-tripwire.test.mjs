@@ -120,10 +120,14 @@ test("admission gate refuses a financial_commit capability on every auto-dispatc
   const base = { id: "fixture.pay.send", appId: "fixture", maturity: "E3", risk: "R0", idempotency: "replay_safe", automationPolicy: { mode: "automatic" }, resources: [], restoration: { required: false } };
   const payCap = { ...base, financialCommit: true };
   for (const invocation of ["job", "session", "mission_effect"]) {
-    assert.throws(() => evaluateCapabilityPolicy(payCap, { invocation }), { code: "FINANCIAL_COMMIT_REQUIRES_HUMAN_GATE" }, invocation);
+    const out = evaluateCapabilityPolicy(payCap, { invocation });
+    assert.equal(out.decision, "wait_human_commit", invocation);
+    assert.equal(out.reasonCode, "PROTECTED_COMMIT_REQUIRED", invocation);
+    assert.equal(out.approvalRequired, true, invocation);
   }
   // 普通同等 capability 不受闸影响
-  assert.doesNotThrow(() => evaluateCapabilityPolicy(base, { invocation: "job" }));
+  const ok = evaluateCapabilityPolicy(base, { invocation: "job" });
+  assert.equal(ok.decision, "allow");
 });
 
 test("XiaoweiTransport.invoke fail-closes on financial_commit data before opening the WS", async () => {

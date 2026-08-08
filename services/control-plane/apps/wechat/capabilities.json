@@ -9,21 +9,59 @@
       "versionRange": "observed:8.0.64",
       "maturity": "E2",
       "risk": "R0",
-      "resources": ["device", "transport:xiaowei:22222"],
-      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
-      "outputSchema": { "type": "object" },
+      "resources": [
+        "device",
+        "transport:xiaowei:22222"
+      ],
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object"
+      },
       "preconditions": [
         "WeChat is installed and logged in",
         "dump is empty-shell → Activity classify + screenshot hash (OCR optional later)"
       ],
-      "verification": { "mode": "state", "description": "LauncherUI messages tab + fresh screenshot hash" },
-      "restoration": { "required": true, "description": "return to the WeChat main page" },
+      "verification": {
+        "mode": "state",
+        "description": "LauncherUI messages tab + fresh screenshot hash"
+      },
+      "restoration": {
+        "required": true,
+        "description": "return to the WeChat main page"
+      },
       "timeoutMs": 90000,
       "idempotency": "read_only",
-      "automationPolicy": { "mode": "automatic" },
-      "implementation": { "adapter": "wechat", "action": "inspect" },
-      "evidence": ["PR #13", "skills/wechat/SKILL.md", "tmp-know/EXPLORE-WECHAT-01-20260801.md", "scripts/wechat-operator.mjs slice1"],
-      "availability": "implemented"
+      "automationPolicy": {
+        "mode": "automatic"
+      },
+      "implementation": {
+        "adapter": "wechat",
+        "action": "inspect"
+      },
+      "evidence": [
+        "PR #13",
+        "skills/wechat/SKILL.md",
+        "tmp-know/EXPLORE-WECHAT-01-20260801.md",
+        "scripts/wechat-operator.mjs slice1"
+      ],
+      "availability": "implemented",
+      "effect": {
+        "class": "none",
+        "phase": "na",
+        "commitBoundary": "automatic"
+      },
+      "exposure": "public",
+      "invocationPolicy": {
+        "allowedModes": [
+          "job",
+          "session"
+        ]
+      },
+      "lifecycle": "implemented"
     },
     {
       "schemaVersion": 1,
@@ -33,25 +71,64 @@
       "versionRange": "observed:8.0.64",
       "maturity": "E2",
       "risk": "R0",
-      "resources": ["device", "transport:xiaowei:22222"],
+      "resources": [
+        "device",
+        "transport:xiaowei:22222"
+      ],
       "inputSchema": {
         "type": "object",
-        "properties": { "label": { "type": "string", "minLength": 1, "maxLength": 40 } },
+        "properties": {
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 40
+          }
+        },
         "additionalProperties": false
       },
-      "outputSchema": { "type": "object" },
+      "outputSchema": {
+        "type": "object"
+      },
       "preconditions": [
         "WeChat is installed and logged in",
         "dump is empty-shell → Activity classify + screenshot hash (OCR optional later)"
       ],
-      "verification": { "mode": "hash", "description": "fresh focus, screen ID, and screenshot hash are returned" },
-      "restoration": { "required": false, "description": "probe does not navigate beyond ensure-foreground" },
+      "verification": {
+        "mode": "hash",
+        "description": "fresh focus, screen ID, and screenshot hash are returned"
+      },
+      "restoration": {
+        "required": false,
+        "description": "probe does not navigate beyond ensure-foreground"
+      },
       "timeoutMs": 60000,
       "idempotency": "read_only",
-      "automationPolicy": { "mode": "automatic" },
-      "implementation": { "adapter": "wechat", "action": "probe" },
-      "evidence": ["PR #13", "skills/wechat/SKILL.md", "scripts/wechat-operator.mjs slice1"],
-      "availability": "implemented"
+      "automationPolicy": {
+        "mode": "automatic"
+      },
+      "implementation": {
+        "adapter": "wechat",
+        "action": "probe"
+      },
+      "evidence": [
+        "PR #13",
+        "skills/wechat/SKILL.md",
+        "scripts/wechat-operator.mjs slice1"
+      ],
+      "availability": "implemented",
+      "effect": {
+        "class": "none",
+        "phase": "na",
+        "commitBoundary": "automatic"
+      },
+      "exposure": "public",
+      "invocationPolicy": {
+        "allowedModes": [
+          "job",
+          "session"
+        ]
+      },
+      "lifecycle": "implemented"
     },
     {
       "schemaVersion": 1,
@@ -61,23 +138,65 @@
       "versionRange": "observed:8.0.64",
       "maturity": "E2",
       "risk": "R1",
-      "resources": ["device", "transport:xiaowei:22222"],
+      "resources": [
+        "device",
+        "transport:xiaowei:22222"
+      ],
       "inputSchema": {
         "type": "object",
-        "properties": { "title": { "type": "string", "minLength": 1, "maxLength": 80 } },
-        "required": ["title"],
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          }
+        },
+        "required": [
+          "title"
+        ],
         "additionalProperties": false
       },
-      "outputSchema": { "type": "object" },
-      "preconditions": ["unique OCR contact match", "local OCR and wechat-operator open path"],
-      "verification": { "mode": "custom", "description": "ChattingUI title matches and main-page baseline is restored" },
-      "restoration": { "required": true, "description": "return to main page and compare baseline" },
+      "outputSchema": {
+        "type": "object"
+      },
+      "preconditions": [
+        "unique OCR contact match",
+        "local OCR and wechat-operator open path"
+      ],
+      "verification": {
+        "mode": "custom",
+        "description": "ChattingUI title matches and main-page baseline is restored"
+      },
+      "restoration": {
+        "required": true,
+        "description": "return to main page and compare baseline"
+      },
       "timeoutMs": 120000,
       "idempotency": "replay_safe",
-      "automationPolicy": { "mode": "automatic" },
-      "implementation": { "adapter": "wechat", "action": "open" },
-      "evidence": ["PR #13"],
-      "availability": "dependency_pending_wechat_ocr"
+      "automationPolicy": {
+        "mode": "automatic"
+      },
+      "implementation": {
+        "adapter": "wechat",
+        "action": "open"
+      },
+      "evidence": [
+        "PR #13"
+      ],
+      "availability": "dependency_pending_wechat_ocr",
+      "effect": {
+        "class": "reversible",
+        "phase": "na",
+        "commitBoundary": "automatic"
+      },
+      "exposure": "public",
+      "invocationPolicy": {
+        "allowedModes": [
+          "job",
+          "session"
+        ]
+      },
+      "lifecycle": "draft"
     }
   ]
 }

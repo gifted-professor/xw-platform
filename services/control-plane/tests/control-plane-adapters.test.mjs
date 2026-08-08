@@ -339,10 +339,10 @@ test("Xianyu adapter preserves stop-before-publish and discard verification", as
   })).ok, false);
   assert.equal(calls.at(-1).args.includes("verify-image-manifest"), true);
   assert.equal(calls.at(-1).args.includes("--images"), true);
-  assert.deepEqual(evaluateCapabilityPolicy(imageManifestCap), {
-    approvalRequired: false,
-    externalEffect: false,
-  });
+  const imagePolicy = evaluateCapabilityPolicy(imageManifestCap);
+  assert.equal(imagePolicy.approvalRequired, false);
+  assert.equal(imagePolicy.externalEffect, false);
+  assert.equal(imagePolicy.decision, "allow");
   assert.throws(
     () => registry.validateParams(imageManifestCap.id, {
       images: [{ phonePath: "/sdcard/Pictures/a.png", sha256: "short" }],
@@ -406,19 +406,19 @@ test("Xianyu adapter preserves stop-before-publish and discard verification", as
   })).ok, false);
 
   const fullDraftCap = registry.require("xianyu.publish.full_draft_dry_run");
-  // REX Phase 5 §8.2 B9 反转：legacy 下旧锁仍在（external_effect + approval_required →
-  // approvalRequired:true），作为迁移期 fallback 文档；
-  assert.deepEqual(evaluateCapabilityPolicy(fullDraftCap), {
-    approvalRequired: true,
-    externalEffect: true,
-  });
-  // nonpayment_v1 active（fake adapter）下：非支付 draft dry-run 不再要求审批——自由 +
-  // liveness（adapter 实际执行 dispatch，不拦）。externalEffect 仍作为事实返回。
+  // Foundation: shadow/legacy blocks business prepare without ordinary approval.
+  const legacyDraft = evaluateCapabilityPolicy(fullDraftCap);
+  assert.equal(legacyDraft.decision, "block");
+  assert.equal(legacyDraft.reasonCode, "AUTONOMY_INACTIVE");
+  assert.equal(legacyDraft.approvalRequired, false);
+  assert.equal(legacyDraft.externalEffect, true);
+  // nonpayment_v1 active: prepare allow
   const activeMode = { active: true, effectiveDecisionSource: "deployed-runtime", mode: "nonpayment_v1" };
   const freed = evaluateCapabilityPolicy(fullDraftCap, { policyMode: activeMode });
+  assert.equal(freed.decision, "allow");
   assert.equal(freed.approvalRequired, false, "nonpayment_v1: non-payment draft must not require approval");
   assert.equal(freed.externalEffect, true, "externalEffect stays as a fact for ECP/reconcile semantics");
-  assert.equal(freed.effectiveDecisionSource, "deployed-runtime");
+  assert.equal(freed.authorization?.effectiveDecisionSource, "deployed-runtime");
   const draftExec = await adapter.execute({
     capability: fullDraftCap,
     device: privateDevice,

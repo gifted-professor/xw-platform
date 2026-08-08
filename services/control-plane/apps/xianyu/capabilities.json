@@ -9,18 +9,54 @@
       "versionRange": "observed",
       "maturity": "E2",
       "risk": "R0",
-      "resources": ["device"],
-      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
-      "outputSchema": { "type": "object" },
-      "preconditions": ["PR #11 xianyu-operator implementation is present"],
-      "verification": { "mode": "state", "description": "fresh focus and semantic snapshot are returned" },
-      "restoration": { "required": false, "description": "read-only" },
+      "resources": [
+        "device"
+      ],
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object"
+      },
+      "preconditions": [
+        "PR #11 xianyu-operator implementation is present"
+      ],
+      "verification": {
+        "mode": "state",
+        "description": "fresh focus and semantic snapshot are returned"
+      },
+      "restoration": {
+        "required": false,
+        "description": "read-only"
+      },
       "timeoutMs": 30000,
       "idempotency": "read_only",
-      "automationPolicy": { "mode": "automatic" },
-      "implementation": { "adapter": "xianyu", "action": "snapshot" },
-      "evidence": ["PR #11"],
-      "availability": "implemented"
+      "automationPolicy": {
+        "mode": "automatic"
+      },
+      "implementation": {
+        "adapter": "xianyu",
+        "action": "snapshot"
+      },
+      "evidence": [
+        "PR #11"
+      ],
+      "availability": "implemented",
+      "effect": {
+        "class": "none",
+        "phase": "na",
+        "commitBoundary": "automatic"
+      },
+      "exposure": "public",
+      "invocationPolicy": {
+        "allowedModes": [
+          "job",
+          "session"
+        ]
+      },
+      "lifecycle": "implemented"
     },
     {
       "schemaVersion": 1,
@@ -30,7 +66,9 @@
       "versionRange": "observed",
       "maturity": "E2",
       "risk": "R0",
-      "resources": ["device"],
+      "resources": [
+        "device"
+      ],
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -52,15 +90,22 @@
                   "maxLength": 64
                 }
               },
-              "required": ["phonePath", "sha256"],
+              "required": [
+                "phonePath",
+                "sha256"
+              ],
               "additionalProperties": false
             }
           }
         },
-        "required": ["images"],
+        "required": [
+          "images"
+        ],
         "additionalProperties": false
       },
-      "outputSchema": { "type": "object" },
+      "outputSchema": {
+        "type": "object"
+      },
       "preconditions": [
         "images are expected under /sdcard/Pictures",
         "the capability only computes SHA-256 and never starts or navigates Xianyu"
@@ -69,13 +114,36 @@
         "mode": "state",
         "description": "every bounded phone path exists with the expected SHA-256 before any UI work"
       },
-      "restoration": { "required": false, "description": "read-only; no UI or file mutation" },
+      "restoration": {
+        "required": false,
+        "description": "read-only; no UI or file mutation"
+      },
       "timeoutMs": 30000,
       "idempotency": "read_only",
-      "automationPolicy": { "mode": "automatic" },
-      "implementation": { "adapter": "xianyu", "action": "verify-image-manifest" },
-      "evidence": ["xianyu-04-image-phone-path-preflight-gap-20260726"],
-      "availability": "implemented"
+      "automationPolicy": {
+        "mode": "automatic"
+      },
+      "implementation": {
+        "adapter": "xianyu",
+        "action": "verify-image-manifest"
+      },
+      "evidence": [
+        "xianyu-04-image-phone-path-preflight-gap-20260726"
+      ],
+      "availability": "implemented",
+      "effect": {
+        "class": "none",
+        "phase": "na",
+        "commitBoundary": "automatic"
+      },
+      "exposure": "public",
+      "invocationPolicy": {
+        "allowedModes": [
+          "job",
+          "session"
+        ]
+      },
+      "lifecycle": "implemented"
     },
     {
       "schemaVersion": 1,
@@ -85,18 +153,54 @@
       "versionRange": "observed",
       "maturity": "E2",
       "risk": "R1",
-      "resources": ["device"],
-      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
-      "outputSchema": { "type": "object" },
-      "preconditions": ["PR #11 xianyu-operator implementation is present"],
-      "verification": { "mode": "state", "description": "compose page reached with stoppedBeforePublish=true" },
-      "restoration": { "required": true, "description": "discard without saving and return to a safe page" },
+      "resources": [
+        "device"
+      ],
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object"
+      },
+      "preconditions": [
+        "PR #11 xianyu-operator implementation is present"
+      ],
+      "verification": {
+        "mode": "state",
+        "description": "compose page reached with stoppedBeforePublish=true"
+      },
+      "restoration": {
+        "required": true,
+        "description": "discard without saving and return to a safe page"
+      },
       "timeoutMs": 60000,
       "idempotency": "replay_safe",
-      "automationPolicy": { "mode": "automatic" },
-      "implementation": { "adapter": "xianyu", "action": "open-publish" },
-      "evidence": ["PR #11"],
-      "availability": "implemented"
+      "automationPolicy": {
+        "mode": "automatic"
+      },
+      "implementation": {
+        "adapter": "xianyu",
+        "action": "open-publish"
+      },
+      "evidence": [
+        "PR #11"
+      ],
+      "availability": "implemented",
+      "effect": {
+        "class": "publish",
+        "phase": "prepare",
+        "commitBoundary": "automatic"
+      },
+      "exposure": "public",
+      "invocationPolicy": {
+        "allowedModes": [
+          "job",
+          "session"
+        ]
+      },
+      "lifecycle": "implemented"
     },
     {
       "schemaVersion": 1,
@@ -106,23 +210,64 @@
       "versionRange": "observed",
       "maturity": "E2",
       "risk": "R1",
-      "resources": ["device", "transport:xiaowei:22222"],
+      "resources": [
+        "device",
+        "transport:xiaowei:22222"
+      ],
       "inputSchema": {
         "type": "object",
-        "properties": { "text": { "type": "string", "minLength": 1, "maxLength": 500 } },
-        "required": ["text"],
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "text"
+        ],
         "additionalProperties": false
       },
-      "outputSchema": { "type": "object" },
-      "preconditions": ["PR #11 xianyu-operator implementation is present; operator open-if-needed when not on compose"],
-      "verification": { "mode": "text_scan", "description": "XwIME inputText accepted + textVerified; probe cleared; IME may stay on XwIME (no Sogou restore required)" },
-      "restoration": { "required": true, "description": "clear probe text and discard without saving; keep XwIME allowed" },
+      "outputSchema": {
+        "type": "object"
+      },
+      "preconditions": [
+        "PR #11 xianyu-operator implementation is present; operator open-if-needed when not on compose"
+      ],
+      "verification": {
+        "mode": "text_scan",
+        "description": "XwIME inputText accepted + textVerified; probe cleared; IME may stay on XwIME (no Sogou restore required)"
+      },
+      "restoration": {
+        "required": true,
+        "description": "clear probe text and discard without saving; keep XwIME allowed"
+      },
       "timeoutMs": 150000,
       "idempotency": "replay_safe",
-      "automationPolicy": { "mode": "automatic" },
-      "implementation": { "adapter": "xianyu", "action": "input-dry-run" },
-      "evidence": ["PR #11"],
-      "availability": "implemented"
+      "automationPolicy": {
+        "mode": "automatic"
+      },
+      "implementation": {
+        "adapter": "xianyu",
+        "action": "input-dry-run"
+      },
+      "evidence": [
+        "PR #11"
+      ],
+      "availability": "implemented",
+      "effect": {
+        "class": "publish",
+        "phase": "prepare",
+        "commitBoundary": "automatic"
+      },
+      "exposure": "public",
+      "invocationPolicy": {
+        "allowedModes": [
+          "job",
+          "session"
+        ]
+      },
+      "lifecycle": "implemented"
     },
     {
       "schemaVersion": 1,
@@ -132,7 +277,9 @@
       "versionRange": "observed",
       "maturity": "E2",
       "risk": "R1",
-      "resources": ["device"],
+      "resources": [
+        "device"
+      ],
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -143,20 +290,42 @@
             "items": {
               "type": "object",
               "properties": {
-                "phonePath": { "type": "string", "minLength": 8 },
-                "sha256": { "type": "string", "minLength": 64, "maxLength": 64 }
+                "phonePath": {
+                  "type": "string",
+                  "minLength": 8
+                },
+                "sha256": {
+                  "type": "string",
+                  "minLength": 64,
+                  "maxLength": 64
+                }
               },
-              "required": ["phonePath", "sha256"],
+              "required": [
+                "phonePath",
+                "sha256"
+              ],
               "additionalProperties": true
             }
           },
-          "imageAlbum": { "type": "string", "minLength": 1, "maxLength": 80 },
-          "maxImages": { "type": "integer", "minimum": 1, "maximum": 9 }
+          "imageAlbum": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "maxImages": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9
+          }
         },
-        "required": ["images"],
+        "required": [
+          "images"
+        ],
         "additionalProperties": true
       },
-      "outputSchema": { "type": "object" },
+      "outputSchema": {
+        "type": "object"
+      },
       "preconditions": [
         "PR #11 xianyu-operator image path present",
         "images staged on device under /sdcard/Pictures/<album> with matching SHA",
@@ -166,13 +335,38 @@
         "mode": "state",
         "description": "image-dry-run selects N staged images and publish page media count increases; never taps final publish"
       },
-      "restoration": { "required": true, "description": "discard without saving and return to MainActivity" },
+      "restoration": {
+        "required": true,
+        "description": "discard without saving and return to MainActivity"
+      },
       "timeoutMs": 180000,
       "idempotency": "replay_safe",
-      "automationPolicy": { "mode": "automatic" },
-      "implementation": { "adapter": "xianyu", "action": "image-dry-run" },
-      "evidence": ["xianyu-image-picker-staging-album", "xianyu-image-tile-no-label", "2026-07-26 step2"],
-      "availability": "implemented"
+      "automationPolicy": {
+        "mode": "automatic"
+      },
+      "implementation": {
+        "adapter": "xianyu",
+        "action": "image-dry-run"
+      },
+      "evidence": [
+        "xianyu-image-picker-staging-album",
+        "xianyu-image-tile-no-label",
+        "2026-07-26 step2"
+      ],
+      "availability": "implemented",
+      "effect": {
+        "class": "publish",
+        "phase": "prepare",
+        "commitBoundary": "automatic"
+      },
+      "exposure": "public",
+      "invocationPolicy": {
+        "allowedModes": [
+          "job",
+          "session"
+        ]
+      },
+      "lifecycle": "implemented"
     },
     {
       "schemaVersion": 1,
@@ -182,21 +376,49 @@
       "versionRange": "observed",
       "maturity": "E2",
       "risk": "R1",
-      "resources": ["device", "transport:xiaowei:22222"],
+      "resources": [
+        "device",
+        "transport:xiaowei:22222"
+      ],
       "inputSchema": {
         "type": "object",
         "properties": {
-          "description": { "type": "string" },
-          "price": { "type": "number" },
-          "skuPrice": { "type": "number" },
-          "skuStock": { "type": "string" },
-          "skuSpecs": { "type": "object" },
-          "skuReplaceExisting": { "type": "boolean" },
-          "freightTemplate": { "type": "string" },
-          "freightPrice": { "type": "number" },
-          "images": { "type": "array" },
-          "imageAlbum": { "type": "string" },
-          "saveDraft": { "type": "boolean", "enum": [false] },
+          "description": {
+            "type": "string"
+          },
+          "price": {
+            "type": "number"
+          },
+          "skuPrice": {
+            "type": "number"
+          },
+          "skuStock": {
+            "type": "string"
+          },
+          "skuSpecs": {
+            "type": "object"
+          },
+          "skuReplaceExisting": {
+            "type": "boolean"
+          },
+          "freightTemplate": {
+            "type": "string"
+          },
+          "freightPrice": {
+            "type": "number"
+          },
+          "images": {
+            "type": "array"
+          },
+          "imageAlbum": {
+            "type": "string"
+          },
+          "saveDraft": {
+            "type": "boolean",
+            "enum": [
+              false
+            ]
+          },
           "calibrated": {
             "type": "object",
             "description": "二级页校准开关；标准草稿链路建议 sku/freight/image=true"
@@ -204,7 +426,9 @@
         },
         "additionalProperties": true
       },
-      "outputSchema": { "type": "object" },
+      "outputSchema": {
+        "type": "object"
+      },
       "preconditions": [
         "PR #11 xianyu-operator implementation is present",
         "publish compose page reachable",
@@ -220,14 +444,32 @@
       },
       "timeoutMs": 720000,
       "idempotency": "replay_safe",
-      "automationPolicy": { "mode": "automatic" },
-      "implementation": { "adapter": "xianyu", "action": "full-dry-run" },
+      "automationPolicy": {
+        "mode": "automatic"
+      },
+      "implementation": {
+        "adapter": "xianyu",
+        "action": "full-dry-run"
+      },
       "evidence": [
         "PR #11",
         "xianyu-gap1 through xianyu-gap7 probes",
         "2026-07-26 session: type-into-input SKU, batch 99/10 numpad, 包邮 line geometry, 存草稿"
       ],
-      "availability": "implemented"
+      "availability": "implemented",
+      "effect": {
+        "class": "publish",
+        "phase": "prepare",
+        "commitBoundary": "automatic"
+      },
+      "exposure": "public",
+      "invocationPolicy": {
+        "allowedModes": [
+          "job",
+          "session"
+        ]
+      },
+      "lifecycle": "implemented"
     },
     {
       "schemaVersion": 1,
@@ -237,16 +479,28 @@
       "versionRange": "observed",
       "maturity": "E1",
       "risk": "R1",
-      "resources": ["device", "transport:xiaowei:22222"],
+      "resources": [
+        "device",
+        "transport:xiaowei:22222"
+      ],
       "inputSchema": {
         "type": "object",
         "properties": {
-          "saveDraft": { "type": "boolean", "enum": [false] }
+          "saveDraft": {
+            "type": "boolean",
+            "enum": [
+              false
+            ]
+          }
         },
-        "required": ["saveDraft"],
+        "required": [
+          "saveDraft"
+        ],
         "additionalProperties": false
       },
-      "outputSchema": { "type": "object" },
+      "outputSchema": {
+        "type": "object"
+      },
       "preconditions": [
         "Xiaowei typed HTTP API is listening on Windows loopback port 17910",
         "probe runs through a visible exclusive control-plane canary session lease",
@@ -262,10 +516,30 @@
       },
       "timeoutMs": 360000,
       "idempotency": "replay_safe",
-      "automationPolicy": { "mode": "automatic" },
-      "implementation": { "adapter": "xianyu", "action": "flutter-pointer-tap-probe" },
-      "evidence": ["device-capabilities-gap-20260728"],
-      "availability": "implemented"
+      "automationPolicy": {
+        "mode": "automatic"
+      },
+      "implementation": {
+        "adapter": "xianyu",
+        "action": "flutter-pointer-tap-probe"
+      },
+      "evidence": [
+        "device-capabilities-gap-20260728"
+      ],
+      "availability": "implemented",
+      "effect": {
+        "class": "reversible",
+        "phase": "na",
+        "commitBoundary": "automatic"
+      },
+      "exposure": "public",
+      "invocationPolicy": {
+        "allowedModes": [
+          "job",
+          "session"
+        ]
+      },
+      "lifecycle": "implemented"
     },
     {
       "schemaVersion": 1,
@@ -275,21 +549,49 @@
       "versionRange": "observed",
       "maturity": "E2",
       "risk": "R1",
-      "resources": ["device", "transport:xiaowei:22222"],
+      "resources": [
+        "device",
+        "transport:xiaowei:22222"
+      ],
       "inputSchema": {
         "type": "object",
         "properties": {
-          "description": { "type": "string" },
-          "price": { "type": "number" },
-          "skuPrice": { "type": "number" },
-          "skuStock": { "type": "string" },
-          "skuSpecs": { "type": "object" },
-          "skuReplaceExisting": { "type": "boolean" },
-          "freightTemplate": { "type": "string" },
-          "freightPrice": { "type": "number" },
-          "images": { "type": "array" },
-          "imageAlbum": { "type": "string" },
-          "saveDraft": { "type": "boolean", "enum": [true] },
+          "description": {
+            "type": "string"
+          },
+          "price": {
+            "type": "number"
+          },
+          "skuPrice": {
+            "type": "number"
+          },
+          "skuStock": {
+            "type": "string"
+          },
+          "skuSpecs": {
+            "type": "object"
+          },
+          "skuReplaceExisting": {
+            "type": "boolean"
+          },
+          "freightTemplate": {
+            "type": "string"
+          },
+          "freightPrice": {
+            "type": "number"
+          },
+          "images": {
+            "type": "array"
+          },
+          "imageAlbum": {
+            "type": "string"
+          },
+          "saveDraft": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
           "calibrated": {
             "type": "object",
             "description": "二级页校准开关；标准草稿链路建议 sku/freight/image=true"
@@ -297,7 +599,9 @@
         },
         "additionalProperties": true
       },
-      "outputSchema": { "type": "object" },
+      "outputSchema": {
+        "type": "object"
+      },
       "preconditions": [
         "xianyu.publish.full_dry_run is implemented and calibrated",
         "writes one user-visible draft but never taps final publish",
@@ -313,14 +617,32 @@
       },
       "timeoutMs": 360000,
       "idempotency": "external_effect",
-      "automationPolicy": { "mode": "approval_required" },
-      "implementation": { "adapter": "xianyu", "action": "full-draft-dry-run" },
+      "automationPolicy": {
+        "mode": "approval_required"
+      },
+      "implementation": {
+        "adapter": "xianyu",
+        "action": "full-draft-dry-run"
+      },
       "evidence": [
         "xianyu.publish.full_dry_run",
         "2026-07-26 save-draft close-dialog path",
         "agent-entry-v1 lease-visible requirement"
       ],
-      "availability": "implemented"
+      "availability": "implemented",
+      "effect": {
+        "class": "publish",
+        "phase": "prepare",
+        "commitBoundary": "automatic"
+      },
+      "exposure": "public",
+      "invocationPolicy": {
+        "allowedModes": [
+          "job",
+          "session"
+        ]
+      },
+      "lifecycle": "implemented"
     },
     {
       "schemaVersion": 1,
@@ -330,9 +652,18 @@
       "versionRange": "observed",
       "maturity": "E2",
       "risk": "R1",
-      "resources": ["device", "transport:xiaowei:22222"],
-      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
-      "outputSchema": { "type": "object" },
+      "resources": [
+        "device",
+        "transport:xiaowei:22222"
+      ],
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object"
+      },
       "preconditions": [
         "已在发闲置编辑页（或 open_dry_run 之后未 discard）",
         "会写入用户草稿箱（我的-我发布的）；不得点最终发布"
@@ -347,10 +678,30 @@
       },
       "timeoutMs": 90000,
       "idempotency": "external_effect",
-      "automationPolicy": { "mode": "automatic" },
-      "implementation": { "adapter": "xianyu", "action": "save-draft-dry-run" },
-      "evidence": ["2026-07-26 存草稿 toast 草稿保存成功"],
-      "availability": "implemented"
+      "automationPolicy": {
+        "mode": "automatic"
+      },
+      "implementation": {
+        "adapter": "xianyu",
+        "action": "save-draft-dry-run"
+      },
+      "evidence": [
+        "2026-07-26 存草稿 toast 草稿保存成功"
+      ],
+      "availability": "implemented",
+      "effect": {
+        "class": "publish",
+        "phase": "prepare",
+        "commitBoundary": "automatic"
+      },
+      "exposure": "public",
+      "invocationPolicy": {
+        "allowedModes": [
+          "job",
+          "session"
+        ]
+      },
+      "lifecycle": "implemented"
     }
   ]
 }

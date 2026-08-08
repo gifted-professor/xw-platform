@@ -15,11 +15,33 @@ test("repository capabilities use the unified E0-E4 manifest", () => {
   assert.equal(registry.listPublic().some((item) => Object.hasOwn(item, "implementation")), false);
 });
 
+test("Foundation: every live capability has explicit effect and contract hash", () => {
+  const registry = CapabilityRegistry.load(fileURLToPath(new URL("../apps", import.meta.url)));
+  for (const cap of registry.capabilities) {
+    assert.ok(cap.effect, `${cap.id} missing effect`);
+    assert.ok(cap.normalizedEffect?.class, `${cap.id} missing normalizedEffect`);
+    assert.equal(cap.normalizedEffect.legacyDerived, false, `${cap.id} should not legacy-derive`);
+    assert.match(cap.capabilityContractHash || "", /^[0-9a-f]{64}$/);
+    assert.ok(["public", "internal"].includes(cap.exposure || "public"));
+  }
+  const fullDry = registry.require("xianyu.publish.full_dry_run");
+  assert.equal(fullDry.normalizedEffect.class, "publish");
+  assert.equal(fullDry.normalizedEffect.phase, "prepare");
+  const comment = registry.require("xhs.comment.send");
+  assert.equal(comment.exposure, "internal");
+  assert.equal(comment.normalizedEffect.class, "social");
+  // internal capabilities must not appear in public catalog
+  assert.equal(registry.listPublic().some((c) => c.id === "xhs.comment.send"), false);
+});
+
 test("standing-grant collect is schema-bound and cannot enter the ordinary job lane", () => {
   const registry = CapabilityRegistry.load(fileURLToPath(new URL("../apps", import.meta.url)));
   const collect = registry.require("xhs.collect.standing_grant");
   assert.throws(() => evaluateCapabilityPolicy(collect), { code: "STANDING_GRANT_MISSION_REQUIRED" });
-  assert.deepEqual(evaluateCapabilityPolicy(collect, { invocation: "mission_effect" }), { approvalRequired: false, externalEffect: true });
+  const missionPolicy = evaluateCapabilityPolicy(collect, { invocation: "mission_effect" });
+  assert.equal(missionPolicy.approvalRequired, false);
+  assert.equal(missionPolicy.externalEffect, true);
+  assert.equal(missionPolicy.decision, "allow");
   assert.throws(() => registry.validateParams(collect.id, { observationReceiptId: "receipt" }), { code: "PARAMS_SCHEMA_INVALID" });
   assert.doesNotThrow(() => registry.validateParams(collect.id, {
     observationReceiptId: "receipt", targetFingerprint: "target",
@@ -34,10 +56,10 @@ test("Flutter pointer tap probe is bounded, no-save, and restoration-required", 
   assert.equal(probe.risk, "R1");
   assert.equal(probe.restoration.required, true);
   assert.throws(() => evaluateCapabilityPolicy(probe), { code: "CANARY_SESSION_REQUIRED" });
-  assert.deepEqual(evaluateCapabilityPolicy(probe, { canary: true, invocation: "session" }), {
-    approvalRequired: false,
-    externalEffect: false,
-  });
+  const sessionPolicy = evaluateCapabilityPolicy(probe, { canary: true, invocation: "session" });
+  assert.equal(sessionPolicy.approvalRequired, false);
+  assert.equal(sessionPolicy.externalEffect, false);
+  assert.equal(sessionPolicy.decision, "allow");
   assert.throws(
     () => registry.validateParams(probe.id, {
       saveDraft: true,
