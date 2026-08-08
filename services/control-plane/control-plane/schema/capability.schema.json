@@ -77,7 +77,12 @@
       "required": ["adapter", "action"],
       "properties": {
         "adapter": { "type": "string", "minLength": 1 },
-        "action": { "type": "string", "minLength": 1 }
+        "action": { "type": "string", "minLength": 1 },
+        "implementationClosureHash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "tcbManifestRef": { "type": "string", "minLength": 1 }
       }
     },
     "evidence": { "type": "array", "items": { "type": "string" } },

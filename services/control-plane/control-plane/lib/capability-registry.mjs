@@ -83,6 +83,15 @@ export function validateCapability(capability) {
   assertObject(capability.implementation, `${capability.id}.implementation`);
   assertString(capability.implementation.adapter, `${capability.id}.implementation.adapter`);
   assertString(capability.implementation.action, `${capability.id}.implementation.action`);
+  if (capability.implementation.implementationClosureHash !== undefined) {
+    if (typeof capability.implementation.implementationClosureHash !== "string"
+      || !/^[a-f0-9]{64}$/.test(capability.implementation.implementationClosureHash)) {
+      throw new TypeError(`${capability.id}.implementation.implementationClosureHash must be 64 hex`);
+    }
+  }
+  if (capability.implementation.tcbManifestRef !== undefined) {
+    assertString(capability.implementation.tcbManifestRef, `${capability.id}.implementation.tcbManifestRef`);
+  }
   if (!Array.isArray(capability.evidence) || capability.evidence.some((item) => typeof item !== "string")) {
     throw new TypeError(`${capability.id}.evidence must be strings`);
   }
@@ -230,6 +239,8 @@ export class CapabilityRegistry {
         adapter: implementation?.adapter,
         normalizedEffect: capability.normalizedEffect || null,
         capabilityContractHash: capability.capabilityContractHash || null,
+        implementationClosureHash: implementation?.implementationClosureHash || null,
+        tcbManifestRef: implementation?.tcbManifestRef || null,
         authorizationHint: "context_required",
       }));
   }

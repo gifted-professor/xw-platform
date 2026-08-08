@@ -107,10 +107,12 @@ function legacyDeriveEffect(capability) {
 
 /**
  * Stable capability contract hash (64 hex, no sha256: prefix).
- * PR1: does not yet require implementationClosureHash (that is PR2).
+ * PR2 / RI-02: includes implementationClosureHash + tcbManifestRef when present.
+ * Missing closure fields stay null so legacy catalogs remain loadable.
  */
 export function computeCapabilityContractHash(capability, normalizedEffect) {
   const effect = normalizedEffect || normalizeCapabilityEffect(capability);
+  const impl = capability.implementation || {};
   const body = {
     id: capability.id,
     appId: capability.appId,
@@ -130,7 +132,12 @@ export function computeCapabilityContractHash(capability, normalizedEffect) {
     verification: capability.verification,
     restoration: capability.restoration,
     timeoutMs: capability.timeoutMs,
-    implementation: capability.implementation,
+    implementation: {
+      adapter: impl.adapter,
+      action: impl.action,
+      implementationClosureHash: impl.implementationClosureHash ?? null,
+      tcbManifestRef: impl.tcbManifestRef ?? null,
+    },
     lifecycle: capability.lifecycle ?? null,
   };
   return sha256(canonicalJson(body));
