@@ -28,12 +28,17 @@
 - `typed-transport.mjs`：interface + fake + injected adapter（无真机）
 - tests
 
-## 仍未做（可进 PR 正文 backlog，不挡本轮 review）
+## Slice 3 — review follow-ups（P3 + residual tests）
 
-- 给 live `apps/*/capabilities.json` 批量写真实 TCB manifest（需选 path 集合；避免一锅炖）
-- Mandatory Capability 晋升 canary/implemented 与假 hash 清零的生产 Catalog 审计
-- Adapter import lint CI
-- 端到端 fake CP pump 集成测（当前有 unit recheck + pump 接线）
+- Align path validation with schema (`isCanonicalRepoRelativePath`; allow `v1..0.mjs`, reject `../`)
+- Golden cross-repo RI-01 hash pin (`14b92313…`)
+- Asymmetric null→present closure recheck coverage
+
+## 仍未做（PR backlog，不挡 draft）
+
+- live capabilities 挂真实 TCB（可选最小 xianyu prepare）
+- Adapter import lint CI / fake-CP pump 集成测
+- Mandatory Capability 晋升与假 hash 清零审计
 
 ## 红线仍守
 

@@ -11,6 +11,18 @@ import { isAbsolute, relative, resolve, sep } from "node:path";
 export const CLOSURE_SCHEMA_ID = "xhs.implementation-closure.v1";
 export const CLOSURE_ALGORITHM = "sha256-canonical-json-v1";
 
+/**
+ * Repo-relative POSIX path check aligned with closure/TCB schema:
+ * reject `/`, `\`, `../` segments — allow filenames that merely contain `..` (e.g. v1..0.mjs).
+ */
+export function isCanonicalRepoRelativePath(path) {
+  if (typeof path !== "string" || path.length === 0) return false;
+  if (path.includes("\\") || path.startsWith("/")) return false;
+  if (path === ".." || path.startsWith("../") || path.endsWith("/..") || path.includes("/../")) return false;
+  if (path.split("/").includes("..")) return false;
+  return true;
+}
+
 function canonicalize(value) {
   if (Array.isArray(value)) return value.map(canonicalize);
   if (value && typeof value === "object") {
@@ -65,7 +77,7 @@ export function buildImplementationClosureDocument(entries) {
       throw fail("IMPLEMENTATION_CLOSURE_INVALID", `bad sha256 for ${entry.path}`);
     }
     const path = entry.path.replace(/\\/g, "/").replace(/^\.\//, "");
-    if (!path || path.startsWith("/") || path.includes("..")) {
+    if (!isCanonicalRepoRelativePath(path)) {
       throw fail("IMPLEMENTATION_CLOSURE_INVALID", `non-canonical path: ${entry.path}`);
     }
     return { path, sha256: entry.sha256 };

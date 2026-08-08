@@ -102,6 +102,13 @@ test("RI-04: resume integrity fails closed on drift", () => {
     liveCapability: { capabilityContractHash: contractA, implementationClosureHash: closureA },
   });
   assert.equal(ok.ok, true);
+
+  const asymmetric = recheckImplementationIntegrity({
+    boundCapability: { capabilityContractHash: contractA, implementationClosureHash: null },
+    liveCapability: { capabilityContractHash: contractA, implementationClosureHash: closureA },
+  });
+  assert.equal(asymmetric.ok, false);
+  assert.equal(asymmetric.details.notSent, true);
 });
 
 test("RI-05: WorkReceipt v1 still validates; v2 carries integrity proof", () => {

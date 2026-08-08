@@ -67,7 +67,7 @@ test("RI-01: one-byte change and missing path fail-closed", () => {
   }
 });
 
-test("TCB manifest verify + drift", () => {
+test("TCB manifest verify + drift; path policy allows v1..0.mjs not ../", () => {
   const root = fixtureRoot();
   try {
     const manifest = createTcbManifest({
@@ -80,6 +80,43 @@ test("TCB manifest verify + drift", () => {
     assert.equal(verifyTcbManifestAgainstRoot(manifest, root).implementationClosureHash, manifest.implementationClosureHash);
     writeFileSync(join(root, "apps", "xianyu", "adapter.mjs"), "tampered\n", "utf8");
     assert.throws(() => verifyTcbManifestAgainstRoot(manifest, root), { code: "IMPLEMENTATION_CONTRACT_CHANGED" });
+
+    assert.equal(validateTcbManifest({
+      schemaId: "xhs.tcb.manifest.v1",
+      schemaVersion: 1,
+      manifestId: "ok",
+      implementationClosureHash: "a".repeat(64),
+      paths: ["apps/xianyu/v1..0.mjs"],
+    }).ok, true);
+    assert.equal(validateTcbManifest({
+      schemaId: "xhs.tcb.manifest.v1",
+      schemaVersion: 1,
+      manifestId: "bad",
+      implementationClosureHash: "a".repeat(64),
+      paths: ["apps/../secret.mjs"],
+    }).ok, false);
+    assert.equal(
+      buildImplementationClosureDocument([{ path: "apps/xianyu/v1..0.mjs", sha256: "a".repeat(64) }]).entries[0].path,
+      "apps/xianyu/v1..0.mjs",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+/** Golden vector shared with routing twin — must stay byte-identical across repos. */
+const GOLDEN_CLOSURE_HASH = "14b9231325de0d86433a871bf19a659fb2b6a2a15051d82e03adc9b1eb30fad6";
+
+test("RI-01 cross-repo golden: same fixture bytes yield pinned closure hash", () => {
+  const root = fixtureRoot();
+  try {
+    const { implementationClosureHash, document } = computeImplementationClosureFromFiles({
+      rootDir: root,
+      paths: ["apps/xianyu/adapter.mjs", "apps/xianyu/helper.mjs"],
+    });
+    assert.equal(implementationClosureHash, GOLDEN_CLOSURE_HASH);
+    assert.equal(document.entries[0].sha256, "4c2488e1d089991c07dcfb1398e4746e7cf669ed008e8726866675f1a6bec9b8");
+    assert.equal(document.entries[1].sha256, "979613b99cf4a596c5481e22bace9d140ef67e2e6b9fe1e7d989ca0f456837a1");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
