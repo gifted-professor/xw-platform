@@ -98,6 +98,10 @@ export function bindTaskPlanToLiveCapabilities(rawPlan, liveCatalog) {
       capabilityId,
       appId: cap.appId || executor.appId || null,
       capabilityContractHash: cap.capabilityContractHash || null,
+      implementationClosureHash: cap.implementationClosureHash
+        || cap.implementation?.implementationClosureHash
+        || null,
+      tcbManifestRef: cap.tcbManifestRef || cap.implementation?.tcbManifestRef || null,
       normalizedEffect: liveEffect,
       retryClass: liveRetry,
       placementConstraint: extractPlacementConstraint(node),

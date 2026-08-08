@@ -1,7 +1,9 @@
 import { createWorkReceipt } from "./work-receipt.mjs";
+import { assertResumeIntegrity, RESUME_POLICY } from "./runtime-integrity.mjs";
 
 const TERMINAL = new Set(["succeeded", "failed", "ambiguous", "recovery_required", "cancelled", "waiting_approval"]);
-const STOP_CODES = /CAPTCHA|RISK|LOGIN|APPROVAL|RECOVERY_REQUIRED|UNKNOWN_EXTERNAL_EFFECT|UNEXPECTED_EXTERNAL_EFFECT|PLACEMENT_MISMATCH|CAPABILITY_MISMATCH|CAPABILITY_NOT_PROVEN|POLICY_MISMATCH|ROUTE_NOT_PROVEN|ROUTE_POLICY_MISMATCH/i;
+
+const STOP_CODES = /CAPTCHA|RISK|LOGIN|APPROVAL|RECOVERY_REQUIRED|UNKNOWN_EXTERNAL_EFFECT|UNEXPECTED_EXTERNAL_EFFECT|PLACEMENT_MISMATCH|CAPABILITY_MISMATCH|CAPABILITY_NOT_PROVEN|POLICY_MISMATCH|ROUTE_NOT_PROVEN|ROUTE_POLICY_MISMATCH|IMPLEMENTATION_CONTRACT_CHANGED/i;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -209,7 +211,7 @@ export class ControlPlaneHttpClient {
 }
 
 export class TypedJobWorker {
-  constructor({ client, actorId, pollMs = 1000, pollTimeoutMs = 15 * 60 * 1000, businessValidators = {} } = {}) {
+  constructor({ client, actorId, pollMs = 1000, pollTimeoutMs = 15 * 60 * 1000, businessValidators = {}, resumePolicy = RESUME_POLICY } = {}) {
     if (!client) throw new Error("client is required");
     if (!actorId) throw new Error("actorId is required");
     this.client = client;
@@ -217,6 +219,7 @@ export class TypedJobWorker {
     this.pollMs = pollMs;
     this.pollTimeoutMs = pollTimeoutMs;
     this.businessValidators = businessValidators;
+    this.resumePolicy = resumePolicy?.mode === "fail_closed" ? resumePolicy : RESUME_POLICY;
   }
 
   async assertLiveCapability(executor) {
@@ -258,6 +261,18 @@ export class TypedJobWorker {
     try {
       const capabilityId = assignment.node.executor.capabilityId;
       const liveCapability = await this.assertLiveCapability(assignment.node.executor);
+      // RI-04 resume fail-closed: bound ExecutionPlan node vs live catalog.
+      if (this.resumePolicy.mode === "fail_closed"
+        && (assignment.resumeJobId || assignment.node?.capabilityContractHash || assignment.node?.implementationClosureHash)) {
+        assertResumeIntegrity({
+          boundNode: {
+            capabilityId,
+            capabilityContractHash: assignment.node.capabilityContractHash || null,
+            implementationClosureHash: assignment.node.implementationClosureHash || null,
+          },
+          liveCapability,
+        });
+      }
       const common = {
         actorId: this.actorId,
         capabilityId,
