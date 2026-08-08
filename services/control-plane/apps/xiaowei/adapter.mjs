@@ -1,13 +1,39 @@
 import { ControlPlaneError } from "../../control-plane/lib/errors.mjs";
-import { XiaoweiTransport } from "../../control-plane/lib/xiaowei-transport.mjs";
 import { executeExplorerPrimitive } from "./explorer-primitive.mjs";
 
 const RAW_ALLOWLIST = new Set(["list", "Screen", "imeList"]);
 
-export function createXiaoweiAdapter({ transport = new XiaoweiTransport() } = {}) {
+export function createXiaoweiAdapter({ transport = null } = {}) {
   return {
     id: "xiaowei",
-    async execute({ capability, device, params, job, evidenceDirectory, leaseAuthorization }) {
+    async execute({
+      capability,
+      device,
+      params,
+      job,
+      evidenceDirectory,
+      leaseAuthorization,
+      typedTransport = null,
+      transportToken = null,
+    }) {
+      // Foundation PR3 / INV-08: device I/O stays on constructor-injected transport.
+      // TypedTransport (when present) only consumes one-time auth before that I/O.
+      if (!transport || typeof transport.invoke !== "function") {
+        throw new ControlPlaneError(
+          "TYPED_TRANSPORT_REQUIRED",
+          "xiaowei adapter requires injected transport (TypedTransport Phase 1)",
+          { status: 403 },
+        );
+      }
+      if (typedTransport && transportToken) {
+        await typedTransport.invoke({
+          purpose: "execute",
+          action: capability.implementation.action,
+          transportToken,
+          deviceId: leaseAuthorization?.deviceId || device.deviceId,
+          leaseId: leaseAuthorization?.leaseId,
+        });
+      }
       if (capability.implementation.action === "explorer_primitive") {
         return executeExplorerPrimitive({
           transport,

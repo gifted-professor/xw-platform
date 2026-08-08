@@ -55,7 +55,7 @@ function openInput(fixture, overrides = {}) {
 test("v7 migrates additively to v8 discovery storage and open is one fenced allocation", () => {
   const f = setup();
   try {
-    assert.equal(f.state.db.prepare("PRAGMA user_version").get().user_version, 14);
+    assert.equal(f.state.db.prepare("PRAGMA user_version").get().user_version, 15);
     assert.equal(f.state.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='standing_grant_canaries'").get().name, "standing_grant_canaries");
     assert.equal(f.state.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='discovery_runs'").get().name, "discovery_runs");
     const run = f.state.openDiscoveryRunStorage(openInput(f));

@@ -46,6 +46,8 @@ export async function returnDeviceHome({
   leaseAuthorization,
   GatewayOperatorImpl = GatewayOperator,
   settleMs = 800,
+  transportToken = null,
+  typedTransport = null,
 } = {}) {
   const serial = device?.runtimeId;
   if (!serial) {
@@ -53,6 +55,26 @@ export async function returnDeviceHome({
   }
   if (!leaseAuthorization?.leaseId || !leaseAuthorization?.token || !leaseAuthorization?.deviceId) {
     return { ok: false, skipped: true, reason: "lease_context_missing" };
+  }
+
+  // Foundation PR3: when CP mints return_home authority, consume it before Gateway I/O.
+  if (typedTransport && transportToken) {
+    try {
+      await typedTransport.invoke({
+        purpose: "return_home",
+        action: "pressHome",
+        transportToken,
+        deviceId: leaseAuthorization.deviceId,
+        leaseId: leaseAuthorization.leaseId,
+      });
+    } catch (error) {
+      return {
+        ok: false,
+        reason: "return_home_transport_auth",
+        error: String(error?.message || error).slice(0, 240),
+        code: error?.code || null,
+      };
+    }
   }
 
   let op = null;

@@ -10,6 +10,10 @@ import {
   normalizeRoutingProfile,
   selectPlacement,
 } from "./placement.mjs";
+import {
+  issueTransportActionAuthorization as issueTransportAuthKernel,
+  consumeTransportActionAuthorization as consumeTransportAuthKernel,
+} from "./transport-action-authorization.mjs";
 
 const ACTIVE_JOB_STATES = new Set(["running", "verifying", "restoring"]);
 const TERMINAL_JOB_STATES = new Set(["succeeded", "failed", "ambiguous", "recovery_required", "cancelled"]);
@@ -530,7 +534,32 @@ export class StateStore {
     `);
     this.#ensureColumn("jobs", "operation_key", "TEXT");
     this.#ensureColumn("jobs", "authorization_snapshot_json", "TEXT");
-    this.db.exec("PRAGMA user_version = 14;");
+    // Foundation PR3: one-time transport action authorizations (INV-02).
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS transport_action_authorizations (
+        authorization_id TEXT PRIMARY KEY,
+        schema_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        purpose TEXT NOT NULL,
+        job_id TEXT,
+        run_id TEXT,
+        mission_id TEXT,
+        device_run_id TEXT,
+        lease_id TEXT NOT NULL,
+        device_id TEXT NOT NULL,
+        operation_key TEXT NOT NULL,
+        capability_contract_hash TEXT NOT NULL,
+        implementation_closure_hash TEXT,
+        nonce_hash TEXT NOT NULL UNIQUE,
+        issued_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        consumed_at TEXT,
+        source TEXT
+      );
+    `);
+    this.db.exec("CREATE INDEX IF NOT EXISTS transport_auth_job_idx ON transport_action_authorizations(job_id, purpose, consumed_at)");
+    this.db.exec("CREATE INDEX IF NOT EXISTS transport_auth_lease_idx ON transport_action_authorizations(lease_id, consumed_at)");
+    this.db.exec("PRAGMA user_version = 15;");
   }
 
   #ensureColumn(table, column, definition) {
@@ -3376,4 +3405,94 @@ export class StateStore {
       return this.#publicDeviceRun(this.db.prepare("SELECT * FROM device_runs WHERE device_run_id=?").get(deviceRunId));
     });
   }
+
+  /**
+   * Persist + return a one-time transport action authorization (Foundation PR3).
+   * Plaintext nonce is returned once; only nonce_hash is stored.
+   */
+  issueTransportActionAuthorization(input) {
+    const { authorization, token } = issueTransportAuthKernel(input);
+    this.db.prepare(`
+      INSERT INTO transport_action_authorizations (
+        authorization_id, schema_id, kind, purpose, job_id, run_id, mission_id, device_run_id,
+        lease_id, device_id, operation_key, capability_contract_hash, implementation_closure_hash,
+        nonce_hash, issued_at, expires_at, consumed_at, source
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
+    `).run(
+      authorization.authorizationId,
+      authorization.schemaId,
+      authorization.kind,
+      authorization.purpose,
+      authorization.jobId,
+      authorization.runId,
+      authorization.missionId,
+      authorization.deviceRunId,
+      authorization.leaseId,
+      authorization.deviceId,
+      authorization.operationKey,
+      authorization.capabilityContractHash,
+      authorization.implementationClosureHash,
+      authorization.nonceHash,
+      authorization.issuedAt,
+      authorization.expiresAt,
+      authorization.source,
+    );
+    return { authorization: this.getTransportActionAuthorization(authorization.authorizationId), token };
+  }
+
+  getTransportActionAuthorization(authorizationId) {
+    const row = this.db.prepare("SELECT * FROM transport_action_authorizations WHERE authorization_id=?").get(authorizationId);
+    return publicTransportAuth(row);
+  }
+
+  consumeTransportActionAuthorization({ authorizationId, token, expectedPurpose = null, expectedDeviceId = null, expectedLeaseId = null } = {}) {
+    return this.transaction(() => {
+      const row = this.db.prepare("SELECT * FROM transport_action_authorizations WHERE authorization_id=?").get(authorizationId);
+      if (!row) {
+        throw new ControlPlaneError("TRANSPORT_AUTH_NOT_FOUND", "authorization missing", { status: 404 });
+      }
+      const stored = publicTransportAuth(row);
+      const consumed = consumeTransportAuthKernel({
+        stored,
+        token: { ...token, authorizationId },
+        expectedPurpose: expectedPurpose || stored.purpose,
+        expectedDeviceId: expectedDeviceId || stored.deviceId,
+        expectedLeaseId: expectedLeaseId || stored.leaseId,
+      });
+      const updated = this.db.prepare(
+        "UPDATE transport_action_authorizations SET consumed_at=? WHERE authorization_id=? AND consumed_at IS NULL",
+      ).run(consumed.consumedAt, authorizationId);
+      if (!updated.changes) {
+        throw new ControlPlaneError("TRANSPORT_AUTH_REPLAY", "authorization nonce already consumed", {
+          status: 409,
+          details: { authorizationId },
+        });
+      }
+      return this.getTransportActionAuthorization(authorizationId);
+    });
+  }
+}
+
+function publicTransportAuth(row) {
+  if (!row) return null;
+  return {
+    schemaId: row.schema_id,
+    authorizationId: row.authorization_id,
+    kind: row.kind,
+    purpose: row.purpose,
+    jobId: row.job_id,
+    runId: row.run_id,
+    missionId: row.mission_id,
+    deviceRunId: row.device_run_id,
+    leaseId: row.lease_id,
+    deviceId: row.device_id,
+    operationKey: row.operation_key,
+    capabilityContractHash: row.capability_contract_hash,
+    implementationClosureHash: row.implementation_closure_hash,
+    nonceHash: row.nonce_hash,
+    issuedAt: row.issued_at,
+    expiresAt: row.expires_at,
+    consumedAt: row.consumed_at,
+    source: row.source,
+  };
 }
