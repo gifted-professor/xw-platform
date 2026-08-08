@@ -43,8 +43,12 @@ export function evaluateNonpaymentAutonomy(input = {}, options = {}) {
     return verdict(actionClass, "dispatch_known", false, false, "KNOWN_CAPABILITY_DISPATCH", effectiveDecisionSource);
   }
 
-  // 5. unknown / no skill / no route：自动转 Explorer，不拒绝
-  return verdict(actionClass, "dispatch_explorer", false, false, "UNKNOWN_ROUTE_TO_EXPLORER", effectiveDecisionSource);
+  // 5. Foundation Freeze: unknown interactive routes no longer get free Explorer write path.
+  // Readonly observation may still use dispatch_explorer_readonly; needs-interaction → block.
+  if (input.readonlyObservation === true || actionClass === "observe" || actionClass === "readonly") {
+    return verdict(actionClass, "dispatch_explorer_readonly", false, false, "UNKNOWN_READONLY_EXPLORER", effectiveDecisionSource);
+  }
+  return verdict(actionClass, "typed_capability_required", false, false, "TYPED_CAPABILITY_REQUIRED", effectiveDecisionSource);
 }
 
 function verdict(actionClass, decision, humanApprovalRequired, paymentHold, reasonCode, effectiveDecisionSource) {

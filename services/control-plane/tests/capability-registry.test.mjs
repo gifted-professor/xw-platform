@@ -19,7 +19,10 @@ test("standing-grant collect is schema-bound and cannot enter the ordinary job l
   const registry = CapabilityRegistry.load(fileURLToPath(new URL("../apps", import.meta.url)));
   const collect = registry.require("xhs.collect.standing_grant");
   assert.throws(() => evaluateCapabilityPolicy(collect), { code: "STANDING_GRANT_MISSION_REQUIRED" });
-  assert.deepEqual(evaluateCapabilityPolicy(collect, { invocation: "mission_effect" }), { approvalRequired: false, externalEffect: true });
+  const missionPolicy = evaluateCapabilityPolicy(collect, { invocation: "mission_effect" });
+  assert.equal(missionPolicy.approvalRequired, false);
+  assert.equal(missionPolicy.externalEffect, true);
+  assert.equal(missionPolicy.decision, "allow");
   assert.throws(() => registry.validateParams(collect.id, { observationReceiptId: "receipt" }), { code: "PARAMS_SCHEMA_INVALID" });
   assert.doesNotThrow(() => registry.validateParams(collect.id, {
     observationReceiptId: "receipt", targetFingerprint: "target",
@@ -34,10 +37,10 @@ test("Flutter pointer tap probe is bounded, no-save, and restoration-required", 
   assert.equal(probe.risk, "R1");
   assert.equal(probe.restoration.required, true);
   assert.throws(() => evaluateCapabilityPolicy(probe), { code: "CANARY_SESSION_REQUIRED" });
-  assert.deepEqual(evaluateCapabilityPolicy(probe, { canary: true, invocation: "session" }), {
-    approvalRequired: false,
-    externalEffect: false,
-  });
+  const sessionPolicy = evaluateCapabilityPolicy(probe, { canary: true, invocation: "session" });
+  assert.equal(sessionPolicy.approvalRequired, false);
+  assert.equal(sessionPolicy.externalEffect, false);
+  assert.equal(sessionPolicy.decision, "allow");
   assert.throws(
     () => registry.validateParams(probe.id, {
       saveDraft: true,

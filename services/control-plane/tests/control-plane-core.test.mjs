@@ -352,23 +352,20 @@ test("external effects wait for approval before entering the queue", async () =>
   });
   const f = fixture({ capabilities: [external], adapter });
   try {
-    const submitted = f.control.submitJob({
-      idempotencyKey: "external",
-      actorId: "agent-a",
-      deviceId: f.devices[0].deviceId,
-      capabilityId: external.id,
-      params: {},
-    }).job;
-    assert.equal(submitted.status, "waiting_approval");
+    // Foundation: shadow/legacy no longer creates ordinary waiting_approval jobs.
+    // Business effects outside active pilot are machine-blocked (AUTONOMY_INACTIVE).
+    assert.throws(
+      () => f.control.submitJob({
+        idempotencyKey: "external",
+        actorId: "agent-a",
+        deviceId: f.devices[0].deviceId,
+        capabilityId: external.id,
+        params: {},
+      }),
+      (err) => err.code === "AUTONOMY_INACTIVE" && err.status === 403,
+    );
     await new Promise((resolve) => setTimeout(resolve, 30));
     assert.equal(executions, 0);
-    f.control.decideApproval(submitted.jobId, {
-      decision: "approve",
-      actorId: "human-reviewer",
-      reason: "bounded test",
-    });
-    assert.equal((await f.control.waitForJob(submitted.jobId)).status, "succeeded");
-    assert.equal(executions, 1);
   } finally {
     await f.close();
   }
@@ -466,13 +463,15 @@ test("legacy: low-disk submitJob stays fail-closed (EVIDENCE_DISK_LOW) — payme
     async verify() { return { ok: true, mode: "custom" }; },
     async restore() { return { ok: true }; },
   };
-  const external = manifest("test.external.legacydisk", {
-    risk: "R2",
-    idempotency: "external_effect",
-    automationPolicy: { mode: "approval_required" },
+  // Foundation: R2 business effects are AUTONOMY_INACTIVE in legacy before capacity checks.
+  // Preserve the disk fail-closed path using an allow-able none/read_only capability.
+  const readOnly = manifest("test.readonly.legacydisk", {
+    risk: "R0",
+    idempotency: "read_only",
+    automationPolicy: { mode: "automatic" },
   });
   const f = fixture({
-    capabilities: [external],
+    capabilities: [readOnly],
     adapter,
     policyMode: null,
     evidenceOpts: { minFreeBytes: Number.MAX_SAFE_INTEGER, minExternalEffectFreeBytes: Number.MAX_SAFE_INTEGER },
@@ -483,7 +482,7 @@ test("legacy: low-disk submitJob stays fail-closed (EVIDENCE_DISK_LOW) — payme
         idempotencyKey: "legacy-disk",
         actorId: "agent-a",
         deviceId: f.devices[0].deviceId,
-        capabilityId: external.id,
+        capabilityId: readOnly.id,
         params: {},
       }),
       { code: "EVIDENCE_DISK_LOW" },

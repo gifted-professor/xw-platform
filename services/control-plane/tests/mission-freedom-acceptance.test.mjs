@@ -274,27 +274,27 @@ test("PHC policy and legacy non-Mission R2 gate retain their independent authori
   const control = new ControlPlane({ state, capabilities: new CapabilityRegistry([capability]), adapters: new AdapterRegistry([{ id: "acceptance-adapter", async execute() {}, async verify() { return { ok: true }; }, async restore() { return { ok: true }; } }]), evidence, authorityNodeId: AUTHORITY });
   try {
     state.upsertDevice({ alias: "01", physicalLabel: "legacy-device", nodeId: AUTHORITY, runtimeId: "private-runtime", routingProfile: { enabled: true, tags: [], capabilityIds: [capability.id] } });
-    const job = control.submitJob({ actorId: "agent:legacy", capabilityId: capability.id, idempotencyKey: "acceptance-legacy", params: {} }).job;
-    assert.equal(job.status, "waiting_approval");
-    assert.equal(job.approvalRequired, true);
-    // REX Phase 5 §8.2 B9 反转：nonpayment_v1 active（fake adapter）下，同一非支付 R2
-    // capability 不再 waiting_approval——非支付一律自由，唯一硬闸是 financial_commit（此
-    // capability risk R2 / read_only / automatic，非支付）。legacy 闸作为 fallback 保留上方。
-    // liveness：job 进 queued（不拦），pump 实际 dispatch（无需人类审批即执行）。
-    const freeControl = new ControlPlane({ state, capabilities: new CapabilityRegistry([capability]), adapters: new AdapterRegistry([{ id: "acceptance-adapter", async execute() { return { ok: true }; }, async verify() { return { ok: true }; }, async restore() { return { ok: true }; } }]), evidence, authorityNodeId: AUTHORITY, policyMode: { active: true, mode: "nonpayment_v1", effectiveDecisionSource: "deployed-runtime" } });
-    const freed = freeControl.submitJob({ actorId: "agent:freedom", capabilityId: capability.id, idempotencyKey: "acceptance-freedom", params: {} }).job;
-    assert.equal(freed.approvalRequired, false, "nonpayment_v1: non-payment R2 must not require approval");
-    assert.notEqual(freed.status, "waiting_approval", "nonpayment_v1: non-payment R2 must not wait for approval");
-    // liveness：job 进 queued（dispatch 队列）而非 waiting_approval（审批队列）——
-    // 证明无审批门阻挡 dispatch，pump 会直接执行。
-    assert.equal(freed.status, "queued", "nonpayment_v1: non-payment R2 enters dispatch queue, not approval queue");
-    // 让 pump 的 queueMicrotask 排空（freed job 进 queued 会触发 pump），再进 finally close，
-    // 避免 pump 在 state.close() 后触 DB 产生 unhandledRejection。
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    // Foundation: shadow/legacy machine-blocks business effects — no ordinary waiting_approval.
+    assert.throws(
+      () => control.submitJob({ actorId: "agent:legacy", capabilityId: capability.id, idempotencyKey: "acceptance-legacy", params: {} }),
+      (err) => err.code === "AUTONOMY_INACTIVE",
+    );
+    const freeControl = new ControlPlane({ state, capabilities: new CapabilityRegistry([capability]), adapters: new AdapterRegistry([{ id: "acceptance-adapter", async execute() { return { ok: true }; }, async verify() { return { ok: true }; }, async restore() { return { ok: true }; } }]), evidence, authorityNodeId: AUTHORITY, policyMode: { active: true, mode: "nonpayment_v1", effectiveDecisionSource: "deployed-runtime" }, schedulerIntervalMs: 50 });
+    freeControl.start();
+    try {
+      const freed = freeControl.submitJob({ actorId: "agent:freedom", capabilityId: capability.id, idempotencyKey: "acceptance-freedom", params: {} }).job;
+      assert.equal(freed.approvalRequired, false, "nonpayment_v1: non-payment R2 must not require approval");
+      assert.notEqual(freed.status, "waiting_approval", "nonpayment_v1: non-payment R2 must not wait for approval");
+      assert.equal(freed.status, "queued", "nonpayment_v1: non-payment R2 enters dispatch queue, not approval queue");
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    } finally {
+      await freeControl.stop();
+    }
     const mission = control.missions.createMission({ issuer: { actorId: "human:operator" }, idempotencyKey: "acceptance-phc-policy", app: "xhs", account: "alias", parallelism: 1, controllers: ["agent:runner"], scope: { actions: ["follow", "publish", "delete"], targets: { kind: "fingerprint", values: ["target-a"] }, totalCount: 3, perTargetCount: 3, frequency: { count: 3, windowSeconds: 3600 } }, validity: fixture.policy.validity, policy: { publish: "allow_within_scope", delete: "confirm" } }).mission;
     assert.equal(control.missions.evaluateMissionEffect(mission, { action: "payment", target: "target-a" }).decision, "phc");
     assert.equal(control.missions.evaluateMissionEffect(mission, { action: "delete", target: "target-a" }).decision, "phc");
-    assert.equal(control.missions.evaluateMissionEffect(mission, { action: "publish", target: "target-a" }).decision, "ecp");
+    // Foundation: publish is always phc; allow_within_scope cannot release
+    assert.equal(control.missions.evaluateMissionEffect(mission, { action: "publish", target: "target-a" }).decision, "phc");
     assert.equal(control.missions.evaluateMissionEffect(mission, { action: "follow", target: "outside" }).decision, "scope_violation");
   } finally {
     state.close();

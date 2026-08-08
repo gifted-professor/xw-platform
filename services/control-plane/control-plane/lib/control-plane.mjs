@@ -6,7 +6,8 @@ import { ControlPlaneError, asControlError } from "./errors.mjs";
 import { fingerprint } from "./canonical.mjs";
 import { validateJsonSchema } from "./json-schema-validator.mjs";
 import { DiscoverySessionRuntime } from "./discovery-session.mjs";
-import { evaluateCapabilityPolicy } from "./policy.mjs";
+import { evaluateCapabilityPolicy, assertAuthorizationAllow } from "./policy.mjs";
+import { decideCapabilityPolicy } from "./authorization-decision.mjs";
 import { inspectTransportLock } from "./xiaowei-transport.mjs";
 import { normalizeRecoveryVisualAnalysis } from "./recovery-inspection.mjs";
 import { MissionRuntime } from "./mission-runtime.mjs";
@@ -1053,7 +1054,15 @@ export class ControlPlane {
     const requestPolicyMode = route
       ? this.effectivePolicyMode({ actorId, deviceId: route.selectedDeviceId })
       : this.policyMode;
-    const policy = evaluateCapabilityPolicy(capability, { canary, invocation: "job", policyMode: requestPolicyMode });
+    // Foundation: request-scoped authorization; no ordinary waiting_approval jobs.
+    const policy = evaluateCapabilityPolicy(capability, {
+      canary,
+      invocation: "job",
+      policyMode: requestPolicyMode,
+      actorId,
+      enforce: false,
+    });
+    assertAuthorizationAllow(policy.authorization || policy);
     const pilotInScope = requestPolicyMode?.pilotScope === "in_scope";
     const createDeviceId = pilotInScope ? routeRequest.deviceId : deviceId;
     const createPlacement = pilotInScope ? routeRequest.placement : placement;
@@ -1067,9 +1076,11 @@ export class ControlPlane {
       capability,
       params,
       canary,
-      status: policy.approvalRequired ? "waiting_approval" : "queued",
-      approvalRequired: policy.approvalRequired,
+      status: "queued",
+      approvalRequired: false,
       externalEffect: policy.externalEffect,
+      authorization: policy.authorization || policy,
+      operationKey: idempotencyKey,
     });
     if (!created.reused) {
       const device = this.state.requireDevice(created.job.deviceId);
@@ -1079,6 +1090,7 @@ export class ControlPlane {
     }
     return {
       ...created,
+      authorization: policy.authorization || policy,
       storage: this.evidence.storageForRun(created.job.runId),
     };
   }
@@ -1113,10 +1125,31 @@ export class ControlPlane {
       const requestPolicyMode = pilotScoped
         ? this.effectivePolicyMode({ actorId, deviceId: route.selectedDeviceId })
         : this.policyMode;
-      const policy = preRoutePolicy || evaluateCapabilityPolicy(capability, { canary, invocation, policyMode: requestPolicyMode });
+      const policy = preRoutePolicy || evaluateCapabilityPolicy(capability, {
+        canary,
+        invocation,
+        policyMode: requestPolicyMode,
+        actorId,
+        enforce: false,
+      });
+      const authorization = policy.authorization || decideCapabilityPolicy(capability, {
+        canary,
+        invocation,
+        policyMode: requestPolicyMode,
+        actorId,
+      });
       return {
         ...route,
-        approvalRequired: policy.approvalRequired,
+        authorization,
+        placement: {
+          decision: route.decision === "queue" ? "queued_resource" : route.decision,
+          selectedDevice: route.selectedDeviceId
+            ? { deviceId: route.selectedDeviceId, alias: route.selectedAlias || null }
+            : null,
+          activeLease: Boolean(route.activeLease),
+        },
+        // deprecated compatibility projection (not authority)
+        approvalRequired: authorization.decision === "wait_human_commit",
         externalEffect: policy.externalEffect,
         transport: capability.resources.includes("transport:xiaowei:22222")
           ? this.transportStatus()
@@ -1952,12 +1985,26 @@ export class ControlPlane {
     }
     const capability = this.capabilities.validateParams(capabilityId, params);
     const sessionPolicyMode = this.effectivePolicyMode({ actorId: session.actorId, deviceId: session.deviceId });
-    const policy = evaluateCapabilityPolicy(capability, { canary: session.canary, invocation: "session", policyMode: sessionPolicyMode });
-    if (policy.approvalRequired) {
+    const policy = evaluateCapabilityPolicy(capability, {
+      canary: session.canary,
+      invocation: "session",
+      policyMode: sessionPolicyMode,
+      actorId: session.actorId,
+      enforce: false,
+    });
+    // Foundation: no ordinary approval gate; non-allow is machine block / protected wait.
+    if (policy.authorization?.decision === "wait_human_commit" || policy.decision === "wait_human_commit") {
       throw new ControlPlaneError(
-        "APPROVAL_REQUIRED",
-        "external effects must be submitted as an approvable job",
-        { status: 403 },
+        "PROTECTED_COMMIT_REQUIRED",
+        "protected commit required; not available via session action",
+        { status: 409, details: { authorization: policy.authorization || policy } },
+      );
+    }
+    if (policy.authorization?.decision === "block" || policy.decision === "block") {
+      throw new ControlPlaneError(
+        policy.reasonCode || policy.authorization?.reasonCode || "CAPABILITY_BLOCKED",
+        `session action blocked: ${policy.reasonCode || policy.authorization?.reasonCode}`,
+        { status: 403, details: { authorization: policy.authorization || policy } },
       );
     }
     if (this.activeJobs.has(session.deviceId)) {

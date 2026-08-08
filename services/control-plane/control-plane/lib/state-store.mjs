@@ -516,7 +516,21 @@ export class StateStore {
     // REX Phase 5 §8.1 item 3：legacy pending migration。superseded_by 记录旧 waiting_approval
     // job 被 fresh queued job 取代的链路（旧行→queued_migrated，superseded_by→新 job_id）。
     this.#ensureColumn("jobs", "superseded_by", "TEXT");
-    this.db.exec("PRAGMA user_version = 13;");
+    // Foundation PR1: operations owns operation_key uniqueness (jobs.idempotency_key is legacy projection).
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS operations (
+        operation_key TEXT PRIMARY KEY,
+        fingerprint_version INTEGER NOT NULL DEFAULT 1,
+        request_fingerprint_hash TEXT NOT NULL,
+        outcome_kind TEXT NOT NULL,
+        authorization_decision_id TEXT,
+        job_id TEXT,
+        created_at TEXT NOT NULL
+      );
+    `);
+    this.#ensureColumn("jobs", "operation_key", "TEXT");
+    this.#ensureColumn("jobs", "authorization_snapshot_json", "TEXT");
+    this.db.exec("PRAGMA user_version = 14;");
   }
 
   #ensureColumn(table, column, definition) {
@@ -923,6 +937,8 @@ export class StateStore {
     status = "queued",
     approvalRequired = false,
     externalEffect = false,
+    authorization = null,
+    operationKey = null,
   }) {
     if (typeof idempotencyKey !== "string" || idempotencyKey.trim() === "") {
       throw new ControlPlaneError("IDEMPOTENCY_REQUIRED", "idempotencyKey is required");
@@ -930,6 +946,7 @@ export class StateStore {
     if (typeof actorId !== "string" || actorId.trim() === "") {
       throw new ControlPlaneError("ACTOR_REQUIRED", "actorId is required");
     }
+    const opKey = (typeof operationKey === "string" && operationKey.trim()) ? operationKey.trim() : idempotencyKey;
     const placementRequest = normalizePlacementRequest({ deviceId, placement });
     const requestFingerprint = fingerprint({
       actorId,
@@ -943,9 +960,22 @@ export class StateStore {
       ? fingerprint({ deviceId: placementRequest.deviceId, capabilityId: capability.id, params, canary, sessionId })
       : null;
     const now = this.now();
+    const nowIso = new Date(now).toISOString();
     const jobId = newId("job");
     const runId = newId("run");
     const result = this.transaction(() => {
+      // Foundation: operations table is the unique owner of operation_key.
+      const priorOp = this.db.prepare("SELECT * FROM operations WHERE operation_key=?").get(opKey);
+      if (priorOp) {
+        if (priorOp.request_fingerprint_hash !== requestFingerprint
+          && priorOp.request_fingerprint_hash !== legacyFingerprint) {
+          throw new ControlPlaneError("IDEMPOTENCY_CONFLICT", "operation key was used for a different request", {
+            status: 409,
+            details: { operationKey: opKey, jobId: priorOp.job_id },
+          });
+        }
+        if (priorOp.job_id) return { reused: true, jobId: priorOp.job_id };
+      }
       const prior = this.db.prepare("SELECT * FROM jobs WHERE idempotency_key=?").get(idempotencyKey);
       if (prior) {
         if (prior.actor_id !== actorId
@@ -965,13 +995,31 @@ export class StateStore {
         canary,
         advisory: false,
       });
+      if (!priorOp) {
+        this.db.prepare(`
+          INSERT INTO operations (
+            operation_key, fingerprint_version, request_fingerprint_hash, outcome_kind,
+            authorization_decision_id, job_id, created_at
+          ) VALUES (?, 1, ?, 'allowed_job', ?, ?, ?)
+        `).run(
+          opKey,
+          requestFingerprint,
+          authorization?.decisionId || null,
+          jobId,
+          nowIso,
+        );
+      } else {
+        this.db.prepare("UPDATE operations SET job_id=?, outcome_kind='allowed_job', authorization_decision_id=? WHERE operation_key=?")
+          .run(jobId, authorization?.decisionId || null, opKey);
+      }
       this.db.prepare(`
         INSERT INTO jobs (
           job_id, run_id, idempotency_key, request_fingerprint, actor_id, device_id,
           capability_id, capability_json, params_json, canary, session_id, status,
           approval_required, external_effect, created_at, updated_at,
-          placement_request_json, placement_decision_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          placement_request_json, placement_decision_json,
+          operation_key, authorization_snapshot_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         jobId,
         runId,
@@ -991,6 +1039,8 @@ export class StateStore {
         now,
         canonicalJson(placementRequest),
         canonicalJson(routeDecision),
+        opKey,
+        authorization ? canonicalJson(authorization) : null,
       );
       this.#insertEvent({
         jobId,

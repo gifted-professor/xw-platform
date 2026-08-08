@@ -364,8 +364,10 @@ test("every parent-grant flag/ADR denial is zero-allocation and legacy R2 stays 
       assert.equal(f.state.listLeases().length, 0);
       assert.equal(f.state.listMissionEffects(blocked.mission.missionId).length, 0);
       assert.equal(f.state.db.prepare("SELECT COUNT(*) AS c FROM approvals").get().c, 0);
-      const legacy = f.control.submitJob({ idempotencyKey: `legacy-${JSON.stringify(gates)}`, actorId: "agent:r2", capabilityId: "xhs.follow.r2", params: {} });
-      assert.equal(legacy.job.status, "waiting_approval");
+      assert.throws(
+        () => f.control.submitJob({ idempotencyKey: `legacy-${JSON.stringify(gates)}`, actorId: "agent:r2", capabilityId: "xhs.follow.r2", params: {} }),
+        (err) => err.code === "AUTONOMY_INACTIVE",
+      );
     } finally {
       f.close();
     }
@@ -591,18 +593,18 @@ test("mission show/status/revoke report lifecycle and revoke blocks further effe
   }
 });
 
-test("a legacy non-Mission R2 job retains its manual waiting_approval gate", () => {
-  const f = setup(); // flag off does not affect legacy jobs
+test("a legacy non-Mission R2 job is machine-blocked without ordinary waiting_approval", () => {
+  const f = setup(); // shadow/legacy: no ordinary approval queue for business effects
   try {
-    const created = f.control.submitJob({
-      idempotencyKey: "legacy-r2-01",
-      actorId: "agent-a",
-      capabilityId: "xhs.follow.r2",
-      params: {},
-    });
-    assert.equal(created.job.approvalRequired, true);
-    assert.equal(created.job.status, "waiting_approval");
-    assert.equal(created.job.externalEffect, true);
+    assert.throws(
+      () => f.control.submitJob({
+        idempotencyKey: "legacy-r2-01",
+        actorId: "agent-a",
+        capabilityId: "xhs.follow.r2",
+        params: {},
+      }),
+      (err) => err.code === "AUTONOMY_INACTIVE" && err.status === 403,
+    );
   } finally {
     f.close();
   }

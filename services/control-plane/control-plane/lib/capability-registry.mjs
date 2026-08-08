@@ -2,13 +2,23 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 import { ControlPlaneError } from "./errors.mjs";
+import { attachNormalizedEffect, isClassificationStub } from "./capability-effect.mjs";
 
 const REQUIRED_FIELDS = [
   "schemaVersion", "id", "appId", "packageName", "versionRange", "maturity", "risk",
   "resources", "inputSchema", "outputSchema", "preconditions", "verification",
   "restoration", "timeoutMs", "idempotency", "automationPolicy", "implementation", "evidence",
 ];
-const ALLOWED_FIELDS = new Set([...REQUIRED_FIELDS, "availability", "description"]);
+const ALLOWED_FIELDS = new Set([
+  ...REQUIRED_FIELDS,
+  "availability",
+  "description",
+  "effect",
+  "exposure",
+  "invocationPolicy",
+  "lifecycle",
+  "financialCommit",
+]);
 const MATURITY = new Set(["E0", "E1", "E2", "E3", "E4"]);
 const RISK = new Set(["R0", "R1", "R2", "R3"]);
 const RESOURCES = new Set(["device", "transport:xiaowei:22222"]);
@@ -75,6 +85,16 @@ export function validateCapability(capability) {
   assertString(capability.implementation.action, `${capability.id}.implementation.action`);
   if (!Array.isArray(capability.evidence) || capability.evidence.some((item) => typeof item !== "string")) {
     throw new TypeError(`${capability.id}.evidence must be strings`);
+  }
+  if (capability.exposure !== undefined && !["public", "internal"].includes(capability.exposure)) {
+    throw new TypeError(`${capability.id} invalid exposure`);
+  }
+  if (capability.lifecycle !== undefined
+    && !["draft", "canary_only", "implemented", "deprecated", "retired"].includes(capability.lifecycle)) {
+    throw new TypeError(`${capability.id} invalid lifecycle`);
+  }
+  if (capability.effect !== undefined) {
+    assertObject(capability.effect, `${capability.id}.effect`);
   }
   return capability;
 }
@@ -157,7 +177,20 @@ export class CapabilityRegistry {
     this.capabilities = [];
     this.byId = new Map();
     for (const raw of capabilities) {
-      const capability = structuredClone(validateCapability(raw));
+      // Classification stubs: minimal draft entries without full required fields
+      if (isClassificationStub(raw) && !raw.implementation) {
+        const stub = structuredClone(raw);
+        if (!stub.id) throw new TypeError("classification stub missing id");
+        if (this.byId.has(stub.id)) throw new TypeError(`duplicate capability ID: ${stub.id}`);
+        stub.runnable = false;
+        stub.lifecycle = stub.lifecycle || "draft";
+        stub.availability = stub.availability || "classification_required";
+        this.byId.set(stub.id, stub);
+        this.capabilities.push(stub);
+        continue;
+      }
+      const capability = attachNormalizedEffect(structuredClone(validateCapability(raw)));
+      capability.runnable = !isClassificationStub(capability);
       if (this.byId.has(capability.id)) throw new TypeError(`duplicate capability ID: ${capability.id}`);
       this.byId.set(capability.id, capability);
       this.capabilities.push(capability);
@@ -189,10 +222,16 @@ export class CapabilityRegistry {
   }
 
   listPublic() {
-    return this.capabilities.map(({ implementation, ...capability }) => ({
-      ...structuredClone(capability),
-      adapter: implementation.adapter,
-    }));
+    return this.capabilities
+      .filter((capability) => (capability.exposure || "public") !== "internal")
+      .filter((capability) => capability.runnable !== false)
+      .map(({ implementation, ...capability }) => ({
+        ...structuredClone(capability),
+        adapter: implementation?.adapter,
+        normalizedEffect: capability.normalizedEffect || null,
+        capabilityContractHash: capability.capabilityContractHash || null,
+        authorizationHint: "context_required",
+      }));
   }
 
   validateParams(id, params = {}) {
