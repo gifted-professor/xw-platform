@@ -25,9 +25,15 @@
         "control-plane/lib/return-home.mjs",
         "control-plane/lib/operator-access.mjs",
         "control-plane/lib/xiaowei-transport.mjs",
+        "control-plane/bootstrap.mjs",
+        "apps/xiaowei/adapter.mjs",
+        "scripts/check-adapter-imports.mjs",
         "scripts/fast-operator.mjs",
         "tests/transport-action-authorization.test.mjs",
         "tests/foundation-pr3-transport-boundary.test.mjs",
+        "tests/operator-access.test.mjs",
+        "tests/control-plane-placement.test.mjs",
+        "tests/discovery-session-state.test.mjs",
         "docs/plans/2026-08-08-foundation-pr3-branch.md"
       ]
     },
