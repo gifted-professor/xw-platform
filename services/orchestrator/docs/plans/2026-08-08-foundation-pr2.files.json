@@ -1,0 +1,79 @@
+{
+  "schemaId": "xhs.foundation-pr2-scope.v1",
+  "title": "Foundation PR2: bind runtime implementation integrity",
+  "branch": "foundation/pr2-runtime-integrity",
+  "baselines": {
+    "routing": "fb4f90be6faa308e1e65346d4cf353c9daefe620",
+    "registry": "3dae43f3e6fd6478eeeef391e1de76c772727d93"
+  },
+  "authorization": {
+    "sourceImplementation": true,
+    "windowsDeploy": false,
+    "deviceActions": false,
+    "jobOrSessionSubmit": false,
+    "activatePilot": false,
+    "realDeviceCanary": false
+  },
+  "invariants": ["RI-01", "RI-02", "RI-03", "RI-04", "RI-05"],
+  "mergeOrder": ["routing", "registry"],
+  "forbidden": [
+    "transportActionAuthorization production wiring",
+    "FastOperator serve rewrite",
+    "Gateway/Xiaowei nonce consume",
+    "Windows task reload",
+    "DeployShadow",
+    "ActivatePilot",
+    "live canary",
+    "xhs.comment.bound_send",
+    "real social effects",
+    "PHC Surface",
+    "FleetRun"
+  ],
+  "repositories": {
+    "routing": {
+      "name": "xhs-device-agent",
+      "allowedPrefixes": [
+        "control-plane/lib/implementation-closure.mjs",
+        "control-plane/lib/tcb-manifest.mjs",
+        "control-plane/lib/runtime-integrity.mjs",
+        "control-plane/schema/implementation-closure.v1.schema.json",
+        "control-plane/schema/tcb.manifest.v1.schema.json",
+        "control-plane/lib/capability-effect.mjs",
+        "control-plane/lib/capability-registry.mjs",
+        "control-plane/lib/authorization-decision.mjs",
+        "control-plane/lib/control-plane.mjs",
+        "control-plane/lib/state-store.mjs",
+        "control-plane/schema/capability.schema.json",
+        "tests/implementation-closure.test.mjs",
+        "tests/tcb-manifest.test.mjs",
+        "tests/foundation-pr2-runtime-integrity.test.mjs",
+        "docs/plans/2026-08-08-foundation-pr2-branch.md"
+      ],
+      "notes": "Later PR2 slices may touch contract hash propagation + dispatch recheck only within these prefixes; expand allowedPrefixes in a follow-up commit when wiring RI-02..RI-04."
+    },
+    "registry": {
+      "name": "xhs-registry",
+      "allowedPrefixes": [
+        "docs/plans/2026-08-08-foundation-pr2-baseline.md",
+        "docs/plans/2026-08-08-foundation-pr2.files.json",
+        "docs/plans/2026-08-08-foundation-pr2-progress.md",
+        "contracts/implementation-closure.v1.schema.json",
+        "contracts/tcb.manifest.v1.schema.json",
+        "scripts/lib/implementation-closure.mjs",
+        "scripts/lib/tcb-manifest.mjs",
+        "scripts/lib/runtime-integrity.mjs",
+        "scripts/lib/typed-transport.mjs",
+        "scripts/lib/task-plan-capability-binding.mjs",
+        "scripts/lib/orchestration-store.mjs",
+        "scripts/lib/work-receipt.mjs",
+        "scripts/lib/typed-job-worker.mjs",
+        "contracts/work-receipt.v2.schema.json",
+        "tests/implementation-closure.test.mjs",
+        "tests/tcb-manifest.test.mjs",
+        "tests/foundation-pr2-runtime-integrity.test.mjs",
+        "tests/typed-transport.test.mjs",
+        "tests/work-receipt.test.mjs"
+      ]
+    }
+  }
+}

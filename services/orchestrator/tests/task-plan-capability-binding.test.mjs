@@ -46,6 +46,7 @@ test("binder produces actor-independent ExecutionPlan with placement constraint 
   assert.equal(executionPlan.nodes[0].placementConstraint.alias, "01");
   assert.equal(executionPlan.nodes[0].deviceId, undefined);
   assert.equal(executionPlan.nodes[0].capabilityContractHash, "a".repeat(64));
+  assert.equal(executionPlan.nodes[0].implementationClosureHash, null);
   assert.equal(executionPlan.constraints.maxWorkers, 1);
 
   const again = bindTaskPlanToLiveCapabilities(raw, catalog);
