@@ -11,7 +11,7 @@ const baseMission = {
   policy: { publish: "confirm", delete: "confirm", payment: "confirm" },
 };
 
-test("PHC is per-commit only for payment and unreleased publish/delete", async () => {
+test("PHC covers payment and publish/delete; allow_within_scope never releases publish to ECP", async () => {
   const calls = [];
   const ecp = {
     async prepare(input) { calls.push(["prepare", input.action]); return { status: "prepared", effect: { effectId: `effect-${input.action}` } }; },
@@ -33,7 +33,7 @@ test("PHC is per-commit only for payment and unreleased publish/delete", async (
     mission: { ...baseMission, policy: { ...baseMission.policy, publish: "allow_within_scope" } },
     action: "publish", target: "target-a",
   });
-  assert.equal(released.decision, "ecp");
+  assert.equal(released.decision, "phc");
 });
 
 test("PHC denial restores a single pending commit and never turns scope failure into approval", async () => {

@@ -22,10 +22,10 @@ test("feed-note exploration is a general automatic R0 navigation capability", ()
   assert.deepEqual(capability.inputSchema.properties.selector.enum, ["any"]);
   assert.equal(capability.inputSchema.properties.index.minimum, 0);
   assert.equal(capability.preconditions.some((item) => /already on|on a feed page/i.test(item)), false);
-  assert.deepEqual(evaluateCapabilityPolicy(capability, { invocation: "session" }), {
-    approvalRequired: false,
-    externalEffect: false,
-  });
+  const policy = evaluateCapabilityPolicy(capability, { invocation: "session" });
+  assert.equal(policy.approvalRequired, false);
+  assert.equal(policy.externalEffect, false);
+  assert.equal(policy.decision, "allow");
   const bootstrap = readFileSync(new URL("../control-plane/bootstrap.mjs", import.meta.url), "utf8");
   assert.match(bootstrap, /capabilityId: "xhs\.explore\.open_feed_note", adapterId: "xhs"/);
 });
