@@ -1796,10 +1796,38 @@ function findRowByLabel(snapshot, regex, { clickable = true } = {}) {
     && node.bounds[1] >= 200) || null;
 }
 
-// 价格输入框：label 含「价格」且为可点输入区；价格行常带「¥」前缀占位。
+// 价格输入框：优先匹配字段自身，避免把「预估服务费 ¥x」误认成价格行。
+// Flutter compose 页可能视觉显示「¥199.00」，但 accessibility label 仍只有「价格设置」；
+// 因而字段定位与数值回读必须分开处理。
 function findPriceField(snapshot) {
-  return snapshot.find((node) => /价格|¥/.test(node.label) && node.bounds && node.bounds[1] >= 200)
+  const candidates = (snapshot || []).filter((node) => node?.bounds && node.bounds[1] >= 200);
+  return candidates.find((node) => /^(?:价格设置|价格(?:\s|¥|￥|$))/.test(String(node.label || "").trim()))
+    || candidates.find((node) => /价格|¥|￥/.test(String(node.label || "")))
     || null;
+}
+
+export function priceFieldValueMatches(label, expected) {
+  const wanted = String(expected ?? "").trim().replace(/[^\d.]/g, "");
+  if (!wanted || !Number.isFinite(Number(wanted))) return false;
+  const compact = String(label || "").replace(/\s+/g, "");
+  const match = compact.match(/^(?:价格设置|价格)[^\d]*(\d+(?:\.\d{1,2})?)/);
+  if (!match || !Number.isFinite(Number(match[1]))) return false;
+  return Number(match[1]) === Number(wanted);
+}
+
+export function inspectPriceState(nodes, expected) {
+  const list = nodes || [];
+  const digitCount = new Set(list
+    .filter((node) => /^[0-9]$/.test(String(node?.label || "").trim()) && node?.bounds)
+    .map((node) => String(node.label).trim())).size;
+  const confirms = list.filter((node) => /^确定$/.test(String(node?.label || "").trim()) && node?.bounds);
+  const priceField = findPriceField(list);
+  return {
+    sheetOpen: digitCount >= 8,
+    priceField,
+    valueMatches: priceFieldValueMatches(priceField?.label, expected),
+    keyboardConfirm: confirms.find((node) => center(node.bounds)[0] > 700) || null,
+  };
 }
 
 // 标题输入框：label 含「标题」「宝贝标题」「品牌型号」中任一（注意描述区也含「品牌型号」，
@@ -2741,8 +2769,10 @@ async function fillDescriptionMultiLine(op, field, lines, { evidenceDir, label =
   };
 }
 
-// 价格字段填入：价格是纯数字（ASCII），用 `input text` 直输即可，无需 IME 桥。
-// 仍做回读校验（页面出现该数字串）。
+// 价格字段填入：应用内数字键盘输入后，必须先确认 sheet 已关闭，再验证持久化值。
+// 当前 Flutter 版本会在 compose 视觉行显示「¥199.00」，但 accessibility label 仍可能
+// 只有「价格设置」。此时关闭后重开 sheet，从字段自身回读已提交值；禁止把首次打开、
+// 尚未 commit 的 sheet 内值当作成功（旧 gap4 false positive）。
 async function fillPriceField(op, field, price, { evidenceDir } = {}) {
   if (!field?.bounds) return { ok: false, step: "price-field-missing" };
   const clean = String(price).replace(/[^\d.]/g, "");
@@ -2780,12 +2810,63 @@ async function fillPriceField(op, field, price, { evidenceDir } = {}) {
     await settle(500);
     entered = await capturePng(op, `${evidenceDir}\\xianyu-price-entered-${safeSerial}.png`);
   }
-  const after = await snapshot(op, "xianyu-price-after");
-  // 严格校验：必须出现在价格行 label 里（防「66 进了描述框也判过」的假象，T3 实证）
-  const rowAfter = findPriceField(after.nodes);
-  const verified = !!(rowAfter && String(rowAfter.label || "").includes(clean));
+  let after = null;
+  let composeState = null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    after = await snapshot(op, `xianyu-price-after-${attempt}`);
+    composeState = inspectPriceState(after.nodes, clean);
+    if (!composeState.sheetOpen) break;
+    await settle(500);
+  }
+  // 首次 sheet 内出现目标值只证明按键已注册，不证明 commit。只有键盘已关闭时才接受
+  // compose semantics；若其值缺失，则通过 close -> reopen -> field readback 验证持久化。
+  let verified = !composeState?.sheetOpen && composeState?.valueMatches;
+  let verificationMethod = verified ? "compose-semantics" : null;
+  let persisted = null;
+
+  if (!verified && !composeState?.sheetOpen && composeState?.priceField?.bounds) {
+    await op.tap(...center(composeState.priceField.bounds));
+    await settle(900);
+    const reopened = await snapshot(op, "xianyu-price-persisted-readback");
+    const persistedState = inspectPriceState(reopened.nodes, clean);
+    verified = persistedState.sheetOpen && persistedState.valueMatches;
+    if (verified) {
+      verificationMethod = "sheet-reopen";
+      persisted = await capturePng(op, `${evidenceDir}\\xianyu-price-persisted-${safeSerial}.png`);
+    }
+    // 无论回读成败，都必须关闭重开的 sheet；成功路径要求用其确定键回到 compose，
+    // 避免把打开的价格 sheet 留给后续步骤。
+    if (!persistedState.keyboardConfirm?.bounds) {
+      await cleanup();
+      return {
+        ok: false,
+        step: "price-readback-confirm-missing",
+        verified: false,
+        evidence: { baseline, entered, persisted },
+      };
+    }
+    await op.tap(...center(persistedState.keyboardConfirm.bounds));
+    await settle(1000);
+    const closed = await snapshot(op, "xianyu-price-readback-closed");
+    if (inspectPriceState(closed.nodes, clean).sheetOpen) {
+      await cleanup();
+      return {
+        ok: false,
+        step: "price-readback-close-unverified",
+        verified: false,
+        evidence: { baseline, entered, persisted },
+      };
+    }
+  }
+
   if (!verified) await cleanup(); // fail-closed：不留开着的 sheet 给后续步骤
-  return { ok: verified, step: verified ? "price-filled" : "price-unverified", verified, evidence: { baseline, entered } };
+  return {
+    ok: verified,
+    step: verified ? "price-filled" : "price-unverified",
+    verified,
+    verificationMethod,
+    evidence: { baseline, entered, persisted },
+  };
 }
 
 // 成色选择：点成色行 → 在弹出的选项里点目标（默认「全新」）。

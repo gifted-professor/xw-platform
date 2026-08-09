@@ -33,6 +33,8 @@ import {
   isPublishCompose,
   isXianyuChatOverlay,
   isRecoverySafeMain,
+  inspectPriceState,
+  priceFieldValueMatches,
   returnFromXianyuChatOverlay,
   ensureOnPublishCompose,
   firstFailedPublishStep,
@@ -1054,6 +1056,44 @@ test("findSkuBatchEditControls prefers rightmost 确定 as keyboard confirm", ()
   assert.ok(controls.stockInput);
   assert.deepEqual(controls.keyboardConfirm.bounds, [884, 2132, 972, 2184]);
   assert.ok(APP_NUMPAD_SETTLE_MS >= 400);
+});
+
+test("price readback distinguishes an uncommitted open sheet from persisted value", () => {
+  const keypad = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
+    .map((label, index) => ({ label, bounds: [40 + index * 10, 1700, 100 + index * 10, 1800] }));
+  const typedSheet = [
+    { label: "价格设置199", bounds: [44, 912, 1036, 1044] },
+    ...keypad,
+    { label: "确定", bounds: [857, 2109, 1033, 2274] },
+  ];
+  const typedState = inspectPriceState(typedSheet, "199");
+  assert.equal(typedState.sheetOpen, true);
+  assert.equal(typedState.valueMatches, true);
+  assert.ok(typedState.keyboardConfirm);
+  // valueMatches alone is intentionally insufficient: this is the pre-commit state.
+
+  const staleCompose = inspectPriceState([
+    { label: "价格设置", bounds: [77, 1677, 1003, 1831] },
+    { label: "预估鱼小铺软件服务费 (1.6%)-¥3.18", bounds: [77, 1831, 1003, 1900] },
+  ], "199");
+  assert.equal(staleCompose.sheetOpen, false);
+  assert.equal(staleCompose.valueMatches, false);
+
+  const reopened = inspectPriceState([
+    { label: "价格设置199.00", bounds: [44, 912, 1036, 1044] },
+    ...keypad,
+    { label: "确定", bounds: [857, 2109, 1033, 2274] },
+  ], "199");
+  assert.equal(reopened.sheetOpen, true);
+  assert.equal(reopened.valueMatches, true);
+});
+
+test("priceFieldValueMatches compares the field amount exactly", () => {
+  assert.equal(priceFieldValueMatches("价格设置199", "199"), true);
+  assert.equal(priceFieldValueMatches("价格 ¥199.00", "199"), true);
+  assert.equal(priceFieldValueMatches("价格设置19.90", "199"), false);
+  assert.equal(priceFieldValueMatches("价格设置", "199"), false);
+  assert.equal(priceFieldValueMatches("预估服务费 ¥3.18", "3.18"), false);
 });
 
 test("findSkuSelectAll requires comma-prefix and trailing 全选 (recipe success label)", () => {
