@@ -1337,7 +1337,6 @@ export function firstFailedPublishDiagnostic(steps = {}) {
         ? observed.surface : "ambiguous",
       composeVisible: observed.composeVisible === true,
       composeNeighborhood: observed.composeNeighborhood === true,
-      belowSheetAnchor: observed.belowSheetAnchor === true,
       valueMatches: observed.valueMatches === true,
       inlinePriceValue: observed.inlinePriceValue === true,
       atComposeAnchor: observed.atComposeAnchor === true,
@@ -1872,10 +1871,6 @@ export function inspectPriceState(nodes, expected, {
   };
   const auxiliaryCount = Object.values(auxiliaryMarkers).filter(Boolean).length;
   const priceCenterY = priceField?.bounds ? center(priceField.bounds)[1] : null;
-  const sheetAnchorCenterY = Array.isArray(sheetPriceBounds) ? center(sheetPriceBounds)[1] : null;
-  const sheetCollapseGap = Math.max(120, width * 0.15);
-  const belowSheetAnchor = Number.isFinite(priceCenterY) && Number.isFinite(sheetAnchorCenterY)
-    && priceCenterY - sheetAnchorCenterY >= sheetCollapseGap;
   const hasRelativeRow = (pattern, direction) => Number.isFinite(priceCenterY) && list.some((node) => {
     if (!node?.bounds || !pattern.test(String(node.label || "").trim())) return false;
     const nodeY = center(node.bounds)[1];
@@ -1891,8 +1886,9 @@ export function inspectPriceState(nodes, expected, {
   // compose 字段语义更新成「价格设置199」。只有键盘控件、至少两个辅助字段，或
   // 字段仍匹配本次打开时的 sheet bounds，才证明 overlay 仍开着。存在本次交互锚点时，
   // compose 优先匹配打开前的字段 bounds；若关闭 sheet 触发纵向重排，也可由价格行
-  // 的稳定相对邻域，或显著落到本次 sheet 价格锚点下方来证明。后者使用屏宽缩放的
-  // 最小间距，避免把键盘刚隐藏但 sheet 尚未折叠的同位过渡帧当作 compose。
+  // 的稳定相对邻域来证明。当前设备的已关闭 compose 还会把字段语义保留为无金额的
+  // 「价格设置」；当所有 sheet 独有信号均已消失时，这个 stale label 也只证明 closure，
+  // 金额仍必须在下一步重开 sheet 后精确回读。
   const sheetEvidence = Boolean(priceField) && (
     digitCount > 0
     || Boolean(keyboardConfirm)
@@ -1903,8 +1899,7 @@ export function inspectPriceState(nodes, expected, {
   const composeEvidence = composeVisible && Boolean(priceField) && (
     (atComposeAnchor && !atSheetAnchor)
     || composeNeighborhood
-    || belowSheetAnchor
-    || (!hasBoundsAnchor && !inlinePriceValue)
+    || !inlinePriceValue
   );
   const surface = sheetEvidence
     ? "sheet"
@@ -1914,7 +1909,6 @@ export function inspectPriceState(nodes, expected, {
     sheetOpen: surface === "sheet",
     composeVisible,
     composeNeighborhood,
-    belowSheetAnchor,
     priceField,
     valueMatches: priceFieldValueMatches(priceField?.label, expected),
     inlinePriceValue,
@@ -2883,7 +2877,6 @@ export async function fillPriceField(op, field, price, {
     surface: state.surface,
     composeVisible: state.composeVisible,
     composeNeighborhood: state.composeNeighborhood,
-    belowSheetAnchor: state.belowSheetAnchor,
     valueMatches: state.valueMatches,
     inlinePriceValue: state.inlinePriceValue,
     atComposeAnchor: state.atComposeAnchor,
