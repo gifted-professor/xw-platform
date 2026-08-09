@@ -2763,7 +2763,7 @@ async function fillPriceField(op, field, price, { evidenceDir } = {}) {
       const key = sheet.nodes.find((n) => String(n.label) === ch);
       if (!key?.bounds) { await cleanup(); return { ok: false, step: `price-key-missing`, evidence: { baseline } }; }
       await op.tap(...center(key.bounds));
-      await settle(220);
+      await settle(APP_NUMPAD_SETTLE_MS);
     }
     await settle(400);
     entered = await capturePng(op, `${evidenceDir}\\xianyu-price-entered-${safeSerial}.png`);
