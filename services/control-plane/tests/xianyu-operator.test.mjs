@@ -17,6 +17,7 @@ import {
   findHomeTab,
   findPublishEntry,
   findSellTab,
+  fillPriceField,
   findSkuRecoveryClose,
   findSkuExitConfirm,
   findSkuBatchEditControls,
@@ -33,6 +34,9 @@ import {
   isPublishCompose,
   isXianyuChatOverlay,
   isRecoverySafeMain,
+  inspectPriceState,
+  priceFieldValueMatches,
+  shouldPersistDraft,
   returnFromXianyuChatOverlay,
   ensureOnPublishCompose,
   firstFailedPublishStep,
@@ -1054,6 +1058,189 @@ test("findSkuBatchEditControls prefers rightmost 确定 as keyboard confirm", ()
   assert.ok(controls.stockInput);
   assert.deepEqual(controls.keyboardConfirm.bounds, [884, 2132, 972, 2184]);
   assert.ok(APP_NUMPAD_SETTLE_MS >= 400);
+});
+
+test("price readback distinguishes an uncommitted open sheet from persisted value", () => {
+  const keypad = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
+    .map((label, index) => ({ label, bounds: [40 + index * 10, 1700, 100 + index * 10, 1800] }));
+  const typedSheet = [
+    { label: "价格设置199", bounds: [44, 912, 1036, 1044] },
+    ...keypad,
+    { label: "确定", bounds: [857, 2109, 1033, 2274] },
+  ];
+  const typedState = inspectPriceState(typedSheet, "199");
+  assert.equal(typedState.surface, "sheet");
+  assert.equal(typedState.sheetOpen, true);
+  assert.equal(typedState.valueMatches, true);
+  assert.ok(typedState.keyboardConfirm);
+  // valueMatches alone is intentionally insufficient: this is the pre-commit state.
+
+  const sparseTypedState = inspectPriceState([
+    { label: "价格设置199", bounds: [44, 912, 1036, 1044] },
+  ], "199");
+  assert.equal(sparseTypedState.surface, "sheet");
+  assert.equal(sparseTypedState.valueMatches, true);
+
+  const staleCompose = inspectPriceState([
+    { label: "宝贝描述", bounds: [77, 300, 1003, 600] },
+    { label: "价格设置", bounds: [77, 1677, 1003, 1831] },
+    { label: "预估鱼小铺软件服务费 (1.6%)-¥3.18", bounds: [77, 1831, 1003, 1900] },
+    { label: "发布", className: "android.widget.Button", bounds: [900, 20, 1070, 150] },
+  ], "199");
+  assert.equal(staleCompose.surface, "compose");
+  assert.equal(staleCompose.sheetOpen, false);
+  assert.equal(staleCompose.valueMatches, false);
+
+  const valueCompose = inspectPriceState([
+    { label: "宝贝描述", bounds: [77, 300, 1003, 600] },
+    { label: "价格 ¥199.00", bounds: [77, 1677, 1003, 1831] },
+    { label: "发布", className: "android.widget.Button", bounds: [900, 20, 1070, 150] },
+  ], "199");
+  assert.equal(valueCompose.surface, "compose");
+  assert.equal(valueCompose.valueMatches, true);
+
+  const reopened = inspectPriceState([
+    { label: "价格设置199.00", bounds: [44, 912, 1036, 1044] },
+    ...keypad,
+    { label: "确定", bounds: [857, 2109, 1033, 2274] },
+  ], "199");
+  assert.equal(reopened.surface, "sheet");
+  assert.equal(reopened.sheetOpen, true);
+  assert.equal(reopened.valueMatches, true);
+
+  const feeOnly = inspectPriceState([
+    { label: "预估鱼小铺软件服务费 (1.6%)-¥3.18", bounds: [77, 1831, 1003, 1900] },
+  ], "3.18");
+  assert.equal(feeOnly.surface, "ambiguous");
+  assert.equal(feeOnly.priceField, null);
+  assert.equal(feeOnly.valueMatches, false);
+});
+
+test("priceFieldValueMatches compares the field amount exactly", () => {
+  assert.equal(priceFieldValueMatches("价格设置199", "199"), true);
+  assert.equal(priceFieldValueMatches("价格 ¥199.00", "199"), true);
+  assert.equal(priceFieldValueMatches("价格设置19.90", "199"), false);
+  assert.equal(priceFieldValueMatches("价格设置1199.00", "199"), false);
+  assert.equal(priceFieldValueMatches("价格设置199.001", "199"), false);
+  assert.equal(priceFieldValueMatches("价格设置", "199"), false);
+  assert.equal(priceFieldValueMatches("预估服务费 ¥3.18", "3.18"), false);
+});
+
+test("draft persistence is blocked after any hard prior failure", () => {
+  assert.equal(shouldPersistDraft({ requested: true, summaryOk: true }), true);
+  assert.equal(shouldPersistDraft({ requested: true, summaryOk: false }), false);
+  assert.equal(shouldPersistDraft({ requested: false, summaryOk: true }), false);
+});
+
+test("fillPriceField proves close, persisted readback, and final compose before success", async () => {
+  const keypad = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
+    .map((label, index) => ({ label, bounds: [40 + index * 10, 1700, 100 + index * 10, 1800] }));
+  const sheet = (label) => [
+    { label, bounds: [44, 912, 1036, 1044] },
+    { label: "原价 0.00", bounds: [44, 1050, 1036, 1160] },
+    { label: "库存 1000", bounds: [44, 1170, 1036, 1280] },
+    ...keypad,
+    { label: "确定", bounds: [857, 2109, 1033, 2274] },
+  ];
+  const compose = [
+    { label: "宝贝描述", bounds: [77, 300, 1003, 600] },
+    { label: "价格设置", bounds: [77, 1677, 1003, 1831] },
+    { label: "发布", className: "android.widget.Button", bounds: [900, 20, 1070, 150] },
+  ];
+  const snapshots = [sheet("价格设置"), sheet("价格设置199"), compose, sheet("价格设置199.00"), compose];
+  const taps = [];
+  let backs = 0;
+  const op = {
+    serial: "test-price",
+    tap: async (...point) => { taps.push(point); },
+    back: async () => { backs += 1; },
+    shellExec: async () => ({ ok: true }),
+  };
+  const result = await fillPriceField(op, { bounds: [77, 1677, 1003, 1831] }, "199", {
+    evidenceDir: "C:\\evidence",
+    snapshotFn: async () => ({ nodes: snapshots.shift() }),
+    captureFn: async (_op, path) => ({ path, bytes: 1, sha256: "a".repeat(64) }),
+    settleFn: async () => {},
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.verificationMethod, "sheet-reopen");
+  assert.equal(snapshots.length, 0);
+  assert.equal(backs, 0);
+  assert.equal(taps.length, 7); // open + 3 digits + first confirm + reopen + readback confirm
+});
+
+test("fillPriceField fails closed when the first price sheet never proves compose closure", async () => {
+  const keypad = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
+    .map((label, index) => ({ label, bounds: [40 + index * 10, 1700, 100 + index * 10, 1800] }));
+  const initial = [
+    { label: "价格设置", bounds: [44, 912, 1036, 1044] },
+    ...keypad,
+    { label: "确定", bounds: [857, 2109, 1033, 2274] },
+  ];
+  const typed = initial.map((node, index) => index === 0 ? { ...node, label: "价格设置199" } : node);
+  const sparseOpen = [{ label: "价格设置199", bounds: [44, 912, 1036, 1044] }];
+  const snapshots = [initial, typed, sparseOpen, sparseOpen, sparseOpen];
+  let backs = 0;
+  const op = {
+    serial: "test-price",
+    tap: async () => {},
+    back: async () => { backs += 1; },
+    shellExec: async () => ({ ok: true }),
+  };
+  const result = await fillPriceField(op, { bounds: [77, 1677, 1003, 1831] }, "199", {
+    evidenceDir: "C:\\evidence",
+    snapshotFn: async () => ({ nodes: snapshots.shift() }),
+    captureFn: async (_op, path) => ({ path, bytes: 1, sha256: "b".repeat(64) }),
+    settleFn: async () => {},
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.step, "price-commit-close-unverified");
+  assert.equal(backs, 1);
+  assert.equal(snapshots.length, 0);
+});
+
+test("fillPriceField fails closed when persisted readback cannot prove the final compose", async () => {
+  const keypad = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
+    .map((label, index) => ({ label, bounds: [40 + index * 10, 1700, 100 + index * 10, 1800] }));
+  const sheet = (label) => [
+    { label, bounds: [44, 912, 1036, 1044] },
+    { label: "原价 0.00", bounds: [44, 1050, 1036, 1160] },
+    { label: "库存 1000", bounds: [44, 1170, 1036, 1280] },
+    ...keypad,
+    { label: "确定", bounds: [857, 2109, 1033, 2274] },
+  ];
+  const compose = [
+    { label: "宝贝描述", bounds: [77, 300, 1003, 600] },
+    { label: "价格设置", bounds: [77, 1677, 1003, 1831] },
+    { label: "发布", className: "android.widget.Button", bounds: [900, 20, 1070, 150] },
+  ];
+  const sparseOpen = [{ label: "价格设置199", bounds: [44, 912, 1036, 1044] }];
+  const snapshots = [
+    sheet("价格设置"),
+    sheet("价格设置199"),
+    compose,
+    sheet("价格设置199.00"),
+    sparseOpen,
+    sparseOpen,
+    sparseOpen,
+  ];
+  let backs = 0;
+  const op = {
+    serial: "test-price",
+    tap: async () => {},
+    back: async () => { backs += 1; },
+    shellExec: async () => ({ ok: true }),
+  };
+  const result = await fillPriceField(op, { bounds: [77, 1677, 1003, 1831] }, "199", {
+    evidenceDir: "C:\\evidence",
+    snapshotFn: async () => ({ nodes: snapshots.shift() }),
+    captureFn: async (_op, path) => ({ path, bytes: 1, sha256: "c".repeat(64) }),
+    settleFn: async () => {},
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.step, "price-readback-close-unverified");
+  assert.equal(backs, 1);
+  assert.equal(snapshots.length, 0);
 });
 
 test("findSkuSelectAll requires comma-prefix and trailing 全选 (recipe success label)", () => {

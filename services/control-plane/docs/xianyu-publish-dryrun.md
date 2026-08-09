@@ -15,6 +15,14 @@
 | 5 | 发货方式 | `freightTemplate: "包邮"` + `calibrated.freight`；多行块按行心点 |
 | 6 | 存草稿（独立副作用） | `full_draft_dry_run` 或 `save_draft_dry_run`；必须走控制面审批 job |
 
+独立价格字段的验收必须区分两阶段：首次打开的 sheet 内出现目标数字只证明按键已注册；
+点击右下角「确定」关闭后，compose 视觉行会显示 `¥199.00`，但部分 Flutter 版本的
+accessibility label 仍可能只有「价格设置」。此时须重开价格 sheet，从价格字段自身回读
+持久化值，再点「确定」返回 compose。不得用首次 sheet 内的值假充 commit 证据，也不得
+因 compose 语义占位未更新而把视觉上已提交的价格误判为失败。sheet/compose 使用
+`sheet | compose | ambiguous` 三态判定；稀疏或矛盾 dump 必须停止并恢复。价格硬失败后
+禁止继续后续字段或保存草稿。
+
 ```bash
 # 纯整表 dry-run：不会存草稿，控制面自动 lease
 node control-plane/devicectl.mjs --ssh xhs-windows job submit \

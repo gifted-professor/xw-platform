@@ -1321,6 +1321,10 @@ export function firstFailedPublishStep(steps = {}) {
   return failed ? `${failed[0]}:${failed[1]?.step || "failed"}` : null;
 }
 
+export function shouldPersistDraft({ requested = false, summaryOk = false } = {}) {
+  return requested === true && summaryOk === true;
+}
+
 export function firstFailedPublishDiagnostic(steps = {}) {
   const sku = steps?.sku;
   if (sku?.selectAllMiss?.kind === "sku-select-all-missing") {
@@ -1796,10 +1800,68 @@ function findRowByLabel(snapshot, regex, { clickable = true } = {}) {
     && node.bounds[1] >= 200) || null;
 }
 
-// 价格输入框：label 含「价格」且为可点输入区；价格行常带「¥」前缀占位。
+// 价格输入框：只接受字段自身，禁止把「预估服务费 ¥x」等金额行当成可点击价格字段。
+// Flutter compose 页可能视觉显示「¥199.00」，但 accessibility label 仍只有「价格设置」；
+// 因而字段定位与数值回读必须分开处理，诊断候选也不能回流到 mutation locator。
 function findPriceField(snapshot) {
-  return snapshot.find((node) => /价格|¥/.test(node.label) && node.bounds && node.bounds[1] >= 200)
+  const candidates = (snapshot || []).filter((node) => node?.bounds && node.bounds[1] >= 200);
+  return candidates.find((node) => /^(?:价格设置|价格(?:\s|¥|￥|$))/.test(String(node.label || "").trim()))
     || null;
+}
+
+export function priceFieldValueMatches(label, expected) {
+  const wanted = String(expected ?? "").trim().replace(/[^\d.]/g, "");
+  if (!wanted || !Number.isFinite(Number(wanted))) return false;
+  const compact = String(label || "").replace(/\s+/g, "");
+  const match = compact.match(/^(?:价格设置|价格)[^\d]*(\d+(?:\.\d{1,2})?)(?![\d.])/);
+  if (!match || !Number.isFinite(Number(match[1]))) return false;
+  return Number(match[1]) === Number(wanted);
+}
+
+export function inspectPriceState(nodes, expected) {
+  const list = nodes || [];
+  const labels = list.map((node) => String(node?.label || "").trim());
+  const digitCount = new Set(list
+    .filter((node) => /^[0-9]$/.test(String(node?.label || "").trim()) && node?.bounds)
+    .map((node) => String(node.label).trim())).size;
+  const confirms = list.filter((node) => /^确定$/.test(String(node?.label || "").trim()) && node?.bounds);
+  const priceField = findPriceField(list);
+  const width = Math.max(1, ...list.filter((node) => node?.bounds).map((node) => Number(node.bounds[2]) || 0));
+  const height = Math.max(1, ...list.filter((node) => node?.bounds).map((node) => Number(node.bounds[3]) || 0));
+  const keyboardConfirm = confirms.find((node) => {
+    const [x] = center(node.bounds);
+    return x >= width * 0.65 && node.bounds[1] >= height * 0.65;
+  }) || null;
+  const priceLabel = String(priceField?.label || "").replace(/\s+/g, "");
+  const inlineSheetValue = /^价格设置[^\d]*\d/.test(priceLabel);
+  const auxiliaryMarkers = {
+    originalPrice: labels.some((label) => /^原价(?:\s|¥|￥|\d|$)/.test(label)),
+    stock: labels.some((label) => /^库存(?:\s|\d|$)/.test(label)),
+    settlement: labels.some((label) => /预估.*(?:服务费|到手价)/.test(label)),
+  };
+  const auxiliaryCount = Object.values(auxiliaryMarkers).filter(Boolean).length;
+  // 价格 sheet 覆盖在 compose 上方，因此底层 compose 指纹可能仍可见。不能只凭
+  // isPublishCompose 判 closed；任何 sheet 独有信号都优先判 sheet，稀疏/矛盾态 fail-closed。
+  const sheetEvidence = Boolean(priceField) && (
+    inlineSheetValue
+    || digitCount > 0
+    || Boolean(keyboardConfirm)
+    || auxiliaryCount >= 2
+  );
+  const composeVisible = isPublishCompose(list);
+  const surface = sheetEvidence
+    ? "sheet"
+    : (composeVisible && priceField ? "compose" : "ambiguous");
+  return {
+    surface,
+    sheetOpen: surface === "sheet",
+    composeVisible,
+    priceField,
+    valueMatches: priceFieldValueMatches(priceField?.label, expected),
+    keyboardConfirm,
+    digitCount,
+    auxiliaryMarkers,
+  };
 }
 
 // 标题输入框：label 含「标题」「宝贝标题」「品牌型号」中任一（注意描述区也含「品牌型号」，
@@ -2741,19 +2803,28 @@ async function fillDescriptionMultiLine(op, field, lines, { evidenceDir, label =
   };
 }
 
-// 价格字段填入：价格是纯数字（ASCII），用 `input text` 直输即可，无需 IME 桥。
-// 仍做回读校验（页面出现该数字串）。
-async function fillPriceField(op, field, price, { evidenceDir } = {}) {
+// 价格字段填入：应用内数字键盘输入后，必须先确认 sheet 已关闭，再验证持久化值。
+// 当前 Flutter 版本会在 compose 视觉行显示「¥199.00」，但 accessibility label 仍可能
+// 只有「价格设置」。此时关闭后重开 sheet，从字段自身回读已提交值；禁止把首次打开、
+// 尚未 commit 的 sheet 内值当作成功（旧 gap4 false positive）。
+export async function fillPriceField(op, field, price, {
+  evidenceDir,
+  snapshotFn = snapshot,
+  captureFn = capturePng,
+  settleFn = settle,
+} = {}) {
   if (!field?.bounds) return { ok: false, step: "price-field-missing" };
   const clean = String(price).replace(/[^\d.]/g, "");
   if (!clean) return { ok: false, step: "price-invalid" };
   const safeSerial = String(op.serial).replace(/[^A-Za-z0-9_-]/g, "_");
-  const cleanup = () => op.back().catch(() => null);
+  const cleanup = (state = null) => state?.surface === "compose"
+    ? Promise.resolve()
+    : op.back().catch(() => null);
   const [x, y] = center(field.bounds);
   await op.tap(x, y);
-  await settle(1000);
-  const baseline = await capturePng(op, `${evidenceDir}\\xianyu-price-baseline-${safeSerial}.png`);
-  const sheet = await snapshot(op, "xianyu-price-sheet");
+  await settleFn(1000);
+  const baseline = await captureFn(op, `${evidenceDir}\\xianyu-price-baseline-${safeSerial}.png`);
+  const sheet = await snapshotFn(op, "xianyu-price-sheet");
   const digits = sheet.nodes.filter((n) => /^[0-9]$/.test(String(n.label || "")) && n.bounds);
   let entered = null;
   if (digits.length >= 8) {
@@ -2763,29 +2834,108 @@ async function fillPriceField(op, field, price, { evidenceDir } = {}) {
       const key = sheet.nodes.find((n) => String(n.label) === ch);
       if (!key?.bounds) { await cleanup(); return { ok: false, step: `price-key-missing`, evidence: { baseline } }; }
       await op.tap(...center(key.bounds));
-      await settle(APP_NUMPAD_SETTLE_MS);
+      await settleFn(APP_NUMPAD_SETTLE_MS);
     }
-    await settle(400);
-    entered = await capturePng(op, `${evidenceDir}\\xianyu-price-entered-${safeSerial}.png`);
-    const typed = await snapshot(op, "xianyu-price-typed");
+    await settleFn(400);
+    entered = await captureFn(op, `${evidenceDir}\\xianyu-price-entered-${safeSerial}.png`);
+    const typed = await snapshotFn(op, "xianyu-price-typed");
     const kbConfirm = typed.nodes.find((n) => /^确定$/.test(String(n.label || "")) && n.bounds && center(n.bounds)[0] > 700)
       || sheet.nodes.find((n) => /^确定$/.test(String(n.label || "")) && n.bounds && center(n.bounds)[0] > 700);
     if (!kbConfirm?.bounds) { await cleanup(); return { ok: false, step: "price-keyboard-confirm-missing", evidence: { baseline, entered } }; }
     await op.tap(...center(kbConfirm.bounds));
-    await settle(1000);
+    await settleFn(1000);
   } else {
     // 兼容行内编辑形态：KeyEvent 直输（先清后输）
     await op.shellExec("input keyevent KEYCODE_MOVE_END " + Array(24).fill("KEYCODE_DEL").join(" "), 8000);
     await op.shellExec(`input text ${clean}`, 8000);
-    await settle(500);
-    entered = await capturePng(op, `${evidenceDir}\\xianyu-price-entered-${safeSerial}.png`);
+    await settleFn(500);
+    entered = await captureFn(op, `${evidenceDir}\\xianyu-price-entered-${safeSerial}.png`);
   }
-  const after = await snapshot(op, "xianyu-price-after");
-  // 严格校验：必须出现在价格行 label 里（防「66 进了描述框也判过」的假象，T3 实证）
-  const rowAfter = findPriceField(after.nodes);
-  const verified = !!(rowAfter && String(rowAfter.label || "").includes(clean));
-  if (!verified) await cleanup(); // fail-closed：不留开着的 sheet 给后续步骤
-  return { ok: verified, step: verified ? "price-filled" : "price-unverified", verified, evidence: { baseline, entered } };
+  let composeState = null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const after = await snapshotFn(op, `xianyu-price-after-${attempt}`);
+    composeState = inspectPriceState(after.nodes, clean);
+    if (composeState.surface === "compose") break;
+    await settleFn(500);
+  }
+  if (composeState?.surface !== "compose") {
+    await cleanup(composeState);
+    return {
+      ok: false,
+      step: "price-commit-close-unverified",
+      verified: false,
+      evidence: { baseline, entered, persisted: null },
+    };
+  }
+  // 首次 sheet 内出现目标值只证明按键已注册，不证明 commit。即使 compose semantics
+  // 已带目标值，也统一 close -> reopen -> field readback，避免稀疏 overlay 被误判为 compose。
+  let verified = false;
+  let verificationMethod = null;
+  let persisted = null;
+
+  if (composeState.priceField?.bounds) {
+    await op.tap(...center(composeState.priceField.bounds));
+    await settleFn(900);
+    let persistedState = null;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const reopened = await snapshotFn(op, `xianyu-price-persisted-readback-${attempt}`);
+      persistedState = inspectPriceState(reopened.nodes, clean);
+      if (persistedState.surface === "sheet") break;
+      await settleFn(500);
+    }
+    if (persistedState?.surface !== "sheet") {
+      await cleanup(persistedState);
+      return {
+        ok: false,
+        step: "price-readback-sheet-unverified",
+        verified: false,
+        evidence: { baseline, entered, persisted },
+      };
+    }
+    verified = persistedState.valueMatches;
+    if (verified) {
+      verificationMethod = "sheet-reopen";
+      persisted = await captureFn(op, `${evidenceDir}\\xianyu-price-persisted-${safeSerial}.png`);
+    }
+    // 无论回读成败，都必须关闭重开的 sheet；成功路径要求用其确定键回到 compose，
+    // 避免把打开的价格 sheet 留给后续步骤。
+    if (!persistedState.keyboardConfirm?.bounds) {
+      await cleanup(persistedState);
+      return {
+        ok: false,
+        step: "price-readback-confirm-missing",
+        verified: false,
+        evidence: { baseline, entered, persisted },
+      };
+    }
+    await op.tap(...center(persistedState.keyboardConfirm.bounds));
+    await settleFn(1000);
+    let closedState = null;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const closed = await snapshotFn(op, `xianyu-price-readback-closed-${attempt}`);
+      closedState = inspectPriceState(closed.nodes, clean);
+      if (closedState.surface === "compose") break;
+      await settleFn(500);
+    }
+    if (closedState?.surface !== "compose") {
+      await cleanup(closedState);
+      return {
+        ok: false,
+        step: "price-readback-close-unverified",
+        verified: false,
+        evidence: { baseline, entered, persisted },
+      };
+    }
+  }
+
+  if (!verified) await cleanup(composeState); // fail-closed：不留开着的 sheet 给后续步骤
+  return {
+    ok: verified,
+    step: verified ? "price-filled" : "price-unverified",
+    verified,
+    verificationMethod,
+    evidence: { baseline, entered, persisted },
+  };
 }
 
 // 成色选择：点成色行 → 在弹出的选项里点目标（默认「全新」）。
@@ -4050,10 +4200,31 @@ export async function publishDryRun(op, plan, {
   const record = (key, result) => {
     summary.steps[key] = result;
     // images-unverified / sku-*-unverified 对全流程也是致命（以前把 *unverified* 一律当非致命）
+    let hardFailed = false;
     if (!result?.ok && result?.step) {
       const soft = /needs-calibration|skipped|chip-missing/.test(String(result.step));
-      if (!soft) summary.ok = false;
+      if (!soft) {
+        summary.ok = false;
+        hardFailed = true;
+      }
     }
+    return hardFailed;
+  };
+
+  const finishFailure = () => {
+    summary.ok = false;
+    summary.stoppedBeforePublish = true;
+    summary.publishAttempted = false;
+    summary.publishTapped = false;
+    summary.savedDraft = false;
+    summary.supervisorEvents = sup.events;
+    summary.step = summary.step || firstFailedPublishStep(summary.steps) || "publish-dry-run-unverified";
+    summary.stall = sup.stallSummary();
+    if (summary.stall?.llmEscalationRecommended) {
+      summary.llmEscalationRecommended = true;
+      summary.diagnosisHint = summary.stall.diagnosisHint || "stuck_or_slow";
+    }
+    return summary;
   };
 
   const recoverCompose = async () => {
@@ -4174,7 +4345,8 @@ export async function publishDryRun(op, plan, {
   // 6. 无 SKU 时发布页设价
   if (plan.price && !plan.skuSpecs) {
     const { row: field } = await locateRowWithScroll(op, findPriceField, "price");
-    record("price", await fillPriceField(op, field, plan.price, { evidenceDir }));
+    const priceResult = await fillPriceField(op, field, plan.price, { evidenceDir });
+    if (record("price", priceResult)) return finishFailure();
   }
 
   // 7. 规格/SKU（失败不主动三连 BACK 退桌面）
@@ -4237,7 +4409,8 @@ export async function publishDryRun(op, plan, {
   }
 
   // 10. 存草稿
-  if (plan.saveDraft === true || optionsSaveDraft) {
+  const draftRequested = plan.saveDraft === true || optionsSaveDraft;
+  if (shouldPersistDraft({ requested: draftRequested, summaryOk: summary.ok })) {
     record("saveDraft", await sup.run("saveDraft", async () => {
       const ensured = await recoverCompose();
       if (!ensured.ok) return { ok: false, step: "save-draft-not-on-compose", savedDraft: false };
@@ -4248,6 +4421,14 @@ export async function publishDryRun(op, plan, {
     }));
     summary.savedDraft = summary.steps.saveDraft?.savedDraft === true;
     if (!summary.steps.saveDraft?.ok) summary.ok = false;
+  } else if (draftRequested) {
+    summary.steps.saveDraft = {
+      ok: false,
+      step: "save-draft-skipped-prior-failure",
+      savedDraft: false,
+      skipped: true,
+    };
+    summary.savedDraft = false;
   } else {
     summary.savedDraft = false;
   }
