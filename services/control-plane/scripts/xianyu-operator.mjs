@@ -1818,7 +1818,10 @@ export function priceFieldValueMatches(label, expected) {
   return Number(match[1]) === Number(wanted);
 }
 
-export function inspectPriceState(nodes, expected) {
+export function inspectPriceState(nodes, expected, {
+  composePriceBounds = null,
+  sheetPriceBounds = null,
+} = {}) {
   const list = nodes || [];
   const labels = list.map((node) => String(node?.label || "").trim());
   const digitCount = new Set(list
@@ -1833,7 +1836,10 @@ export function inspectPriceState(nodes, expected) {
     return x >= width * 0.65 && node.bounds[1] >= height * 0.65;
   }) || null;
   const priceLabel = String(priceField?.label || "").replace(/\s+/g, "");
-  const inlineSheetValue = /^价格设置[^\d]*\d/.test(priceLabel);
+  const inlinePriceValue = /^价格设置[^\d]*\d/.test(priceLabel);
+  const hasBoundsAnchor = Array.isArray(composePriceBounds) || Array.isArray(sheetPriceBounds);
+  const atComposeAnchor = Boolean(priceField?.bounds && boundsClose(priceField.bounds, composePriceBounds));
+  const atSheetAnchor = Boolean(priceField?.bounds && boundsClose(priceField.bounds, sheetPriceBounds));
   const auxiliaryMarkers = {
     originalPrice: labels.some((label) => /^原价(?:\s|¥|￥|\d|$)/.test(label)),
     stock: labels.some((label) => /^库存(?:\s|\d|$)/.test(label)),
@@ -1841,23 +1847,34 @@ export function inspectPriceState(nodes, expected) {
   };
   const auxiliaryCount = Object.values(auxiliaryMarkers).filter(Boolean).length;
   // 价格 sheet 覆盖在 compose 上方，因此底层 compose 指纹可能仍可见。不能只凭
-  // isPublishCompose 判 closed；任何 sheet 独有信号都优先判 sheet，稀疏/矛盾态 fail-closed。
+  // isPublishCompose 判 closed。金额本身也不是 sheet 独有信号：部分版本确认后会把
+  // compose 字段语义更新成「价格设置199」。只有键盘控件、至少两个辅助字段，或
+  // 字段仍匹配本次打开时的 sheet bounds，才证明 overlay 仍开着。存在本次交互锚点时，
+  // compose 也必须匹配打开前的字段 bounds；无锚点的 inline 金额态保持 ambiguous。
   const sheetEvidence = Boolean(priceField) && (
-    inlineSheetValue
-    || digitCount > 0
+    digitCount > 0
     || Boolean(keyboardConfirm)
     || auxiliaryCount >= 2
+    || (hasBoundsAnchor && atSheetAnchor && !atComposeAnchor)
   );
   const composeVisible = isPublishCompose(list);
+  const composeEvidence = composeVisible && Boolean(priceField) && (
+    hasBoundsAnchor
+      ? (atComposeAnchor && !atSheetAnchor)
+      : !inlinePriceValue
+  );
   const surface = sheetEvidence
     ? "sheet"
-    : (composeVisible && priceField ? "compose" : "ambiguous");
+    : (composeEvidence ? "compose" : "ambiguous");
   return {
     surface,
     sheetOpen: surface === "sheet",
     composeVisible,
     priceField,
     valueMatches: priceFieldValueMatches(priceField?.label, expected),
+    inlinePriceValue,
+    atComposeAnchor,
+    atSheetAnchor,
     keyboardConfirm,
     digitCount,
     auxiliaryMarkers,
@@ -2817,6 +2834,17 @@ export async function fillPriceField(op, field, price, {
   const clean = String(price).replace(/[^\d.]/g, "");
   if (!clean) return { ok: false, step: "price-invalid" };
   const safeSerial = String(op.serial).replace(/[^A-Za-z0-9_-]/g, "_");
+  const diagnostic = (state) => state ? {
+    surface: state.surface,
+    composeVisible: state.composeVisible,
+    valueMatches: state.valueMatches,
+    inlinePriceValue: state.inlinePriceValue,
+    atComposeAnchor: state.atComposeAnchor,
+    atSheetAnchor: state.atSheetAnchor,
+    digitCount: state.digitCount,
+    hasKeyboardConfirm: Boolean(state.keyboardConfirm),
+    auxiliaryMarkers: state.auxiliaryMarkers,
+  } : null;
   const cleanup = (state = null) => state?.surface === "compose"
     ? Promise.resolve()
     : op.back().catch(() => null);
@@ -2825,6 +2853,11 @@ export async function fillPriceField(op, field, price, {
   await settleFn(1000);
   const baseline = await captureFn(op, `${evidenceDir}\\xianyu-price-baseline-${safeSerial}.png`);
   const sheet = await snapshotFn(op, "xianyu-price-sheet");
+  const openedSheetState = inspectPriceState(sheet.nodes, clean);
+  const priceBoundsAnchors = {
+    composePriceBounds: field.bounds,
+    sheetPriceBounds: openedSheetState.priceField?.bounds || null,
+  };
   const digits = sheet.nodes.filter((n) => /^[0-9]$/.test(String(n.label || "")) && n.bounds);
   let entered = null;
   if (digits.length >= 8) {
@@ -2851,10 +2884,11 @@ export async function fillPriceField(op, field, price, {
     await settleFn(500);
     entered = await captureFn(op, `${evidenceDir}\\xianyu-price-entered-${safeSerial}.png`);
   }
+  const afterCommit = await captureFn(op, `${evidenceDir}\\xianyu-price-commit-${safeSerial}.png`);
   let composeState = null;
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const after = await snapshotFn(op, `xianyu-price-after-${attempt}`);
-    composeState = inspectPriceState(after.nodes, clean);
+    composeState = inspectPriceState(after.nodes, clean, priceBoundsAnchors);
     if (composeState.surface === "compose") break;
     await settleFn(500);
   }
@@ -2864,7 +2898,8 @@ export async function fillPriceField(op, field, price, {
       ok: false,
       step: "price-commit-close-unverified",
       verified: false,
-      evidence: { baseline, entered, persisted: null },
+      observed: diagnostic(composeState),
+      evidence: { baseline, entered, afterCommit, persisted: null },
     };
   }
   // 首次 sheet 内出现目标值只证明按键已注册，不证明 commit。即使 compose semantics
@@ -2879,7 +2914,7 @@ export async function fillPriceField(op, field, price, {
     let persistedState = null;
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const reopened = await snapshotFn(op, `xianyu-price-persisted-readback-${attempt}`);
-      persistedState = inspectPriceState(reopened.nodes, clean);
+      persistedState = inspectPriceState(reopened.nodes, clean, priceBoundsAnchors);
       if (persistedState.surface === "sheet") break;
       await settleFn(500);
     }
@@ -2889,7 +2924,8 @@ export async function fillPriceField(op, field, price, {
         ok: false,
         step: "price-readback-sheet-unverified",
         verified: false,
-        evidence: { baseline, entered, persisted },
+        observed: diagnostic(persistedState),
+        evidence: { baseline, entered, afterCommit, persisted },
       };
     }
     verified = persistedState.valueMatches;
@@ -2905,15 +2941,20 @@ export async function fillPriceField(op, field, price, {
         ok: false,
         step: "price-readback-confirm-missing",
         verified: false,
-        evidence: { baseline, entered, persisted },
+        observed: diagnostic(persistedState),
+        evidence: { baseline, entered, afterCommit, persisted },
       };
     }
     await op.tap(...center(persistedState.keyboardConfirm.bounds));
     await settleFn(1000);
+    const readbackBoundsAnchors = {
+      ...priceBoundsAnchors,
+      sheetPriceBounds: persistedState.priceField?.bounds || priceBoundsAnchors.sheetPriceBounds,
+    };
     let closedState = null;
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const closed = await snapshotFn(op, `xianyu-price-readback-closed-${attempt}`);
-      closedState = inspectPriceState(closed.nodes, clean);
+      closedState = inspectPriceState(closed.nodes, clean, readbackBoundsAnchors);
       if (closedState.surface === "compose") break;
       await settleFn(500);
     }
@@ -2923,7 +2964,8 @@ export async function fillPriceField(op, field, price, {
         ok: false,
         step: "price-readback-close-unverified",
         verified: false,
-        evidence: { baseline, entered, persisted },
+        observed: diagnostic(closedState),
+        evidence: { baseline, entered, afterCommit, persisted },
       };
     }
   }
@@ -2934,7 +2976,7 @@ export async function fillPriceField(op, field, price, {
     step: verified ? "price-filled" : "price-unverified",
     verified,
     verificationMethod,
-    evidence: { baseline, entered, persisted },
+    evidence: { baseline, entered, afterCommit, persisted },
   };
 }
 

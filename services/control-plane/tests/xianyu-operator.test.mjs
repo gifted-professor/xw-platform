@@ -1078,7 +1078,7 @@ test("price readback distinguishes an uncommitted open sheet from persisted valu
   const sparseTypedState = inspectPriceState([
     { label: "价格设置199", bounds: [44, 912, 1036, 1044] },
   ], "199");
-  assert.equal(sparseTypedState.surface, "sheet");
+  assert.equal(sparseTypedState.surface, "ambiguous");
   assert.equal(sparseTypedState.valueMatches, true);
 
   const staleCompose = inspectPriceState([
@@ -1098,6 +1098,29 @@ test("price readback distinguishes an uncommitted open sheet from persisted valu
   ], "199");
   assert.equal(valueCompose.surface, "compose");
   assert.equal(valueCompose.valueMatches, true);
+
+  const updatedValueCompose = inspectPriceState([
+    { label: "宝贝描述", bounds: [77, 300, 1003, 600] },
+    { label: "价格设置199", bounds: [77, 1677, 1003, 1831] },
+    { label: "预估鱼小铺软件服务费 (1.6%)-¥3.18", bounds: [77, 1831, 1003, 1900] },
+    { label: "发布", className: "android.widget.Button", bounds: [900, 20, 1070, 150] },
+  ], "199", {
+    composePriceBounds: [77, 1677, 1003, 1831],
+    sheetPriceBounds: [44, 912, 1036, 1044],
+  });
+  assert.equal(updatedValueCompose.surface, "compose");
+  assert.equal(updatedValueCompose.valueMatches, true);
+
+  const mixedSparseOverlay = [
+    { label: "宝贝描述", bounds: [77, 300, 1003, 600] },
+    { label: "价格设置199", bounds: [44, 912, 1036, 1044] },
+    { label: "发布", className: "android.widget.Button", bounds: [900, 20, 1070, 150] },
+  ];
+  assert.equal(inspectPriceState(mixedSparseOverlay, "199").surface, "ambiguous");
+  assert.equal(inspectPriceState(mixedSparseOverlay, "199", {
+    composePriceBounds: [77, 1677, 1003, 1831],
+    sheetPriceBounds: [44, 912, 1036, 1044],
+  }).surface, "sheet");
 
   const reopened = inspectPriceState([
     { label: "价格设置199.00", bounds: [44, 912, 1036, 1044] },
@@ -1144,7 +1167,7 @@ test("fillPriceField proves close, persisted readback, and final compose before 
   ];
   const compose = [
     { label: "宝贝描述", bounds: [77, 300, 1003, 600] },
-    { label: "价格设置", bounds: [77, 1677, 1003, 1831] },
+    { label: "价格设置199", bounds: [77, 1677, 1003, 1831] },
     { label: "发布", className: "android.widget.Button", bounds: [900, 20, 1070, 150] },
   ];
   const snapshots = [sheet("价格设置"), sheet("价格设置199"), compose, sheet("价格设置199.00"), compose];
