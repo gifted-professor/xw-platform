@@ -172,7 +172,6 @@ test("publish failure diagnostic bubbles only bounded price surface state", () =
         surface: "ambiguous",
         composeVisible: true,
         composeNeighborhood: false,
-        belowSheetAnchor: false,
         valueMatches: true,
         inlinePriceValue: true,
         atComposeAnchor: false,
@@ -190,7 +189,6 @@ test("publish failure diagnostic bubbles only bounded price surface state", () =
     surface: "ambiguous",
     composeVisible: true,
     composeNeighborhood: false,
-    belowSheetAnchor: false,
     valueMatches: true,
     inlinePriceValue: true,
     atComposeAnchor: false,
@@ -1175,7 +1173,6 @@ test("price readback distinguishes an uncommitted open sheet from persisted valu
   });
   assert.equal(shiftedState.atComposeAnchor, false);
   assert.equal(shiftedState.composeNeighborhood, true);
-  assert.equal(shiftedState.belowSheetAnchor, true);
   assert.equal(shiftedState.surface, "compose");
 
   const staleShiftedCompose = inspectPriceState([
@@ -1189,7 +1186,6 @@ test("price readback distinguishes an uncommitted open sheet from persisted valu
   assert.equal(staleShiftedCompose.composeVisible, true);
   assert.equal(staleShiftedCompose.valueMatches, false);
   assert.equal(staleShiftedCompose.composeNeighborhood, false);
-  assert.equal(staleShiftedCompose.belowSheetAnchor, true);
   assert.equal(staleShiftedCompose.surface, "compose");
 
   const reopened = inspectPriceState([
