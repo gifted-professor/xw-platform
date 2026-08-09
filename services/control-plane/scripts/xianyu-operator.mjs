@@ -1326,6 +1326,30 @@ export function shouldPersistDraft({ requested = false, summaryOk = false } = {}
 }
 
 export function firstFailedPublishDiagnostic(steps = {}) {
+  const price = steps?.price;
+  const observed = price?.observed;
+  if (/^price-(?:commit-close|readback-sheet|readback-close)-unverified$/.test(String(price?.step || ""))
+    && observed && typeof observed === "object") {
+    return {
+      kind: "price-state-unverified",
+      stage: String(price.step).slice(0, 64),
+      surface: ["sheet", "compose", "ambiguous"].includes(observed.surface)
+        ? observed.surface : "ambiguous",
+      composeVisible: observed.composeVisible === true,
+      composeNeighborhood: observed.composeNeighborhood === true,
+      valueMatches: observed.valueMatches === true,
+      inlinePriceValue: observed.inlinePriceValue === true,
+      atComposeAnchor: observed.atComposeAnchor === true,
+      atSheetAnchor: observed.atSheetAnchor === true,
+      digitCount: Math.max(0, Math.min(10, Number(observed.digitCount || 0))),
+      hasKeyboardConfirm: observed.hasKeyboardConfirm === true,
+      auxiliaryMarkers: {
+        originalPrice: observed.auxiliaryMarkers?.originalPrice === true,
+        stock: observed.auxiliaryMarkers?.stock === true,
+        settlement: observed.auxiliaryMarkers?.settlement === true,
+      },
+    };
+  }
   const sku = steps?.sku;
   if (sku?.selectAllMiss?.kind === "sku-select-all-missing") {
     const source = sku.selectAllMiss;
@@ -1846,11 +1870,23 @@ export function inspectPriceState(nodes, expected, {
     settlement: labels.some((label) => /预估.*(?:服务费|到手价)/.test(label)),
   };
   const auxiliaryCount = Object.values(auxiliaryMarkers).filter(Boolean).length;
+  const priceCenterY = priceField?.bounds ? center(priceField.bounds)[1] : null;
+  const hasRelativeRow = (pattern, direction) => Number.isFinite(priceCenterY) && list.some((node) => {
+    if (!node?.bounds || !pattern.test(String(node.label || "").trim())) return false;
+    const nodeY = center(node.bounds)[1];
+    return direction === "above" ? nodeY < priceCenterY : nodeY > priceCenterY;
+  });
+  // 关闭 sheet 后页面可纵向重排，绝对 bounds 会变化；compose 的价格行稳定地位于
+  // 「商品规格」下方、闲鱼币/发货方式/所在地上方。overlay 自身的价格行位于这些
+  // 底层商务行上方，因此不能形成这个相对邻域。
+  const composeNeighborhood = hasRelativeRow(/^商品规格(?:[,，\s]|$)/, "above")
+    && hasRelativeRow(/^(?:闲鱼币抵扣|发货方式|所在位置)(?:[,，\s]|$)/, "below");
   // 价格 sheet 覆盖在 compose 上方，因此底层 compose 指纹可能仍可见。不能只凭
   // isPublishCompose 判 closed。金额本身也不是 sheet 独有信号：部分版本确认后会把
   // compose 字段语义更新成「价格设置199」。只有键盘控件、至少两个辅助字段，或
   // 字段仍匹配本次打开时的 sheet bounds，才证明 overlay 仍开着。存在本次交互锚点时，
-  // compose 也必须匹配打开前的字段 bounds；无锚点的 inline 金额态保持 ambiguous。
+  // compose 优先匹配打开前的字段 bounds；若关闭 sheet 触发纵向重排，也可由价格行
+  // 的稳定相对邻域证明。无锚点、无相对邻域的 inline 金额态保持 ambiguous。
   const sheetEvidence = Boolean(priceField) && (
     digitCount > 0
     || Boolean(keyboardConfirm)
@@ -1859,9 +1895,9 @@ export function inspectPriceState(nodes, expected, {
   );
   const composeVisible = isPublishCompose(list);
   const composeEvidence = composeVisible && Boolean(priceField) && (
-    hasBoundsAnchor
-      ? (atComposeAnchor && !atSheetAnchor)
-      : !inlinePriceValue
+    (atComposeAnchor && !atSheetAnchor)
+    || composeNeighborhood
+    || (!hasBoundsAnchor && !inlinePriceValue)
   );
   const surface = sheetEvidence
     ? "sheet"
@@ -1870,6 +1906,7 @@ export function inspectPriceState(nodes, expected, {
     surface,
     sheetOpen: surface === "sheet",
     composeVisible,
+    composeNeighborhood,
     priceField,
     valueMatches: priceFieldValueMatches(priceField?.label, expected),
     inlinePriceValue,
@@ -2837,6 +2874,7 @@ export async function fillPriceField(op, field, price, {
   const diagnostic = (state) => state ? {
     surface: state.surface,
     composeVisible: state.composeVisible,
+    composeNeighborhood: state.composeNeighborhood,
     valueMatches: state.valueMatches,
     inlinePriceValue: state.inlinePriceValue,
     atComposeAnchor: state.atComposeAnchor,
@@ -4261,6 +4299,8 @@ export async function publishDryRun(op, plan, {
     summary.savedDraft = false;
     summary.supervisorEvents = sup.events;
     summary.step = summary.step || firstFailedPublishStep(summary.steps) || "publish-dry-run-unverified";
+    const diagnostic = firstFailedPublishDiagnostic(summary.steps);
+    if (diagnostic) summary.diagnostic = diagnostic;
     summary.stall = sup.stallSummary();
     if (summary.stall?.llmEscalationRecommended) {
       summary.llmEscalationRecommended = true;
