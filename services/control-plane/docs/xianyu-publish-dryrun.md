@@ -20,8 +20,9 @@
 accessibility label 仍可能只有「价格设置」。此时须重开价格 sheet，从价格字段自身回读
 持久化值，再点「确定」返回 compose。不得用首次 sheet 内的值假充 commit 证据，也不得
 因 compose 语义占位未更新而把视觉上已提交的价格误判为失败。sheet/compose 使用
-`sheet | compose | ambiguous` 三态判定；稀疏或矛盾 dump 必须停止并恢复。价格硬失败后
-禁止继续后续字段或保存草稿。
+`sheet | compose | ambiguous` 三态判定。`价格设置199` 这种金额语义也可能出现在已关闭的
+compose；只有数字键盘控件，或原价/库存/结算中的至少两个辅助标记，才证明 sheet 仍打开。
+仅有金额且没有 compose 指纹的稀疏态仍须停止并恢复。价格硬失败后禁止继续后续字段或保存草稿。
 
 ```bash
 # 纯整表 dry-run：不会存草稿，控制面自动 lease
