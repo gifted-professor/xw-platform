@@ -1818,7 +1818,10 @@ export function priceFieldValueMatches(label, expected) {
   return Number(match[1]) === Number(wanted);
 }
 
-export function inspectPriceState(nodes, expected) {
+export function inspectPriceState(nodes, expected, {
+  composePriceBounds = null,
+  sheetPriceBounds = null,
+} = {}) {
   const list = nodes || [];
   const labels = list.map((node) => String(node?.label || "").trim());
   const digitCount = new Set(list
@@ -1834,6 +1837,9 @@ export function inspectPriceState(nodes, expected) {
   }) || null;
   const priceLabel = String(priceField?.label || "").replace(/\s+/g, "");
   const inlinePriceValue = /^价格设置[^\d]*\d/.test(priceLabel);
+  const hasBoundsAnchor = Array.isArray(composePriceBounds) || Array.isArray(sheetPriceBounds);
+  const atComposeAnchor = Boolean(priceField?.bounds && boundsClose(priceField.bounds, composePriceBounds));
+  const atSheetAnchor = Boolean(priceField?.bounds && boundsClose(priceField.bounds, sheetPriceBounds));
   const auxiliaryMarkers = {
     originalPrice: labels.some((label) => /^原价(?:\s|¥|￥|\d|$)/.test(label)),
     stock: labels.some((label) => /^库存(?:\s|\d|$)/.test(label)),
@@ -1842,17 +1848,24 @@ export function inspectPriceState(nodes, expected) {
   const auxiliaryCount = Object.values(auxiliaryMarkers).filter(Boolean).length;
   // 价格 sheet 覆盖在 compose 上方，因此底层 compose 指纹可能仍可见。不能只凭
   // isPublishCompose 判 closed。金额本身也不是 sheet 独有信号：部分版本确认后会把
-  // compose 字段语义更新成「价格设置199」。只有键盘控件或至少两个辅助字段才证明
-  // overlay 仍开着；仅有金额、又没有 compose 指纹的稀疏态保持 ambiguous/fail-closed。
+  // compose 字段语义更新成「价格设置199」。只有键盘控件、至少两个辅助字段，或
+  // 字段仍匹配本次打开时的 sheet bounds，才证明 overlay 仍开着。存在本次交互锚点时，
+  // compose 也必须匹配打开前的字段 bounds；无锚点的 inline 金额态保持 ambiguous。
   const sheetEvidence = Boolean(priceField) && (
     digitCount > 0
     || Boolean(keyboardConfirm)
     || auxiliaryCount >= 2
+    || (hasBoundsAnchor && atSheetAnchor && !atComposeAnchor)
   );
   const composeVisible = isPublishCompose(list);
+  const composeEvidence = composeVisible && Boolean(priceField) && (
+    hasBoundsAnchor
+      ? (atComposeAnchor && !atSheetAnchor)
+      : !inlinePriceValue
+  );
   const surface = sheetEvidence
     ? "sheet"
-    : (composeVisible && priceField ? "compose" : "ambiguous");
+    : (composeEvidence ? "compose" : "ambiguous");
   return {
     surface,
     sheetOpen: surface === "sheet",
@@ -1860,6 +1873,8 @@ export function inspectPriceState(nodes, expected) {
     priceField,
     valueMatches: priceFieldValueMatches(priceField?.label, expected),
     inlinePriceValue,
+    atComposeAnchor,
+    atSheetAnchor,
     keyboardConfirm,
     digitCount,
     auxiliaryMarkers,
@@ -2824,6 +2839,8 @@ export async function fillPriceField(op, field, price, {
     composeVisible: state.composeVisible,
     valueMatches: state.valueMatches,
     inlinePriceValue: state.inlinePriceValue,
+    atComposeAnchor: state.atComposeAnchor,
+    atSheetAnchor: state.atSheetAnchor,
     digitCount: state.digitCount,
     hasKeyboardConfirm: Boolean(state.keyboardConfirm),
     auxiliaryMarkers: state.auxiliaryMarkers,
@@ -2836,6 +2853,11 @@ export async function fillPriceField(op, field, price, {
   await settleFn(1000);
   const baseline = await captureFn(op, `${evidenceDir}\\xianyu-price-baseline-${safeSerial}.png`);
   const sheet = await snapshotFn(op, "xianyu-price-sheet");
+  const openedSheetState = inspectPriceState(sheet.nodes, clean);
+  const priceBoundsAnchors = {
+    composePriceBounds: field.bounds,
+    sheetPriceBounds: openedSheetState.priceField?.bounds || null,
+  };
   const digits = sheet.nodes.filter((n) => /^[0-9]$/.test(String(n.label || "")) && n.bounds);
   let entered = null;
   if (digits.length >= 8) {
@@ -2866,7 +2888,7 @@ export async function fillPriceField(op, field, price, {
   let composeState = null;
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const after = await snapshotFn(op, `xianyu-price-after-${attempt}`);
-    composeState = inspectPriceState(after.nodes, clean);
+    composeState = inspectPriceState(after.nodes, clean, priceBoundsAnchors);
     if (composeState.surface === "compose") break;
     await settleFn(500);
   }
@@ -2892,7 +2914,7 @@ export async function fillPriceField(op, field, price, {
     let persistedState = null;
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const reopened = await snapshotFn(op, `xianyu-price-persisted-readback-${attempt}`);
-      persistedState = inspectPriceState(reopened.nodes, clean);
+      persistedState = inspectPriceState(reopened.nodes, clean, priceBoundsAnchors);
       if (persistedState.surface === "sheet") break;
       await settleFn(500);
     }
@@ -2925,10 +2947,14 @@ export async function fillPriceField(op, field, price, {
     }
     await op.tap(...center(persistedState.keyboardConfirm.bounds));
     await settleFn(1000);
+    const readbackBoundsAnchors = {
+      ...priceBoundsAnchors,
+      sheetPriceBounds: persistedState.priceField?.bounds || priceBoundsAnchors.sheetPriceBounds,
+    };
     let closedState = null;
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const closed = await snapshotFn(op, `xianyu-price-readback-closed-${attempt}`);
-      closedState = inspectPriceState(closed.nodes, clean);
+      closedState = inspectPriceState(closed.nodes, clean, readbackBoundsAnchors);
       if (closedState.surface === "compose") break;
       await settleFn(500);
     }
