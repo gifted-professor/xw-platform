@@ -25,8 +25,10 @@ compose；只有数字键盘控件、原价/库存/结算中的至少两个辅�
 sheet 字段 bounds，才证明 sheet 仍打开。金额态可由打开前的 compose 字段 bounds，或
 「商品规格 < 价格 < 闲鱼币抵扣/发货方式/所在地」的稳定相对行邻域证明 compose。已关闭
 compose 若只暴露无金额的旧「价格设置」，也只把它当 closure 证据；金额仍必须重开 sheet
-精确回读。带金额但缺少 compose bounds/相对邻域的稀疏态必须停止并恢复。价格硬失败后
-禁止继续后续字段或保存草稿。
+精确回读。部分分类在关闭后会暂时不暴露 priceField；只要 compose 指纹存在且数字键盘/确定/
+原价库存结算等 sheet 信号全消失，也可复用打开前价格字段的已审计 bounds 重开读回。反之，
+缺 priceField 但仍有任一 sheet 控件必须判 sheet。带金额但缺少 compose bounds/相对邻域的稀疏态
+必须停止并恢复。价格硬失败后禁止继续后续字段或保存草稿。
 
 ```bash
 # 纯整表 dry-run：不会存草稿，控制面自动 lease
