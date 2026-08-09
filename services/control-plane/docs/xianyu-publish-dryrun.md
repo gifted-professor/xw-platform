@@ -22,8 +22,10 @@ accessibility label 仍可能只有「价格设置」。此时须重开价格 sh
 因 compose 语义占位未更新而把视觉上已提交的价格误判为失败。sheet/compose 使用
 `sheet | compose | ambiguous` 三态判定。`价格设置199` 这种金额语义也可能出现在已关闭的
 compose；只有数字键盘控件、原价/库存/结算中的至少两个辅助标记，或匹配本次打开时的
-sheet 字段 bounds，才证明 sheet 仍打开。金额态只有匹配打开前的 compose 字段 bounds 才能
-判 compose；缺少锚点或锚点冲突的稀疏态必须停止并恢复。价格硬失败后禁止继续后续字段或保存草稿。
+sheet 字段 bounds，才证明 sheet 仍打开。金额态可由打开前的 compose 字段 bounds，或
+「商品规格 < 价格 < 闲鱼币抵扣/发货方式/所在地」的稳定相对行邻域证明 compose（关闭 sheet
+可能触发纵向重排，不能强求绝对坐标不变）；两者都缺失的稀疏态必须停止并恢复。价格硬失败后
+禁止继续后续字段或保存草稿。
 
 ```bash
 # 纯整表 dry-run：不会存草稿，控制面自动 lease
