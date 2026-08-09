@@ -172,6 +172,7 @@ test("publish failure diagnostic bubbles only bounded price surface state", () =
         surface: "ambiguous",
         composeVisible: true,
         composeNeighborhood: false,
+        belowSheetAnchor: false,
         valueMatches: true,
         inlinePriceValue: true,
         atComposeAnchor: false,
@@ -189,6 +190,7 @@ test("publish failure diagnostic bubbles only bounded price surface state", () =
     surface: "ambiguous",
     composeVisible: true,
     composeNeighborhood: false,
+    belowSheetAnchor: false,
     valueMatches: true,
     inlinePriceValue: true,
     atComposeAnchor: false,
@@ -1173,7 +1175,22 @@ test("price readback distinguishes an uncommitted open sheet from persisted valu
   });
   assert.equal(shiftedState.atComposeAnchor, false);
   assert.equal(shiftedState.composeNeighborhood, true);
+  assert.equal(shiftedState.belowSheetAnchor, true);
   assert.equal(shiftedState.surface, "compose");
+
+  const staleShiftedCompose = inspectPriceState([
+    { label: "宝贝描述", bounds: [77, 300, 1003, 600] },
+    { label: "价格设置", bounds: [74, 1260, 1006, 1380] },
+    { label: "发布", className: "android.widget.Button", bounds: [900, 20, 1070, 150] },
+  ], "199", {
+    composePriceBounds: [77, 1677, 1003, 1831],
+    sheetPriceBounds: [44, 912, 1036, 1044],
+  });
+  assert.equal(staleShiftedCompose.composeVisible, true);
+  assert.equal(staleShiftedCompose.valueMatches, false);
+  assert.equal(staleShiftedCompose.composeNeighborhood, false);
+  assert.equal(staleShiftedCompose.belowSheetAnchor, true);
+  assert.equal(staleShiftedCompose.surface, "compose");
 
   const reopened = inspectPriceState([
     { label: "价格设置199.00", bounds: [44, 912, 1036, 1044] },
@@ -1220,10 +1237,7 @@ test("fillPriceField proves close, persisted readback, and final compose before 
   ];
   const compose = [
     { label: "宝贝描述", bounds: [77, 300, 1003, 600] },
-    { label: "商品规格, 非必填", bounds: [74, 1130, 1006, 1240] },
-    { label: "价格设置199", bounds: [74, 1260, 1006, 1380] },
-    { label: "闲鱼币抵扣, 开启抵扣", bounds: [74, 1400, 1006, 1520] },
-    { label: "发货方式, 包邮", bounds: [74, 1540, 1006, 1660] },
+    { label: "价格设置", bounds: [74, 1260, 1006, 1380] },
     { label: "发布", className: "android.widget.Button", bounds: [900, 20, 1070, 150] },
   ];
   const snapshots = [sheet("价格设置"), sheet("价格设置199"), compose, sheet("价格设置199.00"), compose];
