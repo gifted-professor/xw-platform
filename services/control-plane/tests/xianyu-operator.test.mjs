@@ -171,6 +171,7 @@ test("publish failure diagnostic bubbles only bounded price surface state", () =
       observed: {
         surface: "ambiguous",
         composeVisible: true,
+        hasPriceField: false,
         composeNeighborhood: false,
         valueMatches: true,
         inlinePriceValue: true,
@@ -188,6 +189,7 @@ test("publish failure diagnostic bubbles only bounded price surface state", () =
     stage: "price-commit-close-unverified",
     surface: "ambiguous",
     composeVisible: true,
+    hasPriceField: false,
     composeNeighborhood: false,
     valueMatches: true,
     inlinePriceValue: true,
@@ -1188,6 +1190,29 @@ test("price readback distinguishes an uncommitted open sheet from persisted valu
   assert.equal(staleShiftedCompose.composeNeighborhood, false);
   assert.equal(staleShiftedCompose.surface, "compose");
 
+  const missingPriceCompose = inspectPriceState([
+    { label: "宝贝描述", bounds: [77, 300, 1003, 600] },
+    { label: "发布", className: "android.widget.Button", bounds: [900, 20, 1070, 150] },
+  ], "199", {
+    composePriceBounds: [77, 1677, 1003, 1831],
+    sheetPriceBounds: [44, 912, 1036, 1044],
+  });
+  assert.equal(missingPriceCompose.composeVisible, true);
+  assert.equal(missingPriceCompose.hasPriceField, false);
+  assert.equal(missingPriceCompose.surface, "compose");
+
+  const missingPriceOpenSheet = inspectPriceState([
+    { label: "宝贝描述", bounds: [77, 300, 1003, 600] },
+    ...keypad,
+    { label: "确定", bounds: [857, 2109, 1033, 2274] },
+    { label: "发布", className: "android.widget.Button", bounds: [900, 20, 1070, 150] },
+  ], "199", {
+    composePriceBounds: [77, 1677, 1003, 1831],
+    sheetPriceBounds: [44, 912, 1036, 1044],
+  });
+  assert.equal(missingPriceOpenSheet.hasPriceField, false);
+  assert.equal(missingPriceOpenSheet.surface, "sheet");
+
   const reopened = inspectPriceState([
     { label: "价格设置199.00", bounds: [44, 912, 1036, 1044] },
     ...keypad,
@@ -1233,7 +1258,6 @@ test("fillPriceField proves close, persisted readback, and final compose before 
   ];
   const compose = [
     { label: "宝贝描述", bounds: [77, 300, 1003, 600] },
-    { label: "价格设置", bounds: [74, 1260, 1006, 1380] },
     { label: "发布", className: "android.widget.Button", bounds: [900, 20, 1070, 150] },
   ];
   const snapshots = [sheet("价格设置"), sheet("价格设置199"), compose, sheet("价格设置199.00"), compose];

@@ -1336,6 +1336,7 @@ export function firstFailedPublishDiagnostic(steps = {}) {
       surface: ["sheet", "compose", "ambiguous"].includes(observed.surface)
         ? observed.surface : "ambiguous",
       composeVisible: observed.composeVisible === true,
+      hasPriceField: observed.hasPriceField === true,
       composeNeighborhood: observed.composeNeighborhood === true,
       valueMatches: observed.valueMatches === true,
       inlinePriceValue: observed.inlinePriceValue === true,
@@ -1889,15 +1890,15 @@ export function inspectPriceState(nodes, expected, {
   // 的稳定相对邻域来证明。当前设备的已关闭 compose 还会把字段语义保留为无金额的
   // 「价格设置」；当所有 sheet 独有信号均已消失时，这个 stale label 也只证明 closure，
   // 金额仍必须在下一步重开 sheet 后精确回读。
-  const sheetEvidence = Boolean(priceField) && (
-    digitCount > 0
+  const sheetControlEvidence = digitCount > 0
     || Boolean(keyboardConfirm)
-    || auxiliaryCount >= 2
-    || (hasBoundsAnchor && atSheetAnchor && !atComposeAnchor)
-  );
+    || auxiliaryCount >= 2;
+  const sheetEvidence = sheetControlEvidence
+    || (Boolean(priceField) && hasBoundsAnchor && atSheetAnchor && !atComposeAnchor);
   const composeVisible = isPublishCompose(list);
-  const composeEvidence = composeVisible && Boolean(priceField) && (
-    (atComposeAnchor && !atSheetAnchor)
+  const composeEvidence = composeVisible && !sheetControlEvidence && (
+    !priceField
+    || (atComposeAnchor && !atSheetAnchor)
     || composeNeighborhood
     || !inlinePriceValue
   );
@@ -1908,6 +1909,7 @@ export function inspectPriceState(nodes, expected, {
     surface,
     sheetOpen: surface === "sheet",
     composeVisible,
+    hasPriceField: Boolean(priceField),
     composeNeighborhood,
     priceField,
     valueMatches: priceFieldValueMatches(priceField?.label, expected),
@@ -2876,6 +2878,7 @@ export async function fillPriceField(op, field, price, {
   const diagnostic = (state) => state ? {
     surface: state.surface,
     composeVisible: state.composeVisible,
+    hasPriceField: state.hasPriceField,
     composeNeighborhood: state.composeNeighborhood,
     valueMatches: state.valueMatches,
     inlinePriceValue: state.inlinePriceValue,
@@ -2948,8 +2951,9 @@ export async function fillPriceField(op, field, price, {
   let verificationMethod = null;
   let persisted = null;
 
-  if (composeState.priceField?.bounds) {
-    await op.tap(...center(composeState.priceField.bounds));
+  const readbackField = composeState.priceField?.bounds ? composeState.priceField : field;
+  if (readbackField?.bounds) {
+    await op.tap(...center(readbackField.bounds));
     await settleFn(900);
     let persistedState = null;
     for (let attempt = 0; attempt < 3; attempt += 1) {
