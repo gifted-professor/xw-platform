@@ -1271,6 +1271,15 @@ export class FastOperator {
       }
       if (!result) fail("captionPageNotReached");
     } catch (error) {
+      try {
+        this.diagnosticLogger?.({
+          event: "fast-operator.workflow-failed",
+          workflowId: "workflow.xhs.publish-edit-dry-run.v1",
+          step: error?.step || "exception",
+          errorCode: safeOperatorCode(error?.code),
+          message: safeOperatorMessage(error?.message, this.serial),
+        });
+      } catch {}
       fail("exception", { error: String(error?.message || error).slice(0, 240) });
     }
 
@@ -1283,6 +1292,18 @@ export class FastOperator {
     }));
     if (restoreIme) await restoreIme().catch(() => {});
     const ok = result?.ok === true && cleanup.restored === true;
+    if (!ok) {
+      try {
+        this.diagnosticLogger?.({
+          event: "fast-operator.workflow-incomplete",
+          workflowId: "workflow.xhs.publish-edit-dry-run.v1",
+          step: result?.step || "cleanupFailed",
+          cleanupReason: cleanup?.reason || null,
+          cleanupActivity: cleanup?.activity || null,
+          traceSteps: trace.map((entry) => entry.step).slice(-12),
+        });
+      } catch {}
+    }
     return {
       ...result,
       ok,
@@ -1678,7 +1699,12 @@ export class FastOperator {
     throw lastErr;
   }
   async currentIme() {
-    const out = await this.session.exec("settings get secure default_input_method", 8000);
+    // The Xiaowei Windows ADB build can close an interactive `adb shell` after
+    // warm-up. IME reads are bounded probes, so keep them on a fresh one-shot
+    // process and never poison restoration by opening the persistent channel.
+    const out = typeof this.session.oneShotShell === "function"
+      ? await this.session.oneShotShell("settings get secure default_input_method", 8000)
+      : await this.session.exec("settings get secure default_input_method", 8000);
     return out.trim();
   }
 
@@ -1725,7 +1751,7 @@ export class FastOperator {
       audit.selected = true;
       await new Promise((r) => setTimeout(r, 400));
       if (clearFirst) {
-        await this.session.exec("input keyevent KEYCODE_MOVE_END " + Array(48).fill("KEYCODE_DEL").join(" "), 8000);
+        await this.navigationShell("input keyevent KEYCODE_MOVE_END " + Array(48).fill("KEYCODE_DEL").join(" "), 8000);
         await new Promise((r) => setTimeout(r, 150));
         audit.cleared = true;
       }

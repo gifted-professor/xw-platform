@@ -104,6 +104,10 @@ export function createXhsAdapter({ fetchImpl = globalThis.fetch } = {}) {
             step: result.step ?? null,
             activity: result.activity ?? result.focus ?? null,
             log: Array.isArray(result.log) ? result.log.slice(-8) : undefined,
+            workflowError: typeof result.error === "string" ? result.error.slice(0, 240) : undefined,
+            cleanupReason: typeof result.cleanup?.reason === "string" ? result.cleanup.reason : undefined,
+            cleanupActivity: typeof result.cleanup?.activity === "string" ? result.cleanup.activity : undefined,
+            trace: Array.isArray(result.trace) ? result.trace.slice(-12) : undefined,
             ...(adapterError ? { adapterError } : {}),
           },
         });

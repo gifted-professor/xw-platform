@@ -105,6 +105,21 @@ test("publish dry-run fails closed without tapping when the foreground app is no
   assert.equal(shell.length, 2, "only force-stop and bounded launch may run before the app identity check");
 });
 
+test("IME probes stay on bounded one-shot ADB and never start the persistent shell", async () => {
+  const calls = [];
+  const operator = new FastOperator({ adbPath: "offline", serial: "offline", wait: async () => {} });
+  operator.session.oneShotShell = async (command, timeoutMs) => {
+    calls.push({ command, timeoutMs });
+    return "com.sohu.inputmethod.sogou.xiaomi/.SogouIME\r\n";
+  };
+  operator.session.exec = async () => {
+    throw new Error("persistent shell must not be opened for an IME probe");
+  };
+
+  assert.equal(await operator.currentIme(), "com.sohu.inputmethod.sogou.xiaomi/.SogouIME");
+  assert.deepEqual(calls, [{ command: "settings get secure default_input_method", timeoutMs: 8000 }]);
+});
+
 test("serve exposes the catalog-bound dry-run action without accepting primitive arrays", async (t) => {
   const calls = [];
   const server = serve(0, {
