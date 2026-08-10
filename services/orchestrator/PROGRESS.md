@@ -1,6 +1,41 @@
 # xhs-registry 进度
 
-> 最后更新：2026-08-08 Foundation PR2 **wiring closure** 源码补丁待 review（未部署）
+> 最后更新：2026-08-10 `/xw start` 一键 readiness 入口已完成 Windows live 验收
+
+## 2026-08-10 `/xw start` 一键启动与 readiness
+
+**入口**：`/xw start [alias[,alias...]] [--check]`；实际协调器为
+`node ops/xw-start.mjs [aliases] [--check] --actor <actor> --json`。默认覆盖 01–04，
+`--check` 严格只读。
+
+**安全语义**：
+- 先核对 routing `main`、`origin/main`、release receipt 与 `task-launch.json` 的完整 commit；
+  任一不一致即停止。
+- Registry / 控制面健康时不重启；serve 只启动受控计划任务。运行中的 stale serve 不隐式重启。
+- 停止且 stale 的 serve 先重绑；若 `Register-ScheduledTask` 因当前 shell 非管理员而失败，
+  只在重新证明 launch config 等于部署 commit、已有 task action 精确绑定官方 worker/config、
+  且端口未监听后，才复用已有 task 继续 Start；证明失败则 fail-closed。
+- 设备 readiness 只允许正式控制面 `xiaowei.device.list` R0 job；精确 alias + physicalLabel，
+  路由必须 allow、无审批、无外部效果，并记录 lease 可见性、verification、restoration 与 ready 回读。
+- quarantine、active lease / running job、未知状态均不旁路；无设备直连、无 `control.db` 写入、
+  无支付、发布、草稿保存或其他外部效果。
+
+**2026-08-10 live 验收**：
+- release / routing HEAD / task-launch：`cc7e526e4e6b9eab047afb5c3daa964852af79e7`。
+- 01/02/04 readiness job 均 `succeeded`，且 `leaseObserved=true`、verification/restoration/ready
+  均通过：`job_81836087-5761-4886-a3fa-bade37f8ccb8`、
+  `job_1a5fe84c-a168-406d-ad6b-db75995abebc`、
+  `job_a953e69a-05d5-478c-a80a-ccf5563aedce`；03 原本 ready，未提交 job。
+- 01–04 serve 均由已有受控计划任务启动并监听 17895 / 17897 / 17898 / 17896。
+- 终态 4/4 ready/free，0 active lease，0 running job；第二次 start 为 0 action / 0 mutation。
+- 总状态 `READY_WITH_LIMITS`、`canExecute=true`；limits 是既有 4 条 XHS note locator blocker，
+  不伪装为全能力可用。
+
+**源码与验证**：分支 `foundation/xw-start-20260810`，实现提交
+`b520d1b16ec379f4289fa33426a184a8fa6fe65d`；定向 13/13、`npm run check`、
+`git diff --check` 通过。`.codex` / `.agents` 两份 xw Skill SHA256 均为
+`46ce5ca33bd999bd4ae70516a61d98ad523ffc0a9b0db19d0d45dc59865059c7`。
+源码已推送，Draft PR：`gifted-professor/xhs-registry#8`。
 
 ## 2026-08-08 Foundation PR2 wiring closure（post-merge hotfix）
 
