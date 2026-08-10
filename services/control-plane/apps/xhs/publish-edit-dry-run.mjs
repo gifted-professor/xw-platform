@@ -836,18 +836,29 @@ export async function runXhsPublishEditDryRun({
           restoreIme = input.restore;
           await sleep(500);
         }
+        let tagTrace = [];
         if (normalizedTags.length) {
-          const tagTrace = await inputPublishTopicTags(transport, serial, normalizedTags, bodyField, { bodyText });
+          tagTrace = await inputPublishTopicTags(transport, serial, normalizedTags, bodyField, { bodyText });
           trace.push({ step: "topicTags", tags: tagTrace });
+        }
+        const dismissPage = await dumpUi(transport, serial);
+        const dismissDone = findLabel(dismissPage.nodes, [/^完成$/u], { clickable: true });
+        if (dismissDone?.center) {
+          await tap(transport, serial, dismissDone);
+          await sleep(450);
         }
         const verify = await dumpUi(transport, serial);
         const titleLanded = textLanded(verify, titleText);
         const bodyBaseLanded = !bodyText || textLanded(verify, bodyText);
         const tagsResult = verifyPublishTagsLanded(verify, normalizedTags);
         const postAfter = findLabel(verify.nodes, [/^发布$/u, /^发笔记$/u]);
-        const coreFilled = titleLanded && bodyBaseLanded && Boolean(postAfter);
-        const tagsOk = !normalizedTags.length || tagsResult.ok;
-        const allowStayWithTagDebt = stay && coreFilled && normalizedTags.length > 0 && !tagsResult.ok;
+        const tagInputOk = !normalizedTags.length || tagTrace.every((entry) => (
+          entry?.confirm === "pickerRow" || entry?.confirm === "suggestion" || entry?.confirm === "done"
+        ));
+        const allowStayWithTagDebt = stay && titleLanded && bodyBaseLanded && normalizedTags.length > 0
+          && (tagInputOk || !tagsResult.ok);
+        const coreFilled = titleLanded && bodyBaseLanded && (Boolean(postAfter) || allowStayWithTagDebt);
+        const tagsOk = !normalizedTags.length || tagsResult.ok || (stay && tagInputOk);
         const filled = coreFilled && tagsOk;
         result = {
           ok: filled || allowStayWithTagDebt,
@@ -858,9 +869,10 @@ export async function runXhsPublishEditDryRun({
           bodyLanded: bodyBaseLanded,
           captionLanded: bodyBaseLanded,
           tags: normalizedTags,
-          tagsLanded: tagsResult.ok,
+          tagsLanded: tagsResult.ok || (stay && tagInputOk),
           tagsLandedEach: tagsResult.landed,
-          tagsVerifyDebt: allowStayWithTagDebt,
+          tagsVerifyDebt: allowStayWithTagDebt && !tagsResult.ok,
+          tagInputOk,
           postButtonObserved: Boolean(postAfter),
         };
         break;

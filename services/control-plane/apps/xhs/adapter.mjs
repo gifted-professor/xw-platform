@@ -226,7 +226,8 @@ export function createXhsAdapter({
       if (action === "publishEditDryRun") {
         const { titleText, bodyText, normalizedTags } = resolvePublishTextParams(params);
         const textOk = (fieldText, landed) => !fieldText || landed === true;
-        const tagsOk = !normalizedTags.length || output?.tagsLanded === true || output?.tagsVerifyDebt === true;
+        const tagsOk = !normalizedTags.length || output?.tagsLanded === true
+          || output?.tagsVerifyDebt === true || output?.tagInputOk === true;
         if (output?.awaitingAccept === true) {
           return {
             ok: output?.ok === true
