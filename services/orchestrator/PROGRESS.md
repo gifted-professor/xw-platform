@@ -1,28 +1,36 @@
 # xhs-registry 进度
 
-> 最后更新：2026-08-10 飞书→小红书 6 图 dry-run 链路入库（图序 mtime + 干净 CP）
+> 最后更新：2026-08-10 飞书→小红书 dry-run 流程沉淀（默认入口 + 回归约定）
 
 ## 2026-08-10 飞书商品表 → 小红书发布 dry-run（6 图 / stay）
 
-**结论**：飞书 view `REPLACE_FEISHU_PRODUCT_VIEW_ID` 前 N 行 → 下载 6 图 → ADB 推机 → `xhs.publish.edit_dry_run`（`imageCount:6` + `stayForAccept`）四机已人工确认标题/正文/话题/图序（四宫格第一）。
+**结论**：飞书 view `REPLACE_FEISHU_PRODUCT_VIEW_ID` → 下载 6 图 → ADB 推机 → `xhs.publish.edit_dry_run`（`imageCount:6` + `stayForAccept`）已成默认编排；人工确认标题/正文/话题/图序（四宫格第一）。
 
-**routing `main`**：`ace16cf577e5e2b009d0d5fa5fe07f21ab3b6efa`（已 push；`task-launch.json` + 四台 `serve-launch-0N.json` 已对齐；正式计划任务 CP/serve 已拉起，无需 `XHS_ALLOW_DIRTY_WORKTREE`）。
+**routing `main`**：`ace16cf577e5e2b009d0d5fa5fe07f21ab3b6efa`（已 push；`task-launch.json` + 四台 `serve-launch-0N.json` 已对齐；正式计划任务 CP/serve，无需 dirty allow）。
+
+**默认入口（沉淀）**：`ops/feishu-to-xhs-publish.mjs` + `ops/feishu-to-xhs-lib.mjs`  
+手拼 fanout 仅调试：`ops/xhs-publish-edit-dry-run-fanout.mjs`。
 
 **关键修法**：
-- 相册多选点缩略图**右上角勾选圆**（非格子中心）；误进预览则 back。
-- 标题/正文优先点真实 `EditText`；验收须 `titleLanded`/`bodyLanded`（禁止仅标签假绿）。
-- 图序：`adb push` 会保留宿主机 mtime → **倒序推**（四宫格最后）+ 每张 `touch`；文件名 `01-`…`06-` 兼顾按名排序。知识库 `xhs-publish-album-mtime-order-20260810`。
+- 相册多选点缩略图**右上角勾选圆**；误进预览则 back。
+- 标题/正文优先点真实 `EditText`；验收须文案落盘（禁止仅标签假绿）。
+- 图序：倒序推 + 每张 `touch`（`adb push` 会保留宿主机 mtime）；文件名 `01-`…`06-`。知识库 `xhs-publish-album-mtime-order-20260810`。
+- `--row-offset` 只校验目标行，不因中间缺图行炸读表。
+- 标题 >20 字自动截断并打 WARN（capability 硬闸）。
 
-**Registry 入口**：
+**命令**：
 ```powershell
-# 前 4 行 → 01..04（验收默认）
+# 冒烟：view 前 4 行 → 01..04
 node ops/feishu-to-xhs-publish.mjs --aliases 01,02,03,04 --rows 4 --actor claude-pilot-20260809
-# 回归矩阵：飞书第 5–8 行 → 01..04
-node ops/feishu-to-xhs-publish.mjs --aliases 01,02,03,04 --rows 4 --row-offset 4 --actor claude-pilot-20260809
+# 回归：取下一批 READY+六图齐全的 4 行（勿盲用 offset 4——第 5–6 行曾缺试穿背面）
+node ops/feishu-to-xhs-publish.mjs --aliases 01,02,03,04 --rows 4 --row-offset 6 --actor claude-pilot-20260809
 node ops/feishu-to-xhs-publish.mjs --discard --aliases 01,02,03,04 --actor claude-pilot-20260809
 ```
 
-**下次回归**：走飞书 **第 5–8 条**（`--row-offset 4 --rows 4`），不重复前 4 条。
+**回归实证（2026-08-10）**：原定第 5–8 行不可用（5–6=`DRAFT_REVIEW` 且缺 `试穿背面`）。改跑第 **7–10** 行 → 01..04，4/4 `awaitingAccept`：
+`HM9699-897` / `HQ9255-235` / `HQ9255-355`（标题截断）/ `IF2083-010`。
+
+**知识库**：`xhs-publish-album-mtime-order-20260810`；`xhs-feishu-publish-dry-run-default-20260810`。
 
 ## 2026-08-10 小红书发布编辑页 title/body/tags[]（4/4 live）
 

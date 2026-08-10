@@ -121,17 +121,17 @@ async function fetchJson(url, { method = "GET", body = null, timeoutMs = 120000 
   return data;
 }
 
-function readFeishuRows(count) {
+function readFeishuRows(count, offset = 0) {
   const data = lark([
     "base", "+record-list",
     "--base-token", FEISHU_BASE_TOKEN,
     "--table-id", FEISHU_TABLE_ID,
     "--view-id", FEISHU_VIEW_ID,
-    "--limit", String(count),
+    "--limit", String(count + offset),
     "--as", "user",
     "--format", "json",
   ]);
-  return readFirstRowsFromRecordList(data, count);
+  return readFirstRowsFromRecordList(data, count, { offset });
 }
 
 function downloadRowImages(row, alias) {
@@ -227,8 +227,13 @@ async function preflightAliases(aliases) {
 }
 
 async function submitJob(row, alias, actor) {
+  let title = String(row.title || "").trim();
+  if (title.length > 20) {
+    log(`  WARN alias=${alias} title ${title.length}>20, truncate to 20`);
+    title = title.slice(0, 20);
+  }
   const params = {
-    title: row.title,
+    title,
     body: row.body,
     tags: row.tags,
     imageCount: 6,
@@ -288,7 +293,7 @@ async function main() {
   }
 
   const aliases = ALIASES;
-  const feishuRows = readFeishuRows(aliases.length + ROW_OFFSET).slice(ROW_OFFSET);
+  const feishuRows = readFeishuRows(aliases.length, ROW_OFFSET);
   if (feishuRows.length !== aliases.length) throw new Error("飞书行数与 alias 数不一致");
 
   const plan = aliases.map((alias, i) => ({

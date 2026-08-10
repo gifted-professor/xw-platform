@@ -72,12 +72,17 @@ export function parseXhsRow(values, idx, { recordId = null } = {}) {
   };
 }
 
-export function readFirstRowsFromRecordList(data, count = 4) {
+export function readFirstRowsFromRecordList(data, count = 4, { offset = 0 } = {}) {
   const fields = data.fields;
   if (!Array.isArray(fields)) throw new Error("飞书 record-list 无 fields");
   const idx = buildFieldIndex(fields);
   const rows = [];
-  for (let i = 0; i < Math.min(count, data.data.length); i += 1) {
+  const start = Math.max(0, Number(offset) || 0);
+  const end = start + Math.max(0, Number(count) || 0);
+  if (!Array.isArray(data.data) || data.data.length < end) {
+    throw new Error(`飞书行不足：需要到第 ${end} 行，实际 ${data.data?.length || 0}`);
+  }
+  for (let i = start; i < end; i += 1) {
     const values = data.data[i];
     const recordId = data.record_id_list?.[i] || null;
     const row = parseXhsRow(values, idx, { recordId });
