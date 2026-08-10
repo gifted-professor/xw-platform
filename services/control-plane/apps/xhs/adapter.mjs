@@ -98,6 +98,7 @@ export function createXhsAdapter({
           title: params.title,
           body: params.body,
           caption: params.caption,
+          tags: params.tags,
           stayForAccept: params.stayForAccept === true,
         });
         if (result?.ok !== true) {
@@ -223,13 +224,15 @@ export function createXhsAdapter({
         };
       }
       if (action === "publishEditDryRun") {
-        const { titleText, bodyText } = resolvePublishTextParams(params);
+        const { titleText, bodyText, normalizedTags } = resolvePublishTextParams(params);
         const textOk = (fieldText, landed) => !fieldText || landed === true;
+        const tagsOk = !normalizedTags.length || output?.tagsLanded === true;
         if (output?.awaitingAccept === true) {
           return {
             ok: output?.ok === true
               && textOk(titleText, output?.titleLanded)
               && textOk(bodyText, output?.bodyLanded ?? output?.captionLanded)
+              && tagsOk
               && output?.postButtonObserved === true
               && output?.published === false
               && output?.savedDraft === false
@@ -242,6 +245,7 @@ export function createXhsAdapter({
           ok: output?.ok === true
             && textOk(titleText, output?.titleLanded)
             && textOk(bodyText, output?.bodyLanded ?? output?.captionLanded)
+            && tagsOk
             && output?.postButtonObserved === true
             && output?.published === false
             && output?.savedDraft === false

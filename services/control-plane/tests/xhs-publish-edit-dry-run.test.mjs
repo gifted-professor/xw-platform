@@ -5,8 +5,10 @@ import { fileURLToPath } from "node:url";
 
 import { createXhsAdapter } from "../apps/xhs/adapter.mjs";
 import {
+  resolvePublishTextParams,
   restoreXhsPublishNoSave,
   runXhsPublishEditDryRun,
+  verifyPublishTagsLanded,
 } from "../apps/xhs/publish-edit-dry-run.mjs";
 import { CapabilityRegistry } from "../control-plane/lib/capability-registry.mjs";
 import { FastOperator, serve } from "../scripts/fast-operator.mjs";
@@ -415,7 +417,7 @@ test("serve exposes the catalog-bound dry-run action without accepting primitive
     }),
   });
   assert.equal(response.status, 200);
-  assert.deepEqual(calls, [{ title: undefined, body: "只传业务参数", caption: "只传业务参数", stayForAccept: false }]);
+  assert.deepEqual(calls, [{ title: undefined, body: "只传业务参数", caption: "只传业务参数", tags: undefined, stayForAccept: false }]);
 });
 
 test("XHS adapter verifies all no-commit invariants and performs idempotent cleanup", async () => {
@@ -618,6 +620,97 @@ test("publish edit dry-run fills title and body into separate fields", async () 
   assert.equal(output.titleLanded, true);
   assert.equal(output.bodyLanded, true);
   assert.deepEqual(inputTexts, [title, body]);
+});
+
+test("resolvePublishTextParams appends normalized tags to body", () => {
+  assert.deepEqual(resolvePublishTextParams({
+    title: "标题",
+    body: "正文",
+    tags: ["Adidas", "#百搭", " 标题 "],
+  }), {
+    titleText: "标题",
+    bodyText: "正文",
+    normalizedTags: ["Adidas", "百搭", "标题"],
+    fullBodyText: "正文 #Adidas #百搭 #标题",
+  });
+});
+
+test("publish edit dry-run rejects too many tags before Xiaowei requests", async () => {
+  let requests = 0;
+  const output = await runXhsPublishEditDryRun({
+    transport: { invoke: async () => { requests += 1; } },
+    device: { runtimeId: "runtime-01" },
+    body: "正文",
+    tags: Array.from({ length: 11 }, (_, index) => `tag${index}`),
+  });
+  assert.equal(output.ok, false);
+  assert.equal(output.step, "tagsInvalid");
+  assert.equal(requests, 0);
+});
+
+test("publish edit dry-run fills body with hashtag suffixes", async () => {
+  const title = "测试标题";
+  const body = "测试正文";
+  const tags = ["Adidas", "百搭"];
+  const fullBody = "测试正文 #Adidas #百搭";
+  const publishButton = node("发布", [820, 2140, 1060, 2250]);
+  const dumps = [
+    doc([node("发布", [460, 2200, 620, 2380], { contentDesc: "发布", text: "" })]),
+    doc([node("从相册选择", [220, 1500, 860, 1640])]),
+    doc([node("", [20, 300, 340, 640], { className: "android.widget.FrameLayout", text: "" })]),
+    doc([node("下一步(1)", [820, 2180, 1060, 2320])]),
+    doc([
+      node("", [40, 400, 1040, 540], { className: "android.widget.EditText", text: "" }),
+      node("", [40, 660, 1040, 1100], { className: "android.widget.EditText", text: "" }),
+      publishButton,
+    ]),
+    doc([
+      node(title, [40, 400, 1040, 540], { className: "android.widget.EditText" }),
+      node(fullBody, [40, 660, 1040, 1100], { className: "android.widget.EditText" }),
+      publishButton,
+    ], `<hierarchy text="${title} ${fullBody}"></hierarchy>`),
+    doc([
+      node(title, [40, 400, 1040, 540], { className: "android.widget.EditText" }),
+      node(fullBody, [40, 660, 1040, 1100], { className: "android.widget.EditText" }),
+      publishButton,
+    ], `<hierarchy text="${title} ${fullBody}"></hierarchy>`),
+  ];
+  const inputTexts = [];
+  const operator = new FastOperator({ adbPath: "adb", serial: "runtime-01" });
+  operator.navigationShell = async () => "";
+  operator.wait = async () => {};
+  operator.dump = async () => dumps.shift();
+  operator.navigationTap = async () => {};
+  operator.exitPublishNoSave = async () => ({ ok: true, restored: true, imeRestored: true });
+  operator.inputTextViaXiaowei = async (text) => {
+    inputTexts.push(text);
+    return { audit: { inputAccepted: true }, restore: async () => {} };
+  };
+  const focuses = [
+    "com.xingin.xhs.index.v2.IndexActivityV2",
+    "com.xingin.xhs.index.v2.IndexActivityV2",
+    "com.xingin.capa.lib.entrancev2.CapaAlbumActivity",
+    "com.xingin.capa.lib.entrancev2.CapaAlbumActivity",
+    "com.xingin.capa.post.platform.activity.CapaPostNotePlatformActivity",
+    "com.xingin.capa.post.platform.activity.CapaPostNotePlatformActivity",
+    "com.xingin.xhs.index.v2.IndexActivityV2",
+  ];
+  operator.currentFocus = async () => ({ package: "com.xingin.xhs", activity: focuses.shift() });
+
+  const output = await operator.publishEditDryRun({ title, body, tags });
+  assert.equal(output.ok, true);
+  assert.equal(output.tagsLanded, true);
+  assert.deepEqual(output.tags, tags);
+  assert.deepEqual(inputTexts, [title, fullBody]);
+});
+
+test("verifyPublishTagsLanded checks hash-prefixed topic names", () => {
+  const verify = {
+    xml: "测试正文#Adidas #百搭",
+    nodes: [{ text: "测试正文#Adidas #百搭" }],
+  };
+  assert.equal(verifyPublishTagsLanded(verify, ["Adidas", "百搭"]).ok, true);
+  assert.equal(verifyPublishTagsLanded(verify, ["Adidas", "missing"]).ok, false);
 });
 
 test("publish discard editor capability is registered as replay-safe cleanup", () => {

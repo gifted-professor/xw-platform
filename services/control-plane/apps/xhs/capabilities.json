@@ -414,6 +414,15 @@
           "stayForAccept": {
             "type": "boolean",
             "default": false
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 30
+            },
+            "maxItems": 10,
+            "description": "Topic names without # prefix; appended to body as #tag chips"
           }
         },
         "additionalProperties": false

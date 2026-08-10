@@ -97,17 +97,51 @@ function contains(outer, inner) {
     && inner[2] <= outer[2] + 2 && inner[3] <= outer[3] + 2;
 }
 
-export function resolvePublishTextParams({ title, body, caption } = {}) {
-  const titleText = String(title ?? "").trim();
-  const bodyText = String(body ?? caption ?? "").trim();
-  return { titleText, bodyText };
+export function normalizePublishTags(tags) {
+  if (tags == null) return [];
+  const list = Array.isArray(tags) ? tags : String(tags).split(/[,，]/);
+  return list
+    .map((value) => String(value).trim().replace(/^#+/, ""))
+    .filter(Boolean);
 }
 
-function validatePublishTextParams({ titleText, bodyText }) {
+export function appendTagsToBody(bodyText, tags) {
+  const normalized = normalizePublishTags(tags);
+  if (!normalized.length) return String(bodyText ?? "").trim();
+  const base = String(bodyText ?? "").trim();
+  return `${base}${normalized.map((tag) => ` #${tag}`).join("")}`.trim();
+}
+
+export function resolvePublishTextParams({ title, body, caption, tags } = {}) {
+  const titleText = String(title ?? "").trim();
+  const bodyText = String(body ?? caption ?? "").trim();
+  const normalizedTags = normalizePublishTags(tags);
+  const fullBodyText = appendTagsToBody(bodyText, normalizedTags);
+  return { titleText, bodyText, normalizedTags, fullBodyText };
+}
+
+function validatePublishTextParams({ titleText, bodyText, normalizedTags, fullBodyText }) {
   if (titleText.length > 20) return { ok: false, step: "titleInvalid" };
-  if (bodyText.length > 300) return { ok: false, step: "bodyInvalid" };
-  if (!titleText && !bodyText) return { ok: false, step: "textInvalid" };
+  if (fullBodyText.length > 300) return { ok: false, step: "bodyInvalid" };
+  if (normalizedTags.length > 10) return { ok: false, step: "tagsInvalid" };
+  if (normalizedTags.some((tag) => tag.length > 30)) return { ok: false, step: "tagsInvalid" };
+  if (!titleText && !fullBodyText) return { ok: false, step: "textInvalid" };
   return { ok: true };
+}
+
+export function verifyPublishTagsLanded(verify, tags) {
+  const normalized = normalizePublishTags(tags);
+  if (!normalized.length) return { ok: true, landed: [] };
+  const landed = normalized.map((tag) => tagLanded(verify, tag));
+  return { ok: landed.every(Boolean), landed };
+}
+
+function tagLanded(verify, tag) {
+  if (!tag) return true;
+  const hashForm = `#${tag.replace(/^#+/, "")}`;
+  const needle = hashForm.slice(0, Math.min(8, hashForm.length));
+  return verify.xml.includes(hashForm)
+    || verify.nodes.some((node) => String(node.text || "").includes(needle));
 }
 
 function findTitleAndBodyFields(page) {
@@ -523,11 +557,17 @@ export async function runXhsPublishEditDryRun({
   title,
   body,
   caption,
+  tags,
   stayForAccept = false,
 }) {
   const stay = stayForAccept === true;
-  const { titleText, bodyText } = resolvePublishTextParams({ title, body, caption });
-  const validation = validatePublishTextParams({ titleText, bodyText });
+  const { titleText, bodyText, normalizedTags, fullBodyText } = resolvePublishTextParams({
+    title,
+    body,
+    caption,
+    tags,
+  });
+  const validation = validatePublishTextParams({ titleText, bodyText, normalizedTags, fullBodyText });
   if (!validation.ok) {
     return {
       ok: false,
@@ -668,7 +708,7 @@ export async function runXhsPublishEditDryRun({
           fail("titleFieldMissing");
           break;
         }
-        if (bodyText && !bodyField?.center) {
+        if (fullBodyText && !bodyField?.center) {
           fail("bodyFieldMissing");
           break;
         }
@@ -677,19 +717,22 @@ export async function runXhsPublishEditDryRun({
           postButtonObserved: Boolean(post),
           titleField: titleField?.label || null,
           bodyField: bodyField?.label || null,
+          tags: normalizedTags,
         });
         if (titleText) {
           await inputCaption(transport, serial, titleText, titleField.center);
           await sleep(700);
         }
-        if (bodyText) {
-          const input = await inputCaption(transport, serial, bodyText, bodyField.center);
+        if (fullBodyText) {
+          const input = await inputCaption(transport, serial, fullBodyText, bodyField.center);
           restoreIme = input.restore;
           await sleep(900);
         }
         const verify = await dumpUi(transport, serial);
         const titleLanded = textLanded(verify, titleText);
-        const bodyLanded = textLanded(verify, bodyText);
+        const bodyBaseLanded = !bodyText || textLanded(verify, bodyText);
+        const tagsResult = verifyPublishTagsLanded(verify, normalizedTags);
+        const bodyLanded = bodyBaseLanded && tagsResult.ok;
         const postAfter = findLabel(verify.nodes, [/^发布$/u, /^发笔记$/u]);
         const filled = titleLanded && bodyLanded && Boolean(postAfter);
         result = {
@@ -700,6 +743,9 @@ export async function runXhsPublishEditDryRun({
           titleLanded,
           bodyLanded,
           captionLanded: bodyLanded,
+          tags: normalizedTags,
+          tagsLanded: tagsResult.ok,
+          tagsLandedEach: tagsResult.landed,
           postButtonObserved: Boolean(postAfter),
         };
         break;

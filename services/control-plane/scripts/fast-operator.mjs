@@ -27,6 +27,10 @@ import { join } from "node:path";
 import { acquireTransportLock } from "../control-plane/lib/xiaowei-transport.mjs";
 import { ControlPlaneError } from "../control-plane/lib/errors.mjs";
 import { guardFinancialCommit } from "../control-plane/lib/financial-commit-classifier.mjs";
+import {
+  resolvePublishTextParams,
+  verifyPublishTagsLanded,
+} from "../apps/xhs/publish-edit-dry-run.mjs";
 
 // 跨进程文件锁串行化小薇 WS 访问：xiaowei 单实例 WS accept 串行，多设备并发建连会持续 connection failed
 // （非瞬时，retry 无效）。4 个 task-runner 进程抢同一 lock 文件，O_EXCL 互斥，每次只 1 路连 22222。
@@ -1153,16 +1157,21 @@ export class FastOperator {
   // Catalog-bound XHS publish editor dry-run. It is one formal capability/job even though the
   // device workflow has several UI steps. Accepts title/body (caption is a deprecated body alias),
   // owns all selectors server-side, never exposes an action array, and always attempts no-save cleanup.
-  async publishEditDryRun({ title, body, caption, stayForAccept = false } = {}) {
+  async publishEditDryRun({ title, body, caption, tags, stayForAccept = false } = {}) {
     const stay = stayForAccept === true;
-    const titleText = String(title ?? "").trim();
-    const bodyText = String(body ?? caption ?? "").trim();
-    if (titleText.length > 20 || bodyText.length > 300 || (!titleText && !bodyText)) {
+    const { titleText, bodyText, normalizedTags, fullBodyText } = resolvePublishTextParams({
+      title,
+      body,
+      caption,
+      tags,
+    });
+    if (titleText.length > 20 || fullBodyText.length > 300 || (!titleText && !fullBodyText)
+      || normalizedTags.length > 10 || normalizedTags.some((tag) => tag.length > 30)) {
       return {
         ok: false,
         notSent: true,
         ambiguous: false,
-        step: !titleText && !bodyText ? "textInvalid" : (titleText.length > 20 ? "titleInvalid" : "bodyInvalid"),
+        step: !titleText && !fullBodyText ? "textInvalid" : (titleText.length > 20 ? "titleInvalid" : (normalizedTags.length > 10 || normalizedTags.some((tag) => tag.length > 30) ? "tagsInvalid" : "bodyInvalid")),
         published: false,
         savedDraft: false,
         finalCommit: false,
@@ -1287,7 +1296,7 @@ export class FastOperator {
             fail("titleFieldMissing", { labels: pageLabels.slice(0, 24) });
             break;
           }
-          if (bodyText && !bodyField?.center) {
+          if (fullBodyText && !bodyField?.center) {
             fail("bodyFieldMissing", { labels: pageLabels.slice(0, 24) });
             break;
           }
@@ -1295,6 +1304,7 @@ export class FastOperator {
             postButtonObserved: Boolean(post),
             titleField: titleField?.label || null,
             bodyField: bodyField?.label || null,
+            tags: normalizedTags,
           });
           if (titleText) {
             await this.navigationTap(titleField.center[0], titleField.center[1]);
@@ -1302,18 +1312,21 @@ export class FastOperator {
             const titleInput = await this.inputTextViaXiaowei(titleText, { clearFirst: true, deferRestore: true });
             await pause(700);
           }
-          if (bodyText) {
+          if (fullBodyText) {
             await this.navigationTap(bodyField.center[0], bodyField.center[1]);
             await pause(700);
-            const bodyInput = await this.inputTextViaXiaowei(bodyText, { clearFirst: true, deferRestore: true });
+            const bodyInput = await this.inputTextViaXiaowei(fullBodyText, { clearFirst: true, deferRestore: true });
             restoreIme = bodyInput.restore;
             await pause(900);
           }
           const verifyDoc = await this.dump({ label: "publish-caption-verify", retries: 2 });
+          const verify = { xml: verifyDoc._hierarchyXml || "", nodes: verifyDoc.nodes || [] };
           const landedTitle = !titleText || verifyDoc._hierarchyXml?.includes(titleText)
             || (verifyDoc.nodes || []).some((node) => String(node.text || "").includes(titleText.slice(0, Math.min(6, titleText.length))));
-          const landedBody = !bodyText || verifyDoc._hierarchyXml?.includes(bodyText)
+          const bodyBaseLanded = !bodyText || verifyDoc._hierarchyXml?.includes(bodyText)
             || (verifyDoc.nodes || []).some((node) => String(node.text || "").includes(bodyText.slice(0, Math.min(6, bodyText.length))));
+          const tagsResult = verifyPublishTagsLanded(verify, normalizedTags);
+          const landedBody = bodyBaseLanded && tagsResult.ok;
           const postAfter = findUiLabel(verifyDoc, [/^发布$/u, /^发笔记$/u], (node) => Boolean(node.bounds));
           const filled = landedTitle && landedBody && Boolean(postAfter);
           result = {
@@ -1324,6 +1337,9 @@ export class FastOperator {
             titleLanded: landedTitle,
             bodyLanded: landedBody,
             captionLanded: landedBody,
+            tags: normalizedTags,
+            tagsLanded: tagsResult.ok,
+            tagsLandedEach: tagsResult.landed,
             postButtonObserved: Boolean(postAfter),
           };
           break;
@@ -2527,6 +2543,7 @@ export function serve(port, options = {}) {
           title: q.title,
           body: q.body ?? q.caption,
           caption: q.caption,
+          tags: q.tags,
           stayForAccept: q.stayForAccept === true,
         }); break;
         case "abortPublishNoSave": out = await op.exitPublishNoSave({ maxSteps: q.maxSteps ?? 10 }); break;
