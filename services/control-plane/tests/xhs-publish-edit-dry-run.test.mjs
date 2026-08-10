@@ -31,15 +31,15 @@ test("publish edit dry-run capability is a bounded replay-safe job with no final
   assert.deepEqual(capability.resources, ["device", "transport:xiaowei:22222"]);
 });
 
-test("transport workflow rejects invalid caption before any Xiaowei request", async () => {
+test("transport workflow rejects empty text before any Xiaowei request", async () => {
   let requests = 0;
   const output = await runXhsPublishEditDryRun({
     transport: { invoke: async () => { requests += 1; } },
     device: { runtimeId: "runtime-01" },
-    caption: "   ",
+    body: "   ",
   });
   assert.equal(output.ok, false);
-  assert.equal(output.step, "captionInvalid");
+  assert.equal(output.step, "textInvalid");
   assert.equal(output.finalCommit, false);
   assert.equal(output.paymentTransport, 0);
   assert.equal(requests, 0);
@@ -323,8 +323,9 @@ test("bounded publish edit workflow fills caption, observes publish, and exits w
   ];
   operator.currentFocus = async () => ({ package: "com.xingin.xhs", activity: focuses.shift() });
 
-  const output = await operator.publishEditDryRun({ caption });
+  const output = await operator.publishEditDryRun({ body: caption });
   assert.equal(output.ok, true);
+  assert.equal(output.bodyLanded, true);
   assert.equal(output.captionLanded, true);
   assert.equal(output.postButtonObserved, true);
   assert.equal(output.published, false);
@@ -347,7 +348,7 @@ test("publish dry-run fails closed without tapping when the foreground app is no
   operator.dump = async () => doc([node("发布", [460, 2200, 620, 2380])]);
   operator.currentFocus = async () => ({ package: "com.example.other", activity: "OtherActivity" });
 
-  const output = await operator.publishEditDryRun({ caption: "不会发布" });
+  const output = await operator.publishEditDryRun({ body: "不会发布" });
   assert.equal(output.ok, false);
   assert.equal(output.restored, false);
   assert.equal(output.published, false);
@@ -414,7 +415,7 @@ test("serve exposes the catalog-bound dry-run action without accepting primitive
     }),
   });
   assert.equal(response.status, 200);
-  assert.deepEqual(calls, [{ caption: "只传业务参数", stayForAccept: false }]);
+  assert.deepEqual(calls, [{ title: undefined, body: "只传业务参数", caption: "只传业务参数", stayForAccept: false }]);
 });
 
 test("XHS adapter verifies all no-commit invariants and performs idempotent cleanup", async () => {
@@ -426,6 +427,7 @@ test("XHS adapter verifies all no-commit invariants and performs idempotent clea
       calls.push({ type: "execute", input });
       return {
         ok: true,
+        bodyLanded: true,
         captionLanded: true,
         postButtonObserved: true,
         published: false,
@@ -447,13 +449,13 @@ test("XHS adapter verifies all no-commit invariants and performs idempotent clea
     metadata: { xhsServePort: 17895 },
   };
   const leaseAuthorization = { leaseId: "lease-01", token: "secret", deviceId: "device-01" };
-  const execution = await adapter.execute({ capability, device, params: { caption: "测试" }, leaseAuthorization });
-  assert.equal((await adapter.verify({ capability, params: { caption: "测试" }, execution })).ok, true);
+  const execution = await adapter.execute({ capability, device, params: { body: "测试" }, leaseAuthorization });
+  assert.equal((await adapter.verify({ capability, params: { body: "测试" }, execution })).ok, true);
   assert.equal((await adapter.restore({ capability, device, leaseAuthorization })).ok, true);
   assert.equal(calls.length, 2);
   assert.equal(calls[0].type, "execute");
   assert.equal(calls[0].input.transport, transport);
-  assert.equal(calls[0].input.caption, "测试");
+  assert.equal(calls[0].input.body, "测试");
   assert.equal(calls[1].type, "restore");
   assert.equal(calls[1].input.transport, transport);
   assert.equal(calls[1].input.maxSteps, 10);
@@ -470,6 +472,7 @@ test("XHS adapter stayForAccept defers cleanup and skips restored verification",
         ok: true,
         awaitingAccept: true,
         stayForAccept: true,
+        bodyLanded: true,
         captionLanded: true,
         postButtonObserved: true,
         published: false,
@@ -494,11 +497,11 @@ test("XHS adapter stayForAccept defers cleanup and skips restored verification",
   const execution = await adapter.execute({
     capability,
     device,
-    params: { caption: "测试", stayForAccept: true },
+    params: { body: "测试", stayForAccept: true },
     leaseAuthorization,
   });
   assert.equal(execution.output.awaitingAccept, true);
-  assert.equal((await adapter.verify({ capability, params: { caption: "测试", stayForAccept: true }, execution })).ok, true);
+  assert.equal((await adapter.verify({ capability, params: { body: "测试", stayForAccept: true }, execution })).ok, true);
   const restoration = await adapter.restore({ capability, device, execution, leaseAuthorization });
   assert.equal(restoration.ok, true);
   assert.equal(restoration.deferred, true);
@@ -553,12 +556,68 @@ test("publish edit dry-run stayForAccept skips no-save cleanup", async () => {
     throw new Error("stayForAccept must not call exitPublishNoSave");
   };
 
-  const output = await operator.publishEditDryRun({ caption, stayForAccept: true });
+  const output = await operator.publishEditDryRun({ body: caption, stayForAccept: true });
   assert.equal(output.ok, true);
   assert.equal(output.step, "awaitingAccept");
   assert.equal(output.awaitingAccept, true);
   assert.equal(output.restored, false);
   assert.equal(output.cleanup?.deferred, true);
+});
+
+test("publish edit dry-run fills title and body into separate fields", async () => {
+  const title = "今日穿搭";
+  const body = "正文不会发布";
+  const publishButton = node("发布", [820, 2140, 1060, 2250]);
+  const dumps = [
+    doc([node("发布", [460, 2200, 620, 2380], { contentDesc: "发布", text: "" })]),
+    doc([node("从相册选择", [220, 1500, 860, 1640])]),
+    doc([node("", [20, 300, 340, 640], { className: "android.widget.FrameLayout", text: "" })]),
+    doc([node("下一步(1)", [820, 2180, 1060, 2320])]),
+    doc([
+      node("", [40, 400, 1040, 540], { className: "android.widget.EditText", text: "" }),
+      node("", [40, 660, 1040, 1100], { className: "android.widget.EditText", text: "" }),
+      publishButton,
+    ]),
+    doc([
+      node(title, [40, 400, 1040, 540], { className: "android.widget.EditText" }),
+      node(body, [40, 660, 1040, 1100], { className: "android.widget.EditText" }),
+      publishButton,
+    ], `<hierarchy text="${title} ${body}"></hierarchy>`),
+    doc([
+      node(title, [40, 400, 1040, 540], { className: "android.widget.EditText" }),
+      node(body, [40, 660, 1040, 1100], { className: "android.widget.EditText" }),
+      publishButton,
+    ], `<hierarchy text="${title} ${body}"></hierarchy>`),
+  ];
+  const inputTexts = [];
+  const operator = new FastOperator({ adbPath: "offline", serial: "offline", wait: async () => {} });
+  operator.navigationShell = async () => "";
+  operator.navigationTap = async () => {};
+  operator.dump = async () => {
+    const next = dumps.shift();
+    if (!next) throw new Error("unexpected dump");
+    return next;
+  };
+  operator.inputTextViaXiaowei = async (text) => {
+    inputTexts.push(text);
+    return { audit: { inputAccepted: true }, restore: async () => {} };
+  };
+  const focuses = [
+    "com.xingin.xhs.index.v2.IndexActivityV2",
+    "com.xingin.xhs.index.v2.IndexActivityV2",
+    "com.xingin.capa.lib.entrancev2.CapaAlbumActivity",
+    "com.xingin.capa.lib.entrancev2.CapaAlbumActivity",
+    "com.xingin.capa.post.platform.activity.CapaPostNotePlatformActivity",
+    "com.xingin.capa.post.platform.activity.CapaPostNotePlatformActivity",
+    "com.xingin.xhs.index.v2.IndexActivityV2",
+  ];
+  operator.currentFocus = async () => ({ package: "com.xingin.xhs", activity: focuses.shift() });
+
+  const output = await operator.publishEditDryRun({ title, body });
+  assert.equal(output.ok, true);
+  assert.equal(output.titleLanded, true);
+  assert.equal(output.bodyLanded, true);
+  assert.deepEqual(inputTexts, [title, body]);
 });
 
 test("publish discard editor capability is registered as replay-safe cleanup", () => {

@@ -2,6 +2,7 @@ import { postJson, safeAdapterError } from "../../control-plane/lib/command-runn
 import { ControlPlaneError } from "../../control-plane/lib/errors.mjs";
 import {
   captureXhsRecoveryScreen,
+  resolvePublishTextParams,
   restoreXhsPublishNoSave,
   runXhsPublishDiscardEditor,
   runXhsPublishEditDryRun,
@@ -94,6 +95,8 @@ export function createXhsAdapter({
         const result = await publishWorkflow({
           transport,
           device,
+          title: params.title,
+          body: params.body,
           caption: params.caption,
           stayForAccept: params.stayForAccept === true,
         });
@@ -220,10 +223,13 @@ export function createXhsAdapter({
         };
       }
       if (action === "publishEditDryRun") {
+        const { titleText, bodyText } = resolvePublishTextParams(params);
+        const textOk = (fieldText, landed) => !fieldText || landed === true;
         if (output?.awaitingAccept === true) {
           return {
             ok: output?.ok === true
-              && output?.captionLanded === true
+              && textOk(titleText, output?.titleLanded)
+              && textOk(bodyText, output?.bodyLanded ?? output?.captionLanded)
               && output?.postButtonObserved === true
               && output?.published === false
               && output?.savedDraft === false
@@ -234,7 +240,8 @@ export function createXhsAdapter({
         }
         return {
           ok: output?.ok === true
-            && output?.captionLanded === true
+            && textOk(titleText, output?.titleLanded)
+            && textOk(bodyText, output?.bodyLanded ?? output?.captionLanded)
             && output?.postButtonObserved === true
             && output?.published === false
             && output?.savedDraft === false

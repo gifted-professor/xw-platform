@@ -398,19 +398,24 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "title": {
+            "type": "string",
+            "maxLength": 20
+          },
+          "body": {
+            "type": "string",
+            "maxLength": 300
+          },
           "caption": {
             "type": "string",
-            "minLength": 1,
-            "maxLength": 300
+            "maxLength": 300,
+            "description": "deprecated alias for body"
           },
           "stayForAccept": {
             "type": "boolean",
             "default": false
           }
         },
-        "required": [
-          "caption"
-        ],
         "additionalProperties": false
       },
       "outputSchema": {
@@ -423,7 +428,7 @@
       ],
       "verification": {
         "mode": "custom",
-        "description": "caption and final publish button are observed, publish/save remain false, and the editor is discarded or left on the edit page when stayForAccept=true"
+        "description": "title/body text fields are observed, publish/save remain false, and the editor is discarded or left on the edit page when stayForAccept=true"
       },
       "restoration": {
         "required": true,

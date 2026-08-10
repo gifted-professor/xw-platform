@@ -1151,17 +1151,18 @@ export class FastOperator {
   }
 
   // Catalog-bound XHS publish editor dry-run. It is one formal capability/job even though the
-  // device workflow has several UI steps. The method accepts business data only (caption), owns
-  // all selectors server-side, never exposes an action array, and always attempts no-save cleanup.
-  async publishEditDryRun({ caption, stayForAccept = false } = {}) {
+  // device workflow has several UI steps. Accepts title/body (caption is a deprecated body alias),
+  // owns all selectors server-side, never exposes an action array, and always attempts no-save cleanup.
+  async publishEditDryRun({ title, body, caption, stayForAccept = false } = {}) {
     const stay = stayForAccept === true;
-    const text = String(caption || "").trim();
-    if (!text || text.length > 300) {
+    const titleText = String(title ?? "").trim();
+    const bodyText = String(body ?? caption ?? "").trim();
+    if (titleText.length > 20 || bodyText.length > 300 || (!titleText && !bodyText)) {
       return {
         ok: false,
         notSent: true,
         ambiguous: false,
-        step: "captionInvalid",
+        step: !titleText && !bodyText ? "textInvalid" : (titleText.length > 20 ? "titleInvalid" : "bodyInvalid"),
         published: false,
         savedDraft: false,
         finalCommit: false,
@@ -1263,35 +1264,66 @@ export class FastOperator {
         const edit = (doc.nodes || []).find((node) => node.className === "android.widget.EditText"
           && node.bounds && (node.clickable || node.focusable));
         const post = findUiLabel(doc, [/^发布$/u, /^发笔记$/u], (node) => Boolean(node.bounds));
-        const captionMarker = pageLabels.some((label) => /添加标题|添加正文|说点什么|正文|话题/u.test(label));
+        const captionMarker = pageLabels.some((label) => /添加标题|添加正文|说点什么|发语音|正文|话题/u.test(label));
         if (captionMarker || (edit && post)) {
           if (!/CapaPostNotePlatformActivity/i.test(focus.activity || "")) {
             fail("captionSurfaceMismatch", { activity: focus.activity || null });
             break;
           }
-          const field = edit
-            ? { center: centerOf(edit.bounds), label: "EditText" }
-            : findClickableUiLabel(doc, [/添加正文/u, /说点什么/u, /^正文$/u]);
-          if (!field?.center) {
-            fail("captionFieldMissing", { labels: pageLabels.slice(0, 24) });
+          const edits = (doc.nodes || [])
+            .filter((node) => node.className === "android.widget.EditText" && node.bounds)
+            .sort((left, right) => centerOf(left.bounds)[1] - centerOf(right.bounds)[1]);
+          let titleField = edits[0] ? { center: centerOf(edits[0].bounds), label: "titleEditText" } : null;
+          let bodyField = edits[1] ? { center: centerOf(edits[1].bounds), label: "bodyEditText" } : null;
+          const titleLabel = findClickableUiLabel(doc, [/添加标题/u, /^标题$/u]);
+          const bodyLabel = findClickableUiLabel(doc, [/添加正文/u, /说点什么/u, /发语音/u, /^正文$/u]);
+          if (titleLabel?.center) titleField = titleLabel;
+          if (bodyLabel?.center) bodyField = bodyLabel;
+          if (!bodyField && edits.length === 1) {
+            bodyField = titleField;
+            titleField = null;
+          }
+          if (titleText && !titleField?.center) {
+            fail("titleFieldMissing", { labels: pageLabels.slice(0, 24) });
             break;
           }
-          record("captionPage", { postButtonObserved: Boolean(post), field: field.label });
-          await this.navigationTap(field.center[0], field.center[1]);
-          await pause(700);
-          const input = await this.inputTextViaXiaowei(text, { clearFirst: true, deferRestore: true });
-          restoreIme = input.restore;
-          await pause(900);
+          if (bodyText && !bodyField?.center) {
+            fail("bodyFieldMissing", { labels: pageLabels.slice(0, 24) });
+            break;
+          }
+          record("captionPage", {
+            postButtonObserved: Boolean(post),
+            titleField: titleField?.label || null,
+            bodyField: bodyField?.label || null,
+          });
+          if (titleText) {
+            await this.navigationTap(titleField.center[0], titleField.center[1]);
+            await pause(700);
+            const titleInput = await this.inputTextViaXiaowei(titleText, { clearFirst: true, deferRestore: true });
+            await pause(700);
+          }
+          if (bodyText) {
+            await this.navigationTap(bodyField.center[0], bodyField.center[1]);
+            await pause(700);
+            const bodyInput = await this.inputTextViaXiaowei(bodyText, { clearFirst: true, deferRestore: true });
+            restoreIme = bodyInput.restore;
+            await pause(900);
+          }
           const verifyDoc = await this.dump({ label: "publish-caption-verify", retries: 2 });
-          const landed = verifyDoc._hierarchyXml?.includes(text)
-            || (verifyDoc.nodes || []).some((node) => String(node.text || "").includes(text.slice(0, Math.min(6, text.length))));
+          const landedTitle = !titleText || verifyDoc._hierarchyXml?.includes(titleText)
+            || (verifyDoc.nodes || []).some((node) => String(node.text || "").includes(titleText.slice(0, Math.min(6, titleText.length))));
+          const landedBody = !bodyText || verifyDoc._hierarchyXml?.includes(bodyText)
+            || (verifyDoc.nodes || []).some((node) => String(node.text || "").includes(bodyText.slice(0, Math.min(6, bodyText.length))));
           const postAfter = findUiLabel(verifyDoc, [/^发布$/u, /^发笔记$/u], (node) => Boolean(node.bounds));
+          const filled = landedTitle && landedBody && Boolean(postAfter);
           result = {
-            ok: landed && Boolean(postAfter),
+            ok: filled,
             notSent: true,
             ambiguous: false,
-            step: landed && postAfter ? "captionFilled" : "captionVerificationFailed",
-            captionLanded: landed,
+            step: filled ? "editorFilled" : "editorVerificationFailed",
+            titleLanded: landedTitle,
+            bodyLanded: landedBody,
+            captionLanded: landedBody,
             postButtonObserved: Boolean(postAfter),
           };
           break;
@@ -2491,7 +2523,12 @@ export function serve(port, options = {}) {
         case "feedCards": out = await op.observeFeedCards({ label: q.label }); break;
         case "observeOpenNoteDetail": out = await op.observeOpenNoteDetail(); break;
         case "openFeedNote": out = await op.openFeedNote({ selector: q.selector ?? "any", index: q.index }); break;
-        case "publishEditDryRun": out = await op.publishEditDryRun({ caption: q.caption, stayForAccept: q.stayForAccept === true }); break;
+        case "publishEditDryRun": out = await op.publishEditDryRun({
+          title: q.title,
+          body: q.body ?? q.caption,
+          caption: q.caption,
+          stayForAccept: q.stayForAccept === true,
+        }); break;
         case "abortPublishNoSave": out = await op.exitPublishNoSave({ maxSteps: q.maxSteps ?? 10 }); break;
         case "openCard": { const d = await op.dump({ label: "open" }); const cards = op.feedCards(d); const c = cards[q.idx ?? 0]; out = await op.openCard(c); break; }
         case "backToFeed": out = await op.backToFeed(q.maxBack ?? 3); break;

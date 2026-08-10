@@ -97,6 +97,43 @@ function contains(outer, inner) {
     && inner[2] <= outer[2] + 2 && inner[3] <= outer[3] + 2;
 }
 
+export function resolvePublishTextParams({ title, body, caption } = {}) {
+  const titleText = String(title ?? "").trim();
+  const bodyText = String(body ?? caption ?? "").trim();
+  return { titleText, bodyText };
+}
+
+function validatePublishTextParams({ titleText, bodyText }) {
+  if (titleText.length > 20) return { ok: false, step: "titleInvalid" };
+  if (bodyText.length > 300) return { ok: false, step: "bodyInvalid" };
+  if (!titleText && !bodyText) return { ok: false, step: "textInvalid" };
+  return { ok: true };
+}
+
+function findTitleAndBodyFields(page) {
+  const edits = page.nodes
+    .filter((node) => node.className === "android.widget.EditText" && center(node))
+    .sort((left, right) => center(left)[1] - center(right)[1]);
+  let titleField = edits[0] ? { center: center(edits[0]), label: "titleEditText" } : null;
+  let bodyField = edits[1] ? { center: center(edits[1]), label: "bodyEditText" } : null;
+  const titleLabel = findLabel(page.nodes, [/添加标题/u, /^标题$/u], { clickable: true });
+  const bodyLabel = findLabel(page.nodes, [/添加正文/u, /说点什么/u, /发语音/u, /^正文$/u], { clickable: true });
+  if (titleLabel?.center) titleField = titleLabel;
+  if (bodyLabel?.center) bodyField = bodyLabel;
+  if (!bodyField && edits.length === 1) {
+    bodyField = titleField;
+    titleField = null;
+  }
+  return { titleField, bodyField };
+}
+
+function textLanded(verify, text) {
+  if (!text) return true;
+  const needle = text.slice(0, Math.min(6, text.length));
+  return verify.xml.includes(text)
+    || verify.nodes.some((node) => String(node.text || "").includes(needle));
+}
+
 function findLabel(nodes, patterns, { clickable = false } = {}) {
   for (const pattern of patterns) {
     const candidates = nodes.filter((node) => pattern.test(label(node)));
@@ -480,15 +517,23 @@ export async function runXhsPublishDiscardEditor({ transport, device }) {
   };
 }
 
-export async function runXhsPublishEditDryRun({ transport, device, caption, stayForAccept = false }) {
+export async function runXhsPublishEditDryRun({
+  transport,
+  device,
+  title,
+  body,
+  caption,
+  stayForAccept = false,
+}) {
   const stay = stayForAccept === true;
-  const text = String(caption || "").trim();
-  if (!text || text.length > 300) {
+  const { titleText, bodyText } = resolvePublishTextParams({ title, body, caption });
+  const validation = validatePublishTextParams({ titleText, bodyText });
+  if (!validation.ok) {
     return {
       ok: false,
       notSent: true,
       ambiguous: false,
-      step: "captionInvalid",
+      step: validation.step,
       published: false,
       savedDraft: false,
       finalCommit: false,
@@ -609,36 +654,52 @@ export async function runXhsPublishEditDryRun({ transport, device, caption, stay
       const page = await dumpUi(transport, serial);
       const current = await focus(transport, serial);
       requireSurface(current, `publishEdit${index}`, /CapaAlbumActivity|CapaPostNotePlatformActivity|ImageEdit|MaterialPreview/i);
+      const post = findLabel(page.nodes, [/^发布$/u, /^发笔记$/u]);
+      const captionMarker = page.nodes.some((node) => /添加标题|添加正文|说点什么|发语音|正文|话题/u.test(label(node)));
       const edit = page.nodes.find((node) => node.className === "android.widget.EditText"
         && (node.clickable || node.focusable) && center(node));
-      const post = findLabel(page.nodes, [/^发布$/u, /^发笔记$/u]);
-      const captionMarker = page.nodes.some((node) => /添加标题|添加正文|说点什么|正文|话题/u.test(label(node)));
       if (captionMarker || (edit && post)) {
         if (!/CapaPostNotePlatformActivity/i.test(String(current.activity || ""))) {
           fail("captionSurfaceMismatch", { activity: current.activity || null });
           break;
         }
-        const field = edit
-          ? { center: center(edit), label: "EditText" }
-          : findLabel(page.nodes, [/添加正文/u, /说点什么/u, /^正文$/u], { clickable: true });
-        if (!field?.center) {
-          fail("captionFieldMissing");
+        const { titleField, bodyField } = findTitleAndBodyFields(page);
+        if (titleText && !titleField?.center) {
+          fail("titleFieldMissing");
           break;
         }
-        trace.push({ step: "captionPage", postButtonObserved: Boolean(post), field: field.label });
-        const input = await inputCaption(transport, serial, text, field.center);
-        restoreIme = input.restore;
-        await sleep(900);
+        if (bodyText && !bodyField?.center) {
+          fail("bodyFieldMissing");
+          break;
+        }
+        trace.push({
+          step: "captionPage",
+          postButtonObserved: Boolean(post),
+          titleField: titleField?.label || null,
+          bodyField: bodyField?.label || null,
+        });
+        if (titleText) {
+          await inputCaption(transport, serial, titleText, titleField.center);
+          await sleep(700);
+        }
+        if (bodyText) {
+          const input = await inputCaption(transport, serial, bodyText, bodyField.center);
+          restoreIme = input.restore;
+          await sleep(900);
+        }
         const verify = await dumpUi(transport, serial);
-        const landed = verify.xml.includes(text)
-          || verify.nodes.some((node) => String(node.text || "").includes(text.slice(0, Math.min(6, text.length))));
+        const titleLanded = textLanded(verify, titleText);
+        const bodyLanded = textLanded(verify, bodyText);
         const postAfter = findLabel(verify.nodes, [/^发布$/u, /^发笔记$/u]);
+        const filled = titleLanded && bodyLanded && Boolean(postAfter);
         result = {
-          ok: landed && Boolean(postAfter),
+          ok: filled,
           notSent: true,
           ambiguous: false,
-          step: landed && postAfter ? "captionFilled" : "captionVerificationFailed",
-          captionLanded: landed,
+          step: filled ? "editorFilled" : "editorVerificationFailed",
+          titleLanded,
+          bodyLanded,
+          captionLanded: bodyLanded,
           postButtonObserved: Boolean(postAfter),
         };
         break;
