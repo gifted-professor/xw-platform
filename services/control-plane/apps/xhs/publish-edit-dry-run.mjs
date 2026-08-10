@@ -357,7 +357,7 @@ async function restoreDefaultIme(transport, serial) {
   return { restored: response?.code === 10000, already: false, ime: DEFAULT_IME };
 }
 
-async function inputCaption(transport, serial, text, point) {
+async function inputCaption(transport, serial, text, point, { clearFirst = true } = {}) {
   const prior = String(await adbShell(transport, serial, "settings get secure default_input_method", 8000)).trim();
   const restore = async () => {
     if (!prior || prior === BRIDGE_IME) return restoreDefaultIme(transport, serial);
@@ -372,14 +372,21 @@ async function inputCaption(transport, serial, text, point) {
       if (selected?.code !== 10000) throw new Error("bridge IME selection failed");
       await sleep(400);
     }
-    await tap(transport, serial, { center: point });
-    await sleep(500);
-    await adbShell(
-      transport,
-      serial,
-      "input keyevent KEYCODE_MOVE_END " + Array(48).fill("KEYCODE_DEL").join(" "),
-      10000,
-    );
+    if (point?.center) {
+      await tap(transport, serial, { center: point.center ?? point });
+      await sleep(clearFirst ? 500 : 300);
+    }
+    await adbShell(transport, serial, "input keyevent KEYCODE_MOVE_END", 10000);
+    await sleep(150);
+    if (clearFirst) {
+      await adbShell(
+        transport,
+        serial,
+        Array(48).fill("KEYCODE_DEL").join(" "),
+        10000,
+      );
+      await sleep(150);
+    }
     const input = await transport.invoke({
       action: "inputText",
       devices: serial,
@@ -391,6 +398,45 @@ async function inputCaption(transport, serial, text, point) {
     await restore().catch(() => {});
     throw error;
   }
+}
+
+async function appendCaptionText(transport, serial, text, point) {
+  return inputCaption(transport, serial, text, point, { clearFirst: false });
+}
+
+async function confirmTopicTag(transport, serial, tag) {
+  const page = await dumpUi(transport, serial);
+  const escaped = String(tag).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const suggestion = findLabel(page.nodes, [new RegExp(`^${escaped}$`, "u")]);
+  if (suggestion?.center) {
+    await tap(transport, serial, suggestion);
+    await sleep(450);
+    return { method: "suggestion", label: suggestion.label };
+  }
+  const done = findLabel(page.nodes, [/^完成$/u], { clickable: true });
+  if (done?.center) {
+    await tap(transport, serial, done);
+    await sleep(350);
+    return { method: "done", label: done.label };
+  }
+  return { method: "none" };
+}
+
+async function inputPublishTopicTags(transport, serial, tags, bodyField, { bodyText = "" } = {}) {
+  const normalized = normalizePublishTags(tags);
+  const trace = [];
+  let hasContent = Boolean(String(bodyText || "").trim());
+  for (const tag of normalized) {
+    const hashPrefix = hasContent ? " #" : "#";
+    await appendCaptionText(transport, serial, hashPrefix, bodyField.center);
+    await sleep(350);
+    await appendCaptionText(transport, serial, tag, bodyField.center);
+    await sleep(500);
+    const confirm = await confirmTopicTag(transport, serial, tag);
+    trace.push({ tag, hashPrefix, confirm: confirm.method });
+    hasContent = true;
+  }
+  return trace;
 }
 
 export async function restoreXhsPublishNoSave({ transport, device, maxSteps = 10 }) {
@@ -708,7 +754,7 @@ export async function runXhsPublishEditDryRun({
           fail("titleFieldMissing");
           break;
         }
-        if (fullBodyText && !bodyField?.center) {
+        if ((bodyText || normalizedTags.length) && !bodyField?.center) {
           fail("bodyFieldMissing");
           break;
         }
@@ -723,10 +769,18 @@ export async function runXhsPublishEditDryRun({
           await inputCaption(transport, serial, titleText, titleField.center);
           await sleep(700);
         }
-        if (fullBodyText) {
-          const input = await inputCaption(transport, serial, fullBodyText, bodyField.center);
+        if (bodyText) {
+          const input = await inputCaption(transport, serial, bodyText, bodyField.center);
           restoreIme = input.restore;
-          await sleep(900);
+          await sleep(700);
+        } else if (normalizedTags.length) {
+          const input = await inputCaption(transport, serial, "", bodyField.center, { clearFirst: false });
+          restoreIme = input.restore;
+          await sleep(500);
+        }
+        if (normalizedTags.length) {
+          const tagTrace = await inputPublishTopicTags(transport, serial, normalizedTags, bodyField, { bodyText });
+          trace.push({ step: "topicTags", tags: tagTrace });
         }
         const verify = await dumpUi(transport, serial);
         const titleLanded = textLanded(verify, titleText);

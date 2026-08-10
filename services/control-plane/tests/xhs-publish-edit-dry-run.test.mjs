@@ -701,7 +701,7 @@ test("publish edit dry-run fills body with hashtag suffixes", async () => {
   assert.equal(output.ok, true);
   assert.equal(output.tagsLanded, true);
   assert.deepEqual(output.tags, tags);
-  assert.deepEqual(inputTexts, [title, fullBody]);
+  assert.deepEqual(inputTexts, [title, body, " #", "Adidas", " #", "百搭"]);
 });
 
 test("verifyPublishTagsLanded checks hash-prefixed topic names", () => {

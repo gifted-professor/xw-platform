@@ -1296,7 +1296,7 @@ export class FastOperator {
             fail("titleFieldMissing", { labels: pageLabels.slice(0, 24) });
             break;
           }
-          if (fullBodyText && !bodyField?.center) {
+          if ((bodyText || normalizedTags.length) && !bodyField?.center) {
             fail("bodyFieldMissing", { labels: pageLabels.slice(0, 24) });
             break;
           }
@@ -1309,15 +1309,30 @@ export class FastOperator {
           if (titleText) {
             await this.navigationTap(titleField.center[0], titleField.center[1]);
             await pause(700);
-            const titleInput = await this.inputTextViaXiaowei(titleText, { clearFirst: true, deferRestore: true });
+            await this.inputTextViaXiaowei(titleText, { clearFirst: true, deferRestore: true });
             await pause(700);
           }
-          if (fullBodyText) {
+          if (bodyText) {
             await this.navigationTap(bodyField.center[0], bodyField.center[1]);
             await pause(700);
-            const bodyInput = await this.inputTextViaXiaowei(fullBodyText, { clearFirst: true, deferRestore: true });
+            const bodyInput = await this.inputTextViaXiaowei(bodyText, { clearFirst: true, deferRestore: true });
             restoreIme = bodyInput.restore;
-            await pause(900);
+            await pause(700);
+          } else if (normalizedTags.length) {
+            await this.navigationTap(bodyField.center[0], bodyField.center[1]);
+            await pause(500);
+            const bodyInput = await this.inputTextViaXiaowei("", { clearFirst: false, deferRestore: true });
+            restoreIme = bodyInput.restore;
+            await pause(400);
+          }
+          let hasContent = Boolean(bodyText);
+          for (const tag of normalizedTags) {
+            const hashPrefix = hasContent ? " #" : "#";
+            await this.inputTextViaXiaowei(hashPrefix, { clearFirst: false, deferRestore: true });
+            await pause(350);
+            await this.inputTextViaXiaowei(tag, { clearFirst: false, deferRestore: true });
+            await pause(500);
+            hasContent = true;
           }
           const verifyDoc = await this.dump({ label: "publish-caption-verify", retries: 2 });
           const verify = { xml: verifyDoc._hierarchyXml || "", nodes: verifyDoc.nodes || [] };
