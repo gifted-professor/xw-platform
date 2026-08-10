@@ -173,7 +173,7 @@ test("transport recovery resumes an existing XHS edit only to discard it and nev
   ].join("");
   const editorXml = [
     '<hierarchy rotation="0">',
-    '<node text="不保存" class="android.widget.TextView" package="com.xingin.xhs" clickable="true" bounds="[100,1800][500,2000]"/>',
+    '<node text="不保存并退出" class="android.widget.TextView" package="com.xingin.xhs" clickable="true" bounds="[100,1800][500,2000]"/>',
     "</hierarchy>",
   ].join("");
   const homeXml = '<hierarchy rotation="0"><node text="首页" class="android.widget.TextView" package="com.xingin.xhs" clickable="true" bounds="[0,2200][200,2400]"/></hierarchy>';

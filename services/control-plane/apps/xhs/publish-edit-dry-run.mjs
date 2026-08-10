@@ -18,7 +18,7 @@ const DISCARD_PATTERNS = [
   /^丢弃$/u,
   /^狠心离开$/u,
   /^直接退出$/u,
-  /不保存草稿/u,
+  /不保存/u,
   /退出编辑/u,
   /^离开$/u,
   /^不保留$/u,
@@ -347,6 +347,10 @@ export async function restoreXhsPublishNoSave({ transport, device, maxSteps = 10
       };
     }
     const page = await dumpUi(transport, serial);
+    trace.push({
+      step,
+      labels: page.nodes.map(label).filter(Boolean).slice(0, 16),
+    });
     const commit = findLabel(page.nodes, [/^发布$/u, /^发笔记$/u, /^存草稿$/u]);
     if (commit) trace.push({ step, observedNeverTapped: commit.label });
     const discard = findLabel(page.nodes, DISCARD_PATTERNS, { clickable: true });
@@ -361,7 +365,7 @@ export async function restoreXhsPublishNoSave({ transport, device, maxSteps = 10
   const current = await focus(transport, serial);
   const restored = current.package === PACKAGE && /IndexActivity/i.test(String(current.activity || ""));
   const ime = restored ? await restoreDefaultIme(transport, serial) : { restored: false };
-  return {
+  const output = {
     ok: restored && ime.restored === true,
     restored,
     imeRestored: ime.restored === true,
@@ -370,6 +374,17 @@ export async function restoreXhsPublishNoSave({ transport, device, maxSteps = 10
     activity: current.activity || null,
     trace,
   };
+  if (!output.ok) {
+    try {
+      console.log(JSON.stringify({
+        event: "xhs.publish.no-save-cleanup-failed",
+        activity: output.activity,
+        trace: trace.slice(-12),
+        at: new Date().toISOString(),
+      }));
+    } catch {}
+  }
+  return output;
 }
 
 export async function runXhsPublishEditDryRun({ transport, device, caption }) {
@@ -411,6 +426,7 @@ export async function runXhsPublishEditDryRun({ transport, device, caption }) {
         step: "preflightCleanupFailed",
         cleanupReason: preflightCleanup?.reason || null,
         cleanupActivity: preflightCleanup?.activity || null,
+        cleanupTrace: Array.isArray(preflightCleanup?.trace) ? preflightCleanup.trace.slice(-12) : [],
       });
     }
 
@@ -535,6 +551,9 @@ export async function runXhsPublishEditDryRun({ transport, device, caption }) {
       error: String(error?.message || error).slice(0, 240),
       package: error?.actualPackage || null,
       activity: error?.actualActivity || null,
+      cleanupReason: error?.cleanupReason || null,
+      cleanupActivity: error?.cleanupActivity || null,
+      cleanupTrace: Array.isArray(error?.cleanupTrace) ? error.cleanupTrace : undefined,
     });
   }
 

@@ -98,6 +98,7 @@ export function createXhsAdapter({
               cleanupActivity: typeof result?.cleanup?.activity === "string" ? result.cleanup.activity : undefined,
               labels: Array.isArray(result?.labels) ? result.labels.slice(0, 30) : undefined,
               trace: Array.isArray(result?.trace) ? result.trace.slice(-12) : undefined,
+              cleanupTrace: Array.isArray(result?.cleanupTrace) ? result.cleanupTrace.slice(-12) : undefined,
             },
           });
           error.notSent = result?.notSent === true;
