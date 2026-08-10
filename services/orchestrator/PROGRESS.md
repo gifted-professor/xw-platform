@@ -1,6 +1,58 @@
 # xhs-registry 进度
 
-> 最后更新：2026-08-10 `/xw start` 一键 readiness 入口已完成 Windows live 验收
+> 最后更新：2026-08-10 飞书→小红书 dry-run 流程沉淀（默认入口 + 回归约定）
+
+## 2026-08-10 飞书商品表 → 小红书发布 dry-run（6 图 / stay）
+
+**结论**：飞书 view `REPLACE_FEISHU_PRODUCT_VIEW_ID` → 下载 6 图 → ADB 推机 → `xhs.publish.edit_dry_run`（`imageCount:6` + `stayForAccept`）已成默认编排；人工确认标题/正文/话题/图序（四宫格第一）。
+
+**routing `main`**：`ace16cf577e5e2b009d0d5fa5fe07f21ab3b6efa`（已 push；`task-launch.json` + 四台 `serve-launch-0N.json` 已对齐；正式计划任务 CP/serve，无需 dirty allow）。
+
+**默认入口（沉淀）**：`ops/feishu-to-xhs-publish.mjs` + `ops/feishu-to-xhs-lib.mjs`  
+手拼 fanout 仅调试：`ops/xhs-publish-edit-dry-run-fanout.mjs`。
+
+**关键修法**：
+- 相册多选点缩略图**右上角勾选圆**；误进预览则 back。
+- 标题/正文优先点真实 `EditText`；验收须文案落盘（禁止仅标签假绿）。
+- 图序：倒序推 + 每张 `touch`（`adb push` 会保留宿主机 mtime）；文件名 `01-`…`06-`。知识库 `xhs-publish-album-mtime-order-20260810`。
+- `--row-offset` 只校验目标行，不因中间缺图行炸读表。
+- 标题 >20 字自动截断并打 WARN（capability 硬闸）。
+
+**命令**：
+```powershell
+# 冒烟：view 前 4 行 → 01..04
+node ops/feishu-to-xhs-publish.mjs --aliases 01,02,03,04 --rows 4 --actor claude-pilot-20260809
+# 回归：取下一批 READY+六图齐全的 4 行（勿盲用 offset 4——第 5–6 行曾缺试穿背面）
+node ops/feishu-to-xhs-publish.mjs --aliases 01,02,03,04 --rows 4 --row-offset 6 --actor claude-pilot-20260809
+node ops/feishu-to-xhs-publish.mjs --discard --aliases 01,02,03,04 --actor claude-pilot-20260809
+```
+
+**回归实证（2026-08-10）**：原定第 5–8 行不可用（5–6=`DRAFT_REVIEW` 且缺 `试穿背面`）。改跑第 **7–10** 行 → 01..04，4/4 `awaitingAccept`：
+`HM9699-897` / `HQ9255-235` / `HQ9255-355`（标题截断）/ `IF2083-010`。
+
+**知识库**：`xhs-publish-album-mtime-order-20260810`；`xhs-feishu-publish-dry-run-default-20260810`。
+
+## 2026-08-10 小红书发布编辑页 title/body/tags[]（4/4 live）
+
+**结论**：`xhs.publish.edit_dry_run` 参数面已沉淀为 `title` + `body` + `tags[]`；话题须走工具栏「话题」→输入→点候选行，才会落成蓝色 chip。一次性写入 `#标签` 仅为黑字。
+
+**实现**：
+- routing `main` / `deviceAgentCommit`：现以本节上方 `ace16cf…` 为准（本条历史锚点曾为 `0a103fa…`）。
+- capability `tags: string[]`（不含 `#`，最多 10）；workflow 对每个 tag：话题按钮 → IME 名 → picker 行 → 完成。
+- Registry：`ops/xhs-publish-edit-dry-run-fanout.mjs`（`--title` `--body` `--tags` `--stay` / `--discard`）；飞书编排见 `ops/feishu-to-xhs-publish.mjs`。
+- Task template `task.xhs.publish-edit-dry-run` revision 2，`status=implemented`。
+
+**live 证据**：
+- 02 单机人工验收蓝色 `#Adidas` `#百搭` 正确。
+- 四机 fanout 4/4 `succeeded`，`step=awaitingAccept`（`title=测试标题` `body=测试正文` `tags=Adidas,百搭`）。
+
+**默认命令**：
+```powershell
+node ops/xhs-publish-edit-dry-run-fanout.mjs --aliases 01,02,03,04 --title 测试标题 --body 测试正文 --tags Adidas,百搭 --stay
+node ops/xhs-publish-edit-dry-run-fanout.mjs --aliases 01,02,03,04 --discard
+```
+
+**留痕**：知识库 `xhs-publish-topic-tags-typed-job-20260810`（recipe，verifyMode=replay）。
 
 ## 2026-08-10 `/xw start` 一键启动与 readiness
 
