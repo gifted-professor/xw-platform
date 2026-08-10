@@ -45,6 +45,38 @@ test("transport workflow rejects invalid caption before any Xiaowei request", as
   assert.equal(requests, 0);
 });
 
+test("transport cleanup can resolve a discard control on a non-self-closing parent node", async () => {
+  const serial = "runtime-01";
+  let focusCount = 0;
+  const taps = [];
+  const xml = [
+    '<hierarchy rotation="0">',
+    '<node text="不保存" content-desc="" class="android.widget.FrameLayout" package="com.xingin.xhs" clickable="true" bounds="[40,1900][360,2050]">',
+    '<node text="" content-desc="" class="android.widget.ImageView" package="com.xingin.xhs" clickable="false" bounds="[60,1920][100,1960]"/>',
+    "</node>",
+    "</hierarchy>",
+  ].join("");
+  const transport = {
+    async invoke(request) {
+      const command = request.data.command;
+      if (command.includes("dumpsys window")) {
+        focusCount += 1;
+        return { code: 10000, data: { [serial]: focusCount === 1
+          ? "mCurrentFocus=Window{1 u0 com.xingin.xhs/com.xingin.capa.post.platform.activity.CapaPostNotePlatformActivity}"
+          : "mCurrentFocus=Window{2 u0 com.xingin.xhs/com.xingin.xhs.index.v2.IndexActivityV2}" } };
+      }
+      if (command.startsWith("base64 ")) return { code: 10000, data: { [serial]: Buffer.from(xml).toString("base64") } };
+      if (command.startsWith("input tap ")) taps.push(command);
+      if (command.includes("settings get secure")) return { code: 10000, data: { [serial]: "com.sohu.inputmethod.sogou.xiaomi/.SogouIME" } };
+      return { code: 10000, data: { [serial]: "" } };
+    },
+  };
+
+  const output = await restoreXhsPublishNoSave({ transport, device: { runtimeId: serial } });
+  assert.equal(output.ok, true);
+  assert.deepEqual(taps, ["input tap 200 1975"]);
+});
+
 test("transport cleanup observes commit controls but taps only the exact discard branch", async () => {
   const serial = "runtime-01";
   const commands = [];

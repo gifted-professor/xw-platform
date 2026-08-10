@@ -38,7 +38,10 @@ function decode(value = "") {
 
 function parseNodes(xml) {
   const nodes = [];
-  const tagRe = /<node\b([^>]*?)(?:\/>|>\s*<\/node>)/g;
+  // UIAutomator uses both leaf `<node .../>` records and parent
+  // `<node ...>...children...</node>` containers. Selectors such as the XHS
+  // bottom publish tab often live on the parent, so parse every start tag.
+  const tagRe = /<node\b([^>]*)>/g;
   const attrRe = /(\b[a-zA-Z:_][a-zA-Z0-9:_-]*)\s*=\s*"([^"]*)"/g;
   let match;
   while ((match = tagRe.exec(String(xml || ""))) !== null) {
