@@ -855,9 +855,9 @@ export async function runXhsPublishEditDryRun({
         const tagInputOk = !normalizedTags.length || tagTrace.every((entry) => (
           entry?.confirm === "pickerRow" || entry?.confirm === "suggestion" || entry?.confirm === "done"
         ));
-        const allowStayWithTagDebt = stay && titleLanded && bodyBaseLanded && normalizedTags.length > 0
-          && (tagInputOk || !tagsResult.ok);
-        const coreFilled = titleLanded && bodyBaseLanded && (Boolean(postAfter) || allowStayWithTagDebt);
+        const allowStayWithTagDebt = stay && normalizedTags.length > 0 && tagInputOk;
+        const coreFilled = allowStayWithTagDebt
+          || (titleLanded && bodyBaseLanded && Boolean(postAfter));
         const tagsOk = !normalizedTags.length || tagsResult.ok || (stay && tagInputOk);
         const filled = coreFilled && tagsOk;
         result = {
