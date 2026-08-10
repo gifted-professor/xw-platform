@@ -349,6 +349,18 @@ export class FastOperator {
 
   async currentFocus() {
     const focusCommand = "dumpsys window 2>/dev/null | grep -E mCurrentFocus";
+    const parseFocus = (value) => {
+      const text = String(value || "");
+      const current = text.match(/mCurrentFocus=Window\{[^}]+\s([^/}\s]+)\/([^}\s]+)/);
+      const resumed = current ? null : text.match(
+        /\b(?:mResumedActivity|topResumedActivity)\b[^\r\n]*?\s([A-Za-z0-9_.]+)\/([A-Za-z0-9_.$]+)/,
+      );
+      const match = current || resumed;
+      if (!match) return null;
+      const packageName = match[1];
+      const activity = match[2].startsWith(".") ? `${packageName}${match[2]}` : match[2];
+      return { package: packageName, activity, raw: text };
+    };
     // Focus is a read-only probe.  Do not attach a remote grep pipeline: the
     // Windows Xiaowei build can terminate the task host when a pipeline is
     // attached to dumpsys.  Fetch the bounded command output directly and
@@ -371,8 +383,31 @@ export class FastOperator {
     if (!out && typeof this.session.execOut !== "function" && typeof this.session.oneShotShell !== "function") {
       out = await this.session.exec(focusCommand, 10000).catch(() => "");
     }
-    const m = out.match(/mCurrentFocus=Window\{[^}]+ ([^/}\s]+)\/([^}\s]+)/);
-    return m ? { package: m[1], activity: m[2], raw: out } : { package: null, activity: null, raw: out };
+    const windowFocus = parseFocus(out);
+    if (windowFocus) return windowFocus;
+
+    // Android builds that omit mCurrentFocus still expose the resumed activity.
+    // This remains read-only and exact: no package/activity guess is made from UI text.
+    let activityOut = "";
+    if (!execOutTimedOut && typeof this.session.execOut === "function") {
+      try {
+        activityOut = (await this.session.execOut(["dumpsys", "activity", "activities"], 10000)).toString("utf8");
+      } catch {}
+    }
+    if (!activityOut && !execOutTimedOut && typeof this.session.oneShotShell === "function") {
+      activityOut = await this.session.oneShotShell("dumpsys activity activities", 10000).catch(() => "");
+    }
+    const resumedFocus = parseFocus(activityOut);
+    if (resumedFocus) return resumedFocus;
+    try {
+      this.diagnosticLogger?.({
+        event: "fast-operator.focus-unresolved",
+        windowBytes: Buffer.byteLength(String(out || ""), "utf8"),
+        activityBytes: Buffer.byteLength(String(activityOut || ""), "utf8"),
+        windowTimedOut: execOutTimedOut,
+      });
+    } catch {}
+    return { package: null, activity: null, raw: activityOut || out };
   }
 
   // Read-only, parser-owned identity for the note currently on screen.  A display name,

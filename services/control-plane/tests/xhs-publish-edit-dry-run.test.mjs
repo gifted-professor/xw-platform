@@ -120,6 +120,22 @@ test("IME probes stay on bounded one-shot ADB and never start the persistent she
   assert.deepEqual(calls, [{ command: "settings get secure default_input_method", timeoutMs: 8000 }]);
 });
 
+test("focus falls back to the exact resumed activity when mCurrentFocus is absent", async () => {
+  const operator = new FastOperator({ adbPath: "offline", serial: "offline", wait: async () => {} });
+  operator.session.execOut = async (args) => Buffer.from(
+    args.join(" ") === "dumpsys window"
+      ? "mCurrentFocus=null\n"
+      : "mResumedActivity: ActivityRecord{a1 u0 com.xingin.xhs/.index.v2.IndexActivityV2 t12}\n",
+  );
+  operator.session.oneShotShell = async () => "";
+
+  assert.deepEqual(await operator.currentFocus(), {
+    package: "com.xingin.xhs",
+    activity: "com.xingin.xhs.index.v2.IndexActivityV2",
+    raw: "mResumedActivity: ActivityRecord{a1 u0 com.xingin.xhs/.index.v2.IndexActivityV2 t12}\n",
+  });
+});
+
 test("serve exposes the catalog-bound dry-run action without accepting primitive arrays", async (t) => {
   const calls = [];
   const server = serve(0, {
