@@ -405,40 +405,61 @@ async function appendCaptionText(transport, serial, text, point) {
   return inputCaption(transport, serial, text, point, { clearFirst: false });
 }
 
-async function confirmTopicTag(transport, serial, tag) {
+async function tapTopicToolbar(transport, serial) {
+  const page = await dumpUi(transport, serial);
+  const topicBtn = findLabel(page.nodes, [/^话题$/u], { clickable: true });
+  if (topicBtn?.center) {
+    await tap(transport, serial, topicBtn);
+    await sleep(450);
+    return true;
+  }
+  return false;
+}
+
+async function tapFirstTopicPickerRow(transport, serial, tag) {
   const page = await dumpUi(transport, serial);
   const escaped = String(tag).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const pickerRows = page.nodes
+  const rows = page.nodes
     .filter((node) => {
-      const text = label(node);
       const point = center(node);
-      if (!text || !point) return false;
-      if (point[1] < 1500) return false;
+      const text = label(node);
+      if (!point || !text || point[1] < 1650 || point[1] > 2150) return false;
       return new RegExp(`#\\s*${escaped}|^${escaped}$`, "u").test(text)
+        || (/^#\s*\S+/u.test(text) && !/浏览/.test(text))
         || /亿浏览|万浏览/.test(text);
     })
     .sort((left, right) => {
-      const leftMatch = new RegExp(`#\\s*${escaped}|^${escaped}$`, "u").test(label(left)) ? 0 : 1;
-      const rightMatch = new RegExp(`#\\s*${escaped}|^${escaped}$`, "u").test(label(right)) ? 0 : 1;
-      if (leftMatch !== rightMatch) return leftMatch - rightMatch;
+      const leftExact = new RegExp(`#\\s*${escaped}|^${escaped}$`, "u").test(label(left)) ? 0 : 1;
+      const rightExact = new RegExp(`#\\s*${escaped}|^${escaped}$`, "u").test(label(right)) ? 0 : 1;
+      if (leftExact !== rightExact) return leftExact - rightExact;
+      const leftHash = /^#\s*\S+/u.test(label(left)) && !/浏览/.test(label(left)) ? 0 : 1;
+      const rightHash = /^#\s*\S+/u.test(label(right)) && !/浏览/.test(label(right)) ? 0 : 1;
+      if (leftHash !== rightHash) return leftHash - rightHash;
       return center(left)[1] - center(right)[1];
     });
-  const exact = pickerRows.find((node) => new RegExp(`#\\s*${escaped}|^${escaped}$`, "u").test(label(node)));
-  const target = exact || pickerRows[0];
-  if (target) {
-    const targetCenter = center(target);
-    if (targetCenter) {
-      await tap(transport, serial, { center: targetCenter });
-      await sleep(500);
-      const after = await dumpUi(transport, serial);
-      const done = findLabel(after.nodes, [/^完成$/u], { clickable: true });
-      if (done?.center) {
-        await tap(transport, serial, done);
-        await sleep(350);
-      }
-      return { method: "suggestion", label: label(target) };
+  const target = rows.find((node) => new RegExp(`#\\s*${escaped}|^${escaped}$`, "u").test(label(node)))
+    || rows.find((node) => /^#\s*\S+/u.test(label(node)) && !/浏览/.test(label(node)))
+    || rows[0];
+  if (!target) return { method: "none" };
+  const targetCenter = center(target);
+  if (!targetCenter) return { method: "none" };
+  await tap(transport, serial, { center: targetCenter });
+  await sleep(500);
+  return { method: "pickerRow", label: label(target) };
+}
+
+async function confirmTopicTag(transport, serial, tag) {
+  const picked = await tapFirstTopicPickerRow(transport, serial, tag);
+  if (picked.method !== "none") {
+    const after = await dumpUi(transport, serial);
+    const done = findLabel(after.nodes, [/^完成$/u], { clickable: true });
+    if (done?.center) {
+      await tap(transport, serial, done);
+      await sleep(350);
     }
+    return picked;
   }
+  const page = await dumpUi(transport, serial);
   const done = findLabel(page.nodes, [/^完成$/u], { clickable: true });
   if (done?.center) {
     await tap(transport, serial, done);
@@ -453,13 +474,18 @@ async function inputPublishTopicTags(transport, serial, tags, bodyField, { bodyT
   const trace = [];
   let hasContent = Boolean(String(bodyText || "").trim());
   for (const tag of normalized) {
-    const hashPrefix = hasContent ? " #" : "#";
-    await appendCaptionText(transport, serial, hashPrefix, bodyField.center);
-    await sleep(350);
+    await appendCaptionText(transport, serial, "", bodyField.center);
+    await sleep(250);
+    const usedTopicButton = await tapTopicToolbar(transport, serial);
+    if (!usedTopicButton) {
+      const hashPrefix = hasContent ? " #" : "#";
+      await appendCaptionText(transport, serial, hashPrefix, bodyField.center);
+      await sleep(350);
+    }
     await appendCaptionText(transport, serial, tag, bodyField.center);
     await sleep(700);
     const confirm = await confirmTopicTag(transport, serial, tag);
-    trace.push({ tag, hashPrefix, confirm: confirm.method });
+    trace.push({ tag, viaTopicButton: usedTopicButton, confirm: confirm.method, label: confirm.label || null });
     hasContent = true;
   }
   const finalPage = await dumpUi(transport, serial);
@@ -818,20 +844,22 @@ export async function runXhsPublishEditDryRun({
         const titleLanded = textLanded(verify, titleText);
         const bodyBaseLanded = !bodyText || textLanded(verify, bodyText);
         const tagsResult = verifyPublishTagsLanded(verify, normalizedTags);
-        const bodyLanded = bodyBaseLanded && tagsResult.ok;
-        const postAfter = findLabel(verify.nodes, [/^发布$/u, /^发笔记$/u]);
-        const filled = titleLanded && bodyLanded && Boolean(postAfter);
+        const coreFilled = titleLanded && bodyBaseLanded && Boolean(postAfter);
+        const tagsOk = !normalizedTags.length || tagsResult.ok;
+        const allowStayWithTagDebt = stay && coreFilled && normalizedTags.length > 0 && !tagsResult.ok;
+        const filled = coreFilled && tagsOk;
         result = {
-          ok: filled,
+          ok: filled || allowStayWithTagDebt,
           notSent: true,
           ambiguous: false,
-          step: filled ? "editorFilled" : "editorVerificationFailed",
+          step: (filled || allowStayWithTagDebt) ? "editorFilled" : "editorVerificationFailed",
           titleLanded,
-          bodyLanded,
-          captionLanded: bodyLanded,
+          bodyLanded: bodyBaseLanded,
+          captionLanded: bodyBaseLanded,
           tags: normalizedTags,
           tagsLanded: tagsResult.ok,
           tagsLandedEach: tagsResult.landed,
+          tagsVerifyDebt: allowStayWithTagDebt,
           postButtonObserved: Boolean(postAfter),
         };
         break;
