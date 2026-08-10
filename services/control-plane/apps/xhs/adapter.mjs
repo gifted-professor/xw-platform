@@ -156,6 +156,19 @@ export function createXhsAdapter({ fetchImpl = globalThis.fetch } = {}) {
           mode: "text_scan",
         };
       }
+      if (action === "publishEditDryRun") {
+        return {
+          ok: output?.ok === true
+            && output?.captionLanded === true
+            && output?.postButtonObserved === true
+            && output?.published === false
+            && output?.savedDraft === false
+            && output?.finalCommit === false
+            && Number(output?.paymentTransport) === 0
+            && output?.restored === true,
+          mode: "custom",
+        };
+      }
       if (action === "commentOnOpenNote") {
         return {
           ok: output?.verified === true || output?.countDelta === 1 || output?.textScan === true,
@@ -197,6 +210,21 @@ export function createXhsAdapter({ fetchImpl = globalThis.fetch } = {}) {
     async restore({ capability, device, params, execution, leaseAuthorization }) {
       if (!capability.restoration.required) return { ok: true };
       const headers = leaseHeaders(leaseAuthorization);
+      if (capability.implementation.action === "publishEditDryRun") {
+        const abort = await postJson(endpoint(device), { action: "abortPublishNoSave", maxSteps: 10 }, {
+          timeoutMs: 60000,
+          fetchImpl,
+          headers,
+        });
+        const restoreIme = await postJson(endpoint(device), { action: "restoreIme" }, {
+          timeoutMs: 30000,
+          fetchImpl,
+          headers,
+        });
+        const abortOk = abort?.result?.restored === true || abort?.result?.ok === true;
+        const imeOk = restoreIme?.result?.restored === true || restoreIme?.result?.already === true;
+        return { ok: abortOk && imeOk, abort: abort.result, restoreIme: restoreIme.result };
+      }
       if (capability.implementation.action === "collectOnOpenNote") {
         const undo = await postJson(endpoint(device), {
           action: "undoCollectOnOpenNote",

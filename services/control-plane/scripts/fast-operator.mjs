@@ -50,6 +50,46 @@ function centerOf(b) {
   return [((b[0] + b[2]) / 2) | 0, ((b[1] + b[3]) / 2) | 0];
 }
 
+function uiLabel(node) {
+  return String(node?.text || node?.contentDesc || "").trim();
+}
+
+function findUiLabel(doc, patterns, predicate = () => true) {
+  for (const pattern of patterns) {
+    const match = (doc?.nodes || []).find((node) => pattern.test(uiLabel(node)) && predicate(node));
+    if (match) return { node: match, label: uiLabel(match), center: centerOf(match.bounds) };
+  }
+  return null;
+}
+
+function containsBounds(outer, inner) {
+  return Boolean(outer && inner
+    && outer[0] <= inner[0] && outer[1] <= inner[1]
+    && outer[2] >= inner[2] && outer[3] >= inner[3]);
+}
+
+// UIAutomator often marks a TextView label non-clickable while its immediate container owns
+// the click. Resolve only the smallest clickable bounds containing the trusted label.
+function findClickableUiLabel(doc, patterns) {
+  const nodes = doc?.nodes || [];
+  for (const pattern of patterns) {
+    const labelNode = nodes.find((node) => pattern.test(uiLabel(node)) && Boolean(node.bounds));
+    if (!labelNode) continue;
+    if (labelNode.clickable) {
+      return { node: labelNode, label: uiLabel(labelNode), center: centerOf(labelNode.bounds) };
+    }
+    const owner = nodes
+      .filter((node) => node.clickable && containsBounds(node.bounds, labelNode.bounds))
+      .sort((left, right) => {
+        const leftArea = (left.bounds[2] - left.bounds[0]) * (left.bounds[3] - left.bounds[1]);
+        const rightArea = (right.bounds[2] - right.bounds[0]) * (right.bounds[3] - right.bounds[1]);
+        return leftArea - rightArea;
+      })[0];
+    if (owner) return { node: owner, label: uiLabel(labelNode), center: centerOf(owner.bounds) };
+  }
+  return null;
+}
+
 function decodeAttr(value) {
   if (typeof value !== "string") return value;
   // uiautomator 转义: " & ' < >
@@ -272,12 +312,13 @@ class Pacer {
 // ---------- fast-operator 主体 ----------
 
 export class FastOperator {
-  constructor({ adbPath, serial, pacer, diagnosticLogger } = {}) {
+  constructor({ adbPath, serial, pacer, diagnosticLogger, wait } = {}) {
     this.adbPath = adbPath;
     this.serial = serial;
     this.diagnosticLogger = diagnosticLogger ?? (() => {});
     this.session = new AdbShellSession(adbPath, serial, this.diagnosticLogger);
     this.pacer = pacer ?? new Pacer();
+    this.wait = typeof wait === "function" ? wait : (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     this.metrics = { actions: 0, dumps: 0, scrolls: 0, taps: 0, totalDumpMs: 0, totalScrollMs: 0 };
     // Slice 2 评论自主配置（由 CLI flag 注入，见 serve()/demoScroll 末尾）
     this.xwWs = null;            // ws://127.0.0.1:22222/
@@ -997,6 +1038,264 @@ export class FastOperator {
       if ((f.activity || "").includes("IndexActivityV2")) return { back: i + 1, activity: f.activity };
     }
     return { back: maxBack, activity: (await this.currentFocus()).activity };
+  }
+
+  async requireXhsSurface(step, activityPattern) {
+    const focus = await this.currentFocus();
+    if (focus.package !== "com.xingin.xhs" || !activityPattern.test(String(focus.activity || ""))) {
+      throw Object.assign(
+        new Error(`unexpected XHS surface at ${step}`),
+        {
+          code: "XHS_SURFACE_MISMATCH",
+          step,
+          actualPackage: focus.package || null,
+          actualActivity: focus.activity || null,
+        },
+      );
+    }
+    return focus;
+  }
+
+  // Exit the XHS publish/editor stack through an explicit non-save branch. This helper is
+  // deliberately narrower than backToFeed: it may tap only the audited discard labels below;
+  // 存草稿/发笔记/发布 are observation-only and can never become tap targets.
+  async exitPublishNoSave({ maxSteps = 10 } = {}) {
+    const discardPatterns = [
+      /^不保存$/u,
+      /^退出$/u,
+      /^放弃$/u,
+      /^丢弃$/u,
+      /^狠心离开$/u,
+      /^直接退出$/u,
+      /不保存草稿/u,
+      /退出编辑/u,
+      /^离开$/u,
+      /^不保留$/u,
+      /^放弃编辑$/u,
+    ];
+    const trace = [];
+    for (let step = 0; step < maxSteps; step += 1) {
+      const focus = await this.currentFocus();
+      trace.push({ step, activity: focus.activity || null });
+      if (focus.package === "com.xingin.xhs" && /IndexActivity/i.test(focus.activity || "")) {
+        return { ok: true, restored: true, savedDraft: false, published: false, trace };
+      }
+      if (focus.package !== "com.xingin.xhs"
+        || !/capa|post\.platform|ImageEdit|AlbumActivity|MaterialPreview/i.test(String(focus.activity || ""))) {
+        return {
+          ok: false,
+          restored: false,
+          savedDraft: false,
+          published: false,
+          reason: "unexpected_surface",
+          activity: focus.activity || null,
+          trace,
+        };
+      }
+      let doc = null;
+      try { doc = await this.dump({ label: `publish-exit-${step}`, retries: 1 }); } catch {}
+      const discard = findClickableUiLabel(doc, discardPatterns);
+      if (discard?.center) {
+        trace.push({ step, discard: discard.label });
+        await this.navigationTap(discard.center[0], discard.center[1]);
+      } else {
+        await this.navigationShell("input keyevent KEYCODE_BACK", 5000);
+      }
+      await this.wait(850);
+    }
+    const focus = await this.currentFocus();
+    const restored = focus.package === "com.xingin.xhs" && /IndexActivity/i.test(focus.activity || "");
+    return {
+      ok: restored,
+      restored,
+      savedDraft: false,
+      published: false,
+      activity: focus.activity || null,
+      trace,
+    };
+  }
+
+  // Catalog-bound XHS publish editor dry-run. It is one formal capability/job even though the
+  // device workflow has several UI steps. The method accepts business data only (caption), owns
+  // all selectors server-side, never exposes an action array, and always attempts no-save cleanup.
+  async publishEditDryRun({ caption } = {}) {
+    const text = String(caption || "").trim();
+    if (!text || text.length > 300) {
+      return {
+        ok: false,
+        notSent: true,
+        ambiguous: false,
+        step: "captionInvalid",
+        published: false,
+        savedDraft: false,
+        finalCommit: false,
+        paymentTransport: 0,
+      };
+    }
+
+    const trace = [];
+    let result = null;
+    let restoreIme = null;
+    const pause = (ms) => this.wait(ms);
+    const labels = (doc) => (doc?.nodes || []).map(uiLabel).filter(Boolean);
+    const record = (step, extra = {}) => trace.push({ step, ...extra });
+    const fail = (step, extra = {}) => {
+      result = {
+        ok: false,
+        notSent: true,
+        ambiguous: false,
+        step,
+        ...extra,
+      };
+    };
+
+    try {
+      await this.navigationShell("am force-stop com.xingin.xhs", 8000);
+      await this.navigationShell("monkey -p com.xingin.xhs -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1", 12000);
+      await pause(2400);
+
+      let doc = await this.dump({ label: "publish-home", retries: 2 });
+      await this.requireXhsSurface("publishHome", /IndexActivity/i);
+      const publishTab = findClickableUiLabel(doc, [/^发布$/u]);
+      if (!publishTab?.center) fail("publishTabMissing", { labels: labels(doc).slice(0, 20) });
+      if (!result) {
+        record("publishTab", { label: publishTab.label });
+        await this.navigationTap(publishTab.center[0], publishTab.center[1]);
+        await pause(1700);
+        doc = await this.dump({ label: "publish-sheet", retries: 2 });
+        await this.requireXhsSurface("publishSheet", /IndexActivity/i);
+        const album = findClickableUiLabel(doc, [/^从相册选择$/u, /^相册$/u]);
+        if (!album?.center) fail("albumOptionMissing", { labels: labels(doc).slice(0, 20) });
+        if (!result) {
+          record("album", { label: album.label });
+          await this.navigationTap(album.center[0], album.center[1]);
+          await pause(1900);
+        }
+      }
+
+      if (!result) {
+        doc = await this.dump({ label: "publish-album", retries: 2 });
+        await this.requireXhsSurface("publishAlbum", /CapaAlbumActivity/i);
+        const permission = findClickableUiLabel(
+          doc,
+          [/^同意$/u, /^允许$/u, /^始终允许$/u, /允许访问/u],
+        );
+        if (permission?.center) {
+          record("permission", { label: permission.label });
+          await this.navigationTap(permission.center[0], permission.center[1]);
+          await pause(1200);
+          doc = await this.dump({ label: "publish-album-after-permission", retries: 2 });
+          await this.requireXhsSurface("publishAlbumAfterPermission", /CapaAlbumActivity/i);
+        }
+        const thumbs = (doc.nodes || [])
+          .filter((node) => {
+            const center = centerOf(node.bounds);
+            const width = node.bounds ? node.bounds[2] - node.bounds[0] : 0;
+            const height = node.bounds ? node.bounds[3] - node.bounds[1] : 0;
+            return node.clickable && center && !node.text
+              && width >= 200 && width <= 600 && height >= 200 && height <= 600
+              && center[1] >= 250 && center[1] <= 1600;
+          })
+          .sort((left, right) => centerOf(left.bounds)[1] - centerOf(right.bounds)[1]
+            || centerOf(left.bounds)[0] - centerOf(right.bounds)[0]);
+        const thumb = thumbs[0];
+        if (!thumb) fail("albumThumbnailMissing", { labels: labels(doc).slice(0, 20) });
+        if (!result) {
+          const center = centerOf(thumb.bounds);
+          record("thumbnail", { candidates: thumbs.length });
+          await this.navigationTap(center[0], center[1]);
+          await pause(1100);
+          doc = await this.dump({ label: "publish-album-selected", retries: 2 });
+          await this.requireXhsSurface("publishAlbumSelected", /CapaAlbumActivity/i);
+          const next = findClickableUiLabel(doc, [/^下一步(?:\s*\(?\d+\)?)?$/u, /下一步/u]);
+          if (!next?.center) fail("nextMissingAfterSelect", { labels: labels(doc).slice(0, 20) });
+          if (!result) {
+            record("next", { label: next.label });
+            await this.navigationTap(next.center[0], next.center[1]);
+            await pause(2400);
+          }
+        }
+      }
+
+      for (let page = 0; !result && page < 3; page += 1) {
+        const doc = await this.dump({ label: `publish-edit-${page}`, retries: 2 });
+        const focus = await this.requireXhsSurface(
+          `publishEdit${page}`,
+          /CapaAlbumActivity|CapaPostNotePlatformActivity|ImageEdit|MaterialPreview/i,
+        );
+        const pageLabels = labels(doc);
+        const edit = (doc.nodes || []).find((node) => node.className === "android.widget.EditText"
+          && node.bounds && (node.clickable || node.focusable));
+        const post = findUiLabel(doc, [/^发布$/u, /^发笔记$/u], (node) => Boolean(node.bounds));
+        const captionMarker = pageLabels.some((label) => /添加标题|添加正文|说点什么|正文|话题/u.test(label));
+        if (captionMarker || (edit && post)) {
+          if (!/CapaPostNotePlatformActivity/i.test(focus.activity || "")) {
+            fail("captionSurfaceMismatch", { activity: focus.activity || null });
+            break;
+          }
+          const field = edit
+            ? { center: centerOf(edit.bounds), label: "EditText" }
+            : findClickableUiLabel(doc, [/添加正文/u, /说点什么/u, /^正文$/u]);
+          if (!field?.center) {
+            fail("captionFieldMissing", { labels: pageLabels.slice(0, 24) });
+            break;
+          }
+          record("captionPage", { postButtonObserved: Boolean(post), field: field.label });
+          await this.navigationTap(field.center[0], field.center[1]);
+          await pause(700);
+          const input = await this.inputTextViaXiaowei(text, { clearFirst: true, deferRestore: true });
+          restoreIme = input.restore;
+          await pause(900);
+          const verifyDoc = await this.dump({ label: "publish-caption-verify", retries: 2 });
+          const landed = verifyDoc._hierarchyXml?.includes(text)
+            || (verifyDoc.nodes || []).some((node) => String(node.text || "").includes(text.slice(0, Math.min(6, text.length))));
+          const postAfter = findUiLabel(verifyDoc, [/^发布$/u, /^发笔记$/u], (node) => Boolean(node.bounds));
+          result = {
+            ok: landed && Boolean(postAfter),
+            notSent: true,
+            ambiguous: false,
+            step: landed && postAfter ? "captionFilled" : "captionVerificationFailed",
+            captionLanded: landed,
+            postButtonObserved: Boolean(postAfter),
+          };
+          break;
+        }
+        const next = findClickableUiLabel(doc, [/^下一步(?:\s*\(?\d+\)?)?$/u, /下一步/u]);
+        if (next?.center && !post) {
+          record("nextAgain", { label: next.label });
+          await this.navigationTap(next.center[0], next.center[1]);
+          await pause(2400);
+          continue;
+        }
+        fail("captionPageNotReached", { labels: pageLabels.slice(0, 24), postButtonObserved: Boolean(post) });
+      }
+      if (!result) fail("captionPageNotReached");
+    } catch (error) {
+      fail("exception", { error: String(error?.message || error).slice(0, 240) });
+    }
+
+    const cleanup = await this.exitPublishNoSave().catch((error) => ({
+      ok: false,
+      restored: false,
+      error: String(error?.message || error).slice(0, 240),
+      savedDraft: false,
+      published: false,
+    }));
+    if (restoreIme) await restoreIme().catch(() => {});
+    const ok = result?.ok === true && cleanup.restored === true;
+    return {
+      ...result,
+      ok,
+      step: ok ? "completedNoSave" : (result?.step || "cleanupFailed"),
+      workflowId: "workflow.xhs.publish-edit-dry-run.v1",
+      published: false,
+      savedDraft: false,
+      finalCommit: false,
+      paymentTransport: 0,
+      restored: cleanup.restored === true,
+      cleanup,
+      trace,
+    };
   }
 
   // 进作者主页。01 这版 xhs：feed 头像/名字 tap 都只开笔记，主页不是独立 activity，
@@ -2112,6 +2411,8 @@ export function serve(port, options = {}) {
         case "feedCards": out = await op.observeFeedCards({ label: q.label }); break;
         case "observeOpenNoteDetail": out = await op.observeOpenNoteDetail(); break;
         case "openFeedNote": out = await op.openFeedNote({ selector: q.selector ?? "any", index: q.index }); break;
+        case "publishEditDryRun": out = await op.publishEditDryRun({ caption: q.caption }); break;
+        case "abortPublishNoSave": out = await op.exitPublishNoSave({ maxSteps: q.maxSteps ?? 10 }); break;
         case "openCard": { const d = await op.dump({ label: "open" }); const cards = op.feedCards(d); const c = cards[q.idx ?? 0]; out = await op.openCard(c); break; }
         case "backToFeed": out = await op.backToFeed(q.maxBack ?? 3); break;
         case "likeCard": { const d = await op.dump({ label: "like" }); const cards = op.feedCards(d); const c = cards[q.idx ?? 0]; out = { resolved: !!c?.likeButton, card: c, tapped: c?.likeButton ? await op.likeCard(c) : null }; break; }

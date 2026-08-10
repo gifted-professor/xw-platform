@@ -307,13 +307,22 @@ export class ControlPlane {
 
   // When the launch config names an actor + alias pilot, an automatic request from that actor
   // with no explicit device must be routed to the named device before policy is evaluated.
-  // Placement only has a physicalLabel selector, so alias selectors are resolved against the
-  // live registry here. Unknown selectors fail closed by leaving the caller's original route
-  // request untouched (which consequently remains shadow).
+  // An unconstrained request from a pilot actor is pinned to the first configured pilot device.
+  // Explicit placement selectors must remain authoritative: replacing an alias/tag constraint
+  // with the first pilot physicalLabel can make a valid multi-device request impossible
+  // (for example alias=02 combined with physicalLabel=rack-01). Out-of-scope explicit selectors
+  // still fail closed later when policy is evaluated against the selected device.
   #pilotPlacement({ actorId = null, deviceId = null, placement = {} } = {}) {
     if (!this.policyMode?.pilotOnly || !this.policyMode.pilotConfigured) return { deviceId, placement };
     if (!this.policyMode.pilotActors.includes(String(actorId || "").trim())) return { deviceId, placement };
-    if (deviceId || placement?.physicalLabel) return { deviceId, placement };
+    const hasExplicitPlacement = Boolean(
+      deviceId
+      || placement?.alias
+      || placement?.nodeId
+      || placement?.physicalLabel
+      || (Array.isArray(placement?.requiredTags) && placement.requiredTags.length > 0),
+    );
+    if (hasExplicitPlacement) return { deviceId, placement };
     if (typeof this.state?.listDevices !== "function") return { deviceId, placement };
     const selectors = this.policyMode.pilotAliases;
     const selected = this.state.listDevices({ includeRuntime: true })

@@ -385,6 +385,77 @@
     },
     {
       "schemaVersion": 1,
+      "id": "xhs.publish.edit_dry_run",
+      "appId": "xhs",
+      "packageName": "com.xingin.xhs",
+      "versionRange": "observed",
+      "maturity": "E2",
+      "risk": "R1",
+      "resources": [
+        "device",
+        "transport:xiaowei:22222"
+      ],
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "caption": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          }
+        },
+        "required": [
+          "caption"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object"
+      },
+      "preconditions": [
+        "XHS is installed and logged in",
+        "the album contains at least one selectable image",
+        "a formal control-plane lease is active"
+      ],
+      "verification": {
+        "mode": "custom",
+        "description": "caption and final publish button are observed, publish/save remain false, and the editor is discarded"
+      },
+      "restoration": {
+        "required": true,
+        "description": "exit the publish stack through an explicit no-save branch and restore the prior IME"
+      },
+      "timeoutMs": 180000,
+      "idempotency": "replay_safe",
+      "automationPolicy": {
+        "mode": "automatic"
+      },
+      "implementation": {
+        "adapter": "xhs",
+        "action": "publishEditDryRun"
+      },
+      "evidence": [
+        "bounded workflow receipt",
+        "caption verification",
+        "no-save cleanup receipt"
+      ],
+      "availability": "implemented",
+      "effect": {
+        "class": "reversible",
+        "phase": "na",
+        "commitBoundary": "automatic"
+      },
+      "exposure": "public",
+      "invocationPolicy": {
+        "allowedModes": [
+          "job",
+          "session"
+        ]
+      },
+      "lifecycle": "implemented"
+    },
+    {
+      "schemaVersion": 1,
       "id": "xhs.collect.standing_grant",
       "appId": "xhs",
       "packageName": "com.xingin.xhs",

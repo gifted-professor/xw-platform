@@ -202,6 +202,48 @@ test("real nonpayment pilot pins the named actor to alias 01 while other actors 
   }
 });
 
+test("multi-device pilot preserves an explicit alias instead of pinning it to the first pilot", async () => {
+  const effect = capability("test.effect", {
+    risk: "R2",
+    idempotency: "external_effect",
+    automationPolicy: { mode: "approval_required" },
+  });
+  const mode = {
+    mode: "nonpayment_v1",
+    active: true,
+    consulted: true,
+    effectiveDecisionSource: "deployed-runtime",
+    adapterKind: "real",
+    pilotOnly: true,
+    pilotConfigured: true,
+    pilotActors: ["pilot:rex"],
+    pilotAliases: ["01", "02"],
+  };
+  const f = fixture([effect], mode);
+  let session;
+  try {
+    const plan = f.control.planRoute({
+      actorId: "pilot:rex",
+      capabilityId: effect.id,
+      placement: { alias: "02" },
+    });
+    assert.equal(plan.selectedDeviceId, f.devices[1].deviceId);
+    assert.equal(plan.selectedDevice.alias, "02");
+    assert.equal(plan.approvalRequired, false);
+
+    session = f.control.createSession({
+      actorId: "pilot:rex",
+      capabilityId: effect.id,
+      placement: { alias: "02" },
+    });
+    assert.equal(session.deviceId, f.devices[1].deviceId);
+    assert.equal(session.routeDecision.selectedDevice.alias, "02");
+  } finally {
+    if (session) f.control.releaseSession(session.sessionId, session.token);
+    await f.close();
+  }
+});
+
 test("concurrent automatic submissions balance devices and idempotency preserves the original route", async () => {
   const f = fixture();
   try {
