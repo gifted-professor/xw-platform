@@ -228,17 +228,19 @@ export function createXhsAdapter({
         const textOk = (fieldText, landed) => !fieldText || landed === true;
         const tagsOk = !normalizedTags.length || output?.tagsLanded === true
           || output?.tagsVerifyDebt === true || output?.tagInputOk === true;
-        if (output?.awaitingAccept === true) {
+        const stayPending = output?.awaitingAccept === true || output?.step === "awaitingAccept";
+        if (stayPending) {
+          const stayCore = output?.ok === true
+            && tagsOk
+            && output?.published === false
+            && output?.savedDraft === false
+            && output?.finalCommit === false
+            && Number(output?.paymentTransport) === 0;
+          const strictFields = textOk(titleText, output?.titleLanded)
+            && textOk(bodyText, output?.bodyLanded ?? output?.captionLanded)
+            && output?.postButtonObserved === true;
           return {
-            ok: output?.ok === true
-              && textOk(titleText, output?.titleLanded)
-              && textOk(bodyText, output?.bodyLanded ?? output?.captionLanded)
-              && tagsOk
-              && output?.postButtonObserved === true
-              && output?.published === false
-              && output?.savedDraft === false
-              && output?.finalCommit === false
-              && Number(output?.paymentTransport) === 0,
+            ok: stayCore && (strictFields || output?.tagInputOk === true),
             mode: "custom",
           };
         }
