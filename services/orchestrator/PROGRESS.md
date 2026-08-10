@@ -1,6 +1,28 @@
 # xhs-registry 进度
 
-> 最后更新：2026-08-10 `/xw start` 一键 readiness 入口已完成 Windows live 验收
+> 最后更新：2026-08-10 小红书发布编辑页 title/body/tags[] fanout（4/4 live）
+
+## 2026-08-10 小红书发布编辑页 title/body/tags[]（4/4 live）
+
+**结论**：`xhs.publish.edit_dry_run` 参数面已沉淀为 `title` + `body` + `tags[]`；话题须走工具栏「话题」→输入→点候选行，才会落成蓝色 chip。一次性写入 `#标签` 仅为黑字。
+
+**实现**：
+- routing `main` / `deviceAgentCommit`：`0a103fa41f47cefb221d09f10fde082e569b6a7a`（`task-launch.json` 已对齐）。
+- capability `tags: string[]`（不含 `#`，最多 10）；workflow 对每个 tag：话题按钮 → IME 名 → picker 行 → 完成。
+- Registry：`ops/xhs-publish-edit-dry-run-fanout.mjs`（`--title` `--body` `--tags` `--stay` / `--discard`）。
+- Task template `task.xhs.publish-edit-dry-run` revision 2，`status=implemented`。
+
+**live 证据**：
+- 02 单机人工验收蓝色 `#Adidas` `#百搭` 正确。
+- 四机 fanout 4/4 `succeeded`，`step=awaitingAccept`（`title=测试标题` `body=测试正文` `tags=Adidas,百搭`）。
+
+**默认命令**：
+```powershell
+node ops/xhs-publish-edit-dry-run-fanout.mjs --aliases 01,02,03,04 --title 测试标题 --body 测试正文 --tags Adidas,百搭 --stay
+node ops/xhs-publish-edit-dry-run-fanout.mjs --aliases 01,02,03,04 --discard
+```
+
+**留痕**：知识库 `xhs-publish-topic-tags-typed-job-20260810`（recipe，verifyMode=replay）。
 
 ## 2026-08-10 `/xw start` 一键启动与 readiness
 

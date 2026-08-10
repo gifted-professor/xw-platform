@@ -1,0 +1,18 @@
+[
+  {
+    "id": "xhs-publish-topic-tags-typed-job-20260810",
+    "app": "xhs",
+    "category": "recipe",
+    "lifecycle": "resolved",
+    "title": "小红书发布编辑页：title/body/tags[] 正式 job + fanout（蓝色话题 chip）",
+    "content": "xhs.publish.edit_dry_run 参数面已沉淀：title（≤20）、body（≤300）、tags[]（不含 #，最多 10 个）。话题不能一次性 IME 写入「正文 #Adidas #百搭」——只会是普通黑字。正确路径：先填 body，再对每个 tag 点正文区→工具栏「话题」（自动加 #）→ IME 输入标签名→点候选列表行（如 # 百搭 + 浏览量）→点「完成」。routing main 0a103fa 起 workflow 按此实现；deviceAgentCommit 与 task-launch 对齐。Registry fanout：ops/xhs-publish-edit-dry-run-fanout.mjs 支持 --title --body --tags \"Adidas,百搭\" --stay / --discard。task template task.xhs.publish-edit-dry-run revision 2 status=implemented。2026-08-10 live：02 单机人工确认蓝色 chip 正确；01–04 fanout 4/4 succeeded step=awaitingAccept（title=测试标题 body=测试正文 tags=Adidas,百搭）。验收后 discard：node ops/xhs-publish-edit-dry-run-fanout.mjs --aliases 01,02,03,04 --discard。",
+    "appliesTo": ["xhs.publish.edit_dry_run", "CapaPostNotePlatformActivity", "claude-pilot-20260809"],
+    "steps": [
+      "node ops/xhs-publish-edit-dry-run-fanout.mjs --aliases 01,02,03,04 --title 测试标题 --body 测试正文 --tags Adidas,百搭 --stay",
+      "目视确认编辑页 title/body 与蓝色 #Adidas #百搭",
+      "node ops/xhs-publish-edit-dry-run-fanout.mjs --aliases 01,02,03,04 --discard"
+    ],
+    "verifyMode": "replay",
+    "verifiedBy": ["claude-pilot-20260809"]
+  }
+]
