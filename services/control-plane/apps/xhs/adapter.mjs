@@ -1,6 +1,7 @@
 import { postJson, safeAdapterError } from "../../control-plane/lib/command-runner.mjs";
 import { ControlPlaneError } from "../../control-plane/lib/errors.mjs";
 import {
+  captureXhsRecoveryScreen,
   restoreXhsPublishNoSave,
   runXhsPublishEditDryRun,
 } from "./publish-edit-dry-run.mjs";
@@ -82,6 +83,7 @@ export function createXhsAdapter({
   transport = null,
   publishWorkflow = runXhsPublishEditDryRun,
   restorePublishWorkflow = restoreXhsPublishNoSave,
+  recoveryInspector = captureXhsRecoveryScreen,
 } = {}) {
   return {
     id: "xhs",
@@ -232,6 +234,23 @@ export function createXhsAdapter({
         pageFingerprint: output.pageFingerprint,
         targetFingerprint: output.targetFingerprint,
         observedAt: new Date(observedAt).toISOString(),
+      };
+    },
+    async inspectRecovery({ device, evidenceDirectory }) {
+      const path = await recoveryInspector({ transport, device, evidenceDirectory });
+      return {
+        ok: true,
+        stoppedBeforeAction: true,
+        observation: {
+          pageClassification: {
+            schemaVersion: 1,
+            pageType: "unknown",
+            confidence: 0,
+            safeStateVerified: false,
+            reasons: ["visual analysis pending"],
+          },
+        },
+        evidenceFiles: [{ path, kind: "screenshot", label: "xhs-recovery-inspection" }],
       };
     },
     getExplicitObservationReceipt({ job, receiptId }) {

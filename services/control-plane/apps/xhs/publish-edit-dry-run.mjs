@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { mkdirSync, readdirSync, renameSync } from "node:fs";
+import { join } from "node:path";
 
 import { ControlPlaneError } from "../../control-plane/lib/errors.mjs";
 
@@ -153,6 +155,44 @@ async function adbShell(transport, serial, command, timeoutMs = 20000) {
     data: { command: String(command) },
   }, { timeoutMs });
   return responseText(response, serial);
+}
+
+export async function captureXhsRecoveryScreen({ transport, device, evidenceDirectory }) {
+  if (!transport || typeof transport.invoke !== "function") {
+    throw new ControlPlaneError("TYPED_TRANSPORT_REQUIRED", "XHS recovery inspection requires Xiaowei transport", {
+      status: 403,
+    });
+  }
+  const serial = device?.runtimeId;
+  if (!serial) throw new ControlPlaneError("DEVICE_RUNTIME_MISSING", "XHS device runtime is missing", { status: 409 });
+  mkdirSync(evidenceDirectory, { recursive: true });
+  const saveDirectory = join(evidenceDirectory, `_xhs_recovery_${randomUUID()}`);
+  mkdirSync(saveDirectory, { recursive: true });
+  const before = new Set(readdirSync(saveDirectory).filter((name) => /\.png$/i.test(name)));
+  await transport.invoke({
+    action: "Screen",
+    devices: serial,
+    data: { savePath: saveDirectory },
+  }, { timeoutMs: 30000 });
+  let source = null;
+  for (let attempt = 0; attempt < 25; attempt += 1) {
+    const files = readdirSync(saveDirectory)
+      .filter((name) => /\.png$/i.test(name) && !before.has(name))
+      .sort();
+    if (files.length > 0) {
+      source = join(saveDirectory, files.at(-1));
+      break;
+    }
+    await sleep(200);
+  }
+  if (!source) {
+    throw new ControlPlaneError("XHS_RECOVERY_SCREEN_EMPTY", "XHS recovery inspection produced no screenshot", {
+      status: 502,
+    });
+  }
+  const target = join(evidenceDirectory, `xhs-recovery-${randomUUID()}.png`);
+  renameSync(source, target);
+  return target;
 }
 
 function parseFocus(raw) {
