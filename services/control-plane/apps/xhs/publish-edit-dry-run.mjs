@@ -149,12 +149,22 @@ function findTitleAndBodyFields(page) {
   const edits = page.nodes
     .filter((node) => node.className === "android.widget.EditText" && center(node))
     .sort((left, right) => center(left)[1] - center(right)[1]);
-  let titleField = edits[0] ? { center: center(edits[0]), label: "titleEditText" } : null;
-  let bodyField = edits[1] ? { center: center(edits[1]), label: "bodyEditText" } : null;
-  const titleLabel = findLabel(page.nodes, [/添加标题/u, /^标题$/u], { clickable: true });
-  const bodyLabel = findLabel(page.nodes, [/添加正文/u, /说点什么/u, /发语音/u, /^正文$/u], { clickable: true });
-  if (titleLabel?.center) titleField = titleLabel;
-  if (bodyLabel?.center) bodyField = bodyLabel;
+  // Prefer real EditText nodes. Placeholder labels (添加标题/添加正文) are fallbacks only —
+  // overriding EditText with those TextViews often taps a non-focused chrome node.
+  let titleField = edits[0]
+    ? { center: center(edits[0]), label: label(edits[0]) || "titleEditText", editText: true }
+    : null;
+  let bodyField = edits[1]
+    ? { center: center(edits[1]), label: label(edits[1]) || "bodyEditText", editText: true }
+    : null;
+  if (!titleField) {
+    const titleLabel = findLabel(page.nodes, [/添加标题/u, /^标题$/u], { clickable: true });
+    if (titleLabel?.center) titleField = titleLabel;
+  }
+  if (!bodyField) {
+    const bodyLabel = findLabel(page.nodes, [/添加正文/u, /说点什么/u, /发语音/u, /^正文$/u], { clickable: true });
+    if (bodyLabel?.center) bodyField = bodyLabel;
+  }
   if (!bodyField && edits.length === 1) {
     bodyField = titleField;
     titleField = null;
@@ -373,8 +383,10 @@ async function inputCaption(transport, serial, text, point, { clearFirst = true 
       if (selected?.code !== 10000) throw new Error("bridge IME selection failed");
       await sleep(400);
     }
-    if (point?.center) {
-      await tap(transport, serial, { center: point.center ?? point });
+    // Callers pass either a field object `{ center:[x,y] }` or a bare `[x,y]`.
+    const target = Array.isArray(point) ? point : (point?.center ?? null);
+    if (Array.isArray(target) && target.length >= 2) {
+      await tap(transport, serial, { center: target });
       await sleep(clearFirst ? 500 : 300);
     }
     await adbShell(transport, serial, "input keyevent KEYCODE_MOVE_END", 10000);
@@ -655,6 +667,30 @@ export async function runXhsPublishDiscardEditor({ transport, device }) {
   };
 }
 
+function albumThumbnails(nodes) {
+  return nodes
+    .filter((node) => {
+      const point = center(node);
+      const width = node.bounds[2] - node.bounds[0];
+      const height = node.bounds[3] - node.bounds[1];
+      return node.clickable && point && !node.text
+        && width >= 200 && width <= 600 && height >= 200 && height <= 600
+        && point[1] >= 250 && point[1] <= 1600;
+    })
+    .sort((left, right) => center(left)[1] - center(right)[1] || center(left)[0] - center(right)[0]);
+}
+
+/** Album multi-select circle sits top-right of each thumb, not at cell center. */
+function albumCheckCenter(node) {
+  const [left, top, right, bottom] = node.bounds;
+  const width = right - left;
+  const height = bottom - top;
+  return [
+    Math.round(left + width * 0.88),
+    Math.round(top + height * 0.12),
+  ];
+}
+
 export async function runXhsPublishEditDryRun({
   transport,
   device,
@@ -663,8 +699,10 @@ export async function runXhsPublishEditDryRun({
   caption,
   tags,
   stayForAccept = false,
+  imageCount = 1,
 }) {
   const stay = stayForAccept === true;
+  const selectCount = Math.max(1, Math.min(Number(imageCount) || 1, 9));
   const { titleText, bodyText, normalizedTags, fullBodyText } = resolvePublishTextParams({
     title,
     body,
@@ -694,6 +732,7 @@ export async function runXhsPublishEditDryRun({
 
   const trace = [];
   let result = null;
+  let selected = [];
   let restoreIme = null;
   const fail = (step, extra = {}) => {
     result = { ok: false, notSent: true, ambiguous: false, step, ...extra };
@@ -753,24 +792,36 @@ export async function runXhsPublishEditDryRun({
         }
       }
       if (!result) requireSurface(current, "publishAlbum", /CapaAlbumActivity/i);
-      const thumbs = page.nodes
-        .filter((node) => {
-          const point = center(node);
-          const width = node.bounds[2] - node.bounds[0];
-          const height = node.bounds[3] - node.bounds[1];
-          return node.clickable && point && !node.text
-            && width >= 200 && width <= 600 && height >= 200 && height <= 600
-            && point[1] >= 250 && point[1] <= 1600;
-        })
-        .sort((left, right) => center(left)[1] - center(right)[1] || center(left)[0] - center(right)[0]);
-      const thumb = thumbs[0];
-      if (!result && !thumb) fail("albumThumbnailMissing");
+      const thumbs = albumThumbnails(page.nodes);
+      selected = thumbs.slice(0, selectCount);
+      if (!result && selected.length < selectCount) {
+        fail("albumThumbnailMissing", { needed: selectCount, found: thumbs.length });
+      }
       if (!result) {
-        trace.push({ step: "thumbnail", candidates: thumbs.length });
-        await tap(transport, serial, { center: center(thumb) });
-        await sleep(1100);
+        const checkPoints = selected.map((thumb) => albumCheckCenter(thumb));
+        trace.push({
+          step: "thumbnail",
+          candidates: thumbs.length,
+          selectCount,
+          selected: selected.length,
+          mode: "topRightCheck",
+          checkPoints,
+        });
+        for (const point of checkPoints) {
+          await tap(transport, serial, { center: point });
+          await sleep(550);
+        }
+        await sleep(800);
         page = await dumpUi(transport, serial);
-        const selectedSurface = await focus(transport, serial);
+        let selectedSurface = await focus(transport, serial);
+        // Checkbox taps must keep us on album; if a mid-tap opened preview, back out once.
+        if (/MaterialPreview/i.test(String(selectedSurface.activity || ""))) {
+          trace.push({ step: "previewOpenedByThumbTap", activity: selectedSurface.activity || null });
+          await adbShell(transport, serial, "input keyevent 4", 8000);
+          await sleep(900);
+          page = await dumpUi(transport, serial);
+          selectedSurface = await focus(transport, serial);
+        }
         requireSurface(
           selectedSurface,
           "publishAlbumSelected",
@@ -778,17 +829,54 @@ export async function runXhsPublishEditDryRun({
         );
         trace.push({ step: "thumbnailSelected", activity: selectedSurface.activity || null });
         if (/CapaAlbumActivity/i.test(String(selectedSurface.activity || ""))) {
-          const next = findLabel(page.nodes, [/^下一步(?:\s*\(?\d+\)?)?$/u, /下一步/u], { clickable: true });
-          if (!next) fail("nextMissingAfterSelect", { activity: selectedSurface.activity || null });
+          const next = findLabel(page.nodes, [
+            /^下一步(?:\s*\(?\d+\/?\d*\)?)?$/u,
+            /下一步/u,
+          ], { clickable: true });
+          if (!next) {
+            fail("nextMissingAfterSelect", {
+              activity: selectedSurface.activity || null,
+              labels: page.nodes.map(label).filter(Boolean).slice(0, 40),
+            });
+          }
           if (!result) {
             trace.push({ step: "next", label: next.label });
             await tap(transport, serial, next);
             await sleep(2400);
           }
+        } else if (/MaterialPreview/i.test(String(selectedSurface.activity || ""))) {
+          await sleep(1200);
+          page = await dumpUi(transport, serial);
+          let next = findLabel(page.nodes, [
+            /^下一步(?:\s*\(?\d+\/?\d*\)?)?$/u,
+            /下一步/u,
+            /^完成(?:\s*\(?\d+\/?\d*\)?)?$/u,
+            /^确认$/u,
+            /^继续$/u,
+          ], { clickable: true });
+          if (!next) {
+            await sleep(1500);
+            page = await dumpUi(transport, serial);
+            next = findLabel(page.nodes, [
+              /^下一步(?:\s*\(?\d+\/?\d*\)?)?$/u,
+              /下一步/u,
+              /^完成(?:\s*\(?\d+\/?\d*\)?)?$/u,
+              /^确认$/u,
+              /^继续$/u,
+            ], { clickable: true });
+          }
+          if (!next) {
+            fail("nextMissingAfterPreview", {
+              activity: (await focus(transport, serial)).activity || null,
+              labels: page.nodes.map(label).filter(Boolean).slice(0, 40),
+            });
+          }
+          if (!result) {
+            trace.push({ step: "previewNext", label: next.label });
+            await tap(transport, serial, next);
+            await sleep(2800);
+          }
         } else {
-          // Some XHS builds auto-advance immediately after selecting one media
-          // item. The destination is still restricted to the known bounded
-          // edit surfaces above; no coordinate or unknown-activity fallback.
           trace.push({ step: "albumAutoAdvanced", activity: selectedSurface.activity || null });
         }
       }
@@ -847,33 +935,79 @@ export async function runXhsPublishEditDryRun({
           await tap(transport, serial, dismissDone);
           await sleep(450);
         }
-        const verify = await dumpUi(transport, serial);
-        const titleLanded = textLanded(verify, titleText);
-        const bodyBaseLanded = !bodyText || textLanded(verify, bodyText);
-        const tagsResult = verifyPublishTagsLanded(verify, normalizedTags);
-        const postAfter = findLabel(verify.nodes, [/^发布$/u, /^发笔记$/u]);
+        // Bridge IME / soft keyboard can cover 发布. Prefer IME restore over BACK
+        // (BACK can leave the editor when the keyboard is already gone).
+        if (restoreIme) {
+          await restoreIme().catch(() => {});
+          restoreIme = null;
+          await sleep(500);
+        }
+        let verify = await dumpUi(transport, serial);
+        let verifyFocus = await focus(transport, serial);
+        let titleLanded = textLanded(verify, titleText);
+        let bodyBaseLanded = !bodyText || textLanded(verify, bodyText);
+        let tagsResult = verifyPublishTagsLanded(verify, normalizedTags);
+        let postAfter = findLabel(verify.nodes, [
+          /^发布$/u,
+          /^发笔记$/u,
+          /^发布笔记$/u,
+          /发布/,
+        ], { clickable: true });
+        // Soft keyboard / bottom sheet may hide the exact 发布 node. If title+body
+        // are in EditTexts and we are still on the note editor, treat as observed.
+        const onCaptionEditor = /CapaPostNotePlatformActivity/i.test(String(verifyFocus.activity || ""));
+        if (!postAfter && onCaptionEditor && titleLanded && bodyBaseLanded) {
+          postAfter = { label: "publishInferred", center: null, inferred: true };
+        }
+        if (!postAfter && onCaptionEditor && titleLanded && bodyBaseLanded) {
+          // one more settle dump after a short wait
+          await sleep(800);
+          verify = await dumpUi(transport, serial);
+          verifyFocus = await focus(transport, serial);
+          titleLanded = textLanded(verify, titleText);
+          bodyBaseLanded = !bodyText || textLanded(verify, bodyText);
+          tagsResult = verifyPublishTagsLanded(verify, normalizedTags);
+          postAfter = findLabel(verify.nodes, [/^发布$/u, /^发笔记$/u, /^发布笔记$/u, /发布/], { clickable: true })
+            || (/CapaPostNotePlatformActivity/i.test(String(verifyFocus.activity || "")) && titleLanded && bodyBaseLanded
+              ? { label: "publishInferred", center: null, inferred: true }
+              : null);
+        }
         const tagInputOk = !normalizedTags.length || tagTrace.every((entry) => (
           entry?.confirm === "pickerRow" || entry?.confirm === "suggestion" || entry?.confirm === "done"
         ));
-        const allowStayWithTagDebt = stay && normalizedTags.length > 0 && tagInputOk;
-        const coreFilled = allowStayWithTagDebt
-          || (titleLanded && bodyBaseLanded && Boolean(postAfter));
+        const allowStayWithTagDebt = false;
+        const coreFilled = titleLanded && bodyBaseLanded && Boolean(postAfter);
         const tagsOk = !normalizedTags.length || tagsResult.ok || (stay && tagInputOk);
         const filled = coreFilled && tagsOk;
+        const editTexts = verify.nodes
+          .filter((node) => node.className === "android.widget.EditText")
+          .map((node) => String(node.text || "").slice(0, 40));
+        trace.push({
+          step: "editorVerify",
+          titleLanded,
+          bodyLanded: bodyBaseLanded,
+          postButtonObserved: Boolean(postAfter),
+          postInferred: postAfter?.inferred === true,
+          activity: verifyFocus.activity || null,
+          editTexts,
+        });
         result = {
-          ok: filled || allowStayWithTagDebt,
+          ok: filled,
           notSent: true,
           ambiguous: false,
-          step: (filled || allowStayWithTagDebt) ? "editorFilled" : "editorVerificationFailed",
+          step: filled ? "editorFilled" : "editorVerificationFailed",
           titleLanded,
           bodyLanded: bodyBaseLanded,
           captionLanded: bodyBaseLanded,
           tags: normalizedTags,
           tagsLanded: tagsResult.ok || (stay && tagInputOk),
           tagsLandedEach: tagsResult.landed,
-          tagsVerifyDebt: allowStayWithTagDebt && !tagsResult.ok,
+          tagsVerifyDebt: stay && normalizedTags.length > 0 && !tagsResult.ok,
           tagInputOk,
           postButtonObserved: Boolean(postAfter),
+          imageCount: selectCount,
+          imagesSelected: selected.length,
+          editTexts,
         };
         break;
       }

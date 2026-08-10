@@ -100,6 +100,7 @@ export function createXhsAdapter({
           caption: params.caption,
           tags: params.tags,
           stayForAccept: params.stayForAccept === true,
+          imageCount: params.imageCount,
         });
         if (result?.ok !== true) {
           const error = new ControlPlaneError("ADAPTER_ACTION_REJECTED", `xhs action rejected: ${result?.step || "unknown"}`, {
@@ -108,6 +109,10 @@ export function createXhsAdapter({
               step: result?.step ?? null,
               activity: result?.activity ?? null,
               package: result?.package ?? null,
+              titleLanded: result?.titleLanded,
+              bodyLanded: result?.bodyLanded ?? result?.captionLanded,
+              postButtonObserved: result?.postButtonObserved,
+              editTexts: Array.isArray(result?.editTexts) ? result.editTexts.slice(0, 6) : undefined,
               workflowError: typeof result?.error === "string" ? result.error.slice(0, 240) : undefined,
               cleanupReason: typeof result?.cleanup?.reason === "string" ? result.cleanup.reason : undefined,
               cleanupActivity: typeof result?.cleanup?.activity === "string" ? result.cleanup.activity : undefined,
@@ -240,7 +245,7 @@ export function createXhsAdapter({
             && textOk(bodyText, output?.bodyLanded ?? output?.captionLanded)
             && output?.postButtonObserved === true;
           return {
-            ok: stayCore && (strictFields || output?.tagInputOk === true),
+            ok: stayCore && strictFields,
             mode: "custom",
           };
         }

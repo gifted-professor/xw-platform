@@ -423,6 +423,13 @@
             },
             "maxItems": 10,
             "description": "Topic names without # prefix; appended to body as #tag chips"
+          },
+          "imageCount": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9,
+            "default": 1,
+            "description": "Number of album thumbnails to select (top-left sorted); prep images newest-first for correct order"
           }
         },
         "additionalProperties": false
