@@ -283,6 +283,27 @@ export async function restoreXhsPublishNoSave({ transport, device, maxSteps = 10
     const current = await focus(transport, serial);
     trace.push({ step, activity: current.activity || null });
     if (current.package === PACKAGE && /IndexActivity/i.test(String(current.activity || ""))) {
+      const homePage = await dumpUi(transport, serial);
+      const resumePrompt = findLabel(homePage.nodes, [/^继续编辑图文笔记吗[？?]?$/u]);
+      if (resumePrompt) {
+        const saveDraft = findLabel(homePage.nodes, [/^存草稿$/u]);
+        if (saveDraft) trace.push({ step, observedNeverTapped: saveDraft.label });
+        const goEdit = findLabel(homePage.nodes, [/^去编辑$/u], { clickable: true });
+        if (!goEdit) {
+          return {
+            ok: false,
+            restored: false,
+            published: false,
+            savedDraft: false,
+            reason: "resume_dialog_unknown",
+            trace,
+          };
+        }
+        trace.push({ step, action: "resumeForDiscard", label: goEdit.label });
+        await tap(transport, serial, goEdit);
+        await sleep(1000);
+        continue;
+      }
       const ime = await restoreDefaultIme(transport, serial);
       return {
         ok: ime.restored === true,
@@ -383,6 +404,15 @@ export async function runXhsPublishEditDryRun({ transport, device, caption }) {
     await adbShell(transport, serial, `am force-stop ${PACKAGE}`, 12000);
     await adbShell(transport, serial, `monkey -p ${PACKAGE} -c android.intent.category.LAUNCHER 1`, 20000);
     await sleep(2400);
+
+    const preflightCleanup = await restoreXhsPublishNoSave({ transport, device });
+    if (preflightCleanup?.restored !== true) {
+      throw Object.assign(new Error("XHS preflight no-save cleanup failed"), {
+        step: "preflightCleanupFailed",
+        cleanupReason: preflightCleanup?.reason || null,
+        cleanupActivity: preflightCleanup?.activity || null,
+      });
+    }
 
     let page = await dumpUi(transport, serial);
     requireSurface(await focus(transport, serial), "publishHome", /IndexActivity/i);

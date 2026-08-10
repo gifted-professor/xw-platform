@@ -141,6 +141,10 @@ test("transport recovery may bring XHS to front once before applying the home al
           },
         };
       }
+      if (command.startsWith("base64 ")) {
+        const homeXml = '<hierarchy rotation="0"><node text="首页" class="android.widget.TextView" package="com.xingin.xhs" clickable="true" bounds="[0,2200][200,2400]"/></hierarchy>';
+        return { code: 10000, data: { [serial]: Buffer.from(homeXml).toString("base64") } };
+      }
       if (command.includes("settings get secure")) {
         return { code: 10000, data: { [serial]: "com.sohu.inputmethod.sogou.xiaomi/.SogouIME" } };
       }
@@ -153,6 +157,54 @@ test("transport recovery may bring XHS to front once before applying the home al
   assert.equal(output.restored, true);
   assert.equal(commands.filter((command) => command.startsWith("monkey -p ")).length, 1);
   assert.equal(commands.some((command) => command.includes("force-stop")), false);
+});
+
+test("transport recovery resumes an existing XHS edit only to discard it and never taps save draft", async () => {
+  const serial = "runtime-01";
+  const taps = [];
+  let focusCount = 0;
+  let dumpCount = 0;
+  const promptXml = [
+    '<hierarchy rotation="0">',
+    '<node text="继续编辑图文笔记吗？" class="android.widget.TextView" package="com.xingin.xhs" clickable="false" bounds="[100,600][980,800]"/>',
+    '<node text="存草稿" class="android.widget.TextView" package="com.xingin.xhs" clickable="true" bounds="[100,900][480,1050]"/>',
+    '<node text="去编辑" class="android.widget.TextView" package="com.xingin.xhs" clickable="true" bounds="[600,900][980,1050]"/>',
+    "</hierarchy>",
+  ].join("");
+  const editorXml = [
+    '<hierarchy rotation="0">',
+    '<node text="不保存" class="android.widget.TextView" package="com.xingin.xhs" clickable="true" bounds="[100,1800][500,2000]"/>',
+    "</hierarchy>",
+  ].join("");
+  const homeXml = '<hierarchy rotation="0"><node text="首页" class="android.widget.TextView" package="com.xingin.xhs" clickable="true" bounds="[0,2200][200,2400]"/></hierarchy>';
+  const transport = {
+    async invoke(request) {
+      const command = request.data.command;
+      if (command.includes("dumpsys window")) {
+        focusCount += 1;
+        const component = focusCount === 1
+          ? "com.xingin.xhs/com.xingin.xhs.index.v2.IndexActivityV2"
+          : focusCount === 2
+            ? "com.xingin.xhs/com.xingin.capa.post.platform.activity.CapaPostNotePlatformActivity"
+            : "com.xingin.xhs/com.xingin.xhs.index.v2.IndexActivityV2";
+        return { code: 10000, data: { [serial]: `mCurrentFocus=Window{1 u0 ${component}}` } };
+      }
+      if (command.startsWith("base64 ")) {
+        dumpCount += 1;
+        const xml = dumpCount === 1 ? promptXml : dumpCount === 2 ? editorXml : homeXml;
+        return { code: 10000, data: { [serial]: Buffer.from(xml).toString("base64") } };
+      }
+      if (command.startsWith("input tap ")) taps.push(command);
+      if (command.includes("settings get secure")) return { code: 10000, data: { [serial]: "com.sohu.inputmethod.sogou.xiaomi/.SogouIME" } };
+      return { code: 10000, data: { [serial]: "" } };
+    },
+  };
+
+  const output = await restoreXhsPublishNoSave({ transport, device: { runtimeId: serial } });
+  assert.equal(output.ok, true);
+  assert.deepEqual(taps, ["input tap 790 975", "input tap 300 1900"]);
+  assert.equal(taps.includes("input tap 290 975"), false, "存草稿 must remain observation-only");
+  assert.equal(output.trace.some((entry) => entry.observedNeverTapped === "存草稿"), true);
 });
 
 test("bounded publish edit workflow fills caption, observes publish, and exits without tapping commit", async () => {
