@@ -77,6 +77,77 @@ test("transport cleanup can resolve a discard control on a non-self-closing pare
   assert.deepEqual(taps, ["input tap 200 1975"]);
 });
 
+test("transport cleanup repairs UTF-16LE Chinese attribute bytes inside ASCII XML", async () => {
+  const serial = "runtime-01";
+  let focusCount = 0;
+  const taps = [];
+  const xmlBytes = Buffer.concat([
+    Buffer.from('<hierarchy rotation="0"><node text="', "ascii"),
+    Buffer.from("不保存并退出", "utf16le"),
+    Buffer.from('" class="android.widget.TextView" package="com.xingin.xhs" clickable="true" bounds="[100,1800][500,2000]"/></hierarchy>', "ascii"),
+  ]);
+  const transport = {
+    async invoke(request) {
+      const command = request.data.command;
+      if (command.includes("dumpsys window")) {
+        focusCount += 1;
+        const activity = focusCount === 1
+          ? "com.xingin.capa.post.platform.activity.CapaPostNotePlatformActivity"
+          : "com.xingin.xhs.index.v2.IndexActivityV2";
+        return { code: 10000, data: { [serial]: `mCurrentFocus=Window{1 u0 com.xingin.xhs/${activity}}` } };
+      }
+      if (command.startsWith("base64 ")) return { code: 10000, data: { [serial]: xmlBytes.toString("base64") } };
+      if (command.startsWith("input tap ")) taps.push(command);
+      if (command.includes("settings get secure")) return { code: 10000, data: { [serial]: "com.sohu.inputmethod.sogou.xiaomi/.SogouIME" } };
+      return { code: 10000, data: { [serial]: "" } };
+    },
+  };
+
+  const output = await restoreXhsPublishNoSave({ transport, device: { runtimeId: serial } });
+  assert.equal(output.ok, true);
+  assert.deepEqual(taps, ["input tap 300 1900"]);
+  assert.equal(output.trace.some((entry) => entry.discard === "不保存并退出"), true);
+});
+
+test("transport cleanup returns to the editor but never taps save-and-exit", async () => {
+  const serial = "runtime-01";
+  let focusCount = 0;
+  let dumpCount = 0;
+  const taps = [];
+  const saveMenuXml = [
+    '<hierarchy rotation="0">',
+    '<node text="返回编辑" class="android.widget.TextView" package="com.xingin.xhs" clickable="true" bounds="[100,700][500,900]"/>',
+    '<node text="保存并退出" class="android.widget.TextView" package="com.xingin.xhs" clickable="true" bounds="[100,900][500,1100]"/>',
+    "</hierarchy>",
+  ].join("");
+  const discardXml = '<hierarchy rotation="0"><node text="不保存" class="android.widget.TextView" package="com.xingin.xhs" clickable="true" bounds="[100,1800][500,2000]"/></hierarchy>';
+  const transport = {
+    async invoke(request) {
+      const command = request.data.command;
+      if (command.includes("dumpsys window")) {
+        focusCount += 1;
+        const activity = focusCount <= 2
+          ? "com.xingin.capa.post.platform.activity.CapaPostNotePlatformActivity"
+          : "com.xingin.xhs.index.v2.IndexActivityV2";
+        return { code: 10000, data: { [serial]: `mCurrentFocus=Window{1 u0 com.xingin.xhs/${activity}}` } };
+      }
+      if (command.startsWith("base64 ")) {
+        dumpCount += 1;
+        return { code: 10000, data: { [serial]: Buffer.from(dumpCount === 1 ? saveMenuXml : discardXml).toString("base64") } };
+      }
+      if (command.startsWith("input tap ")) taps.push(command);
+      if (command.includes("settings get secure")) return { code: 10000, data: { [serial]: "com.sohu.inputmethod.sogou.xiaomi/.SogouIME" } };
+      return { code: 10000, data: { [serial]: "" } };
+    },
+  };
+
+  const output = await restoreXhsPublishNoSave({ transport, device: { runtimeId: serial } });
+  assert.equal(output.ok, true);
+  assert.deepEqual(taps, ["input tap 300 800", "input tap 300 1900"]);
+  assert.equal(output.trace.some((entry) => entry.observedNeverTapped === "保存并退出"), true);
+  assert.equal(output.trace.some((entry) => entry.safeNavigation === "返回编辑"), true);
+});
+
 test("transport cleanup observes commit controls but taps only the exact discard branch", async () => {
   const serial = "runtime-01";
   const commands = [];

@@ -30,7 +30,19 @@ const DISCARD_PATTERNS = [
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function decode(value = "") {
-  return String(value)
+  // Xiaowei adb_shell occasionally returns an otherwise ASCII UIAutomator XML
+  // whose individual Chinese attribute values contain raw UTF-16LE bytes.
+  // Parse the document through latin1 to preserve bytes, then repair each
+  // attribute independently. Normal UTF-8 attributes take the first path.
+  const bytes = Buffer.from(String(value), "latin1");
+  let text = bytes.toString("utf8");
+  if (text.includes("\uFFFD") && bytes.length % 2 === 0) {
+    const utf16 = bytes.toString("utf16le");
+    const utf16Cjk = (utf16.match(/[\u3400-\u9fff]/g) || []).length;
+    const utf8Cjk = (text.match(/[\u3400-\u9fff]/g) || []).length;
+    if (utf16Cjk > utf8Cjk && !utf16.includes("\uFFFD")) text = utf16;
+  }
+  return text
     .replace(/&quot;/g, '"')
     .replace(/&apos;/g, "'")
     .replace(/&lt;/g, "<")
@@ -225,13 +237,14 @@ async function dumpUi(transport, serial) {
     await sleep(350);
   }
   await adbShell(transport, serial, `rm -f ${remote}`, 8000).catch(() => {});
-  const xml = Buffer.from(String(encoded).replace(/\s+/g, ""), "base64").toString("utf8");
-  if (!xml.includes("<hierarchy") || !xml.includes("</hierarchy>")) {
+  const bytes = Buffer.from(String(encoded).replace(/\s+/g, ""), "base64");
+  const bytePreservingXml = bytes.toString("latin1");
+  if (!bytePreservingXml.includes("<hierarchy") || !bytePreservingXml.includes("</hierarchy>")) {
     throw new ControlPlaneError("XHS_DUMP_INVALID", "XHS bounded workflow received an invalid hierarchy", {
       status: 502,
     });
   }
-  return { xml, nodes: parseNodes(xml) };
+  return { xml: bytes.toString("utf8"), nodes: parseNodes(bytePreservingXml) };
 }
 
 async function tap(transport, serial, target) {
@@ -391,8 +404,19 @@ export async function restoreXhsPublishNoSave({ transport, device, maxSteps = 10
       step,
       labels: page.nodes.map(label).filter(Boolean).slice(0, 16),
     });
-    const commit = findLabel(page.nodes, [/^发布$/u, /^发笔记$/u, /^存草稿$/u]);
+    const commit = findLabel(page.nodes, [/^发布$/u, /^发笔记$/u, /^存草稿$/u, /^保存并退出$/u]);
     if (commit) trace.push({ step, observedNeverTapped: commit.label });
+    const returnToEdit = findLabel(page.nodes, [/^返回编辑$/u], { clickable: true });
+    const saveAndExit = findLabel(page.nodes, [/^保存并退出$/u]);
+    if (returnToEdit && saveAndExit) {
+      // XHS exposes this two-option menu on the final note editor. Saving is a
+      // forbidden commit for dry-run. Returning to the preceding editor is a
+      // navigation-only step and may expose the explicit no-save branch.
+      trace.push({ step, safeNavigation: returnToEdit.label });
+      await tap(transport, serial, returnToEdit);
+      await sleep(850);
+      continue;
+    }
     const discard = findLabel(page.nodes, DISCARD_PATTERNS, { clickable: true });
     if (discard) {
       trace.push({ step, discard: discard.label });
