@@ -1,6 +1,19 @@
 # xhs-registry 进度
 
-> 最后更新：2026-08-10 飞书→小红书 dry-run 流程沉淀（默认入口 + 回归约定）
+> 最后更新：2026-08-10 飞书→小红书 dry-run 倒数 4 行回归（4/4 awaitingAccept）
+
+## 2026-08-10 飞书→小红书发布 dry-run：view 倒数 4 行（4/4 awaitingAccept）
+
+**结论**：用户要「倒数4条」时，先数 view 总行数（2026-08-10 为 44 行），再 `--row-offset 40 --rows 4` 取 41–44。本次 41–44 全 `READY_TO_PUBLISH` 六图齐全，4/4 `succeeded` / `step=awaitingAccept`（停在发布页，未点发布）。
+
+**命令**：
+```powershell
+node ops/feishu-to-xhs-publish.mjs --aliases 01,02,03,04 --rows 4 --row-offset 40 --actor claude-pilot-20260809
+```
+
+**实证**：01=`IF2051-737`（NIKE耐克速干短裤 荧光黄绿色，标题 22 字被硬闸截到 20）、02=`IF2785-510`、03=`IM3758-010`、04=`KH2713`（tags=奥莱代购/外套/奥莱）。job：`job_1fc41ced` / `job_e91109b9` / `job_3d7c8dcb` / `job_bfdccc03`。终态 4/4 ready/free、0 lease、0 running、0 pending，streak 11→12。01 submit 首轮 fetch failed 自动重试成功。
+
+**知识库**：`xhs-feishu-publish-last4-rows-20260810`（recipe，verifyMode=human）。
 
 ## 2026-08-10 飞书商品表 → 小红书发布 dry-run（6 图 / stay）
 
