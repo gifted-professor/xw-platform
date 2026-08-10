@@ -844,6 +844,7 @@ export async function runXhsPublishEditDryRun({
         const titleLanded = textLanded(verify, titleText);
         const bodyBaseLanded = !bodyText || textLanded(verify, bodyText);
         const tagsResult = verifyPublishTagsLanded(verify, normalizedTags);
+        const postAfter = findLabel(verify.nodes, [/^发布$/u, /^发笔记$/u]);
         const coreFilled = titleLanded && bodyBaseLanded && Boolean(postAfter);
         const tagsOk = !normalizedTags.length || tagsResult.ok;
         const allowStayWithTagDebt = stay && coreFilled && normalizedTags.length > 0 && !tagsResult.ok;
