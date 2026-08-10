@@ -244,6 +244,7 @@ export async function restoreXhsPublishNoSave({ transport, device, maxSteps = 10
   const serial = device?.runtimeId;
   if (!serial) throw new ControlPlaneError("DEVICE_RUNTIME_MISSING", "XHS device runtime is missing", { status: 409 });
   const trace = [];
+  let broughtToFront = false;
   for (let step = 0; step < maxSteps; step += 1) {
     const current = await focus(transport, serial);
     trace.push({ step, activity: current.activity || null });
@@ -264,6 +265,21 @@ export async function restoreXhsPublishNoSave({ transport, device, maxSteps = 10
       continue;
     }
     if (current.package !== PACKAGE || !PUBLISH_SURFACE.test(String(current.activity || ""))) {
+      // A failed worker may leave the system launcher in front. Recovery may
+      // bring the existing XHS task forward once, without force-stop or data
+      // mutation, then re-apply the exact home/editor allowlist.
+      if (!broughtToFront) {
+        broughtToFront = true;
+        trace.push({ step, action: "bringXhsToFront", priorPackage: current.package || null });
+        await adbShell(
+          transport,
+          serial,
+          `monkey -p ${PACKAGE} -c android.intent.category.LAUNCHER 1`,
+          20000,
+        );
+        await sleep(1200);
+        continue;
+      }
       return {
         ok: false,
         restored: false,

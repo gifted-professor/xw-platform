@@ -89,6 +89,40 @@ test("transport cleanup observes commit controls but taps only the exact discard
   assert.equal(taps.includes("input tap 930 2175"), false, "publish must remain observation-only");
 });
 
+test("transport recovery may bring XHS to front once before applying the home allowlist", async () => {
+  const serial = "runtime-01";
+  const commands = [];
+  let focusCount = 0;
+  const transport = {
+    async invoke(request) {
+      assert.equal(request.action, "adb_shell");
+      const command = request.data.command;
+      commands.push(command);
+      if (command.includes("dumpsys window")) {
+        focusCount += 1;
+        return {
+          code: 10000,
+          data: {
+            [serial]: focusCount === 1
+              ? "mCurrentFocus=Window{1 u0 com.miui.home/com.miui.home.launcher.Launcher}"
+              : "mCurrentFocus=Window{2 u0 com.xingin.xhs/com.xingin.xhs.index.v2.IndexActivityV2}",
+          },
+        };
+      }
+      if (command.includes("settings get secure")) {
+        return { code: 10000, data: { [serial]: "com.sohu.inputmethod.sogou.xiaomi/.SogouIME" } };
+      }
+      return { code: 10000, data: { [serial]: "" } };
+    },
+  };
+
+  const output = await restoreXhsPublishNoSave({ transport, device: { runtimeId: serial } });
+  assert.equal(output.ok, true);
+  assert.equal(output.restored, true);
+  assert.equal(commands.filter((command) => command.startsWith("monkey -p ")).length, 1);
+  assert.equal(commands.some((command) => command.includes("force-stop")), false);
+});
+
 test("bounded publish edit workflow fills caption, observes publish, and exits without tapping commit", async () => {
   const caption = "并发链路测试，不会发布";
   const publishButton = node("发布", [820, 2140, 1060, 2250]);
