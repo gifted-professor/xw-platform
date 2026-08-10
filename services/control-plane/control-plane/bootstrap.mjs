@@ -135,14 +135,15 @@ export function createControlPlaneRuntime({
     minFreeBytes: Number(process.env.CONTROL_PLANE_MIN_FREE_BYTES || 128 * 1024 * 1024),
     minExternalEffectFreeBytes: Number(process.env.CONTROL_PLANE_MIN_EFFECT_FREE_BYTES || 1024 * 1024 * 1024),
   });
+  const sharedXiaoweiTransport = new XiaoweiTransport();
   const adapterRegistry = adapters instanceof AdapterRegistry
     ? adapters
     : new AdapterRegistry(adapters || [
-      createXhsAdapter(),
+      createXhsAdapter({ transport: sharedXiaoweiTransport }),
       createXianyuAdapter(),
       createDouyinAdapter(),
       createWechatAdapter(),
-      createXiaoweiAdapter({ transport: new XiaoweiTransport() }),
+      createXiaoweiAdapter({ transport: sharedXiaoweiTransport }),
       createVisionAdapter(),
     ]);
   // REX Phase 5 B7 / Phase 7: production policy mode from the pinned launch config. shadow

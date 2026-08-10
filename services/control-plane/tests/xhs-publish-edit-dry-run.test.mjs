@@ -4,6 +4,10 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { createXhsAdapter } from "../apps/xhs/adapter.mjs";
+import {
+  restoreXhsPublishNoSave,
+  runXhsPublishEditDryRun,
+} from "../apps/xhs/publish-edit-dry-run.mjs";
 import { CapabilityRegistry } from "../control-plane/lib/capability-registry.mjs";
 import { FastOperator, serve } from "../scripts/fast-operator.mjs";
 
@@ -25,6 +29,64 @@ test("publish edit dry-run capability is a bounded replay-safe job with no final
   assert.equal(capability.effect.class, "reversible");
   assert.equal(capability.automationPolicy.mode, "automatic");
   assert.deepEqual(capability.resources, ["device", "transport:xiaowei:22222"]);
+});
+
+test("transport workflow rejects invalid caption before any Xiaowei request", async () => {
+  let requests = 0;
+  const output = await runXhsPublishEditDryRun({
+    transport: { invoke: async () => { requests += 1; } },
+    device: { runtimeId: "runtime-01" },
+    caption: "   ",
+  });
+  assert.equal(output.ok, false);
+  assert.equal(output.step, "captionInvalid");
+  assert.equal(output.finalCommit, false);
+  assert.equal(output.paymentTransport, 0);
+  assert.equal(requests, 0);
+});
+
+test("transport cleanup observes commit controls but taps only the exact discard branch", async () => {
+  const serial = "runtime-01";
+  const commands = [];
+  let focusCount = 0;
+  const xml = [
+    '<hierarchy rotation="0">',
+    '<node text="发布" content-desc="" class="android.widget.TextView" package="com.xingin.xhs" clickable="true" bounds="[800,2100][1060,2250]"/>',
+    '<node text="不保存" content-desc="" class="android.widget.TextView" package="com.xingin.xhs" clickable="true" bounds="[40,1900][360,2050]"/>',
+    "</hierarchy>",
+  ].join("");
+  const transport = {
+    async invoke(request) {
+      assert.equal(request.devices, serial);
+      if (request.action === "selectIme") return { code: 10000 };
+      assert.equal(request.action, "adb_shell");
+      const command = request.data.command;
+      commands.push(command);
+      if (command.includes("dumpsys window")) {
+        focusCount += 1;
+        return {
+          code: 10000,
+          data: {
+            [serial]: focusCount === 1
+              ? "mCurrentFocus=Window{1 u0 com.xingin.xhs/com.xingin.capa.post.platform.activity.CapaPostNotePlatformActivity}"
+              : "mCurrentFocus=Window{2 u0 com.xingin.xhs/com.xingin.xhs.index.v2.IndexActivityV2}",
+          },
+        };
+      }
+      if (command.startsWith("base64 ")) return { code: 10000, data: { [serial]: Buffer.from(xml).toString("base64") } };
+      if (command.includes("settings get secure")) return { code: 10000, data: { [serial]: "com.sohu.inputmethod.sogou.xiaomi/.SogouIME" } };
+      return { code: 10000, data: { [serial]: "" } };
+    },
+  };
+
+  const output = await restoreXhsPublishNoSave({ transport, device: { runtimeId: serial } });
+  assert.equal(output.ok, true);
+  assert.equal(output.restored, true);
+  assert.equal(output.published, false);
+  assert.equal(output.savedDraft, false);
+  const taps = commands.filter((command) => command.startsWith("input tap "));
+  assert.deepEqual(taps, ["input tap 200 1975"]);
+  assert.equal(taps.includes("input tap 930 2175"), false, "publish must remain observation-only");
 });
 
 test("bounded publish edit workflow fills caption, observes publish, and exits without tapping commit", async () => {
@@ -167,29 +229,26 @@ test("serve exposes the catalog-bound dry-run action without accepting primitive
 });
 
 test("XHS adapter verifies all no-commit invariants and performs idempotent cleanup", async () => {
-  const requests = [];
+  const calls = [];
+  const transport = { invoke: async () => { throw new Error("adapter test must use the injected workflow"); } };
   const adapter = createXhsAdapter({
-    fetchImpl: async (_url, options) => {
-      const body = JSON.parse(options.body);
-      requests.push(body);
-      const result = body.action === "publishEditDryRun"
-        ? {
-            ok: true,
-            captionLanded: true,
-            postButtonObserved: true,
-            published: false,
-            savedDraft: false,
-            finalCommit: false,
-            paymentTransport: 0,
-            restored: true,
-          }
-        : body.action === "abortPublishNoSave"
-          ? { ok: true, restored: true, published: false, savedDraft: false }
-          : { restored: true };
-      return new Response(JSON.stringify({ ok: true, result, metrics: {} }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
+    transport,
+    publishWorkflow: async (input) => {
+      calls.push({ type: "execute", input });
+      return {
+        ok: true,
+        captionLanded: true,
+        postButtonObserved: true,
+        published: false,
+        savedDraft: false,
+        finalCommit: false,
+        paymentTransport: 0,
+        restored: true,
+      };
+    },
+    restorePublishWorkflow: async (input) => {
+      calls.push({ type: "restore", input });
+      return { ok: true, restored: true, published: false, savedDraft: false };
     },
   });
   const capability = registry.require("xhs.publish.edit_dry_run");
@@ -202,9 +261,11 @@ test("XHS adapter verifies all no-commit invariants and performs idempotent clea
   const execution = await adapter.execute({ capability, device, params: { caption: "测试" }, leaseAuthorization });
   assert.equal((await adapter.verify({ capability, params: { caption: "测试" }, execution })).ok, true);
   assert.equal((await adapter.restore({ capability, device, leaseAuthorization })).ok, true);
-  assert.deepEqual(requests.map((request) => request.action), [
-    "publishEditDryRun",
-    "abortPublishNoSave",
-    "restoreIme",
-  ]);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].type, "execute");
+  assert.equal(calls[0].input.transport, transport);
+  assert.equal(calls[0].input.caption, "测试");
+  assert.equal(calls[1].type, "restore");
+  assert.equal(calls[1].input.transport, transport);
+  assert.equal(calls[1].input.maxSteps, 10);
 });

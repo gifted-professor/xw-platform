@@ -1,5 +1,9 @@
 import { postJson, safeAdapterError } from "../../control-plane/lib/command-runner.mjs";
 import { ControlPlaneError } from "../../control-plane/lib/errors.mjs";
+import {
+  restoreXhsPublishNoSave,
+  runXhsPublishEditDryRun,
+} from "./publish-edit-dry-run.mjs";
 
 function endpoint(device) {
   const port = Number(device.metadata?.xhsServePort);
@@ -73,10 +77,34 @@ function projectFeedCardsOutput(result) {
   };
 }
 
-export function createXhsAdapter({ fetchImpl = globalThis.fetch } = {}) {
+export function createXhsAdapter({
+  fetchImpl = globalThis.fetch,
+  transport = null,
+  publishWorkflow = runXhsPublishEditDryRun,
+  restorePublishWorkflow = restoreXhsPublishNoSave,
+} = {}) {
   return {
     id: "xhs",
     async execute({ capability, device, params, leaseAuthorization }) {
+      if (capability.implementation.action === "publishEditDryRun") {
+        const result = await publishWorkflow({ transport, device, caption: params.caption });
+        if (result?.ok !== true) {
+          const error = new ControlPlaneError("ADAPTER_ACTION_REJECTED", `xhs action rejected: ${result?.step || "unknown"}`, {
+            status: 502,
+            details: {
+              step: result?.step ?? null,
+              workflowError: typeof result?.error === "string" ? result.error.slice(0, 240) : undefined,
+              cleanupReason: typeof result?.cleanup?.reason === "string" ? result.cleanup.reason : undefined,
+              cleanupActivity: typeof result?.cleanup?.activity === "string" ? result.cleanup.activity : undefined,
+              trace: Array.isArray(result?.trace) ? result.trace.slice(-12) : undefined,
+            },
+          });
+          error.notSent = result?.notSent === true;
+          error.ambiguous = result?.ambiguous === true || !error.notSent;
+          throw error;
+        }
+        return { vendorCode: 10000, output: result };
+      }
       if (capability.implementation.action === "collectOnOpenNote") assertCollectReceiptParams(params);
       const response = await postJson(
         endpoint(device),
@@ -215,19 +243,7 @@ export function createXhsAdapter({ fetchImpl = globalThis.fetch } = {}) {
       if (!capability.restoration.required) return { ok: true };
       const headers = leaseHeaders(leaseAuthorization);
       if (capability.implementation.action === "publishEditDryRun") {
-        const abort = await postJson(endpoint(device), { action: "abortPublishNoSave", maxSteps: 10 }, {
-          timeoutMs: 60000,
-          fetchImpl,
-          headers,
-        });
-        const restoreIme = await postJson(endpoint(device), { action: "restoreIme" }, {
-          timeoutMs: 30000,
-          fetchImpl,
-          headers,
-        });
-        const abortOk = abort?.result?.restored === true || abort?.result?.ok === true;
-        const imeOk = restoreIme?.result?.restored === true || restoreIme?.result?.already === true;
-        return { ok: abortOk && imeOk, abort: abort.result, restoreIme: restoreIme.result };
+        return restorePublishWorkflow({ transport, device, maxSteps: 10 });
       }
       if (capability.implementation.action === "collectOnOpenNote") {
         const undo = await postJson(endpoint(device), {
