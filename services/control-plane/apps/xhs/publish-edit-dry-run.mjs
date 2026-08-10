@@ -138,10 +138,11 @@ export function verifyPublishTagsLanded(verify, tags) {
 
 function tagLanded(verify, tag) {
   if (!tag) return true;
-  const hashForm = `#${tag.replace(/^#+/, "")}`;
-  const needle = hashForm.slice(0, Math.min(8, hashForm.length));
-  return verify.xml.includes(hashForm)
-    || verify.nodes.some((node) => String(node.text || "").includes(needle));
+  const clean = String(tag).replace(/^#+/, "").trim();
+  const hashForms = [`#${clean}`, `# ${clean}`, ` #${clean}`, ` # ${clean}`];
+  return hashForms.some((form) => verify.xml.includes(form)
+    || verify.nodes.some((node) => String(node.text || "").includes(form)))
+    || verify.nodes.some((node) => String(node.text || "").includes(clean));
 }
 
 function findTitleAndBodyFields(page) {
@@ -407,11 +408,36 @@ async function appendCaptionText(transport, serial, text, point) {
 async function confirmTopicTag(transport, serial, tag) {
   const page = await dumpUi(transport, serial);
   const escaped = String(tag).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const suggestion = findLabel(page.nodes, [new RegExp(`^${escaped}$`, "u")]);
-  if (suggestion?.center) {
-    await tap(transport, serial, suggestion);
-    await sleep(450);
-    return { method: "suggestion", label: suggestion.label };
+  const pickerRows = page.nodes
+    .filter((node) => {
+      const text = label(node);
+      const point = center(node);
+      if (!text || !point) return false;
+      if (point[1] < 1500) return false;
+      return new RegExp(`#\\s*${escaped}|^${escaped}$`, "u").test(text)
+        || /亿浏览|万浏览/.test(text);
+    })
+    .sort((left, right) => {
+      const leftMatch = new RegExp(`#\\s*${escaped}|^${escaped}$`, "u").test(label(left)) ? 0 : 1;
+      const rightMatch = new RegExp(`#\\s*${escaped}|^${escaped}$`, "u").test(label(right)) ? 0 : 1;
+      if (leftMatch !== rightMatch) return leftMatch - rightMatch;
+      return center(left)[1] - center(right)[1];
+    });
+  const exact = pickerRows.find((node) => new RegExp(`#\\s*${escaped}|^${escaped}$`, "u").test(label(node)));
+  const target = exact || pickerRows[0];
+  if (target) {
+    const targetCenter = center(target);
+    if (targetCenter) {
+      await tap(transport, serial, { center: targetCenter });
+      await sleep(500);
+      const after = await dumpUi(transport, serial);
+      const done = findLabel(after.nodes, [/^完成$/u], { clickable: true });
+      if (done?.center) {
+        await tap(transport, serial, done);
+        await sleep(350);
+      }
+      return { method: "suggestion", label: label(target) };
+    }
   }
   const done = findLabel(page.nodes, [/^完成$/u], { clickable: true });
   if (done?.center) {
@@ -431,10 +457,16 @@ async function inputPublishTopicTags(transport, serial, tags, bodyField, { bodyT
     await appendCaptionText(transport, serial, hashPrefix, bodyField.center);
     await sleep(350);
     await appendCaptionText(transport, serial, tag, bodyField.center);
-    await sleep(500);
+    await sleep(700);
     const confirm = await confirmTopicTag(transport, serial, tag);
     trace.push({ tag, hashPrefix, confirm: confirm.method });
     hasContent = true;
+  }
+  const finalPage = await dumpUi(transport, serial);
+  const done = findLabel(finalPage.nodes, [/^完成$/u], { clickable: true });
+  if (done?.center) {
+    await tap(transport, serial, done);
+    await sleep(400);
   }
   return trace;
 }
