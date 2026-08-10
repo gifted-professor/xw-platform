@@ -3,6 +3,7 @@ import { ControlPlaneError } from "../../control-plane/lib/errors.mjs";
 import {
   captureXhsRecoveryScreen,
   restoreXhsPublishNoSave,
+  runXhsPublishDiscardEditor,
   runXhsPublishEditDryRun,
 } from "./publish-edit-dry-run.mjs";
 
@@ -82,6 +83,7 @@ export function createXhsAdapter({
   fetchImpl = globalThis.fetch,
   transport = null,
   publishWorkflow = runXhsPublishEditDryRun,
+  discardPublishWorkflow = runXhsPublishDiscardEditor,
   restorePublishWorkflow = restoreXhsPublishNoSave,
   recoveryInspector = captureXhsRecoveryScreen,
 } = {}) {
@@ -89,7 +91,12 @@ export function createXhsAdapter({
     id: "xhs",
     async execute({ capability, device, params, leaseAuthorization }) {
       if (capability.implementation.action === "publishEditDryRun") {
-        const result = await publishWorkflow({ transport, device, caption: params.caption });
+        const result = await publishWorkflow({
+          transport,
+          device,
+          caption: params.caption,
+          stayForAccept: params.stayForAccept === true,
+        });
         if (result?.ok !== true) {
           const error = new ControlPlaneError("ADAPTER_ACTION_REJECTED", `xhs action rejected: ${result?.step || "unknown"}`, {
             status: 502,
@@ -107,6 +114,24 @@ export function createXhsAdapter({
           });
           error.notSent = result?.notSent === true;
           error.ambiguous = result?.ambiguous === true || !error.notSent;
+          throw error;
+        }
+        return { vendorCode: 10000, output: result };
+      }
+      if (capability.implementation.action === "publishDiscardEditor") {
+        const result = await discardPublishWorkflow({ transport, device });
+        if (result?.ok !== true) {
+          const error = new ControlPlaneError("ADAPTER_ACTION_REJECTED", `xhs action rejected: ${result?.step || "unknown"}`, {
+            status: 502,
+            details: {
+              step: result?.step ?? null,
+              cleanupReason: typeof result?.cleanup?.reason === "string" ? result.cleanup.reason : undefined,
+              cleanupActivity: typeof result?.cleanup?.activity === "string" ? result.cleanup.activity : undefined,
+              trace: Array.isArray(result?.cleanup?.trace) ? result.cleanup.trace.slice(-12) : undefined,
+            },
+          });
+          error.notSent = true;
+          error.ambiguous = false;
           throw error;
         }
         return { vendorCode: 10000, output: result };
@@ -195,6 +220,18 @@ export function createXhsAdapter({
         };
       }
       if (action === "publishEditDryRun") {
+        if (output?.awaitingAccept === true) {
+          return {
+            ok: output?.ok === true
+              && output?.captionLanded === true
+              && output?.postButtonObserved === true
+              && output?.published === false
+              && output?.savedDraft === false
+              && output?.finalCommit === false
+              && Number(output?.paymentTransport) === 0,
+            mode: "custom",
+          };
+        }
         return {
           ok: output?.ok === true
             && output?.captionLanded === true
@@ -204,6 +241,17 @@ export function createXhsAdapter({
             && output?.finalCommit === false
             && Number(output?.paymentTransport) === 0
             && output?.restored === true,
+          mode: "custom",
+        };
+      }
+      if (action === "publishDiscardEditor") {
+        return {
+          ok: output?.ok === true
+            && output?.restored === true
+            && output?.published === false
+            && output?.savedDraft === false
+            && output?.finalCommit === false
+            && Number(output?.paymentTransport) === 0,
           mode: "custom",
         };
       }
@@ -266,7 +314,18 @@ export function createXhsAdapter({
       if (!capability.restoration.required) return { ok: true };
       const headers = leaseHeaders(leaseAuthorization);
       if (capability.implementation.action === "publishEditDryRun") {
+        if (execution?.output?.awaitingAccept === true) {
+          return {
+            ok: true,
+            deferred: true,
+            restored: false,
+            awaitingAccept: true,
+          };
+        }
         return restorePublishWorkflow({ transport, device, maxSteps: 10 });
+      }
+      if (capability.implementation.action === "publishDiscardEditor") {
+        return { ok: true, restored: execution?.output?.restored === true };
       }
       if (capability.implementation.action === "collectOnOpenNote") {
         const undo = await postJson(endpoint(device), {

@@ -451,7 +451,37 @@ export async function restoreXhsPublishNoSave({ transport, device, maxSteps = 10
   return output;
 }
 
-export async function runXhsPublishEditDryRun({ transport, device, caption }) {
+export async function runXhsPublishDiscardEditor({ transport, device }) {
+  if (!transport || typeof transport.invoke !== "function") {
+    throw new ControlPlaneError("TYPED_TRANSPORT_REQUIRED", "XHS bounded workflow requires Xiaowei transport", {
+      status: 403,
+    });
+  }
+  const serial = device?.runtimeId;
+  if (!serial) throw new ControlPlaneError("DEVICE_RUNTIME_MISSING", "XHS device runtime is missing", { status: 409 });
+  const cleanup = await restoreXhsPublishNoSave({ transport, device }).catch((error) => ({
+    ok: false,
+    restored: false,
+    error: String(error?.message || error).slice(0, 240),
+    published: false,
+    savedDraft: false,
+  }));
+  const ok = cleanup.ok === true && cleanup.restored === true && cleanup.imeRestored !== false;
+  return {
+    ok,
+    step: ok ? "discardedNoSave" : "discardFailed",
+    workflowId: "workflow.xhs.publish-discard-editor.v1",
+    published: false,
+    savedDraft: false,
+    finalCommit: false,
+    paymentTransport: 0,
+    restored: cleanup.restored === true,
+    cleanup,
+  };
+}
+
+export async function runXhsPublishEditDryRun({ transport, device, caption, stayForAccept = false }) {
+  const stay = stayForAccept === true;
   const text = String(caption || "").trim();
   if (!text || text.length > 300) {
     return {
@@ -632,6 +662,25 @@ export async function runXhsPublishEditDryRun({ transport, device, caption }) {
       cleanupActivity: error?.cleanupActivity || null,
       cleanupTrace: Array.isArray(error?.cleanupTrace) ? error.cleanupTrace : undefined,
     });
+  }
+
+  if (result?.ok === true && stay) {
+    return {
+      ...result,
+      ok: true,
+      step: "awaitingAccept",
+      stayForAccept: true,
+      awaitingAccept: true,
+      workflowId: "workflow.xhs.publish-edit-dry-run.v1",
+      transportMode: "control-plane-fifo-single-flight",
+      published: false,
+      savedDraft: false,
+      finalCommit: false,
+      paymentTransport: 0,
+      restored: false,
+      cleanup: { deferred: true, reason: "stayForAccept" },
+      trace,
+    };
   }
 
   const cleanup = await restoreXhsPublishNoSave({ transport, device }).catch((error) => ({

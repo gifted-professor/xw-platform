@@ -1153,7 +1153,8 @@ export class FastOperator {
   // Catalog-bound XHS publish editor dry-run. It is one formal capability/job even though the
   // device workflow has several UI steps. The method accepts business data only (caption), owns
   // all selectors server-side, never exposes an action array, and always attempts no-save cleanup.
-  async publishEditDryRun({ caption } = {}) {
+  async publishEditDryRun({ caption, stayForAccept = false } = {}) {
+    const stay = stayForAccept === true;
     const text = String(caption || "").trim();
     if (!text || text.length > 300) {
       return {
@@ -1316,6 +1317,24 @@ export class FastOperator {
         });
       } catch {}
       fail("exception", { error: String(error?.message || error).slice(0, 240) });
+    }
+
+    if (result?.ok === true && stay) {
+      return {
+        ...result,
+        ok: true,
+        step: "awaitingAccept",
+        stayForAccept: true,
+        awaitingAccept: true,
+        workflowId: "workflow.xhs.publish-edit-dry-run.v1",
+        published: false,
+        savedDraft: false,
+        finalCommit: false,
+        paymentTransport: 0,
+        restored: false,
+        cleanup: { deferred: true, reason: "stayForAccept" },
+        trace,
+      };
     }
 
     const cleanup = await this.exitPublishNoSave().catch((error) => ({
@@ -2472,7 +2491,7 @@ export function serve(port, options = {}) {
         case "feedCards": out = await op.observeFeedCards({ label: q.label }); break;
         case "observeOpenNoteDetail": out = await op.observeOpenNoteDetail(); break;
         case "openFeedNote": out = await op.openFeedNote({ selector: q.selector ?? "any", index: q.index }); break;
-        case "publishEditDryRun": out = await op.publishEditDryRun({ caption: q.caption }); break;
+        case "publishEditDryRun": out = await op.publishEditDryRun({ caption: q.caption, stayForAccept: q.stayForAccept === true }); break;
         case "abortPublishNoSave": out = await op.exitPublishNoSave({ maxSteps: q.maxSteps ?? 10 }); break;
         case "openCard": { const d = await op.dump({ label: "open" }); const cards = op.feedCards(d); const c = cards[q.idx ?? 0]; out = await op.openCard(c); break; }
         case "backToFeed": out = await op.backToFeed(q.maxBack ?? 3); break;

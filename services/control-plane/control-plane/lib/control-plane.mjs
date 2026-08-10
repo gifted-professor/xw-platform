@@ -2393,7 +2393,7 @@ export class ControlPlane {
       }
       // Default fleet policy: always leave the device on system desktop after a job.
       // Soft: failure is recorded, does not flip RESTORATION_FAILED / quarantine.
-      if (shouldReturnHomeAfterJob({ recoveryAttempt: false, capability })) {
+      if (shouldReturnHomeAfterJob({ recoveryAttempt: false, capability, execution })) {
         let returnHome;
         try {
           const homeAuth = this.#mintJobTransportAuth(job, lease, "return_home");

@@ -28,6 +28,10 @@ test("shouldReturnHomeAfterJob defaults on and respects opt-out / recovery", () 
     env: {},
     capability: { id: "xiaowei.lab.raw", automationPolicy: { mode: "lab_only" } },
   }), false);
+  assert.equal(shouldReturnHomeAfterJob({
+    env: {},
+    execution: { output: { awaitingAccept: true } },
+  }), false);
 });
 
 test("returnDeviceHome presses home and checks launcher focus", async () => {
