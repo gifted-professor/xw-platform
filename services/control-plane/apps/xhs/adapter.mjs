@@ -95,6 +95,8 @@ export function createXhsAdapter({
             status: 502,
             details: {
               step: result?.step ?? null,
+              activity: result?.activity ?? null,
+              package: result?.package ?? null,
               workflowError: typeof result?.error === "string" ? result.error.slice(0, 240) : undefined,
               cleanupReason: typeof result?.cleanup?.reason === "string" ? result.cleanup.reason : undefined,
               cleanupActivity: typeof result?.cleanup?.activity === "string" ? result.cleanup.activity : undefined,

@@ -551,13 +551,26 @@ export async function runXhsPublishEditDryRun({ transport, device, caption }) {
         await tap(transport, serial, { center: center(thumb) });
         await sleep(1100);
         page = await dumpUi(transport, serial);
-        requireSurface(await focus(transport, serial), "publishAlbumSelected", /CapaAlbumActivity/i);
-        const next = findLabel(page.nodes, [/^下一步(?:\s*\(?\d+\)?)?$/u, /下一步/u], { clickable: true });
-        if (!next) fail("nextMissingAfterSelect");
-        if (!result) {
-          trace.push({ step: "next", label: next.label });
-          await tap(transport, serial, next);
-          await sleep(2400);
+        const selectedSurface = await focus(transport, serial);
+        requireSurface(
+          selectedSurface,
+          "publishAlbumSelected",
+          /CapaAlbumActivity|CapaPostNotePlatformActivity|ImageEdit|MaterialPreview/i,
+        );
+        trace.push({ step: "thumbnailSelected", activity: selectedSurface.activity || null });
+        if (/CapaAlbumActivity/i.test(String(selectedSurface.activity || ""))) {
+          const next = findLabel(page.nodes, [/^下一步(?:\s*\(?\d+\)?)?$/u, /下一步/u], { clickable: true });
+          if (!next) fail("nextMissingAfterSelect", { activity: selectedSurface.activity || null });
+          if (!result) {
+            trace.push({ step: "next", label: next.label });
+            await tap(transport, serial, next);
+            await sleep(2400);
+          }
+        } else {
+          // Some XHS builds auto-advance immediately after selecting one media
+          // item. The destination is still restricted to the known bounded
+          // edit surfaces above; no coordinate or unknown-activity fallback.
+          trace.push({ step: "albumAutoAdvanced", activity: selectedSurface.activity || null });
         }
       }
     }
