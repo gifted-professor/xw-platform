@@ -103,6 +103,37 @@ function findLabel(nodes, patterns, { clickable = false } = {}) {
   return null;
 }
 
+function resolveHomePublishTab(nodes) {
+  const width = Math.max(0, ...nodes.map((node) => node.bounds?.[2] || 0));
+  const height = Math.max(0, ...nodes.map((node) => node.bounds?.[3] || 0));
+  if (width < 100 || height < 100) return null;
+  const direct = findLabel(
+    nodes,
+    [/^发布$/u, /^发布[，,\s]*(?:按钮|入口)$/u],
+    { clickable: true },
+  );
+  if (direct?.center?.[1] >= height * 0.78) return direct;
+
+  // Coordinate fallback is allowed only on the already verified IndexActivity
+  // and only when the hierarchy proves this is the five-item bottom nav. It is
+  // never used on an editor surface where 发布/发笔记 is a final commit.
+  const bottomLabels = nodes
+    .filter((node) => center(node)?.[1] >= height * 0.78)
+    .map(label)
+    .filter(Boolean);
+  const homeSignals = [/首页/u, /购物/u, /消息/u, /我(?:的)?$/u]
+    .filter((pattern) => bottomLabels.some((value) => pattern.test(value))).length;
+  const bottomClickable = nodes.filter((node) => node.clickable && center(node)?.[1] >= height * 0.78).length;
+  if (homeSignals >= 2 && bottomClickable >= 3) {
+    return {
+      node: null,
+      label: "verified-bottom-nav-fallback",
+      center: [Math.round(width / 2), Math.round(height * 0.956)],
+    };
+  }
+  return null;
+}
+
 function responseText(response, serial) {
   const data = response?.data;
   if (data == null) return "";
@@ -355,8 +386,12 @@ export async function runXhsPublishEditDryRun({ transport, device, caption }) {
 
     let page = await dumpUi(transport, serial);
     requireSurface(await focus(transport, serial), "publishHome", /IndexActivity/i);
-    const publishTab = findLabel(page.nodes, [/^发布$/u], { clickable: true });
-    if (!publishTab) fail("publishTabMissing");
+    const publishTab = resolveHomePublishTab(page.nodes);
+    if (!publishTab) {
+      fail("publishTabMissing", {
+        labels: page.nodes.map(label).filter(Boolean).slice(0, 30),
+      });
+    }
     if (!result) {
       trace.push({ step: "publishTab", label: publishTab.label });
       await tap(transport, serial, publishTab);
