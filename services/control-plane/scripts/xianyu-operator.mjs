@@ -1360,6 +1360,31 @@ export function shouldPersistDraft({ requested = false, summaryOk = false } = {}
 }
 
 export function firstFailedPublishDiagnostic(steps = {}) {
+  const images = steps?.images;
+  const imageSource = images?.diagnostic;
+  if (images?.ok === false && imageSource && typeof imageSource === "object") {
+    const topMedia = imageSource.topMedia && typeof imageSource.topMedia === "object"
+      ? imageSource.topMedia : {};
+    const allowedLabelKinds = new Set(["delete", "product", "add", "other", "empty"]);
+    const allowedClassKinds = new Set(["image", "button", "view", "other"]);
+    return {
+      kind: "image-upload-state-unverified",
+      publishCompose: imageSource.publishCompose === true,
+      mediaCount: Math.max(0, Number(imageSource.mediaCount || 0)),
+      expectedCount: Math.max(0, Number(imageSource.expectedCount || 0)),
+      hasAddMore: imageSource.hasAddMore === true,
+      topMedia: {
+        nodeCount: Math.max(0, Number(topMedia.nodeCount || 0)),
+        nodes: (Array.isArray(topMedia.nodes) ? topMedia.nodes : []).slice(0, 60).map((node) => ({
+          labelKind: allowedLabelKinds.has(node?.labelKind) ? node.labelKind : "other",
+          classKind: allowedClassKinds.has(node?.classKind) ? node.classKind : "other",
+          bounds: Array.isArray(node?.bounds) && node.bounds.length === 4
+            ? node.bounds.map((value) => Number(value) || 0) : [0, 0, 0, 0],
+          clickable: node?.clickable === true,
+        })),
+      },
+    };
+  }
   const price = steps?.price;
   const observed = price?.observed;
   if (/^price-(?:commit-close|readback-sheet|readback-close)-unverified$/.test(String(price?.step || ""))
@@ -2163,6 +2188,7 @@ export function analyzeImageUploadState(snapshot, {
   picked = 0,
   publishCompose = true,
 } = {}) {
+  const expectedCount = Number(baselineCount || 0) + Number(picked || 0);
   const isAddTile = (node) => /添加|上传|娣诲姞鍥剧墖/.test(String(node?.label || ""));
   const isProductTile = (node) => /^商品图片(?:[，,].*)?$/.test(String(node?.label || "").trim());
   const isLargeTopTile = (node) => {
@@ -2213,8 +2239,22 @@ export function analyzeImageUploadState(snapshot, {
     }).length;
     return Math.max(best, count);
   }, 0);
-  const mediaCount = legacyMediaCount || productButtonCount || buttonMediaCount;
-  const expectedCount = Number(baselineCount || 0) + Number(picked || 0);
+  // 满 9 图时部分 Flutter 版本同时丢掉「商品图片」label 与添加锚点，只剩 5+4 的
+  // 同尺寸可点 Button 网格。该 fallback 只接受满容量、精确数量、至少两行四列的顶部网格，
+  // 既覆盖真实满图页，又不把两三个普通大按钮误判为媒体。
+  const unlabeledFullGrid = (snapshot || []).filter((node) => isLargeTopTile(node)
+    && node.className === "android.widget.Button"
+    && node.clickable === true
+    && !isAddTile(node));
+  const rowBuckets = new Set(unlabeledFullGrid.map((node) => Math.round(node.bounds[1] / 48)));
+  const columnBuckets = new Set(unlabeledFullGrid.map((node) => Math.round(node.bounds[0] / 48)));
+  const fullGridButtonCount = expectedCount >= 9
+    && unlabeledFullGrid.length === expectedCount
+    && rowBuckets.size >= 2
+    && columnBuckets.size >= 4
+    ? unlabeledFullGrid.length
+    : 0;
+  const mediaCount = legacyMediaCount || productButtonCount || buttonMediaCount || fullGridButtonCount;
   const hasAddMore = (snapshot || []).some((node) =>
     !!node?.bounds
     && node.bounds[1] < 750
@@ -4670,12 +4710,19 @@ export async function publishDryRun(op, plan, {
   if (skipUpload) {
     record("images", { ok: true, step: "images-skipped" });
   } else if (plan.images && plan.images.length) {
-    const imagesResult = await sup.run("images", async () => uploadImagesDryRun(op, plan.images, {
-      evidenceDir,
-      calibrated: calibrated.image,
-      maxImages: plan.maxImages || 9,
-      albumName: plan.imageAlbum || null,
-    }), {
+    let firstImageDiagnostic = null;
+    const imagesResult = await sup.run("images", async () => {
+      const result = await uploadImagesDryRun(op, plan.images, {
+        evidenceDir,
+        calibrated: calibrated.image,
+        maxImages: plan.maxImages || 9,
+        albumName: plan.imageAlbum || null,
+      });
+      if (!firstImageDiagnostic && result?.ok === false && result?.diagnostic) {
+        firstImageDiagnostic = result.diagnostic;
+      }
+      return result;
+    }, {
       maxAttempts: 2,
       critical: true,
       expect: async (snap, result) => result?.ok === true || /FishFlutterBoost|发闲置|发布/.test(
@@ -4683,6 +4730,9 @@ export async function publishDryRun(op, plan, {
       ),
       recover: recoverCompose,
     });
+    if (!imagesResult.diagnostic && firstImageDiagnostic) {
+      imagesResult.diagnostic = firstImageDiagnostic;
+    }
     if (record("images", imagesResult)) return finishFailure();
   }
 

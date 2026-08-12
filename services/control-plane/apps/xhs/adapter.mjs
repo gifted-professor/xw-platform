@@ -205,7 +205,7 @@ export function createXhsAdapter({
         return {
           ok: Array.isArray(output?.cards)
             && typeof output?.pageClass === "string"
-            && output.pageClass !== ""
+            && /^xhs\.feed\.(?:index|index\.empty)$/.test(output.pageClass)
             && Number.isInteger(output?.cardCount)
             && output.cardCount >= 0,
           mode: "state",

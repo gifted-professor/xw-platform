@@ -243,6 +243,61 @@ test("image upload state counts 02 商品图片 buttons without add-tile anchor"
   });
 });
 
+test("image upload state accepts only a full two-row unlabeled button grid without add anchor", () => {
+  const fullGrid = Array.from({ length: 9 }, (_, index) => {
+    const row = index < 5 ? 0 : 1;
+    const column = row === 0 ? index : index - 5;
+    const left = 77 + column * 187;
+    const top = 282 + row * 187;
+    return {
+      label: "",
+      className: "android.widget.Button",
+      bounds: [left, top, left + 176, top + 176],
+      clickable: true,
+    };
+  });
+  assert.deepEqual(analyzeImageUploadState(fullGrid, { picked: 9, publishCompose: true }), {
+    verified: true,
+    mediaCount: 9,
+    expectedCount: 9,
+    hasAddMore: false,
+  });
+  assert.equal(analyzeImageUploadState(fullGrid.slice(0, 8), {
+    picked: 9,
+    publishCompose: true,
+  }).mediaCount, 0);
+});
+
+test("publish failure diagnostic keeps bounded image geometry and drops raw fields", () => {
+  const diagnostic = firstFailedPublishDiagnostic({
+    images: {
+      ok: false,
+      step: "image-album-selector-missing",
+      diagnostic: {
+        publishCompose: true,
+        mediaCount: 0,
+        expectedCount: 9,
+        hasAddMore: false,
+        privateLabel: "用户私密描述",
+        topMedia: {
+          nodeCount: 1,
+          nodes: [{
+            labelKind: "empty",
+            classKind: "button",
+            bounds: [77, 282, 253, 458],
+            clickable: true,
+            rawLabel: "用户私密描述",
+          }],
+        },
+      },
+    },
+  });
+  assert.equal(diagnostic.kind, "image-upload-state-unverified");
+  assert.equal(diagnostic.expectedCount, 9);
+  assert.deepEqual(diagnostic.topMedia.nodes[0].bounds, [77, 282, 253, 458]);
+  assert.doesNotMatch(JSON.stringify(diagnostic), /用户私密|rawLabel|privateLabel/);
+});
+
 test("image media diagnostics preserve geometry but redact every raw label", () => {
   const diagnostic = summarizeImageMediaNodes([
     {

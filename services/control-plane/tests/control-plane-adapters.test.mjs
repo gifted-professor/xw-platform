@@ -47,6 +47,10 @@ test("XHS adapter uses a per-device loopback serve and fail-closed verifier", as
   assert.equal(execution.output.pageClass, "xhs.feed.index.empty");
   assert.equal(execution.output.cardCount, 0);
   assert.deepEqual(await adapter.verify({ capability, execution }), { ok: true, mode: "state" });
+  assert.deepEqual(await adapter.verify({
+    capability,
+    execution: { output: { cards: [], pageClass: "xhs.unknown", cardCount: 0 } },
+  }), { ok: false, mode: "state" });
 
   const send = registry.require("xhs.comment.send");
   assert.deepEqual(await adapter.verify({
