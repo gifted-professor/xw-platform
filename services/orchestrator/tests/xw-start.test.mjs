@@ -155,6 +155,8 @@ test("active blockers are capability-scoped instead of disabling unrelated tasks
   assert.equal(result.status, "READY_WITH_LIMITS");
   assert.equal(result.canExecute, true);
   assert.deepEqual(result.capabilityLimits[0].capabilityIds, ["xhs.observe.note_detail"]);
+  assert.deepEqual(result.capabilityLimits[0].deviceAliases, ["01"]);
+  assert.equal(result.capabilityLimits[0].scope, "device_capability");
 });
 
 test("PnP-present stable ADB misses require Xiaowei's formal restart instead of a raw daemon restart", () => {

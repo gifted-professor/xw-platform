@@ -271,6 +271,39 @@ test("agent entry aggregates leases, jobs, blockers and omits private identity f
   assert.doesNotMatch(serialized, /"accounts"|"notes"|"customer"/);
 });
 
+test("agent entry accepts a UTF-8 BOM cross-repo release manifest", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "xhs-registry-release-bom-"));
+  createRegistryDb(path.join(root, "registry.db"));
+  createControlDb(path.join(root, "control.db"));
+  await writeFile(path.join(root, "seed.json"), JSON.stringify({ identities: [] }));
+  const manifest = {
+    schemaId: "xhs.cross-repo-release.v1",
+    releaseId: "rel-bom-test",
+    runtimePolicyVersion: "policy-bom-test",
+    evidenceMode: "dual",
+    policyDocDebt: [],
+  };
+  await writeFile(path.join(root, "cross-repo-release.json"), Buffer.concat([
+    Buffer.from([0xef, 0xbb, 0xbf]),
+    Buffer.from(JSON.stringify(manifest), "utf8"),
+  ]));
+  const isolated = await startRegistry({
+    root,
+    controlUrl: `http://127.0.0.1:${control.server.address().port}`,
+    requireAuth: false,
+    extraArgs: ["--control-plane-state-dir", root],
+  });
+  try {
+    const entry = await (await fetch(`${isolated.base}/api/agent-entry`)).json();
+    assert.equal(entry.release.present, true);
+    assert.equal(entry.release.releaseId, "rel-bom-test");
+    assert.equal(entry.release.evidenceMode, "dual");
+  } finally {
+    await stopRegistry(isolated.child);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("authenticated endpoints reject requests without credentials", async () => {
   const response = await fetch(`${registry.base}/api/health`);
   assert.equal(response.status, 401);

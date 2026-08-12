@@ -1248,10 +1248,13 @@ function blockerOverview() {
   const items = listKnowledge().filter((item) => item.lifecycle && KNOW_LIFECYCLES.has(item.lifecycle));
   const group = (status) => items.filter((item) => item.lifecycle === status).map((item) => ({
     id: item.id,
+    scope: item.scope,
     app: item.app,
     title: item.title,
     lifecycle: item.lifecycle,
     needsEngineer: item.needsEngineer,
+    appliesTo: item.appliesTo,
+    verifyMode: item.verifyMode,
     updatedAt: item.updatedAt,
     resolvedAt: item.resolvedAt,
     resolution: item.resolution,
@@ -1271,7 +1274,9 @@ function readReleaseManifest() {
   try {
     const file = path.join(CONTROL_PLANE_STATE_DIR, "cross-repo-release.json");
     if (!fs.existsSync(file)) return null;
-    const manifest = JSON.parse(fs.readFileSync(file, "utf8"));
+    let text = fs.readFileSync(file, "utf8");
+    if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
+    const manifest = JSON.parse(text);
     return manifest && manifest.schemaId === "xhs.cross-repo-release.v1" ? manifest : null;
   } catch (e) {
     return null;

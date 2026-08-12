@@ -417,12 +417,19 @@ export function summarizeCapabilityLimits(blockers = []) {
       /^[a-z][a-z0-9_-]*(?:\.[a-z0-9_-]+){2,}$/.test(value)
       && !value.includes("scripts")
     ));
+    const deviceAliases = [...new Set([
+      String(blocker?.scope || ""),
+      ...appliesTo,
+    ].map((value) => value.match(/^device:(0[1-4])$/)?.[1]).filter(Boolean))];
     return {
       blockerId: String(blocker?.id || "unknown"),
       appId: String(blocker?.app || "unknown") || "unknown",
       title: String(blocker?.title || blocker?.summary || "active capability blocker"),
       capabilityIds: [...new Set(capabilityIds)],
-      scope: capabilityIds.length ? "capability" : "app",
+      deviceAliases,
+      scope: deviceAliases.length
+        ? (capabilityIds.length ? "device_capability" : "device")
+        : (capabilityIds.length ? "capability" : "app"),
     };
   });
 }
