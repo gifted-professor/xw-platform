@@ -222,11 +222,13 @@ export function buildXwStartPlan(snapshot, { aliases = XW_START_ALIASES } = {}) 
 export function classifyXwStartFinal(snapshot, { aliases = XW_START_ALIASES } = {}) {
   const selected = normalizeStartAliases(aliases);
   const reasons = [];
+  if (snapshot?.releaseGate?.ok !== true) reasons.push("release_gate_not_proven");
   if (snapshot?.registry?.healthy !== true) reasons.push("registry_not_healthy");
   if (snapshot?.controlPlane?.healthy !== true) reasons.push("control_plane_not_healthy");
   if (integer(snapshot?.activeLeases) !== 0) reasons.push("active_lease_present");
   if (integer(snapshot?.runningJobs) !== 0) reasons.push("running_job_present");
-  if (integer(snapshot?.pendingApprovals) !== 0) reasons.push("pending_approval_present");
+  if (snapshot?.approvalStateKnown !== true) reasons.push("approval_state_unavailable");
+  else if (integer(snapshot?.pendingApprovals) !== 0) reasons.push("pending_approval_present");
 
   const readyAliases = [];
   const humanRequiredAliases = [];
@@ -265,10 +267,13 @@ export function classifyXwStartFinal(snapshot, { aliases = XW_START_ALIASES } = 
     }
   }
 
-  const infrastructureBlocked = reasons.some((reason) => /^(registry|control_plane)/.test(reason));
+  const infrastructureBlocked = reasons.some((reason) => /^(release_gate|registry|control_plane|approval_state_unavailable)/.test(reason));
   const gatewayOk = reasons.length === 0;
   const canExecuteAny = snapshot?.registry?.healthy === true
     && snapshot?.controlPlane?.healthy === true
+    && snapshot?.releaseGate?.ok === true
+    && snapshot?.approvalStateKnown === true
+    && integer(snapshot?.pendingApprovals) === 0
     && integer(snapshot?.activeLeases) === 0
     && integer(snapshot?.runningJobs) === 0
     && readyAliases.length > 0;
@@ -308,6 +313,7 @@ export function classifyXwStartFinal(snapshot, { aliases = XW_START_ALIASES } = 
     humanRequiredAliases,
     reasons,
     adbLimits,
+    approvalStateKnown: snapshot?.approvalStateKnown === true,
     activeBlockers: integer(snapshot?.activeBlockers),
     capabilityLimits,
   };

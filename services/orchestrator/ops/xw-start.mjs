@@ -19,6 +19,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
+import { buildChildEnv } from "../scripts/lib/node-runtime.mjs";
 import {
   XW_START_ADB_PORT,
   XW_START_ALIASES,
@@ -90,7 +91,7 @@ async function runFile(file, args, options = {}) {
   try {
     return await execFileAsync(file, args, {
       cwd: options.cwd,
-      env: options.env || process.env,
+      env: buildChildEnv(options.env || process.env),
       encoding: "utf8",
       windowsHide: true,
       timeout: options.timeout || 30_000,
@@ -274,6 +275,20 @@ function activeBlockersFromEntry(entry) {
   return Array.isArray(entry?.blockers?.active) ? entry.blockers.active : [];
 }
 
+export function approvalSnapshotFromEntry(entry) {
+  const controlDbSource = entry?.sources?.controlDb;
+  const pending = entry?.approvals?.pendingCount;
+  const known = entry?.approvals?.sourceOk === true
+    && controlDbSource?.reachable === true
+    && controlDbSource?.stale === false
+    && Number.isInteger(pending)
+    && pending >= 0;
+  return {
+    known,
+    pending: known ? pending : null,
+  };
+}
+
 async function hydrateActiveBlockers(blockers) {
   return Promise.all((blockers || []).map(async (blocker) => {
     if (!blocker?.id) return blocker;
@@ -303,43 +318,40 @@ function serialByAliasFrom(entryDevices, seedSerials, aliases) {
   return out;
 }
 
-async function inspectPnpPresence(aliases, serialByAlias) {
+/**
+ * One PowerShell call returns both USB PnP presence (per alias) and the set of
+ * listening ADB daemon ports. Listening uses netstat because
+ * Get-NetTCPConnection costs ~4x more for the same probe. Missing either half
+ * degrades to "no evidence" rather than failing the whole inspect.
+ */
+async function inspectUsbAndAdbPorts(aliases, serialByAlias) {
   const command = [
     "$ids=@(Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue | ForEach-Object {[string]$_.InstanceId})",
-    "$ids|ConvertTo-Json -Compress",
+    "$ports=@()",
+    "foreach($line in netstat -ano -p TCP){ if($line -match ':(5037|5038)\\s+\\S+\\s+LISTENING'){ $ports += $matches[1] } }",
+    "$ports = $ports | Sort-Object -Unique",
+    "@{ ids = $ids; ports = $ports } | ConvertTo-Json -Compress -Depth 4",
   ].join(";");
   try {
     const { stdout } = await runFile("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", command]);
-    const parsed = JSON.parse(String(stdout || "[]").replace(/^\uFEFF/, "").trim() || "[]");
-    const ids = (Array.isArray(parsed) ? parsed : [parsed]).map((value) => String(value).toLowerCase());
-    return Object.fromEntries(aliases.map((alias) => {
+    const parsed = JSON.parse(String(stdout || "{}").replace(/^\uFEFF/, "").trim() || "{}");
+    const ids = (Array.isArray(parsed.ids) ? parsed.ids : [parsed.ids]).map((value) => String(value).toLowerCase());
+    const listeningPorts = (Array.isArray(parsed.ports) ? parsed.ports : [parsed.ports]).map(String);
+    const pnpPresentByAlias = Object.fromEntries(aliases.map((alias) => {
       const serial = String(serialByAlias?.[alias] || "").toLowerCase();
       return [alias, Boolean(serial) && ids.some((id) => id.endsWith(`\\${serial}`))];
     }));
+    return { pnpPresentByAlias, listeningPorts };
   } catch {
-    return Object.fromEntries(aliases.map((alias) => [alias, false]));
-  }
-}
-
-async function inspectListeningAdbPorts() {
-  const command = [
-    "$ports=@(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue",
-    "| Where-Object {$_.LocalPort -in 5037,5038}",
-    "| ForEach-Object {[string]$_.LocalPort} | Sort-Object -Unique)",
-    ";$ports|ConvertTo-Json -Compress",
-  ].join(" ");
-  try {
-    const { stdout } = await runFile("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", command]);
-    const parsed = JSON.parse(String(stdout || "[]").replace(/^\uFEFF/, "").trim() || "[]");
-    return (Array.isArray(parsed) ? parsed : [parsed]).map(String);
-  } catch {
-    return [];
+    return {
+      pnpPresentByAlias: Object.fromEntries(aliases.map((alias) => [alias, false])),
+      listeningPorts: [],
+    };
   }
 }
 
 async function inspectAdb(aliases, serialByAlias) {
-  const pnpPresentByAlias = await inspectPnpPresence(aliases, serialByAlias);
-  const listeningPorts = await inspectListeningAdbPorts();
+  const { pnpPresentByAlias, listeningPorts } = await inspectUsbAndAdbPorts(aliases, serialByAlias);
   const snapshots = [];
   for (const port of [...new Set([ADB_PORT, "5037"])].filter((value) => listeningPorts.includes(value))) {
     try {
@@ -377,7 +389,14 @@ async function inspectAdb(aliases, serialByAlias) {
   };
 }
 
-async function inspect({ aliases, gate = null } = {}) {
+/**
+ * Full or partial fleet inspection. When `prev` is supplied, serve-task state
+ * and the ADB snapshot are reused only for a short intermediate stage whose
+ * own actions cannot mutate those dimensions. External failure can still
+ * change either dimension, so terminal classification must never use `prev`.
+ * Device/service/lease/blocker/approval state is always re-read.
+ */
+async function inspect({ aliases, gate = null, prev = null } = {}) {
   const [registryTask, controlTask, registryHealthy, controlHealthy, seedSerials] = await Promise.all([
     registryTaskStatus(),
     runPowerShellScript(CONTROL_TASK, ["-Action", "Status"]),
@@ -386,20 +405,17 @@ async function inspect({ aliases, gate = null } = {}) {
     loadSeedSerials(),
   ]);
   const effectiveGate = gate || await releaseGate();
-  const serveEntries = await Promise.all(aliases.map(async (alias) => {
-    try { return [alias, await serveStatus(alias)]; }
-    catch (error) { return [alias, { installed: false, listening: false, launchCommit: null, error: error.message }]; }
-  }));
-  const serves = Object.fromEntries(serveEntries);
+  const serves = prev?.serves || Object.fromEntries(
+    await Promise.all(aliases.map(async (alias) => {
+      try { return [alias, await serveStatus(alias)]; }
+      catch (error) { return [alias, { installed: false, listening: false, launchCommit: null, error: error.message }]; }
+    })),
+  );
 
   let entry = null;
-  let deep = null;
   let leases = [];
   if (registryHealthy) {
-    [entry, deep] = await Promise.all([
-      fetchJson(REGISTRY, "/api/agent-entry", { timeoutMs: 20_000 }).catch(() => null),
-      fetchJson(REGISTRY, "/api/health?deep=1", { timeoutMs: 10_000 }).catch(() => null),
-    ]);
+    entry = await fetchJson(REGISTRY, "/api/agent-entry", { timeoutMs: 20_000 }).catch(() => null);
   }
   if (controlHealthy) {
     leases = (await fetchJson(CONTROL, "/control/v1/leases").catch(() => ({ leases: [] }))).leases || [];
@@ -409,7 +425,8 @@ async function inspect({ aliases, gate = null } = {}) {
   const capabilityLimits = summarizeCapabilityLimits(activeBlockers);
   const devices = devicesFromEntry(entry);
   const serialByAlias = serialByAliasFrom(devices, seedSerials, aliases);
-  const adb = await inspectAdb(aliases, serialByAlias);
+  const adb = prev?.adb || await inspectAdb(aliases, serialByAlias);
+  const approvals = approvalSnapshotFromEntry(entry);
   return {
     registry: { installed: registryTask.installed === true, healthy: registryHealthy, taskState: registryTask.taskState },
     controlPlane: { installed: controlTask.installed === true, healthy: controlHealthy, taskState: controlTask.taskState },
@@ -417,7 +434,8 @@ async function inspect({ aliases, gate = null } = {}) {
     desiredCommit,
     activeLeases: entry?.controlPlane?.activeLeases ?? leases.length,
     runningJobs: entry?.jobs?.active?.length ?? 0,
-    pendingApprovals: deep?.approvals?.pendingCount ?? 0,
+    approvalStateKnown: approvals.known,
+    pendingApprovals: approvals.pending,
     activeBlockers: activeBlockers.length,
     blockerSummaries: activeBlockers.map((blocker) => blocker.summary || blocker.title || blocker.id).filter(Boolean),
     capabilityLimits,
@@ -447,46 +465,51 @@ async function ensureBaseServices(initial, gate, actions) {
   }
 }
 
-async function ensureServes(snapshot, aliases, actions) {
+/**
+ * Converge every requested serve task to the deployed commit. Each alias is an
+ * independent scheduled task/port, so aliases run concurrently; per-alias
+ * failures stay isolated in that alias's result.
+ */
+export async function ensureServes(snapshot, aliases, actions, dependencies = {}) {
+  const runServeTask = dependencies.runServeTask
+    || ((action, alias) => runPowerShellScript(SERVE_TASK, ["-Action", action, "-Alias", alias]));
+  const getServeStatus = dependencies.getServeStatus || serveStatus;
+  const getServeTaskBindingOk = dependencies.getServeTaskBindingOk || serveTaskBindingOk;
   if (snapshot.activeLeases > 0 || snapshot.runningJobs > 0) {
     throw new Error("active work present; refusing to change serve tasks");
   }
-  const results = [];
-  for (const alias of aliases) {
+  return Promise.all(aliases.map(async (alias) => {
     const serve = snapshot.serves[alias];
     if (serve?.listening === true) {
       if (serve.launchCommit !== snapshot.desiredCommit) {
         try {
           log(`stopping stale serve ${alias} for exact-release rebind`);
-          await runPowerShellScript(SERVE_TASK, ["-Action", "Stop", "-Alias", alias]);
+          await runServeTask("Stop", alias);
           actions.push({ kind: "serve", alias, action: "stopped_for_rebind" });
-          const stopped = await serveStatus(alias);
+          const stopped = await getServeStatus(alias);
           if (stopped.listening === true) throw new Error(`serve ${alias} did not stop`);
           const reconciled = await reconcileStoppedServe({
             alias,
             launchCommit: stopped.launchCommit,
             desiredCommit: snapshot.desiredCommit,
-            install: () => runPowerShellScript(SERVE_TASK, ["-Action", "Install", "-Alias", alias]),
+            install: () => runServeTask("Install", alias),
             inspectPartialInstall: async () => ({
-              ...await serveStatus(alias),
-              taskBindingOk: await serveTaskBindingOk(alias),
+              ...await getServeStatus(alias),
+              taskBindingOk: await getServeTaskBindingOk(alias),
             }),
-            start: () => runPowerShellScript(SERVE_TASK, ["-Action", "Start", "-Alias", alias]),
+            start: () => runServeTask("Start", alias),
           });
           actions.push({ kind: "serve", alias, action: reconciled.rebindAction || "rebound", gitCommit: snapshot.desiredCommit });
           actions.push({ kind: "serve", alias, action: "started", port: reconciled.started.port });
-          results.push({ alias, status: "ready", action: "rebind_restart", port: reconciled.started.port });
+          return { alias, status: "ready", action: "rebind_restart", port: reconciled.started.port };
         } catch (error) {
-          results.push({ alias, status: "failed", reason: error.message });
+          return { alias, status: "failed", reason: error.message };
         }
-      } else {
-        results.push({ alias, status: "ready", action: "none" });
       }
-      continue;
+      return { alias, status: "ready", action: "none" };
     }
     if (serve?.installed !== true) {
-      results.push({ alias, status: "blocked", reason: "task_missing" });
-      continue;
+      return { alias, status: "blocked", reason: "task_missing" };
     }
     try {
       const stale = serve.launchCommit !== snapshot.desiredCommit;
@@ -497,14 +520,14 @@ async function ensureServes(snapshot, aliases, actions) {
         alias,
         launchCommit: serve.launchCommit,
         desiredCommit: snapshot.desiredCommit,
-        install: () => runPowerShellScript(SERVE_TASK, ["-Action", "Install", "-Alias", alias]),
+        install: () => runServeTask("Install", alias),
         inspectPartialInstall: async () => ({
-          ...await serveStatus(alias),
-          taskBindingOk: await serveTaskBindingOk(alias),
+          ...await getServeStatus(alias),
+          taskBindingOk: await getServeTaskBindingOk(alias),
         }),
         start: async () => {
           log(`starting serve ${alias}`);
-          return runPowerShellScript(SERVE_TASK, ["-Action", "Start", "-Alias", alias]);
+          return runServeTask("Start", alias);
         },
       });
       const { started } = reconciled;
@@ -518,12 +541,11 @@ async function ensureServes(snapshot, aliases, actions) {
         });
       }
       actions.push({ kind: "serve", alias, action: "started", port: started.port });
-      results.push({ alias, status: "ready", action: "started", port: started.port });
+      return { alias, status: "ready", action: "started", port: started.port };
     } catch (error) {
-      results.push({ alias, status: "failed", reason: error.message });
+      return { alias, status: "failed", reason: error.message };
     }
-  }
-  return results;
+  }));
 }
 
 async function observeLeasesUntil(stopSignal, snapshots) {
@@ -532,7 +554,9 @@ async function observeLeasesUntil(stopSignal, snapshots) {
       const result = await fetchJson(CONTROL, "/control/v1/leases", { timeoutMs: 1_500 });
       snapshots.push(...(result.leases || []));
     } catch { /* terminal job status remains authoritative; visibility is recorded separately */ }
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    // 200ms still observes a multi-second R0 lease many times over; the 20ms
+    // original fired up to ~1500 lease requests per readiness job.
+    await new Promise((resolve) => setTimeout(resolve, 200));
   }
 }
 
@@ -572,7 +596,8 @@ async function runReadinessJob(alias, physicalLabel, actor) {
     }
     const deadline = Date.now() + 30_000;
     while (!TERMINAL_JOB_STATES.has(job.status) && Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      // 300ms is well under the ~2-3s an R0 device.list job takes to finish.
+      await new Promise((resolve) => setTimeout(resolve, 300));
       job = (await fetchJson(CONTROL, `/control/v1/jobs/${encodeURIComponent(job.jobId)}`, { timeoutMs: 3_000 })).job;
     }
     if (!TERMINAL_JOB_STATES.has(job.status)) throw new Error(`readiness job timed out for ${alias}`);
@@ -833,13 +858,121 @@ export async function ensureAdbRepair(snapshot, actions, { kill = defaultKillOrp
   }
 }
 
-function chooseActor(explicit, controlHealth) {
+export function chooseActor(explicit, controlHealth, env = process.env) {
   if (explicit) return explicit;
-  const fromEnv = String(process.env.XHS_ACTOR || "").trim();
+  const fromEnv = String(env.XHS_ACTOR || "").trim();
   if (fromEnv) return fromEnv;
   const actors = controlHealth?.policyMode?.pilotActors || [];
   if (controlHealth?.policyMode?.pilotOnly === true && actors.length === 1) return actors[0];
-  return "xw-start";
+  // Never invent an actor id: a made-up actor fails the route plan with
+  // AUTONOMY_PILOT_SCOPE_MISS and is hard to diagnose.
+  throw new Error("no pilot actor resolvable (set --actor / XHS_ACTOR, or pilotOnly single-actor mode)");
+}
+
+export function buildXwStartCheckOutput(initial, gate, aliases) {
+  const plan = buildXwStartPlan(initial, { aliases });
+  const final = classifyXwStartFinal(initial, { aliases });
+  const releaseReady = gate?.ok === true && plan.releaseGateOk === true;
+  const ready = releaseReady
+    && plan.mutationCount === 0
+    && plan.blockerCount === 0
+    && final.ok === true;
+  return {
+    ok: true,
+    mode: "check",
+    ready,
+    adbOk: plan.adb?.ok === true,
+    allHealthy: ready && final.allHealthy === true,
+    releaseGate: gate,
+    adb: initial.adb,
+    capabilityLimits: initial.capabilityLimits,
+    plan,
+  };
+}
+
+function assertStartMutationWindow(snapshot) {
+  if (snapshot.activeLeases > 0 || snapshot.runningJobs > 0) {
+    throw new Error("active work appeared during start convergence; stopping fail-closed");
+  }
+  if (snapshot.approvalStateKnown !== true) {
+    throw new Error("approval state is unavailable; start is fail-closed");
+  }
+  if (Number(snapshot.pendingApprovals) > 0) {
+    throw new Error("pending approval present; start is fail-closed");
+  }
+}
+
+/**
+ * Run the bounded mutation loop with dependency injection for regression tests.
+ * `prev` is allowed only for the intermediate recovery→readiness refresh;
+ * every terminal snapshot is a full inspect with fresh serve and ADB evidence.
+ */
+export async function convergeXwStart({
+  current,
+  aliases,
+  gate,
+  actor,
+  actions,
+  inspectFn = inspect,
+  ensureServesFn = ensureServes,
+  ensureAdbRepairFn = ensureAdbRepair,
+  ensureRecoveriesFn = ensureRecoveries,
+  ensureReadinessFn = ensureReadiness,
+} = {}) {
+  const serveResults = [];
+  const adbRepairResults = [];
+  const recoveryResults = [];
+  const readinessJobs = [];
+  const cycles = [];
+  const recoveryAttemptCounts = new Map();
+  let finalSnapshot = current;
+
+  if (buildXwStartPlan(current, { aliases }).mutationCount === 0) {
+    // Nothing will be mutated, so skip the convergence loop. The one final
+    // confirmation is deliberately full: terminal READY must never rely on a
+    // reused serve/ADB snapshot.
+    finalSnapshot = await inspectFn({ aliases, gate });
+  } else {
+    for (let cycle = 1; cycle <= 2; cycle += 1) {
+      const actionsBefore = actions.length;
+      assertStartMutationWindow(current);
+      const cyclePlan = buildXwStartPlan(current, { aliases });
+      serveResults.push(...await ensureServesFn(current, aliases, actions));
+      adbRepairResults.push(await ensureAdbRepairFn(current, actions));
+
+      // Serve/ADB mutations require a full refresh before device recovery.
+      current = await inspectFn({ aliases, gate });
+      assertStartMutationWindow(current);
+      recoveryResults.push(...await ensureRecoveriesFn(current, aliases, actor, actions, recoveryAttemptCounts));
+
+      // Recovery only moves device state. Reuse serve/ADB once for the short
+      // pre-readiness refresh, then discard it for terminal classification.
+      current = await inspectFn({ aliases, gate, prev: current });
+      assertStartMutationWindow(current);
+      readinessJobs.push(...await ensureReadinessFn(current, aliases, actor, actions));
+      finalSnapshot = await inspectFn({ aliases, gate });
+      const cycleFinal = classifyXwStartFinal(finalSnapshot, { aliases });
+      cycles.push({
+        cycle,
+        plannedMutations: cyclePlan.mutationCount,
+        appliedActions: actions.length - actionsBefore,
+        status: cycleFinal.status,
+        readyAliases: cycleFinal.readyAliases,
+        humanRequiredAliases: cycleFinal.humanRequiredAliases,
+      });
+      if (cycleFinal.ok || actions.length === actionsBefore) break;
+      current = finalSnapshot;
+    }
+  }
+
+  return {
+    finalSnapshot,
+    serveResults,
+    adbRepairResults,
+    recoveryResults,
+    readinessJobs,
+    cycles,
+  };
 }
 
 async function main(argv = process.argv.slice(2)) {
@@ -852,60 +985,36 @@ async function main(argv = process.argv.slice(2)) {
   const initial = await inspect({ aliases: options.aliases, gate });
   const plan = buildXwStartPlan(initial, { aliases: options.aliases });
   if (options.check) {
-    const blockers = Number(initial.activeBlockers) || 0;
-    process.stdout.write(`${JSON.stringify({
-      ok: true,
-      mode: "check",
-      ready: plan.mutationCount === 0 && plan.blockerCount === 0,
-      adbOk: plan.adb?.ok === true,
-      allHealthy: plan.mutationCount === 0 && plan.blockerCount === 0 && plan.adb?.ok === true && blockers === 0,
-      releaseGate: gate,
-      adb: initial.adb,
-      capabilityLimits: initial.capabilityLimits,
-      plan,
-    }, null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify(buildXwStartCheckOutput(initial, gate, options.aliases), null, 2)}\n`);
     return;
   }
   if (!gate.ok) throw new Error(`release gate closed: ${gate.reason}`);
 
   const actions = [];
   await ensureBaseServices(initial, gate, actions);
-  let current = await inspect({ aliases: options.aliases, gate });
-  if (current.activeLeases > 0 || current.runningJobs > 0) throw new Error("active work present; start is fail-closed");
+  // The fast path reuses the initial full snapshot only to decide that no
+  // mutation is needed; convergeXwStart still performs a fresh full terminal
+  // inspect. Any planned/base-service mutation gets a fresh pre-mutation read.
+  let current = actions.length === 0 && plan.mutationCount === 0
+    ? initial
+    : await inspect({ aliases: options.aliases, gate });
   const controlHealth = await fetchJson(CONTROL, "/control/v1/health");
   const actor = chooseActor(options.actor, controlHealth);
-  const serveResults = [];
-  const adbRepairResults = [];
-  const recoveryResults = [];
-  const readinessJobs = [];
-  const cycles = [];
-  const recoveryAttemptCounts = new Map();
-  let finalSnapshot = current;
-  for (let cycle = 1; cycle <= 2; cycle += 1) {
-    const actionsBefore = actions.length;
-    if (current.activeLeases > 0 || current.runningJobs > 0) {
-      throw new Error("active work appeared during start convergence; stopping fail-closed");
-    }
-    const cyclePlan = buildXwStartPlan(current, { aliases: options.aliases });
-    serveResults.push(...await ensureServes(current, options.aliases, actions));
-    adbRepairResults.push(await ensureAdbRepair(current, actions));
-    current = await inspect({ aliases: options.aliases, gate });
-    recoveryResults.push(...await ensureRecoveries(current, options.aliases, actor, actions, recoveryAttemptCounts));
-    current = await inspect({ aliases: options.aliases, gate });
-    readinessJobs.push(...await ensureReadiness(current, options.aliases, actor, actions));
-    finalSnapshot = await inspect({ aliases: options.aliases, gate });
-    const cycleFinal = classifyXwStartFinal(finalSnapshot, { aliases: options.aliases });
-    cycles.push({
-      cycle,
-      plannedMutations: cyclePlan.mutationCount,
-      appliedActions: actions.length - actionsBefore,
-      status: cycleFinal.status,
-      readyAliases: cycleFinal.readyAliases,
-      humanRequiredAliases: cycleFinal.humanRequiredAliases,
-    });
-    if (cycleFinal.ok || actions.length === actionsBefore) break;
-    current = finalSnapshot;
-  }
+  const convergence = await convergeXwStart({
+    current,
+    aliases: options.aliases,
+    gate,
+    actor,
+    actions,
+  });
+  const {
+    finalSnapshot,
+    serveResults,
+    adbRepairResults,
+    recoveryResults,
+    readinessJobs,
+    cycles,
+  } = convergence;
   const final = classifyXwStartFinal(finalSnapshot, { aliases: options.aliases });
   const output = {
     ok: final.ok,

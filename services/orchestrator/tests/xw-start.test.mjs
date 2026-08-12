@@ -14,7 +14,12 @@ import {
   summarizeCapabilityLimits,
 } from "../scripts/lib/xw-start.mjs";
 import {
+  approvalSnapshotFromEntry,
+  buildXwStartCheckOutput,
+  chooseActor,
+  convergeXwStart,
   ensureAdbRepair,
+  ensureServes,
   parseXwStartArgs,
   reconcileStoppedServe,
   requireRunsEvidencePath,
@@ -47,6 +52,7 @@ function healthySnapshot() {
     desiredCommit: SHA,
     activeLeases: 0,
     runningJobs: 0,
+    approvalStateKnown: true,
     pendingApprovals: 0,
     activeBlockers: 0,
     serves: Object.fromEntries(["01", "02", "03", "04"].map((alias) => [alias, {
@@ -75,6 +81,133 @@ test("CLI supports one-click defaults, check mode, actor and target aliases", ()
   });
   assert.throws(() => parseXwStartArgs(["--actor"]), /requires a value/);
   assert.throws(() => parseXwStartArgs(["--unsafe"]), /unknown option/);
+});
+
+test("check output never reports ready while the release gate is closed", () => {
+  const snapshot = healthySnapshot();
+  snapshot.releaseGate = { ok: false, reason: "release_gate_failed" };
+  const output = buildXwStartCheckOutput(snapshot, snapshot.releaseGate, ["01", "02", "03", "04"]);
+  assert.equal(output.plan.mutationCount, 0);
+  assert.equal(output.ready, false);
+  assert.equal(output.allHealthy, false);
+  assert.equal(output.releaseGate.ok, false);
+});
+
+test("approval snapshot requires a fresh readable control.db source", () => {
+  assert.deepEqual(approvalSnapshotFromEntry({
+    sources: { controlDb: { reachable: true, stale: false } },
+    approvals: { sourceOk: true, pendingCount: 2 },
+  }), { known: true, pending: 2 });
+  assert.deepEqual(approvalSnapshotFromEntry({
+    sources: { controlDb: { reachable: false, stale: true } },
+    approvals: { sourceOk: false, pendingCount: 0 },
+  }), { known: false, pending: null });
+  assert.deepEqual(approvalSnapshotFromEntry({
+    sources: { controlDb: { reachable: true, stale: false } },
+    approvals: { sourceOk: true, pendingCount: null },
+  }), { known: false, pending: null });
+});
+
+test("actor resolution is explicit and never invents xw-start", () => {
+  assert.equal(chooseActor("explicit", {}, {}), "explicit");
+  assert.equal(chooseActor(null, {}, { XHS_ACTOR: "env-pilot" }), "env-pilot");
+  assert.equal(chooseActor(null, {
+    policyMode: { pilotOnly: true, pilotActors: ["only-pilot"] },
+  }, {}), "only-pilot");
+  assert.throws(() => chooseActor(null, {
+    policyMode: { pilotOnly: true, pilotActors: ["a", "b"] },
+  }, {}), /no pilot actor resolvable/);
+});
+
+test("already-converged fast path performs one full terminal inspect", async () => {
+  const inspections = [];
+  const finalSnapshot = healthySnapshot();
+  const result = await convergeXwStart({
+    current: healthySnapshot(),
+    aliases: ["01", "02", "03", "04"],
+    gate: { ok: true },
+    actor: "pilot",
+    actions: [],
+    inspectFn: async (options) => {
+      inspections.push(options);
+      return finalSnapshot;
+    },
+  });
+  assert.equal(inspections.length, 1);
+  assert.equal(inspections[0].prev, undefined);
+  assert.equal(result.finalSnapshot, finalSnapshot);
+  assert.deepEqual(result.cycles, []);
+});
+
+test("mutation path reuses dimensions only mid-cycle and fully re-inspects terminal state", async () => {
+  const current = healthySnapshot();
+  current.devices["01"].ready = false;
+  const intermediate = structuredClone(current);
+  const terminal = healthySnapshot();
+  terminal.serves["04"].listening = false;
+  const inspections = [];
+  const result = await convergeXwStart({
+    current,
+    aliases: ["01", "02", "03", "04"],
+    gate: { ok: true },
+    actor: "pilot",
+    actions: [],
+    inspectFn: async (options) => {
+      inspections.push(options);
+      return inspections.length === 3 ? terminal : structuredClone(intermediate);
+    },
+    ensureServesFn: async () => [],
+    ensureAdbRepairFn: async () => ({ status: "none", aliases: [] }),
+    ensureRecoveriesFn: async () => [],
+    ensureReadinessFn: async () => [],
+  });
+  assert.deepEqual(inspections.map((item) => item.prev !== undefined), [false, true, false]);
+  assert.equal(result.finalSnapshot.serves["04"].listening, false);
+  assert.equal(classifyXwStartFinal(result.finalSnapshot).ok, false);
+});
+
+test("mutation path stops before serve work when approval state is unknown", async () => {
+  const current = healthySnapshot();
+  current.devices["01"].ready = false;
+  current.approvalStateKnown = false;
+  current.pendingApprovals = null;
+  let serveTouched = false;
+  await assert.rejects(() => convergeXwStart({
+    current,
+    aliases: ["01", "02", "03", "04"],
+    gate: { ok: true },
+    actor: "pilot",
+    actions: [],
+    ensureServesFn: async () => {
+      serveTouched = true;
+      return [];
+    },
+  }), /approval state is unavailable/);
+  assert.equal(serveTouched, false);
+});
+
+test("serve convergence starts independent aliases concurrently", async () => {
+  const snapshot = healthySnapshot();
+  for (const serve of Object.values(snapshot.serves)) serve.listening = false;
+  const started = [];
+  let releaseStarts;
+  const startBarrier = new Promise((resolve) => { releaseStarts = resolve; });
+  const pending = ensureServes(snapshot, ["01", "02", "03", "04"], [], {
+    runServeTask: async (action, alias) => {
+      assert.equal(action, "Start");
+      started.push(alias);
+      await startBarrier;
+      return { listening: true, port: 17890 + Number(alias) };
+    },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  try {
+    assert.deepEqual([...started].sort(), ["01", "02", "03", "04"]);
+  } finally {
+    releaseStarts();
+  }
+  const results = await pending;
+  assert.equal(results.every((item) => item.status === "ready"), true);
 });
 
 test("healthy infrastructure and devices produce a zero-mutation plan", () => {
@@ -345,6 +478,17 @@ test("fully healthy gateway+ADB classifies READY and allHealthy", () => {
   assert.equal(result.adbOk, true);
   assert.equal(result.canPushImages, true);
   assert.equal(result.allHealthy, true);
+});
+
+test("unknown approval source is BLOCKED instead of becoming zero pending approvals", () => {
+  const snapshot = healthySnapshot();
+  snapshot.approvalStateKnown = false;
+  snapshot.pendingApprovals = null;
+  const result = classifyXwStartFinal(snapshot);
+  assert.equal(result.ok, false);
+  assert.equal(result.status, "BLOCKED");
+  assert.equal(result.canExecuteAny, false);
+  assert.ok(result.reasons.includes("approval_state_unavailable"));
 });
 
 test("final classification fails closed on service, device and resource debt", () => {
