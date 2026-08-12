@@ -1,9 +1,13 @@
 /**
  * Feishu 商品表 → 小红书发布 dry-run 字段/图片解析（record-list 行序）。
+ * Secrets come from repo-root .env (see .env.example).
  */
-export const FEISHU_BASE_TOKEN = "REDACTED_FEISHU_BASE_TOKEN";
-export const FEISHU_TABLE_ID = "REPLACE_FEISHU_PRODUCT_TABLE_ID";
-export const FEISHU_VIEW_ID = "REPLACE_FEISHU_PRODUCT_VIEW_ID";
+import { loadDotenv, requireEnv } from "../scripts/lib/load-dotenv.mjs";
+
+loadDotenv();
+export const FEISHU_BASE_TOKEN = requireEnv("FEISHU_BASE_TOKEN");
+export const FEISHU_TABLE_ID = requireEnv("FEISHU_PRODUCT_TABLE_ID");
+export const FEISHU_VIEW_ID = requireEnv("FEISHU_PRODUCT_VIEW_ID");
 
 /** record-list fields 数组中的列名（与 view REPLACE_FEISHU_PRODUCT_VIEW_ID 一致） */
 export const F = {

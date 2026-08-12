@@ -64,11 +64,15 @@ if (resumeSource) {
   }
 }
 
-let sessionSerial = "REPLACE_SERIAL_01";
+let sessionSerial = "";
 try {
   const ctx = JSON.parse(readFileSync(sessionFile, "utf8"));
-  sessionSerial = ctx.serial || ctx.deviceSerial || ctx.session?.serial || sessionSerial;
+  sessionSerial = ctx.serial || ctx.deviceSerial || ctx.session?.serial || "";
 } catch {}
+if (!sessionSerial) {
+  console.log("✗ session-file missing serial; refuse hardcoded device serial");
+  process.exit(4);
+}
 
 const FUNNEL = { x: 1020, y: 276 };
 const TUWEN = { x: 667, y: 1242 };

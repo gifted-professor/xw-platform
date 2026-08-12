@@ -36,16 +36,18 @@ import {
   redactSensitiveArgValues,
   summarizeJob,
 } from "./feishu-to-xianyu-lib.mjs";
+import { loadDotenv, requireEnv, optionalEnv } from "../scripts/lib/load-dotenv.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..");
 
-// ---------- 常量 ----------
-const FEISHU_BASE_TOKEN = "REDACTED_FEISHU_BASE_TOKEN";
-const FEISHU_TABLE_ID = "REPLACE_FEISHU_PRODUCT_TABLE_ID";
-const SSH = "xhs-windows";
-const REGISTRY = "http://127.0.0.1:17930";
-const REGISTRY_TOKEN = "REDACTED_OLD_AGENT_TOKEN";
+loadDotenv(ROOT);
+// ---------- 常量（密钥只来自 .env / 环境变量） ----------
+const FEISHU_BASE_TOKEN = requireEnv("FEISHU_BASE_TOKEN");
+const FEISHU_TABLE_ID = requireEnv("FEISHU_PRODUCT_TABLE_ID");
+const SSH = optionalEnv("FEISHU_SSH_HOST", "xhs-windows");
+const REGISTRY = requireEnv("XHS_REGISTRY_URL");
+const REGISTRY_TOKEN = requireEnv("XHS_AGENT_TOKEN");
 const GPFS = "/Volumes/GPFS/Users/a1234/Desktop/Coding/xhs-device-agent-routing-v1-1";
 const DEVICTL = join(GPFS, "control-plane/devicectl.mjs");
 const BRIDGE = join(

@@ -13,12 +13,14 @@
  * 注意：禁 console.error（Windows 远端约束传染防御），一律 console.log。
  */
 import { execFileSync } from "node:child_process";
+import { loadDotenv, requireEnv, optionalEnv } from "./scripts/lib/load-dotenv.mjs";
 
-const BASE_TOKEN = "REDACTED_FEISHU_BASE_TOKEN";
-const TABLE_ID = "REPLACE_FEISHU_IDENTITY_TABLE_ID";
-const SSH_HOST = "xhs-windows";
-const REGISTRY = "http://127.0.0.1:17930";
-const REGISTRY_TOKEN = "REDACTED_OLD_AGENT_TOKEN";
+loadDotenv();
+const BASE_TOKEN = requireEnv("FEISHU_BASE_TOKEN");
+const TABLE_ID = requireEnv("FEISHU_IDENTITY_TABLE_ID");
+const SSH_HOST = optionalEnv("FEISHU_SSH_HOST", "xhs-windows");
+const REGISTRY = requireEnv("XHS_REGISTRY_URL");
+const REGISTRY_TOKEN = requireEnv("XHS_AGENT_TOKEN");
 
 const F = {
   alias: "设备编号",

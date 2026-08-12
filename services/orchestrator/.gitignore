@@ -9,6 +9,20 @@ registry.db-shm
 runtime/
 node_modules/
 
+# Local secrets — only .env.example is committed
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+local.psd1
+config/local.*
+
+# Local fleet identity (copy from identities.seed.example.json)
+identities.seed.json
+identities.seed.local.json
+
+
 # feishu-to-xianyu 下载的 Yupoo 原图运行态
 tmp-imgs/
 

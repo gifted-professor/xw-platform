@@ -4,7 +4,7 @@
 - 设备：alias `01`（serial `REPLACE_SERIAL_01`）
 - 主脚本：`ops/douyin-harvest-share-links.mjs`
 - 目标：关键词搜 → 漏斗「图文」→ 开帖 → 拿 `v.douyin.com` 分享链 → 飞书 Base 写入
-- 飞书：Base `REDACTED_FEISHU_BASE_TOKEN` / table `REPLACE_FEISHU_DOUYIN_TABLE_ID`；总目标约 **200** 唯一 URL
+- 飞书：Base/table 见本机 `.env` 的 `FEISHU_BASE_TOKEN` / `FEISHU_DOUYIN_TABLE_ID`（勿把真值写进文档）；总目标约 **200** 唯一 URL
 - 文档性质：人审阅用；知识库条目待统一补（见文末「待补知识库」）
 - 相关短记：
   - `runtime/xj-live-pipeline/REPORT-paste-into-searchbox-every-exit-20260806.md`

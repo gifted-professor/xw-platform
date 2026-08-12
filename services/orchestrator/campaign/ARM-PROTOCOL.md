@@ -39,7 +39,7 @@ stdout 最后是终态 job JSON（记下 jobId 作证据）；退出码 0=绿 2=
 3. **只有**画面是闲鱼主页/首页且无任何弹窗、对话框、半屏 sheet、键盘（即 main-safe）且你置信 ≥0.9 时，才继续；否则停臂，报告分类结论与截图路径，保持隔离。
 4. `job recover-inspect-record --job <jobId> --inspection <iid> --actor claude-arm-<alias> --idempotency-key recrec-<alias>-<ts> --analysis '<JSON>'`——analysis JSON 先试 `{"classification":"main-safe","confidence":0.97,"safeStateVerified":true}`；若报 schema 错误，按错误提示修正字段名重试，**最多 2 次**，仍失败停臂。
 5. `job recover --job <jobId> --actor claude-arm-<alias> --idempotency-key recdo-<alias>-<ts>`——期望结果含 already-safe-main / safeStateVerified=true。5 分钟窗口：第 4、5 步必须紧接着做。
-6. 经 registry 确认隔离已清：`ssh xhs-windows 'curl.exe -s -H "x-registry-token: REDACTED_OLD_AGENT_TOKEN" http://127.0.0.1:17930/api/agent-entry'` 中本设备 `state.quarantined=false`。
+6. 经 registry 确认隔离已清：`ssh xhs-windows 'curl.exe -s -H "x-registry-token: $env:XHS_AGENT_TOKEN" http://127.0.0.1:17930/api/agent-entry'`（token 来自本机 `.env` / 环境变量，勿把真值写进文档）中本设备 `state.quarantined=false`。
 
 ## 红线（违反即臂终止并如实报告）
 

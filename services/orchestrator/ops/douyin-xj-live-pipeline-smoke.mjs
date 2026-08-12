@@ -13,12 +13,14 @@ import { tmpdir } from "node:os";
 import { parseArgs } from "./_explore-lib.mjs";
 import { scoreXjLiveTitle, extractDouyinShareUrls } from "./_douyin-xj-live-lib.mjs";
 import { decodeEntities } from "./_xhs-parse.mjs";
+import { loadDotenv, requireEnv } from "../scripts/lib/load-dotenv.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..");
+loadDotenv(ROOT);
 const PKG = "com.ss.android.ugc.aweme";
-const BASE = "REDACTED_FEISHU_BASE_TOKEN";
-const TABLE = "REPLACE_FEISHU_DOUYIN_TABLE_ID";
+const BASE = requireEnv("FEISHU_BASE_TOKEN");
+const TABLE = requireEnv("FEISHU_DOUYIN_TABLE_ID");
 
 const { opt, flag } = parseArgs(process.argv.slice(2));
 if (flag("--help") || flag("-h")) {

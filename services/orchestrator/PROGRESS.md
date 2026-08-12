@@ -1,6 +1,176 @@
+
+## 2026-08-12 secret → `.env` + GitHub 可分享收口
+
+A 仓密钥从源码硬编码迁到本机 `.env`（gitignore）；入库只留 `.env.example` + `identities.seed.example.json`。
+`identities.seed.json` 改为本地文件（gitignore）；本机保留原 seed。
+`sync-feishu.mjs`、飞书/抖音相关 ops、`install-registry-task.ps1` 改为读 `XHS_*` / `FEISHU_*`；缺键 fail closed。
+根 `README.md` 写清两仓 GitHub 地址 + `copy .env.example` 自建路径。
+本提交合入 `main` 后立即：push origin、**轮换** registry agent/human/observer token、重装 `XhsDeviceRegistry`、用新 token 验 `/api/health`。
+Feishu `FEISHU_BASE_TOKEN` 为 bitable app 标识，不在本轮随机轮换（仍只留在 `.env`）。
+外发说明：`docs/third-party-self-host-pack.md`。
+
+## 2026-08-12 ADB 01/04 挂回 5038
+
+孤儿默认口 **5037**（非效卫托管）占着 01/04。在 active lease/job=0 时只执行 `adb -P 5037 kill-server`，**未** kill 5038。四 serial 立即稳定出现在 5038；`xw-start --check` → `adbOk=true`、`wrongPortAliases=[]`。xiaowei 可能再拉起空的 5037 listen，设备表为空可忽略。证据 closeout `run_ae6fec8b-26bd-4ca5-bda5-e1e942b508ff`。
 # xhs-registry 进度
 
-> 最后更新：2026-08-10 飞书→小红书 dry-run 倒数 4 行回归（4/4 awaitingAccept）
+> 最后更新：2026-08-11 `/xw messages` 小红书消息未读只读入口
+
+## 2026-08-11 `/xw messages`：小红书消息页未读只读
+
+**入口**：`/xw messages [alias[,alias...]] [--home]`  
+脚本：`node ops/xw-xhs-messages.mjs [--aliases 01,02,03,04] [--actor <pilot>] [--home]`
+
+**语义**：Explorer session 编排快捷入口（非 formal capability / recipe）。逐台 acquire →
+launch `com.xingin.xhs` → dump 定位底栏「消息」→ tap → dump/截图汇总未读角标 → release；
+内置 closeout。禁止进私信会话/发送/删除。`--home` 结束后回到 IndexActivityV2。
+
+**实证（同日）**：四机 4/4 进消息页；01≈5 未读、02≈3 未读、03/04 有活动未读。解析单测
+`tests/xw-xhs-messages.test.mjs`。Skill 双份已加命令（`.agents` ≡ `.codex`）。
+
+**留痕**：知识库 `xhs-messages-unread-check-20260811`（recipe，verifyMode=human）。
+
+## 2026-08-11 `/xw start`：从健康检查升级为任务可运行收敛器
+
+**入口语义**：用户执行 `/xw start` 后不应再手拼 `/xw recover`。start 最多两轮执行“检查 → 正式安全修复 → 重检”：
+启动缺失但已安装的 Registry/控制面、按 exact release 重绑/启停 serve、对隔离设备走 audited recovery，随后提交
+`xiaowei.device.list` R0 readiness job。健康服务和设备保持不动；active lease/job、release gate、main-safe 视觉硬闸不放宽。
+
+**audited recovery（真机闭环）**：正式链路为 `recover-inspect` → 审计截图 SHA-256 校验 → Windows
+visual-tap resolver/PaddleOCR 生成 `xhs.visual-elements.v1` → 控制面分类。fresh inspection 已是
+`pageType=main-safe && safeStateVerified=true` 时零动作 `job recover` 清隔离；首次不在主页时只允许正式 recover
+执行一次可逆 restoration，并继续保留隔离，第二轮必须 fresh main-safe 才清，否则 `HUMAN_REQUIRED`。2026-08-11
+实证 02 从 MIUI launcher 经正式 recover 返回闲鱼主页，再以 main-safe 0.98 清隔离；01 fresh 重试同为 0.98，
+03/04 复用 worker 已验证的 main-safe 链。禁止直写 control.db、无 lease 清隔离或把 launcher 当安全主页。
+
+**终态语义**：输出新增 `readyAliases` / `humanRequiredAliases` / `canExecuteAny` /
+`canExecuteAllTargets` / per-alias image-push 状态。active knowledge blocker 按 `app + appliesTo` 输出为
+`capabilityLimits`；例如现存 4 条 XHS locator/hierarchy 问题只限制 `xhs.observe.feed`、
+`xhs.observe.note_detail`、`xhs.explore.open_feed_note` 等相关能力，不再把微信、闲鱼、HOME 等无关任务判死。
+ADB 执行健康固定以效卫控制面约定口 **5038** 为准；5037 只做只读诊断，各连续采样 3 次。设备若仅在
+5037 出现，明确返回 `wrong_port` / `adb_wrong_port`，对应 alias 的 `canPushImages=false`，绝不把两套 daemon
+的设备并集拼成四机健康。2026-08-11 复核确认分口来自他人走错启动入口：01/04 在 5037，02/03 在 5038；
+较早“5037 一度看到四机”的瞬时观测不能作为改写执行端口策略的依据。检查不会自动拉起空 daemon，也禁止
+对效卫托管通道做裸 `kill-server/start-server`；正式 5038 重绑能力尚未收编前，只报告并要求走效卫正确入口恢复。
+
+**验证与终态（2026-08-11 13:27 CST；23:24 端口状态已变化）**：当时 `tests/xw-start.test.mjs` 22/22，`npm run check` 通过；真机
+01/02 audited recovery + R0 readiness succeeded，03/04 R0 readiness succeeded，所有 job lease 均可见且
+`readyObserved=true`。最终 live `--check`：01–04 全 ready/free、0 running job、0 lease、四 serve listening；
+当时连续 3 轮四 serial 均可见。23:24 后因错误入口形成 5037/5038 分口，当前必须按上述主口规则重新判定，
+不得沿用旧终态。4 条 XHS note/feed locator capability-scoped blocker 仍不限制闲鱼或其他无关任务。
+
+## 2026-08-11 `/xw` 入口收口：目录兼容、Task 容错、balance 单 run
+
+**结论**：`/xw` 仍是唯一人工入口，不新增控制面。`/xw skills` 按 deployed runtime 的 typed-job
+实现事实判定可发现性，不再把已废弃的授权提示字段当硬闸；`/xw task` 默认目录遇到单个坏模板时返回
+其余模板并显式给 `warnings`；`/xw balance` 固定解析为 `task.balance.read-all` Task 快捷入口。
+
+**Task 修复**：
+- `task.xhs.publish-edit-dry-run` 新建不可变 revision 3：原文件名 `@1` 实际声明 revision 2，且旧
+  `run/human` step 非法；原字节移入非扫描 `task-templates/legacy-invalid/`，活动 v3 迁移为
+  `capability/human_gate/verify`，补显式 `capabilityId` 并重新 seal；不再因该模板让整个默认 catalog 失败。
+- `xw-task run` 只接受 `implemented` 且有显式 runner binding 的模板；draft 返回
+  `template_is_draft`，未绑定返回 `task_executor_binding_required`。
+- `task.balance.read-all@1` 当前保持 **draft**；三条余额 workflow 继续为 **canary_only**，历史实证不替代
+  本轮独立验收，也没有晋级为默认可执行。
+
+**balance 单 run / 单收尾**：三个 App 子脚本是真机内部执行器，执行时必须收到父 Task 的同一个
+`--task-run-id`；各自只释放 Explorer session，父入口每台只提交一次正式 R0 HOME job，然后统一
+`xw-closeout close`。金额只保存在本地隐私结果，closeout 只挂 redacted receipt；
+`paymentTransport=0`、`finalCommit=false`。
+
+**当前入口**：
+```powershell
+# 普通预检；不占 lease、不碰设备
+node ops/xw-task.mjs prepare --task "/xw balance"
+node ops/xw-balance.mjs
+
+# 仅独立工程 canary，经人明确授权且 live ready/free、无 blocker 时
+node ops/xw-balance.mjs --execute --canary-authorized
+```
+
+**验证**：capability eligibility + Task template/CLI + workflow catalog + balance 定向测试 **37/37**；新增 balance closeout
+输入经权威 `xw-closeout` 离线 seal；`xw-skills --self-test` **12/12**；`npm run check` 通过。全仓测试
+另有 3 个可独立复现的非本改动失败：旧 repair-scope 分支守卫、observer cold-cache READ 计数 flaky、Windows
+无 symlink 权限。独立 reviewer 未产出 verdict（Kimi 未登录；Claude 只读 review 超预算），不能自评替代。
+
+**晋级阻塞**：2026-08-11 04:07 CST live control plane 不可达；control DB 仍列 01/03/04 三个外部
+`xianyu.publish.full_dry_run` 为 running，02 最新同类 job failed，agent-entry 有 4 个 active blocker。
+本轮未恢复/重启/碰这些外部任务，未执行 balance 真机 canary；Task 与 workflows 均不得晋级。
+
+**知识留痕**：`pitfall-xw-capability-deployed-runtime-null-hints-20260811`、
+`recipe-xw-balance-single-task-closeout-20260811`（均 `verifyMode=constraint`；后者明确未完成真机晋级）。
+
+## 2026-08-11 `/xw balance` 加微购（三平台）
+
+**历史入口（已由上节 Task/canary 闸门收口）**：
+```powershell
+node ops/xw-balance.mjs
+# 子脚本不再作为日常真跑入口；由父 Task 传同一个 --task-run-id
+```
+
+**微购路径**：`com.truedian.dragon` → 底栏「我的」→ OCR「钱包>」（避开「代理>」）→「我的钱包」→ OCR「自营收入」。
+统一入口默认 `apps=wechat,alipay,weigou`；微购在四机请求里只跑 **03/04**。金额不进公共 knowledge；每个子步骤 release，父 Task 最后统一 `ops/home.mjs`。
+
+**坑（已写进脚本）**：session TTL~60s 要 heartbeat；我的/钱包 WebView dump 稀；OCR 坐标必须绝对像素；点偏「代理」会出 sheet 需「取消」；钱包页要等加载。
+
+**产物**：`ops/xw-weigou-balance.mjs`、`scripts/lib/weigou-balance-extract.mjs`、catalog `workflow.weigou.balance-read.v1`。
+
+## 2026-08-11 默认碰机 actor：`XHS_ACTOR`
+
+**原因**：`nonpayment_v1` + `pilotOnly` 下，不在 `CONTROL_PLANE_PILOT_ACTORS` 的 actor 会直接 `AUTONOMY_PILOT_SCOPE_MISS`（403）。现场 pilotActors 仅 `claude-pilot-20260809`。
+
+**落地**：
+- Windows User 环境变量：`XHS_ACTOR=claude-pilot-20260809`（新开 shell / Cursor 终端生效；已开进程需重开或手动 `$env:XHS_ACTOR=...`）
+- `/xw start` `chooseActor`：`--actor` → `XHS_ACTOR` → 唯一 `pilotActors` → `xw-start`
+- `/xw explore` acquire：`--actor` 缺省回落 `XHS_ACTOR`
+- balance / home 脚本原本已读 `XHS_ACTOR`（硬编码同名兜底）
+
+**红线不变**：不要自创 `cursor-*` / 日期戳 actor 碰机。
+
+## 2026-08-11 余额链路固定收尾：回桌面
+
+**结论**：Explorer session **故意跳过**控制面 `returnHome`；只靠 `launch_app` 启动器包也拉不回焦点。余额链收尾改为：**先 release explorer lease → `node ops/home.mjs --alias <0N>`**（提交 R0 `xiaowei.device.list`，由 CP 按 KEYCODE_HOME 回桌面）。
+
+**实证**：01 从微信 `MallIndexUIv2` → `HOME=ok` / `com.miui.home`；随后 01–04 全 `HOME=ok`，`leases=[]`。
+
+**接线（现行）**：统一入口给三个子脚本传同一个 Task run；子脚本 defer HOME，最后由 `ops/xw-balance.mjs` 经 `closeoutAliasToDesktop` 每台收尾一次。桌面恢复失败会使 Task 为 partial，不能只保留余额 `ok`。
+
+## 2026-08-10 `/xw balance` 统一余额（微信零钱 + 支付宝理财总资产）
+
+**历史入口（2026-08-11 起以上方 Task 快捷入口为准）**：
+```powershell
+node ops/xw-balance.mjs
+# /xw balance → task.balance.read-all
+```
+
+**行为**：
+- 默认 `apps=wechat,alipay`；未登录（支付宝 LoginActivity / 短信墙）**跳过不采集**
+- 微信：`workflow.wechat.balance-read.v1` + LauncherUI 时「我→服务」兜底
+- 支付宝：launch → 底栏第 2 Tab「理财」→ OCR「总资产」（非「我的→余额」）；卡在余额子页则 back 再进理财
+- 金额仅 stdout / runtime ledger，不进公共 knowledge
+
+**2026-08-10 理财路径复验**：01 总资产 ¥1.27、04 总资产 ¥84.43；02/03 登录墙 skip。
+
+**产物**：`ops/xw-balance.mjs`、`ops/xw-alipay-balance.mjs`、`ops/xw-wechat-balance.mjs`；catalog `workflow.alipay.balance-read.v1`（canary，真机以 `/xw balance` 为准）。
+
+## 2026-08-10 微信零钱余额链路沉淀 + 支付宝探路
+
+**微信（已可复用）**
+- 入口：`node ops/xw-wechat-balance.mjs [--aliases 01,02,03,04] [--actor claude-pilot-20260809] [--execute]`
+- 主路径：`workflow.wechat.balance-read.v1`（launch → screen → 离线 OCR「钱包」旁金额；paymentTransport=0）
+- 兜底：落在 `LauncherUI` / 缺 amount → Explorer session `我 → 服务` 再截屏 OCR，I/O 后立刻 release
+- 修了两处拦路：① ExecutionPlan 多 alias 不再被压成 shards[0]=01（`task-orchestrator` prefer shard.placement；`extractPlacementConstraint` 多 alias 返回 eligibleAliases）；② Windows GBK 打印 `¥` 导致 OCR 假失败（`PYTHONUTF8` + stdout utf-8）
+- 金额仅 stdout / run ledger，**不进公共 knowledge**
+- `/xw` skill 表已加 `wechat-balance`
+
+**支付宝探路（2026-08-10，只读）**
+- 四机均安装 `com.eg.android.AlipayGphone`
+- 01 / 04：已登录，可读余额页（我的 → 余额）；04 曾挡定位权限弹窗，点「拒绝」后可读
+- 02 / 03：登录墙（短信/手机号），**未登录、未闯验证码**，余额不可读
+- 尚无 `workflow.alipay.balance-read`；探路证据在 `runtime/plans/alipay-probe/`（本地，不入库金额）
+
+**知识库**：`recipe-wechat-balance-read-fallback-20260810`；`pitfall-alipay-login-wall-02-03-20260810`
 
 ## 2026-08-10 飞书→小红书发布 dry-run：view 倒数 4 行（4/4 awaitingAccept）
 
@@ -84,6 +254,12 @@ node ops/xhs-publish-edit-dry-run-fanout.mjs --aliases 01,02,03,04 --discard
   路由必须 allow、无审批、无外部效果，并记录 lease 可见性、verification、restoration 与 ready 回读。
 - quarantine、active lease / running job、未知状态均不旁路；无设备直连、无 `control.db` 写入、
   无支付、发布、草稿保存或其他外部效果。
+
+**ADB 健康（2026-08-11）**：start 额外只读检查小薇 ADB 端口 **5038**（`ADB_PATH` /
+`ANDROID_ADB_SERVER_PORT` 可覆盖），按 `identities.seed.json` / agent-entry serial 对目标
+alias 枚举是否为 `device`。ADB **只报告、不自动修 USB、不计入 mutation**；缺机时
+`final.status=READY_WITH_LIMITS`，`adbOk=false`、`canPushImages=false`，但效卫路径仍可
+`canExecute=true`。`allHealthy` 仅当效卫+ADB+无 capability blocker 全绿。业务开不开仍由人拍板。
 
 **2026-08-10 live 验收**：
 - release / routing HEAD / task-launch：`cc7e526e4e6b9eab047afb5c3daa964852af79e7`。
@@ -540,7 +716,7 @@ kimi --add-dir /Users/a1234/Desktop/Coding/xhs-registry
 - **共享账本 xhs-agent-progress.md**：**废弃**（停在 revision 11 / 07-22）。新真相三件套：本 PROGRESS.md + 知识库 + watchdog/reports/
 - **审批通道日常**：手机 registry 面板（tailscale + token），API/curl 备用；飞书只做身份与状态同步，不做审批
 - **v1.2 调度内核**：未实现，纯 backlog。scout 选机暂无 cooldown 子句，v1.2 落地时按设计文档对接点扩展
-- **secret 明文**：本地单人环境的有意取舍（飞书 base token、registry token 均在私有 tailnet/个人 Base 内），接手 agent 不当事故处理；若仓库要公开再统一治理
+- **secret**：已迁 `.env`（gitignore）；GitHub 只带 `.env.example`。分享前须**轮换**曾进过 git 历史的 token；`identities.seed.json` 已改为本地文件不入库。
 - **目录噪音**：placement.mjs 已从本目录删除（与仓库逐字节一致的冗余拷贝）；query-routing.mjs 保留（Windows 探针工具）
 - **知识库 category 裂缝**：设计想要 scope 类，实现只有 pitfall|recipe|unknown——scout 边界记录暂用 pitfall + `[scout-scope]` 前缀顶替，收敛方案待 v1.2 时一起定
 - **P1 现状细分**：xhs 侧 48 条 constraint 可直接验证（证据在代码/配置）；xianyu/wechat 的 recipe 虽有 appliesTo 但 capability 仍 dependency_pending 且全库 0 条 steps——**能挂能力 ≠ 能回放**，这两 app 的 replay 验证等 PR#11/微信 operator 合入

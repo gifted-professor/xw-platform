@@ -1,0 +1,41 @@
+{
+  "comment": "TEMPLATE only. Copy to identities.seed.json and fill your own serials/accounts. Real fleet data stays local (gitignored).",
+  "identities": [
+    {
+      "alias": "01",
+      "serial": "REPLACE_SERIAL_01",
+      "label": "device-01",
+      "model": "REPLACE_MODEL",
+      "accounts": { "xhs": "" },
+      "customer": "",
+      "notes": ""
+    },
+    {
+      "alias": "02",
+      "serial": "REPLACE_SERIAL_02",
+      "label": "device-02",
+      "model": "REPLACE_MODEL",
+      "accounts": { "xhs": "" },
+      "customer": "",
+      "notes": ""
+    },
+    {
+      "alias": "03",
+      "serial": "REPLACE_SERIAL_03",
+      "label": "device-03",
+      "model": "REPLACE_MODEL",
+      "accounts": { "xhs": "" },
+      "customer": "",
+      "notes": ""
+    },
+    {
+      "alias": "04",
+      "serial": "REPLACE_SERIAL_04",
+      "label": "device-04",
+      "model": "REPLACE_MODEL",
+      "accounts": { "xhs": "" },
+      "customer": "",
+      "notes": ""
+    }
+  ]
+}

@@ -429,7 +429,7 @@ L0 控制面不可用仍能只读观察
   - **hardcoded 高熵 secret**（api_key/secret/password/bearer/private_key 赋 ≥16 字符）：两仓 0 命中（排除 fixture/test/mock 与 process.env）。
   - **密钥文件**：两仓 0 个 `.env`/`.pem`/`.key`/`.p12`/`id_rsa` 落仓库（`.git`/`node_modules` 外）。
   - **payment signer 私钥**：`control-plane/` 源码 0 命中内联私钥材料；`trusted-human-issuer` 走 keyPath/keyId/process.env，符合「私钥只能从受限文件/系统密钥设施读取，不出现 argv/URL/日志/HTML/DB/仓库/fixture」约束。
-  - **已知 intentional-tradeoff token（非新泄漏）**：A 仓 `sync-feishu.mjs:17` `BASE_TOKEN="REDACTED_FEISHU_BASE_TOKEN"`、`:21` `REGISTRY_TOKEN="REDACTED_OLD_AGENT_TOKEN"` 硬编码——CLAUDE.md 已记为「本地单人私网有意取舍，公开仓库前再统一治理」，接手 agent 不当事故处理；secret scan 确认无其他新增泄漏。
+  - **secret 治理（2026-08-12）**：A 仓已改为 `.env` / `.env.example`；`sync-feishu.mjs` 与飞书相关 ops / `install-registry-task.ps1` 不再硬编码 token。历史「本地单人私网明文」取舍作废；外发源码只带 `.env.example`。
   - **结论**：两仓干净，无新增 secret 泄漏；唯一待办是公开仓库前治理 `sync-feishu.mjs` 两个 intentional token（已在 CLAUDE.md backlog）。
 - ⚠️→✅(部分) 前置源码改动（B3/B4/B5/B6）：
   - ✅ **B4 evidence-debt 接 live 热路径**（提交 B 741e550 + fa77081）：`evidence-store.assertCapacity({externalEffect, debtOnLowDisk, debtSink})` 加 debt 旁路（低盘+debtOnLowDisk → 记 debt entry 经 debtSink + 返回 `{debt:true,...}`，不抛；缺省/legacy 仍 fail-closed 抛 EVIDENCE_DISK_LOW）；`control-plane.mjs` 构造器 `policyMode.active` 时设 `this.debtOnLowDisk=true` + `this.evidenceDebt=[]`，`capacityOpts`(记一次 debt，initializeRun 用)/`capacityBypassOpts`(只解 throw，预检用) 双 helper，3 个 assertCapacity 预检 + 5 个 initializeRun 调用点全透传。红灯 6 测（evidence-store 4 + control-plane-core 2：nonpayment_v1 低盘非支付 submitJob → queued + evidenceDebt 记 EVIDENCE_DISK_LOW + adapter 执行 liveness；legacy 低盘仍 fail-closed 抛 + 不记 debt）。全套 435/433 pass/0 fail。

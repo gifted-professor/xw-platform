@@ -137,8 +137,8 @@ cat watchdog/state.json
 
 ## sync-feishu.mjs 注意
 
-- 明文 token 硬编码在文件头（`BASE_TOKEN`/`REGISTRY_TOKEN`）——PROGRESS.md backlog 已记为「本地单人私网有意取舍」，接手 agent 不当事故处理，公开仓库前再统一治理。
-- 经 `ssh xhs-windows` 远程调 `curl.exe`；字段映射见 `F` 对象（中文飞书列名 ⇄ 英文 key）。无 SSH 重试退避（backlog）。
+- sync-feishu.mjs：密钥与表 ID 读仓库根目录 `.env`（见 `.env.example`）；缺键 fail closed。本机 `.env` gitignore，外发源码不得打包。
+- 明文 token 硬编码已废止（2026-08-12）；公开/第三方交付只带 `.env.example`。
 
 ## 留痕契约（AGENTS.md 已定，重申要点）
 
