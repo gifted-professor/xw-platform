@@ -375,11 +375,12 @@ test("Xianyu adapter preserves stop-before-publish and discard verification", as
   const fullExec = await adapter.execute({
     capability: fullCap,
     device: privateDevice,
-    params: { saveDraft: false },
+    params: { saveDraft: false, requireQrMask: true },
     leaseAuthorization,
   });
   assert.equal((await adapter.verify({ capability: fullCap, execution: fullExec })).ok, true);
   assert.equal(calls.at(-1).args.includes("--save-draft"), false);
+  assert.equal(calls.at(-1).args.includes("--require-qr-mask"), true);
 
   const flutterTapProbe = registry.require("xianyu.probe.flutter_pointer_tap");
   const flutterTapExec = await adapter.execute({

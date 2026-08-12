@@ -419,6 +419,10 @@
               false
             ]
           },
+          "requireQrMask": {
+            "type": "boolean",
+            "description": "Known QR-bearing image set must complete the semantic one-click mask action before text entry"
+          },
           "calibrated": {
             "type": "object",
             "description": "二级页校准开关；标准草稿链路建议 sku/freight/image=true"

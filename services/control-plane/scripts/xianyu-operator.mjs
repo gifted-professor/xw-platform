@@ -1854,6 +1854,7 @@ function planFromArgv() {
     productTitle: arg("--product-title") || null,
     descriptionBody: arg("--description-body") || null,
     descriptionLines: descLinesRaw ? JSON.parse(descLinesRaw) : null,
+    requireQrMask: process.argv.includes("--require-qr-mask"),
     price: arg("--price") || null,
     originalPrice: arg("--original-price") || null,
     stock: arg("--stock") || null,
@@ -2301,13 +2302,22 @@ export function analyzeQrCodeMaskState(snapshot) {
 
 export async function applyQrCodeMaskIfRequired(op, {
   expectedImageCount = 0,
+  forceRequired = false,
   snapshotFn = snapshot,
   settleFn = settle,
+  maxDetectAttempts = 8,
   maxWaitAttempts = 8,
 } = {}) {
-  const before = await snapshotFn(op, "xianyu-qr-mask-before");
-  const beforeState = analyzeQrCodeMaskState(before.nodes);
-  if (!beforeState.required) {
+  let before = await snapshotFn(op, "xianyu-qr-mask-before");
+  let beforeState = analyzeQrCodeMaskState(before.nodes);
+  // 二维码识别提示由图片内容扫描异步产生；上传页刚返回时可能尚未出现。
+  // 给语义树一个有界等待窗口，再决定 auto 模式是否无需打码。
+  for (let attempt = 1; attempt < maxDetectAttempts && !beforeState.required; attempt += 1) {
+    await settleFn(1000);
+    before = await snapshotFn(op, `xianyu-qr-mask-detect-${attempt + 1}`);
+    beforeState = analyzeQrCodeMaskState(before.nodes);
+  }
+  if (!beforeState.required && !forceRequired) {
     return {
       ok: true,
       step: "qr-mask-not-required",
@@ -2320,7 +2330,9 @@ export async function applyQrCodeMaskIfRequired(op, {
   if (beforeState.actionCount !== 1 || !beforeState.actionBounds) {
     return {
       ok: false,
-      step: beforeState.actionCount > 1 ? "qr-mask-action-ambiguous" : "qr-mask-action-missing",
+      step: beforeState.actionCount > 1
+        ? "qr-mask-action-ambiguous"
+        : forceRequired ? "qr-mask-required-action-missing" : "qr-mask-action-missing",
       required: true,
       applied: false,
       verified: false,
@@ -4841,6 +4853,7 @@ export async function publishDryRun(op, plan, {
     // 「一键打码」误留到最终发布前，也避免按 SKU 写死规则。
     const qrMaskResult = await sup.run("image-qr-mask", async () => applyQrCodeMaskIfRequired(op, {
       expectedImageCount: imagesResult.imgCount || imagesResult.expectedImgCount || plan.images.length,
+      forceRequired: plan.requireQrMask === true,
     }), {
       maxAttempts: 1,
       critical: true,

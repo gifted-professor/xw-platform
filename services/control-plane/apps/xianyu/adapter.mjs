@@ -87,6 +87,7 @@ function commandArgs({ script, action, device, params, evidenceDirectory = null 
   if (params.images !== undefined) args.push("--images", JSON.stringify(params.images));
   if (params.imageAlbum !== undefined) args.push("--image-album", String(params.imageAlbum));
   if (params.maxImages !== undefined) args.push("--max-images", String(params.maxImages));
+  if (params.requireQrMask === true) args.push("--require-qr-mask");
   if (params.attributes !== undefined) args.push("--attributes", JSON.stringify(params.attributes));
   if (action === "full-draft-dry-run" || params.saveDraft === true) args.push("--save-draft");
   if (params.leaveOnCompose === true || params.awaitingAccept === true) {

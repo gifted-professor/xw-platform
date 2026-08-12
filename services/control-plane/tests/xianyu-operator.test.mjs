@@ -357,6 +357,47 @@ test("QR warning without one unique mask action fails closed without tapping", a
   assert.deepEqual(taps, []);
 });
 
+test("QR mask waits for an asynchronously rendered warning before deciding no action", async () => {
+  const warning = { label: "请勿上传含二维码的图片", bounds: [75, 150, 800, 230] };
+  const action = { label: "一键打码", bounds: [880, 150, 1030, 230], clickable: true };
+  const media = Array.from({ length: 9 }, (_, index) => ({
+    label: "商品图片",
+    className: "android.widget.Button",
+    bounds: [77 + (index % 5) * 187, 282 + Math.floor(index / 5) * 187,
+      253 + (index % 5) * 187, 458 + Math.floor(index / 5) * 187],
+    clickable: true,
+  }));
+  const snapshots = [
+    { nodes: [], publishCompose: true },
+    { nodes: [warning, action], publishCompose: true },
+    { nodes: media, publishCompose: true },
+  ];
+  const taps = [];
+  const result = await applyQrCodeMaskIfRequired({
+    async tap(x, y) { taps.push([x, y]); },
+  }, {
+    expectedImageCount: 9,
+    snapshotFn: async () => snapshots.shift(),
+    settleFn: async () => {},
+  });
+  assert.equal(result.step, "qr-mask-applied");
+  assert.equal(result.warningDetected, true);
+  assert.deepEqual(taps, [[955, 190]]);
+});
+
+test("explicit QR requirement cannot degrade to a successful no-op", async () => {
+  const result = await applyQrCodeMaskIfRequired({ async tap() {} }, {
+    forceRequired: true,
+    maxDetectAttempts: 2,
+    snapshotFn: async () => ({ nodes: [], publishCompose: true }),
+    settleFn: async () => {},
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.step, "qr-mask-required-action-missing");
+  assert.equal(result.required, true);
+  assert.equal(result.applied, false);
+});
+
 test("publish failure diagnostic keeps bounded image geometry and drops raw fields", () => {
   const diagnostic = firstFailedPublishDiagnostic({
     images: {
