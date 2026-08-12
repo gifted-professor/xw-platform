@@ -583,10 +583,11 @@ export class FastOperator {
       lastFound = true;
       lastBlock = parsed.block;
       const match = parsed.block.match(noteUriRe);
-      if (!match) {
-        const locatorShape = logLocatorShape(parsed.block, true);
-        return { ok: false, notSent: true, step: "stableNoteLocatorUnavailable", locatorShape };
-      }
+      // A current activities block can carry only a redacted portrait_feed URI
+      // while `dumpsys activity top` still exposes the stable item URI.  Treat
+      // an ID-less block as an incomplete probe, not as the final verdict, so
+      // the bounded top/cmd-top fallbacks actually run.
+      if (!match) return null;
       const locator = `xhs:note:${match[1].toLowerCase()}`;
       const digest = (value) => createHash("sha256").update(value).digest("hex");
       return {
@@ -644,10 +645,13 @@ export class FastOperator {
     }
 
     const locatorShape = logLocatorShape(lastBlock, lastFound);
-    if (lastProbeShape) {
+    // When a current block was found, locatorShape is the complete redacted
+    // failure evidence.  Probe-shape is only useful when no current block was
+    // found at all; avoid emitting a second diagnostic for the same failure.
+    if (lastProbeShape && !lastFound) {
       lastProbeShape.attempts = probeAttempts.slice(0, 4);
       try { this.diagnosticLogger?.(lastProbeShape); } catch {}
-    } else {
+    } else if (!lastProbeShape) {
       try {
         this.diagnosticLogger?.({
           event: "fast-operator.locator-probe-shape",
@@ -926,22 +930,53 @@ export class FastOperator {
     } catch (error) {
       return operatorNotSent("xhsLaunchFailed", "XHS_LAUNCH_FAILED", error, this.serial);
     }
-    for (let attempt = 0; attempt < 6; attempt += 1) {
-      if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 500));
+    const focusAttempts = Number.isInteger(this.xhsLaunchFocusAttempts)
+      ? Math.max(1, this.xhsLaunchFocusAttempts)
+      : 10;
+    const focusPollMs = Number.isInteger(this.xhsLaunchFocusPollMs)
+      ? Math.max(0, this.xhsLaunchFocusPollMs)
+      : 1000;
+    let lastFocus = null;
+    let deepRecoveryAttempted = false;
+    for (let attempt = 0; attempt < focusAttempts; attempt += 1) {
+      if (attempt > 0 && focusPollMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, focusPollMs));
+      }
       let focus;
       try {
         focus = await this.currentFocus();
       } catch (error) {
-        if (attempt === 5) {
+        if (attempt === focusAttempts - 1) {
           return operatorNotSent("xhsFocusAfterLaunchFailed", "XHS_FOCUS_FAILED", error, this.serial);
         }
         continue;
       }
+      lastFocus = focus;
       if (focus.package === "com.xingin.xhs" && (focus.activity || "").includes("IndexActivity")) {
         return { ok: true, activity: focus.activity, launched: true };
       }
+      // Android's launcher can resume the previous XHS task instead of the
+      // feed.  Recover a verified detail surface once; splash/login/unknown
+      // surfaces remain wait-only and eventually fail closed.
+      if (
+        !deepRecoveryAttempted
+        && focus.package === "com.xingin.xhs"
+        && /(?:NoteDetailActivity|DetailFeedActivity)$/.test(focus.activity || "")
+      ) {
+        deepRecoveryAttempted = true;
+        const back = await this.backToFeed(5);
+        if ((back.activity || "").includes("IndexActivity")) {
+          return { ok: true, activity: back.activity, launched: true, back };
+        }
+      }
     }
-    return { ok: false, notSent: true, step: "xhsFeedUnavailable" };
+    return {
+      ok: false,
+      notSent: true,
+      step: "xhsFeedUnavailable",
+      package: lastFocus?.package ?? null,
+      activity: lastFocus?.activity ?? null,
+    };
   }
 
   // 暂停视频笔记的自动播放：tap 屏幕中心切换播放/暂停。若 tap 偏到别的 activity（理论上不会），BACK 回 NoteDetail。

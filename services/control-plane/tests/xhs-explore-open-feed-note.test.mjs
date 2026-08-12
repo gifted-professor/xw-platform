@@ -207,6 +207,57 @@ test("operator prefers a one-shot launcher so a Windows persistent shell cannot 
   ]);
 });
 
+test("operator waits through a bounded XHS splash before accepting the feed", async () => {
+  const operator = Object.create(FastOperator.prototype);
+  const trace = [];
+  const focuses = [
+    { package: "com.android.launcher", activity: "com.android.launcher.Launcher" },
+    { package: "com.xingin.xhs", activity: "com.xingin.xhs.splash.SplashActivity" },
+    { package: "com.xingin.xhs", activity: "com.xingin.xhs.index.v2.IndexActivityV2" },
+  ];
+  operator.xhsLaunchFocusAttempts = 3;
+  operator.xhsLaunchFocusPollMs = 0;
+  operator.currentFocus = async () => { trace.push("focus"); return focuses.shift(); };
+  operator.session = {
+    oneShotShell: async (command) => { trace.push(command); return "Events injected: 1"; },
+  };
+
+  assert.deepEqual(await operator.ensureXhsFeed(), {
+    ok: true,
+    activity: "com.xingin.xhs.index.v2.IndexActivityV2",
+    launched: true,
+  });
+  assert.deepEqual(trace, [
+    "focus",
+    "monkey -p com.xingin.xhs -c android.intent.category.LAUNCHER 1",
+    "focus",
+    "focus",
+  ]);
+});
+
+test("operator recovers a detail task resumed by the package launcher", async () => {
+  const operator = Object.create(FastOperator.prototype);
+  const focuses = [
+    { package: "com.android.launcher", activity: "com.android.launcher.Launcher" },
+    { package: "com.xingin.xhs", activity: "com.xingin.matrix.notedetail.NoteDetailActivity" },
+  ];
+  operator.xhsLaunchFocusAttempts = 2;
+  operator.xhsLaunchFocusPollMs = 0;
+  operator.currentFocus = async () => focuses.shift();
+  operator.session = { oneShotShell: async () => "Events injected: 1" };
+  operator.backToFeed = async (maxBack) => ({
+    activity: "com.xingin.xhs.index.v2.IndexActivityV2",
+    maxBack,
+  });
+
+  assert.deepEqual(await operator.ensureXhsFeed(), {
+    ok: true,
+    activity: "com.xingin.xhs.index.v2.IndexActivityV2",
+    launched: true,
+    back: { activity: "com.xingin.xhs.index.v2.IndexActivityV2", maxBack: 5 },
+  });
+});
+
 test("operator converts a desktop launcher runtime throw into a retryable no-effect result", async () => {
   const operator = Object.create(FastOperator.prototype);
   const commands = [];
@@ -522,6 +573,39 @@ test("empty dumpsys activity activities falls through to dumpsys activity top", 
   const result = await operator.observeOpenNoteDetail();
   assert.equal(result.ok, true);
   assert.deepEqual(calls, [["dumpsys", "activity", "activities"], ["dumpsys", "activity", "top"]]);
+});
+
+test("an ID-less current activities block falls through to activity top", async () => {
+  const calls = [];
+  const operator = Object.create(FastOperator.prototype);
+  operator.currentFocus = async () => ({
+    package: "com.xingin.xhs",
+    activity: "com.xingin.xhs.note.DetailFeedActivity",
+  });
+  operator.session = {
+    execOut: async (args) => {
+      const command = args.join(" ");
+      calls.push(command);
+      if (command === "dumpsys activity activities") {
+        return Buffer.from(
+          "* Hist #0: ActivityRecord{aa u0 com.xingin.xhs/.note.DetailFeedActivity t7}\n"
+            + "  Intent { dat=xhsdiscover://portrait_feed cmp=com.xingin.xhs/.note.DetailFeedActivity }",
+        );
+      }
+      if (command === "dumpsys activity top") {
+        return Buffer.from(
+          "ACTIVITY com.xingin.xhs/.note.DetailFeedActivity\n"
+            + "  Intent { dat=xhsdiscover://item/0123456789abcdef01234567 }",
+        );
+      }
+      return Buffer.from("");
+    },
+  };
+
+  const result = await operator.observeOpenNoteDetail();
+  assert.equal(result.ok, true);
+  assert.match(result.targetFingerprint, /^[a-f0-9]{64}$/);
+  assert.deepEqual(calls, ["dumpsys activity activities", "dumpsys activity top"]);
 });
 
 test("real serve switch exposes only the bounded openFeedNote method", async (t) => {
