@@ -4846,6 +4846,10 @@ export async function publishDryRun(op, plan, {
       critical: true,
       expect: async (_snap, result) => result?.ok === true && result?.verified === true,
     });
+    summary.qrMask = Object.fromEntries([
+      "step", "required", "applied", "verified", "warningDetected", "actionCount",
+      "imageCount", "expectedImageCount",
+    ].filter((key) => qrMaskResult[key] !== undefined).map((key) => [key, qrMaskResult[key]]));
     if (record("imageQrMask", qrMaskResult)) return finishFailure();
   }
 

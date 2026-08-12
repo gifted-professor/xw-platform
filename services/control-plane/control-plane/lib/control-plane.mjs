@@ -86,15 +86,39 @@ function boundedTransportEvidence(value) {
   };
 }
 
+function boundedQrMaskEvidence(value) {
+  if (!value || typeof value !== "object") return undefined;
+  const allowedSteps = new Set(["qr-mask-not-required", "qr-mask-applied"]);
+  if (!allowedSteps.has(value.step)
+    || typeof value.required !== "boolean"
+    || typeof value.applied !== "boolean"
+    || value.verified !== true
+    || typeof value.warningDetected !== "boolean") return undefined;
+  const result = {
+    step: value.step,
+    required: value.required,
+    applied: value.applied,
+    verified: true,
+    warningDetected: value.warningDetected,
+  };
+  for (const key of ["actionCount", "imageCount", "expectedImageCount"]) {
+    if (value[key] === undefined) continue;
+    if (!Number.isSafeInteger(value[key]) || value[key] < 0 || value[key] > 100) return undefined;
+    result[key] = value[key];
+  }
+  return result;
+}
+
 function resultSummary(execution, verification, restoration, error = null) {
   const out = execution?.output;
   const transportEvidence = boundedTransportEvidence(out?.transportEvidence);
+  const qrMaskEvidence = boundedQrMaskEvidence(out?.qrMask);
   return {
     vendorCode: execution?.vendorCode ?? null,
     // 执行细节摘要（ok/step/verified/counts/text），便于 VERIFICATION_FAILED 时回溯，不落完整 dump
     output: out && typeof out === "object"
-      ? Object.fromEntries(
-        [
+      ? {
+        ...Object.fromEntries([
           "ok", "step", "verified", "verifyMethod", "beforeCount", "afterCount", "text", "diagnostic",
           // observe.snapshot: keep focus/package/nodeCount for VERIFICATION_FAILED triage
           "focus", "packageName", "nodeCount", "appId", "reason",
@@ -107,8 +131,9 @@ function resultSummary(execution, verification, restoration, error = null) {
           "path", "bytes", "textLen", "textPreview", "audit", "package", "activity", "stdout",
         ]
           .filter((k) => out[k] !== undefined)
-          .map((k) => [k, out[k]]),
-      )
+          .map((k) => [k, out[k]])),
+        ...(qrMaskEvidence ? { qrMask: qrMaskEvidence } : {}),
+      }
       : null,
     ...(transportEvidence ? { transportEvidence } : {}),
     error: error

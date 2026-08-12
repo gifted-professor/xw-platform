@@ -128,6 +128,17 @@ test("job result keeps bounded diagnostics and drops unrelated adapter output", 
             gatewayTapFallbacks: 0,
             privateRawLabel: "must-not-persist",
           },
+          qrMask: {
+            step: "qr-mask-applied",
+            required: true,
+            applied: true,
+            verified: true,
+            warningDetected: true,
+            actionCount: 1,
+            imageCount: 9,
+            expectedImageCount: 9,
+            privateRawLabel: "must-not-persist",
+          },
           privateRawLabel: "must-not-persist",
         },
       };
@@ -155,6 +166,17 @@ test("job result keeps bounded diagnostics and drops unrelated adapter output", 
       httpTapSucceeded: 4,
       gatewayTapFallbacks: 0,
     });
+    assert.deepEqual(terminal.result.output.qrMask, {
+      step: "qr-mask-applied",
+      required: true,
+      applied: true,
+      verified: true,
+      warningDetected: true,
+      actionCount: 1,
+      imageCount: 9,
+      expectedImageCount: 9,
+    });
+    assert.doesNotMatch(JSON.stringify(terminal.result.output.qrMask), /privateRawLabel/);
   } finally {
     await f.close();
   }
