@@ -1,5 +1,13 @@
 # XHS Device Agent
 
+多设备控制面与执行码（端口 `17920`、FastOperator、capability / job / lease）。
+
+**日常人工入口在兄弟仓**（`/xw`、registry `17930`）：
+
+**https://github.com/gifted-professor/xhs-registry**
+
+自建舰队请先读 registry 仓根目录 `README.md`（两仓一起 clone + `.env` + 设备表），再回到本仓按控制面文档安装。
+
 基于 ADB、Android UI 层级、可选云端视觉识别和飞书多维表格的多设备资产采集框架。
 
 项目采用“脚本执行、Agent 调度、视觉兜底”的方式：常规页面按控件文字和边界定位；页面结构缺失或版本变化时，才把脱敏截图交给云端视觉模型分析。默认不自动点赞、评论、关注、私信或发布。
