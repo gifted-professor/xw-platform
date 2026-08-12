@@ -1,4 +1,12 @@
 
+## 2026-08-12 release 对齐 + `/xw start` ADB 错口自动修复
+
+**release 对齐（routing 仓）**：`task-launch.json`/receipt 原钉 `ace16cf…`（2026-08-10 废弃历史线，非 `d52cd079` 祖先）。把闲鱼 idle 本地改动（adapter `--stock`/`--leave-on-compose`/`--awaiting-accept`、return-home `leaveOnCompose` 跳过、xianyu-operator 布局 profile 回退 + SKU 滚动/维度序、docs/dashboard serial 占位符→真实 serial）提交 routing main 并 push → `6903dfe`。`task-launch.json` gitCommit → `6903dfe`；receipt 重生成（34/34，绑定 `6903dfe`，runtime 产物未跟踪）；控制面经计划任务重启（worker 启动校验 HEAD==gitCommit 通过）。`/xw start` release gate 全绿，serve 四台重绑 `6903dfe`。
+
+**`/xw start` ADB 错口自动修复**：`buildXwStartPlan` 对 `wrong_port`（设备在孤儿 5037、5038 缺失）从 `human_required` 改为 `repair`（非 busy + gate 开时），计入 mutationCount；gate 关时 `blocked/release_gate_failed`。新增 `ensureAdbRepair`（`ops/xw-start.mjs`，kill 可注入便于测试）：非 busy 时 `adb -P 5037 kill-server`（只动 5037，绝不碰 5038）→ 等 1s → 下轮 re-inspect 验证设备回 5038；失败降级 human_required。主循环 ensureServes 后接入，输出加 `adbRepairResults`。测试 27/27（新增 wrong_port→repair、gate 关闭 blocked、ensureAdbRepair 三态）。
+
+**验证**：`/xw start` 实跑 `ok:true` / `READY_WITH_LIMITS`（limits=既有 4 条 XHS note locator blocker，不影响闲鱼/微信）/ 0 mutation / 四机 ready / adbOk=true / canExecute=true。`npm test` 3 个失败均为既有/环境（repair scope guard、registry singleflight flaky、Windows symlink EPERM）。
+
 ## 2026-08-12 闲鱼闲置链路速度优化（稳定为约束）
 
 在已实证稳定（LHJK6MNT01 四机真发）前提下提速，未动 `STAGGER_MS` 8s 提交错开与 1.2s mtime 错开（稳定余量）。
