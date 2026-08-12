@@ -31,7 +31,7 @@ commentTransaction / commentOnOpenNote / openCommentSection / parseComments / re
 - key: `cliproxy-codexapp`
 - model: `gpt-5.4-mini`（注意：`gpt-4o-mini` 在 CPA 报 "unknown provider"，CPA 用自有 model 名表）
 
-## 真机验证（01, serial REPLACE_SERIAL_01）
+## 真机验证（01, serial 1511f78c）
 1. parseComments dry-run：7/7 评论全解，作者评论(盛荷牧场)被 isAuthor=True 排除 ✓
 2. rewriteComment 离线：`有没有不加糖的…原味[害羞R]` → `请问有不加糖的款吗？我想先试试最原始的味道[害羞R]` ✓
 3. inputTextViaXiaowei dry-run（零发送）：全程 audit 绿，BACK 清零、无评论发出、设备回 feed ✓

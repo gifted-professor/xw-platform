@@ -59,6 +59,9 @@ import {
   deleteExistingSpecValues,
   skuBatchInputValue,
   shouldScrollAfterSkuValue,
+  skuScrollNudgeCount,
+  orderSkuDimensionEntries,
+  skuDimensionValuesComplete,
   waitForSkuPricePage,
 } from "../scripts/xianyu-operator.mjs";
 
@@ -219,6 +222,27 @@ test("image upload state counts 04 button tiles only when anchored by the add ti
   assert.equal(analyzeImageUploadState(unrelatedButtons, { picked: 2, publishCompose: true }).mediaCount, 0);
 });
 
+test("image upload state counts 02 商品图片 buttons without add-tile anchor", () => {
+  // Real 02 dump tiles are ~176px; keep fixture realistic so size gate stays honest.
+  const nodes = [
+    { label: "商品图片", className: "android.widget.Button", bounds: [77, 282, 253, 458], clickable: true },
+    { label: "商品图片", className: "android.widget.Button", bounds: [264, 282, 441, 458], clickable: true },
+    { label: "商品图片", className: "android.widget.Button", bounds: [452, 282, 628, 458], clickable: true },
+    { label: "商品图片", className: "android.widget.Button", bounds: [639, 282, 816, 458], clickable: true },
+    { label: "商品图片", className: "android.widget.Button", bounds: [827, 282, 1003, 458], clickable: true },
+    { label: "商品图片", className: "android.widget.Button", bounds: [77, 469, 253, 646], clickable: true },
+    { label: "商品图片", className: "android.widget.Button", bounds: [264, 469, 441, 646], clickable: true },
+    { label: "商品图片", className: "android.widget.Button", bounds: [452, 469, 628, 646], clickable: true },
+    { label: "商品图片", className: "android.widget.Button", bounds: [639, 469, 816, 646], clickable: true },
+  ];
+  assert.deepEqual(analyzeImageUploadState(nodes, { picked: 9, publishCompose: true }), {
+    verified: true,
+    mediaCount: 9,
+    expectedCount: 9,
+    hasAddMore: false,
+  });
+});
+
 test("image media diagnostics preserve geometry but redact every raw label", () => {
   const diagnostic = summarizeImageMediaNodes([
     {
@@ -319,15 +343,38 @@ test("SKU text input keeps the first IME restore until the batch is complete", a
   assert.equal(restores, 1);
 });
 
-test("SKU values scroll exactly after each completed pair, never after the final value", () => {
+test("SKU values scroll after every completed value except the last, more later", () => {
   assert.deepEqual(
     [1, 2, 3, 4, 5].filter((count) => shouldScrollAfterSkuValue(count, 5)),
-    [2, 4],
+    [1, 2, 3, 4],
   );
   assert.deepEqual(
     [1, 2].filter((count) => shouldScrollAfterSkuValue(count, 2)),
-    [],
+    [1],
   );
+  assert.deepEqual(
+    [1, 2, 3, 4, 5].map((count) => skuScrollNudgeCount(count, 5)),
+    [1, 2, 3, 3, 0],
+  );
+});
+
+test("SKU dimension order forces 颜色 before 尺码", () => {
+  assert.deepEqual(
+    orderSkuDimensionEntries({ 尺码: ["M"], 颜色: ["黑色", "白色"] }).map(([name]) => name),
+    ["颜色", "尺码"],
+  );
+});
+
+test("SKU dimension values must all verify before next", () => {
+  const specs = { 颜色: ["黑色", "白色"], 尺码: ["M"] };
+  assert.equal(skuDimensionValuesComplete([
+    { dim: "颜色", chosen: [{ val: "黑色", ok: true }, { val: "白色", ok: false }] },
+    { dim: "尺码", chosen: [{ val: "M", ok: true }] },
+  ], specs), false);
+  assert.equal(skuDimensionValuesComplete([
+    { dim: "颜色", chosen: [{ val: "黑色", ok: true }, { val: "白色", ok: true }] },
+    { dim: "尺码", chosen: [{ val: "M", ok: true }] },
+  ], specs), true);
 });
 
 test("replaceExisting clears old values and dimensions before rebuilding requested specs", async () => {
@@ -1006,13 +1053,20 @@ test("findHomeTab / findSellTab match profile bounds with ±20px tolerance", () 
   assert.deepEqual(home?.bounds, [30, 2140, 210, 2180]);
   assert.deepEqual(sell?.bounds, [435, 2080, 645, 2185]);
   assert.equal(boundsClose([22, 2132, 218, 2175], [30, 2140, 210, 2180], 20), true);
-  // 超出容差：profile miss 后可回落到 ratio；本例 y 太高 ratio 也 miss。
-  const far = [
+  // 超出容差：回落到 ratio。本例节点仍在屏底比例带，应命中 fallback。
+  const farButBottom = [
     { label: "闲鱼，选中状态", bounds: [22, 1000, 218, 1100], clickable: true },
     { label: "卖闲置", bounds: [427, 1000, 653, 1150], clickable: true },
   ];
-  assert.equal(findHomeTab(far, { profile, autoSave: false }), null);
-  assert.equal(findSellTab(far, { profile, autoSave: false }), null);
+  assert.deepEqual(findHomeTab(farButBottom, { profile, autoSave: false })?.bounds, [22, 1000, 218, 1100]);
+  assert.deepEqual(findSellTab(farButBottom, { profile, autoSave: false })?.bounds, [427, 1000, 653, 1150]);
+  // profile + ratio 都 miss：标签不含闲鱼/首页/卖闲置
+  const nowhere = [
+    { label: "同款商品卡", bounds: [22, 1000, 218, 1100], clickable: true },
+    { label: "其他入口", bounds: [427, 1000, 653, 1150], clickable: true },
+  ];
+  assert.equal(findHomeTab(nowhere, { profile, autoSave: false }), null);
+  assert.equal(findSellTab(nowhere, { profile, autoSave: false }), null);
 });
 
 test("loadLayoutProfile / saveLayoutProfile round-trip to temp dir", () => {

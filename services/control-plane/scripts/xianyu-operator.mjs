@@ -366,9 +366,11 @@ export function findHomeTab(snapshot, opts = {}) {
     ? options.profile
     : (serial ? loadLayoutProfile(serial, { dir }) : null);
 
-  // 有 profile 时只按真实 bounds ± 容差匹配，不再混用比例（布局漂移应重探/删 profile）。
+  // Prefer profile bounds ± 容差；漂移超容差时回退比例探测并重落盘（02 2026-08-12：
+  // screenH 2175→2400 / home y 2132→2218，旧 profile 直接 home-tab-not-found）。
   if (profile?.home?.bounds) {
-    return matchTabByProfileBounds(snapshot, profile.home, /闲鱼|首页/);
+    const matched = matchTabByProfileBounds(snapshot, profile.home, /闲鱼|首页/);
+    if (matched) return matched;
   }
 
   const fallback = findHomeTabByRatio(snapshot);
@@ -389,7 +391,8 @@ export function findSellTab(snapshot, opts = {}) {
     : (serial ? loadLayoutProfile(serial, { dir }) : null);
 
   if (profile?.sell?.bounds) {
-    return matchTabByProfileBounds(snapshot, profile.sell, /卖闲置/);
+    const matched = matchTabByProfileBounds(snapshot, profile.sell, /卖闲置/);
+    if (matched) return matched;
   }
 
   const fallback = findSellTabByRatio(snapshot);
@@ -403,23 +406,29 @@ export function findSellTab(snapshot, opts = {}) {
  */
 export async function ensureLayoutProfile(op, snapshotNodes = null, { dir = LAYOUT_PROFILE_DIR } = {}) {
   const serial = op?.serial;
-  const existing = serial ? loadLayoutProfile(serial, { dir }) : null;
-  if (existing?.home?.bounds && existing?.sell?.bounds) {
-    return { profile: existing, source: "cache", path: layoutProfilePath(serial, dir) };
-  }
-
   let nodes = snapshotNodes;
   if (!nodes) {
     const state = await snapshot(op, "xianyu-layout-probe");
     nodes = state.nodes;
   }
+
+  const existing = serial ? loadLayoutProfile(serial, { dir }) : null;
+  if (existing?.home?.bounds && existing?.sell?.bounds) {
+    const homeOk = matchTabByProfileBounds(nodes, existing.home, /闲鱼|首页/);
+    const sellOk = matchTabByProfileBounds(nodes, existing.sell, /卖闲置/);
+    if (homeOk && sellOk) {
+      return { profile: existing, source: "cache", path: layoutProfilePath(serial, dir) };
+    }
+    // Stale cache (nav bar y-shift / screenH change): fall through and re-probe.
+  }
+
   const probe = probeBottomTabs(nodes, getScreenHeight(nodes));
   if (!probe.home?.bounds || !probe.sell?.bounds) {
-    return { profile: null, source: "probe-failed", probe };
+    return { profile: existing || null, source: "probe-failed", probe };
   }
   const profile = buildLayoutProfileFromProbe(probe);
   const path = saveLayoutProfile(serial, profile, { dir });
-  return { profile, source: "probe-saved", path, probe };
+  return { profile, source: existing ? "probe-refreshed" : "probe-saved", path, probe };
 }
 
 export function findDescriptionField(snapshot) {
@@ -1182,8 +1191,33 @@ export async function discardDraftDryRun(op) {
 // fail-closed 仪式：一律点「放弃」(灰钮，左)丢弃脏草稿。返回是否处置过。
 export async function dismissRestoreDialog(op) {
   const snap = await snapshot(op, "xianyu-restore-check");
-  const abandon = snap.nodes.find((node) => /^放弃$/.test(node.label)
-    && node.className === "android.widget.Button" && node.bounds && node.bounds[1] >= 2000) || null;
+  // Flutter 草稿弹窗常见 content-desc=放弃/继续，不一定是 android.widget.Button，
+  // y 也可能略低于 2000。2026-08-12 Explorer 02 实证：过严 Button+y>=2000 会漏点，
+  // 导致 open-publish VERIFICATION_FAILED 后 restoration 回桌面。
+  const abandonCandidates = snap.nodes.filter((node) => {
+    const parts = String(node.label || "")
+      .split(/\n/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    return node.bounds && parts.some((p) => p === "放弃" || /^放弃(?:[,，].*)?$/.test(p));
+  });
+  if (!abandonCandidates.length) return false;
+  const hasContinue = snap.nodes.some((node) =>
+    String(node.label || "")
+      .split(/\n/)
+      .map((s) => s.trim())
+      .some((p) => p === "继续" || /^继续(?:[,，].*)?$/.test(p)),
+  );
+  // Prefer bottom-sheet left grey button when the restore pair is present.
+  const ranked = abandonCandidates
+    .slice()
+    .sort((a, b) => {
+      const ay = a.bounds[1];
+      const by = b.bounds[1];
+      if (ay !== by) return by - ay;
+      return a.bounds[0] - b.bounds[0];
+    });
+  const abandon = (hasContinue ? ranked.find((node) => node.bounds[1] >= 1600) : null) || ranked[0];
   if (!abandon?.bounds) return false;
   await op.tap(...center(abandon.bounds));
   await settle(1500);
@@ -1797,6 +1831,7 @@ function planFromArgv() {
     descriptionLines: descLinesRaw ? JSON.parse(descLinesRaw) : null,
     price: arg("--price") || null,
     originalPrice: arg("--original-price") || null,
+    stock: arg("--stock") || null,
     category: arg("--category") || null,
     condition: arg("--condition") || null,
     skuSpecs: skuSpecsRaw ? JSON.parse(skuSpecsRaw) : null,
@@ -1811,6 +1846,8 @@ function planFromArgv() {
     imageAlbum: arg("--image-album") || null,
     maxImages: Number(arg("--max-images", "9")),
     saveDraft: process.argv.includes("--save-draft"),
+    leaveOnCompose: process.argv.includes("--leave-on-compose"),
+    awaitingAccept: process.argv.includes("--awaiting-accept"),
   };
   return plan;
 }
@@ -2127,13 +2164,15 @@ export function analyzeImageUploadState(snapshot, {
   publishCompose = true,
 } = {}) {
   const isAddTile = (node) => /添加|上传|娣诲姞鍥剧墖/.test(String(node?.label || ""));
+  const isProductTile = (node) => /^商品图片(?:[，,].*)?$/.test(String(node?.label || "").trim());
   const isLargeTopTile = (node) => {
     const b = node?.bounds;
+    // 02 机满 9 图时「商品图片」tile 约 176×176；阈值 180 会全漏计。
     return !!b
       && b[1] >= 150
       && b[3] <= 750
-      && b[2] - b[0] >= 180
-      && b[3] - b[1] >= 180;
+      && b[2] - b[0] >= 160
+      && b[3] - b[1] >= 160;
   };
   const topMediaNodes = (snapshot || []).filter((node) => isLargeTopTile(node)
     && node.className === "android.widget.ImageView"
@@ -2144,6 +2183,12 @@ export function analyzeImageUploadState(snapshot, {
   // ImageView 结构计数，并排除「添加图片」tile。
   const legacyMediaCount = deleteTiles.length
     || topMediaNodes.filter((node) => !isAddTile(node)).length;
+  // 02 机（及部分 Flutter 语义）：已选媒体是顶部可点 Button，label=「商品图片」；
+  // 满 9 张时「添加图片」入口可被挤出 dump，不能再依赖 add 锚点。
+  const productButtonCount = (snapshot || []).filter((node) => isLargeTopTile(node)
+    && node.className === "android.widget.Button"
+    && node.clickable === true
+    && isProductTile(node)).length;
   // 04 真机的 Flutter semantics 把已选媒体暴露成同排的大 Button，而非 ImageView。
   // 只有存在带「添加」语义的同尺寸锚点时，才把其同排、位于锚点左侧的可点击 Button
   // 作为媒体 tile；没有 add 锚点则保持 fail-closed，避免把发布页普通按钮误计为图片。
@@ -2168,7 +2213,7 @@ export function analyzeImageUploadState(snapshot, {
     }).length;
     return Math.max(best, count);
   }, 0);
-  const mediaCount = legacyMediaCount || buttonMediaCount;
+  const mediaCount = legacyMediaCount || productButtonCount || buttonMediaCount;
   const expectedCount = Number(baselineCount || 0) + Number(picked || 0);
   const hasAddMore = (snapshot || []).some((node) =>
     !!node?.bounds
@@ -2200,6 +2245,7 @@ export function summarizeImageMediaNodes(snapshot) {
   const labelKind = (label) => {
     const value = String(label || "");
     if (/删除图片|鍒犻櫎鍥剧墖|^删除(?:[，,]|$)/.test(value)) return "delete";
+    if (/^商品图片(?:[，,].*)?$/.test(value.trim())) return "product";
     if (/添加更多|添加图片|添加照片|上传|娣诲姞/.test(value)) return "add";
     return value ? "other" : "empty";
   };
@@ -2867,6 +2913,7 @@ async function fillDescriptionMultiLine(op, field, lines, { evidenceDir, label =
 // 尚未 commit 的 sheet 内值当作成功（旧 gap4 false positive）。
 export async function fillPriceField(op, field, price, {
   evidenceDir,
+  stock = null,
   snapshotFn = snapshot,
   captureFn = capturePng,
   settleFn = settle,
@@ -2874,6 +2921,7 @@ export async function fillPriceField(op, field, price, {
   if (!field?.bounds) return { ok: false, step: "price-field-missing" };
   const clean = String(price).replace(/[^\d.]/g, "");
   if (!clean) return { ok: false, step: "price-invalid" };
+  const stockClean = stock == null || stock === "" ? "" : String(stock).replace(/[^\d]/g, "");
   const safeSerial = String(op.serial).replace(/[^A-Za-z0-9_-]/g, "_");
   const diagnostic = (state) => state ? {
     surface: state.surface,
@@ -2891,11 +2939,23 @@ export async function fillPriceField(op, field, price, {
   const cleanup = (state = null) => state?.surface === "compose"
     ? Promise.resolve()
     : op.back().catch(() => null);
+  const findStockField = (nodes) => (nodes || []).find((n) =>
+    /^库存(?:\s|\d|$)/.test(String(n.label || "").trim()) && n.bounds)
+    || (nodes || []).find((n) => /库存/.test(String(n.label || "")) && n.bounds && (n.clickable || n.focusable));
+  const tapNumpadDigits = async (nodes, value, label) => {
+    for (const ch of String(value)) {
+      const key = (nodes || []).find((n) => String(n.label) === ch && n.bounds);
+      if (!key?.bounds) return { ok: false, step: `${label}-key-missing`, missing: ch };
+      await op.tap(...center(key.bounds));
+      await settleFn(APP_NUMPAD_SETTLE_MS);
+    }
+    return { ok: true };
+  };
   const [x, y] = center(field.bounds);
   await op.tap(x, y);
   await settleFn(1000);
   const baseline = await captureFn(op, `${evidenceDir}\\xianyu-price-baseline-${safeSerial}.png`);
-  const sheet = await snapshotFn(op, "xianyu-price-sheet");
+  let sheet = await snapshotFn(op, "xianyu-price-sheet");
   const openedSheetState = inspectPriceState(sheet.nodes, clean);
   const priceBoundsAnchors = {
     composePriceBounds: field.bounds,
@@ -2903,16 +2963,39 @@ export async function fillPriceField(op, field, price, {
   };
   const digits = sheet.nodes.filter((n) => /^[0-9]$/.test(String(n.label || "")) && n.bounds);
   let entered = null;
+  let stockEntered = false;
   if (digits.length >= 8) {
     // 应用内数字键盘模式（2026-07-22 gap4 实证）：价格行点开是底部 sheet（价格/原价/库存+数字键盘），
     // KeyEvent input text 对它无效；semantics 数字键逐个点（占位 0.00 输入即替换），键盘确定=x 中心>700。
-    for (const ch of clean) {
-      const key = sheet.nodes.find((n) => String(n.label) === ch);
-      if (!key?.bounds) { await cleanup(); return { ok: false, step: `price-key-missing`, evidence: { baseline } }; }
-      await op.tap(...center(key.bounds));
-      await settleFn(APP_NUMPAD_SETTLE_MS);
+    const priceTyped = await tapNumpadDigits(sheet.nodes, clean, "price");
+    if (!priceTyped.ok) {
+      await cleanup();
+      return { ok: false, step: priceTyped.step, evidence: { baseline } };
     }
     await settleFn(400);
+    // 闲置模式：同 sheet 再填库存（点「库存」行 → 数字键 → 再确定）
+    if (stockClean) {
+      sheet = await snapshotFn(op, "xianyu-price-before-stock");
+      const stockField = findStockField(sheet.nodes);
+      if (!stockField?.bounds) {
+        await cleanup();
+        return { ok: false, step: "stock-field-missing", wanted: stockClean, evidence: { baseline } };
+      }
+      await op.tap(...center(stockField.bounds));
+      await settleFn(600);
+      sheet = await snapshotFn(op, "xianyu-stock-focused");
+      // 清默认库存再输入
+      await op.shellExec("input keyevent KEYCODE_MOVE_END " + Array(8).fill("KEYCODE_DEL").join(" "), 8000).catch(() => null);
+      await settleFn(200);
+      sheet = await snapshotFn(op, "xianyu-stock-cleared");
+      const stockTyped = await tapNumpadDigits(sheet.nodes, stockClean, "stock");
+      if (!stockTyped.ok) {
+        await cleanup();
+        return { ok: false, step: stockTyped.step, wanted: stockClean, evidence: { baseline } };
+      }
+      stockEntered = true;
+      await settleFn(300);
+    }
     entered = await captureFn(op, `${evidenceDir}\\xianyu-price-entered-${safeSerial}.png`);
     const typed = await snapshotFn(op, "xianyu-price-typed");
     const kbConfirm = typed.nodes.find((n) => /^确定$/.test(String(n.label || "")) && n.bounds && center(n.bounds)[0] > 700)
@@ -2926,6 +3009,19 @@ export async function fillPriceField(op, field, price, {
     await op.shellExec(`input text ${clean}`, 8000);
     await settleFn(500);
     entered = await captureFn(op, `${evidenceDir}\\xianyu-price-entered-${safeSerial}.png`);
+    if (stockClean) {
+      // 行内形态少见库存同屏；缺字段则软记，不硬阻断价格成功路径。
+      sheet = await snapshotFn(op, "xianyu-price-inline-stock");
+      const stockField = findStockField(sheet.nodes);
+      if (stockField?.bounds) {
+        await op.tap(...center(stockField.bounds));
+        await settleFn(400);
+        await op.shellExec("input keyevent KEYCODE_MOVE_END " + Array(8).fill("KEYCODE_DEL").join(" "), 8000);
+        await op.shellExec(`input text ${stockClean}`, 8000);
+        stockEntered = true;
+        await settleFn(400);
+      }
+    }
   }
   const afterCommit = await captureFn(op, `${evidenceDir}\\xianyu-price-commit-${safeSerial}.png`);
   let composeState = null;
@@ -3020,6 +3116,8 @@ export async function fillPriceField(op, field, price, {
     step: verified ? "price-filled" : "price-unverified",
     verified,
     verificationMethod,
+    stockEntered: stockEntered || false,
+    stock: stockClean || null,
     evidence: { baseline, entered, afterCommit, persisted },
   };
 }
@@ -3454,8 +3552,48 @@ export function createStickyXiaoweiInputSession(op) {
   };
 }
 
+/** 每填完一个规格值（非最后一个）都要下滑露出下一输入框；越往后滑得越多。 */
 export function shouldScrollAfterSkuValue(enteredCount, totalValues) {
-  return enteredCount > 0 && enteredCount < totalValues && enteredCount % 2 === 0;
+  return enteredCount > 0 && enteredCount < totalValues;
+}
+
+/** 第 N 个已填值后需要的安全下滑次数（02 实证：后面几个值会被已填行顶出可视区）。 */
+export function skuScrollNudgeCount(enteredCount, totalValues) {
+  if (!shouldScrollAfterSkuValue(enteredCount, totalValues)) return 0;
+  // 1→1 次，2→2 次，3+→3 次；上限 3，避免滑过「下一步」黄条。
+  return Math.min(3, Math.max(1, enteredCount));
+}
+
+/** Mid-sheet 下滑：手指上滑 → 内容下移，露出下方输入框；绝不从 CTA 带起手。 */
+export async function nudgeSkuSheetDown(op, times = 1) {
+  const n = Math.max(0, Math.min(5, Number(times) || 0));
+  for (let i = 0; i < n; i += 1) {
+    await op.shellExec("input swipe 540 1200 540 780 320", 8000).catch(() => null);
+    await settle(500);
+  }
+}
+
+/** Prefer 颜色 before 尺码 so the color block stays above「下一步」(02 2026-08-12). */
+export function orderSkuDimensionEntries(specs) {
+  const entries = Object.entries(specs || {});
+  const rank = (name) => {
+    if (name === "颜色") return 0;
+    if (name === "尺码") return 1;
+    return 2;
+  };
+  return entries.slice().sort((a, b) => rank(a[0]) - rank(b[0]) || 0);
+}
+
+export function skuDimensionValuesComplete(dimResults = [], specs = {}) {
+  const byDim = new Map((dimResults || []).map((row) => [row.dim, row]));
+  for (const [dimName, values] of orderSkuDimensionEntries(specs)) {
+    const row = byDim.get(dimName);
+    if (!row || row.ok === false || row.reason) return false;
+    const chosen = Array.isArray(row.chosen) ? row.chosen : [];
+    if (chosen.length !== values.length) return false;
+    if (chosen.some((item) => item?.ok !== true)) return false;
+  }
+  return true;
 }
 
 export async function fillSkuSpecs(op, specs, stock, {
@@ -3491,6 +3629,37 @@ function isDimTitle(label, dimName) {
     return edits[edits.length - 1] || null;
   };
 
+  const dimEntries = orderSkuDimensionEntries(specs);
+  const allDimNames = dimEntries.map(([d]) => d);
+  const nextButtonTop = (nodes) => {
+    const btn = (nodes || []).find((n) => /下一步/.test(String(n.label || "")) && n.bounds);
+    return btn?.bounds?.[1] ?? null;
+  };
+  const exactValueNode = (nodes, val) => {
+    const target = String(val);
+    return (nodes || []).find((n) => {
+      const l = String(n.label || "").trim();
+      return l === target || l.startsWith(`${target},`) || l.startsWith(`${target}，`);
+    }) || null;
+  };
+  // Keep dim title/input above「下一步」; never swipe through the yellow CTA band.
+  const ensureDimAwayFromNext = async (dimName, labelSuffix) => {
+    let snap = await snapshot(op, `xianyu-sku-${labelSuffix}-safe`);
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const title = snap.nodes.find((n) => isDimTitle(n.label, dimName) && n.bounds);
+      const nextTop = nextButtonTop(snap.nodes);
+      const input = sectionInput(snap.nodes, dimName, allDimNames) || sectionInput(snap.nodes, dimName, []);
+      const titleOk = title && title.bounds[1] <= 1300;
+      const inputOk = input && (!nextTop || input.bounds[3] <= nextTop - 120);
+      if (titleOk && inputOk) return snap;
+      // Mid-sheet only: finger up reveals lower dims; avoid y>=1800 near CTA.
+      await op.shellExec("input swipe 540 1350 540 850 350", 8000).catch(() => null);
+      await settle(700);
+      snap = await snapshot(op, `xianyu-sku-${labelSuffix}-safe-${attempt}`);
+    }
+    return snap;
+  };
+
   try {
     await op.tap(...center(row.bounds));
     await settle(1500);
@@ -3501,8 +3670,6 @@ function isDimTitle(label, dimName) {
         return { ...replaced, implemented: true };
       }
     }
-    const dimEntries = Object.entries(specs);
-    const allDimNames = dimEntries.map(([d]) => d);
     for (let d = 0; d < dimEntries.length; d += 1) {
       const [dimName, values] = dimEntries[d];
       let snap = await snapshot(op, `xianyu-sku-dim${d}-check`);
@@ -3537,65 +3704,148 @@ function isDimTitle(label, dimName) {
           }
         }
       }
-      if (!sectionExists) { dimResults.push({ dim: dimName, ok: false, reason: "section-missing" }); continue; }
-      // 填值：用户明确——在分区输入框**打字**（芯片仅作兜底）。输入后校验提交值精确等于目标
-      // （输 "XS" 可能被联想成 2XS及以下——实证；不符则点垃圾桶删掉重试）
+      if (!sectionExists) {
+        dimResults.push({ dim: dimName, ok: false, reason: "section-missing" });
+        await skuInputSession.restore().catch(() => null);
+        return { ok: false, step: "sku-values-incomplete", implemented: true, dimResults, failedDim: dimName };
+      }
+      snap = await ensureDimAwayFromNext(dimName, `dim${d}`);
+      // 填值：推荐 chip 优先（颜色/尺码都有黄框 chip），打字兜底。必须回读成功才进下一个值。
       const chosen = [];
       let valueSnap = snap;
       for (let vi = 0; vi < values.length; vi += 1) {
         const val = values[vi];
-        if (!valueSnap) valueSnap = await snapshot(op, `xianyu-sku-dim${d}-val-${vi}`);
+        if (!valueSnap) valueSnap = await ensureDimAwayFromNext(dimName, `dim${d}-val-${vi}`);
         {
-          const input = sectionInput(valueSnap.nodes, dimName, allDimNames) || sectionInput(valueSnap.nodes, dimName, []);
-          if (!input) {
-            chosen.push({ val, ok: false, reason: "input-missing" });
-            valueSnap = null;
-            continue;
+          const exactCommitted = (n) => {
+            // EditText 里未回车的草稿 text 也会变成 label「黑色」——不能当已提交规格值。
+            if (/EditText/.test(String(n.className || ""))) return false;
+            const l = String(n.label || "").trim();
+            return l === String(val)
+              || l.startsWith(`${String(val)},`)
+              || l.startsWith(`${String(val)}，`);
+          };
+          let after = valueSnap;
+          let ok = false;
+          let via = null;
+          // chip-first：已选中的值行 / 推荐 chip，避免在「下一步」边上的输入框盲打
+          const chip = after.nodes.find((n) => exactCommitted(n) && n.bounds
+            && (!nextButtonTop(after.nodes) || n.bounds[1] < nextButtonTop(after.nodes) - 80));
+          if (chip?.bounds) {
+            await op.tap(...center(chip.bounds));
+            await settle(600);
+            after = await snapshot(op, `xianyu-sku-dim${d}-val-chip-${vi}`);
+            ok = after.nodes.some(exactCommitted);
+            if (ok) via = "chip";
           }
-          const [ix, iy] = center(input.bounds);
-          await op.tap(ix, iy);
-          await settle(600);
-          await skuInputSession.input(String(val), { clearFirst: false, refocus: async () => { await op.tap(ix, iy); } });
-          await settle(500);
-          await op.shellExec("input keyevent KEYCODE_ENTER", 5000).catch(() => null);
-          await settle(800);
-          let after = await snapshot(op, `xianyu-sku-dim${d}-val-after-${vi}`);
-          // 精确判定：提交值==目标（防 "XS"→2XS及以下 联想假阳性）
-          const exact = (n) => { const l = String(n.label || "").trim(); return l === String(val) || l.startsWith(String(val) + ",") || l.startsWith(String(val) + "，"); };
-          let ok = after.nodes.some(exact);
-          let via = "typed";
           if (!ok) {
-            // 兜底：推荐 chip 精确点选
-            const chip = after.nodes.find((n) => exact(n) && n.bounds && !/EditText/.test(String(n.className || "")));
-            if (chip) {
-              await op.tap(...center(chip.bounds));
-              await settle(600);
-              after = await snapshot(op, `xianyu-sku-dim${d}-val-chip-${vi}`);
-              ok = after.nodes.some(exact);
-              if (ok) via = "chip-fallback";
+            const input = sectionInput(after.nodes, dimName, allDimNames) || sectionInput(after.nodes, dimName, []);
+            const nextTop = nextButtonTop(after.nodes);
+            if (!input || (nextTop && input.bounds[3] > nextTop - 80)) {
+              chosen.push({ val, ok: false, reason: input ? "input-too-close-to-next" : "input-missing" });
+              valueSnap = null;
+              continue;
+            }
+            const [ix, iy] = center(input.bounds);
+            await op.tap(ix, iy);
+            await settle(600);
+            await skuInputSession.input(String(val), { clearFirst: false, refocus: async () => { await op.tap(ix, iy); } });
+            await settle(400);
+            // Flutter 规格值必须 ENTER 才落成「黑色, 黑色」行；仅 KEYCODE 偶发丢，最多补两枪。
+            for (let enterTry = 0; enterTry < 3 && !ok; enterTry += 1) {
+              await op.shellExec("input keyevent KEYCODE_ENTER", 5000).catch(() => null);
+              await settle(700);
+              after = await snapshot(op, `xianyu-sku-dim${d}-val-after-${vi}-e${enterTry}`);
+              ok = after.nodes.some(exactCommitted);
+            }
+            via = "typed";
+            if (!ok) {
+              const chip2 = after.nodes.find((n) => exactCommitted(n) && n.bounds);
+              if (chip2) {
+                await op.tap(...center(chip2.bounds));
+                await settle(600);
+                after = await snapshot(op, `xianyu-sku-dim${d}-val-chip2-${vi}`);
+                ok = after.nodes.some(exactCommitted);
+                if (ok) via = "chip-fallback";
+              }
             }
           }
           chosen.push({ val, ok, via });
-          if (shouldScrollAfterSkuValue(vi + 1, values.length)) {
-            await op.shellExec("input swipe 540 1500 540 1100 350", 8000).catch(() => null);
-            await settle(700);
+          if (!ok) {
+            dimResults.push({ dim: dimName, chosen, ok: false, reason: "value-unverified" });
+            await skuInputSession.restore().catch(() => null);
+            return { ok: false, step: "sku-values-incomplete", implemented: true, dimResults, failedDim: dimName, failedValue: val };
+          }
+          // 填一个 → 收键盘 → 下滑露出下一个输入框；越往后滑得越多（用户 2026-08-12 指正）。
+          const nudges = skuScrollNudgeCount(vi + 1, values.length);
+          if (nudges > 0) {
+            // 键盘挡住下滑时点标题栏收起，避免滑到「下一步」。
+            const title = after.nodes.find((n) => isDimTitle(n.label, dimName) && n.bounds);
+            if (title?.bounds) await op.tap(...center(title.bounds)).catch(() => null);
+            else await op.tap(540, 360).catch(() => null);
+            await settle(400);
+            await nudgeSkuSheetDown(op, nudges);
             valueSnap = null;
           } else {
-            // 上一值的精确回读同时就是下一值的定位快照；避免立刻重复 dump 同一页面。
             valueSnap = after;
           }
         }
       }
-      dimResults.push({ dim: dimName, chosen });
+      dimResults.push({ dim: dimName, chosen, ok: chosen.every((item) => item.ok === true) });
     }
     await skuInputSession.restore();
+    if (!skuDimensionValuesComplete(dimResults, specs)) {
+      return {
+        ok: false,
+        step: "sku-values-incomplete",
+        implemented: true,
+        dimResults,
+        stillInFlow: true,
+      };
+    }
     // ④ 下一步 → 价格库存页（模式判定）
     // 注意：找不到下一步时**不要**三连 BACK 退到桌面（02 机 2026-07-26 实证会落到 miui.home）
     let snapN = await snapshot(op, "xianyu-sku-before-next");
+    // Final presence check (values can scroll off-tree; accept any exact label still mounted).
+    const missingBeforeNext = [];
+    for (const [dimName, values] of dimEntries) {
+      for (const val of values) {
+        if (!exactValueNode(snapN.nodes, val)) missingBeforeNext.push({ dim: dimName, val });
+      }
+    }
+    // If the tree only shows the lower dim, scroll mid-sheet once and re-check union.
+    if (missingBeforeNext.length) {
+      const seen = new Set(snapN.nodes.map((n) => String(n.label || "").trim()));
+      for (let si = 0; si < 2; si += 1) {
+        await op.shellExec("input swipe 540 900 540 1350 350", 8000).catch(() => null);
+        await settle(700);
+        const more = await snapshot(op, `xianyu-sku-value-audit-${si}`);
+        for (const n of more.nodes) seen.add(String(n.label || "").trim());
+        snapN = more;
+      }
+      const stillMissing = [];
+      for (const [dimName, values] of dimEntries) {
+        for (const val of values) {
+          const target = String(val);
+          const ok = [...seen].some((l) => l === target || l.startsWith(`${target},`) || l.startsWith(`${target}，`));
+          if (!ok) stillMissing.push({ dim: dimName, val });
+        }
+      }
+      if (stillMissing.length) {
+        return {
+          ok: false,
+          step: "sku-values-incomplete",
+          implemented: true,
+          dimResults,
+          missingBeforeNext: stillMissing,
+          stillInFlow: true,
+        };
+      }
+    }
     let nextBtn = snapN.nodes.find((n) => /下一步/.test(String(n.label || "")) && n.bounds);
     if (!nextBtn?.bounds) {
       for (let si = 0; si < 3 && !nextBtn?.bounds; si += 1) {
-        await op.shellExec("input swipe 540 1700 540 900 400", 8000).catch(() => null);
+        await op.shellExec("input swipe 540 1350 540 850 400", 8000).catch(() => null);
         await settle(700);
         snapN = await snapshot(op, `xianyu-sku-before-next-sc${si}`);
         nextBtn = snapN.nodes.find((n) => /下一步/.test(String(n.label || "")) && n.bounds);
@@ -3882,6 +4132,91 @@ function isDimTitle(label, dimName) {
   }
 }
 
+function findImageEditDoneButton(nodes = []) {
+  const list = nodes || [];
+  const scored = list
+    .filter((n) => {
+      if (!n?.bounds) return false;
+      const l = String(n.label || "").trim();
+      return /^完成(?:[，,].*)?$/.test(l) || l === "完成";
+    })
+    .map((n) => {
+      const [, , , y2] = n.bounds;
+      // Prefer bottom-right clickable Button (true editor CTA).
+      let score = y2;
+      if (n.clickable) score += 10000;
+      if (/Button/i.test(String(n.className || ""))) score += 1000;
+      return { node: n, score };
+    })
+    .sort((a, b) => b.score - a.score);
+  return scored[0]?.node || null;
+}
+
+function isImageToolEditor(nodes = []) {
+  return (nodes || []).some((n) => /^(裁剪|文字|贴纸|滤镜)$/.test(String(n.label || "").trim()));
+}
+
+function isImageLightbox(nodes = []) {
+  const labels = (nodes || []).map((n) => String(n.label || "").trim());
+  const hasEdit = labels.some((l) => l === "编辑" || /^编辑(?:[，,].*)?$/.test(l));
+  const hasMain = labels.some((l) => /当前主图/.test(l));
+  const hasRatio = labels.some((l) => /^\d+\/\d+$/.test(l));
+  return hasRatio && (hasEdit || hasMain) && !isImageToolEditor(nodes);
+}
+
+/**
+ * Leave image editor / lightbox and return to publish compose.
+ * 02 真机：下一步后偶发先进「1/N + 编辑/当前主图」灯箱，需先点「编辑」才出带「完成」的工具页。
+ */
+async function completeImageEditor(op, initialSnap = null) {
+  let snap = initialSnap || await snapshot(op, "xianyu-image-edit-complete");
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    if (isPublishCompose(snap.nodes)) {
+      return { ok: true, snap, via: attempt === 0 ? "already-compose" : "compose-after-done" };
+    }
+    let doneBtn = findImageEditDoneButton(snap.nodes);
+    if (!doneBtn?.bounds && isImageLightbox(snap.nodes)) {
+      const editBtn = (snap.nodes || []).find((n) => {
+        if (!n?.bounds) return false;
+        const l = String(n.label || "").trim();
+        return (l === "编辑" || /^编辑(?:[，,].*)?$/.test(l)) && n.clickable;
+      }) || (snap.nodes || []).find((n) => {
+        if (!n?.bounds) return false;
+        const l = String(n.label || "").trim();
+        return l === "编辑" || /^编辑(?:[，,].*)?$/.test(l);
+      });
+      if (!editBtn?.bounds) {
+        return { ok: false, snap, step: "image-lightbox-edit-missing" };
+      }
+      await op.tap(...center(editBtn.bounds));
+      await settle(1800);
+      snap = await snapshot(op, `xianyu-image-edit-after-lightbox-${attempt}`);
+      doneBtn = findImageEditDoneButton(snap.nodes);
+    }
+    if (doneBtn?.bounds) {
+      await op.tap(...center(doneBtn.bounds));
+      await settle(2500);
+      snap = await snapshot(op, `xianyu-image-after-done-${attempt}`);
+      if (isPublishCompose(snap.nodes)) {
+        return { ok: true, snap, via: "done-button" };
+      }
+      continue;
+    }
+    if (isImageToolEditor(snap.nodes)) {
+      // Tool strip present but dump missed 「完成」label — bottom-right CTA on 1080×2400.
+      await op.tap(930, 2280);
+      await settle(2500);
+      snap = await snapshot(op, `xianyu-image-after-blind-done-${attempt}`);
+      if (isPublishCompose(snap.nodes)) {
+        return { ok: true, snap, via: "tool-editor-blind-done" };
+      }
+      continue;
+    }
+    return { ok: false, snap, step: "image-done-missing" };
+  }
+  return { ok: false, snap, step: "image-done-unresolved" };
+}
+
 // 图片上传（2026-07-23 真机实证配方，4号机 1080x2400）：
 //  ① 发布页点「添加图片」入口（左上媒体区，clickable=false 但坐标 tap 生效）→ 系统相册 picker；
 //  ② picker 是 4 列网格，每格 = ImageView「查看大图」+ 右上角 View「选择」(clickable=true，完全重叠)；
@@ -3934,6 +4269,24 @@ async function uploadImagesDryRun(op, images, {
   const safeSerial = String(op.serial).replace(/[^A-Za-z0-9_-]/g, "_");
   const want = Math.min(images.length, maxImages);
   const cleanup = async () => { for (let i = 0; i < 3; i += 1) { await op.back().catch(() => null); await settle(800); } };
+  const verifyAfterUpload = async (pickedCount, label) => {
+    let finalSnap = await snapshot(op, label);
+    let imageState = analyzeImageUploadState(finalSnap.nodes, {
+      baselineCount: baselineMedia,
+      picked: pickedCount,
+      publishCompose: finalSnap.publishCompose,
+    });
+    for (let retry = 0; retry < 3 && !imageState.verified; retry += 1) {
+      await settle(1200);
+      finalSnap = await snapshot(op, `${label}-r${retry + 1}`);
+      imageState = analyzeImageUploadState(finalSnap.nodes, {
+        baselineCount: baselineMedia,
+        picked: pickedCount,
+        publishCompose: finalSnap.publishCompose,
+      });
+    }
+    return { finalSnap, imageState };
+  };
   try {
     // ① 开 picker
     await op.tap(...center(entry.bounds));
@@ -3941,37 +4294,15 @@ async function uploadImagesDryRun(op, images, {
     let picker = await snapshot(op, "xianyu-image-picker");
     if (!/FishFlutterBoost/.test(picker.focus.activity || "")) { await cleanup(); return { ok: false, step: "image-picker-not-open", implemented: true }; }
 
-    // 若已在图片编辑页（重试时常见残留）：顶栏「1/N」+「完成」→ 直接完成并验证
-    // 04 机 dump 偶发只有「返回/1/2/删除」无「完成」label → 右下坐标兜底
-    const editDoneEarly = (picker.nodes || []).find((n) => {
-      if (!n.bounds) return false;
-      const l = String(n.label || "").trim();
-      return /^完成(?:[，,].*)?$/.test(l) || l === "完成";
-    });
+    // 若已在图片编辑页/灯箱（重试时常见残留）：完成并验证；禁止在灯箱上盲点右下角。
     const editRatio = (picker.nodes || []).some((n) => /^\d+\/\d+$/.test(String(n.label || "").trim()));
-    if (editRatio && (editDoneEarly?.bounds || true)) {
-      if (editDoneEarly?.bounds) {
-        await op.tap(...center(editDoneEarly.bounds));
-      } else {
-        // 1080×2400 编辑页右下「完成」
-        await op.tap(930, 2280);
+    if (editRatio && (findImageEditDoneButton(picker.nodes)?.bounds || isImageToolEditor(picker.nodes) || isImageLightbox(picker.nodes))) {
+      const closed = await completeImageEditor(op, picker);
+      if (!closed.ok) {
+        await cleanup();
+        return { ok: false, step: closed.step || "image-done-missing", implemented: true };
       }
-      await settle(2500);
-      let finalSnap = await snapshot(op, "xianyu-image-final-from-edit");
-      let imageState = analyzeImageUploadState(finalSnap.nodes, {
-        baselineCount: baselineMedia,
-        picked: want,
-        publishCompose: finalSnap.publishCompose,
-      });
-      for (let retry = 0; retry < 3 && !imageState.verified; retry += 1) {
-        await settle(1200);
-        finalSnap = await snapshot(op, `xianyu-image-final-from-edit-r${retry + 1}`);
-        imageState = analyzeImageUploadState(finalSnap.nodes, {
-          baselineCount: baselineMedia,
-          picked: want,
-          publishCompose: finalSnap.publishCompose,
-        });
-      }
+      const { finalSnap, imageState } = await verifyAfterUpload(want, "xianyu-image-final-from-edit");
       const finalShot = await captureEvidenceSoft(
         op,
         `${evidenceDir}\\xianyu-image-final-${safeSerial}.png`,
@@ -3991,6 +4322,7 @@ async function uploadImagesDryRun(op, images, {
         hasAddMore: imageState.hasAddMore,
         ...(!imageState.verified ? { diagnostic: imageMediaDiagnostic(finalSnap, imageState) } : {}),
         selectionStrategy: "resume-edit-complete",
+        editorVia: closed.via,
         evidence: { final: finalShot },
       };
     }
@@ -4004,26 +4336,12 @@ async function uploadImagesDryRun(op, images, {
         await op.tap(...center(nextAlready.bounds));
         await settle(2800);
         const edit = await snapshot(op, "xianyu-image-edit-resume");
-        const doneBtn = edit.nodes.find((n) => /^完成$/.test(String(n.label || "").trim()) && n.bounds && n.clickable);
-        if (doneBtn?.bounds) {
-          await op.tap(...center(doneBtn.bounds));
-          await settle(2500);
+        const closed = await completeImageEditor(op, edit);
+        if (!closed.ok) {
+          await cleanup();
+          return { ok: false, step: closed.step || "image-done-missing", implemented: true, picked: alreadyPicked };
         }
-        let finalSnap = await snapshot(op, "xianyu-image-final-resume");
-        let imageState = analyzeImageUploadState(finalSnap.nodes, {
-          baselineCount: baselineMedia,
-          picked: alreadyPicked,
-          publishCompose: finalSnap.publishCompose,
-        });
-        for (let retry = 0; retry < 3 && !imageState.verified; retry += 1) {
-          await settle(1200);
-          finalSnap = await snapshot(op, `xianyu-image-final-resume-r${retry + 1}`);
-          imageState = analyzeImageUploadState(finalSnap.nodes, {
-            baselineCount: baselineMedia,
-            picked: alreadyPicked,
-            publishCompose: finalSnap.publishCompose,
-          });
-        }
+        const { finalSnap, imageState } = await verifyAfterUpload(alreadyPicked, "xianyu-image-final-resume");
         return {
           ok: imageState.verified,
           step: imageState.verified ? "images-uploaded" : "images-unverified",
@@ -4037,6 +4355,7 @@ async function uploadImagesDryRun(op, images, {
           hasAddMore: imageState.hasAddMore,
           ...(!imageState.verified ? { diagnostic: imageMediaDiagnostic(finalSnap, imageState) } : {}),
           selectionStrategy: "resume-next-complete",
+          editorVia: closed.via,
         };
       }
     }
@@ -4133,30 +4452,15 @@ async function uploadImagesDryRun(op, images, {
     const pickedShot = await capturePng(op, `${evidenceDir}\\xianyu-image-picked-${safeSerial}.png`);
     await op.tap(...center(nextBtn.bounds));
     await settle(2800);
-    // ④ 编辑页「完成」（1 次即可返回发布页）
+    // ④ 编辑页「完成」（灯箱先点「编辑」）
     const edit = await snapshot(op, "xianyu-image-edit");
-    const doneBtn = edit.nodes.find((n) => /^完成$/.test(n.label) && n.bounds && n.clickable);
-    if (!doneBtn?.bounds) { await cleanup(); return { ok: false, step: "image-done-missing", implemented: true, picked: picked.length }; }
-    await op.tap(...center(doneBtn.bounds));
-    await settle(2500);
-    // 验证：回发布页 + 顶部媒体区「删除」角标相对基线增加 N 个。
-    // 真实 tile 没有「商品图片」label，不能再用该 label 计数。
-    // 部分机从编辑页返回语义 dump 滞后，最多 3 次 settle 重抓。
-    let finalSnap = await snapshot(op, "xianyu-image-final");
-    let imageState = analyzeImageUploadState(finalSnap.nodes, {
-      baselineCount: baselineMedia,
-      picked: picked.length,
-      publishCompose: finalSnap.publishCompose,
-    });
-    for (let retry = 0; retry < 3 && !imageState.verified; retry += 1) {
-      await settle(1200);
-      finalSnap = await snapshot(op, `xianyu-image-final-r${retry + 1}`);
-      imageState = analyzeImageUploadState(finalSnap.nodes, {
-        baselineCount: baselineMedia,
-        picked: picked.length,
-        publishCompose: finalSnap.publishCompose,
-      });
+    const closed = await completeImageEditor(op, edit);
+    if (!closed.ok) {
+      await cleanup();
+      return { ok: false, step: closed.step || "image-done-missing", implemented: true, picked: picked.length };
     }
+    // 验证：回发布页 + 顶部媒体区相对基线增加 N 个（02：商品图片 Button）。
+    const { finalSnap, imageState } = await verifyAfterUpload(picked.length, "xianyu-image-final");
     const mediaNodes = finalSnap.nodes
       .filter((node) => node.bounds && node.bounds[1] >= 150 && node.bounds[3] <= 750)
       .map((node) => ({
@@ -4188,6 +4492,7 @@ async function uploadImagesDryRun(op, images, {
       selectionStrategy: albumName ? "isolated-album-exact-count" : "gallery-leading-items",
       selectedAlbum,
       manifest,
+      editorVia: closed.via,
       ...(!verified ? { mediaNodes } : {}),
       evidence: { picked: pickedShot, final: finalShot },
     };
@@ -4303,6 +4608,10 @@ export async function publishDryRun(op, plan, {
     summary.publishAttempted = false;
     summary.publishTapped = false;
     summary.savedDraft = false;
+    if (plan.leaveOnCompose === true || plan.awaitingAccept === true) {
+      summary.leaveOnCompose = true;
+      summary.awaitingAccept = true;
+    }
     summary.supervisorEvents = sup.events;
     summary.step = summary.step || firstFailedPublishStep(summary.steps) || "publish-dry-run-unverified";
     const diagnostic = firstFailedPublishDiagnostic(summary.steps);
@@ -4325,12 +4634,20 @@ export async function publishDryRun(op, plan, {
   const opened = await sup.run("open", async () => {
     // openPublishDryRun 自己负责且只负责一次启动归一，避免开场连续两次 force-stop。
     const o = await openPublishDryRun(op);
-    if (!o.ok) return { ok: false, step: "open-publish", openTrace: o.trace };
+    if (!o.ok) {
+      // Keep the inner step (home-tab / publish-entry / publish-compose / …).
+      // Collapsing everything to "open-publish" hid the real fail locus across soft-retries.
+      return {
+        ok: false,
+        step: o.step || "open-publish",
+        openTrace: o,
+      };
+    }
     const page = await snapshot(op, "xianyu-publish-fill-start");
     if (page.focus.package !== IDLEFISH_PACKAGE || !isPublishCompose(page.nodes)) {
-      return { ok: false, step: "not-on-publish-compose", focus: page.focus };
+      return { ok: false, step: "not-on-publish-compose", focus: page.focus, openTrace: o };
     }
-    return { ok: true, step: "opened", page, openTrace: o.trace };
+    return { ok: true, step: "opened", page, openTrace: o };
   }, {
     maxAttempts: 2,
     expect: (snap) => snap.focus?.package === IDLEFISH_PACKAGE && isPublishCompose(snap.nodes),
@@ -4353,7 +4670,7 @@ export async function publishDryRun(op, plan, {
   if (skipUpload) {
     record("images", { ok: true, step: "images-skipped" });
   } else if (plan.images && plan.images.length) {
-    record("images", await sup.run("images", async () => uploadImagesDryRun(op, plan.images, {
+    const imagesResult = await sup.run("images", async () => uploadImagesDryRun(op, plan.images, {
       evidenceDir,
       calibrated: calibrated.image,
       maxImages: plan.maxImages || 9,
@@ -4365,7 +4682,8 @@ export async function publishDryRun(op, plan, {
         `${snap.focus?.activity || ""}|${(snap.nodes || []).map((n) => n.label).filter(Boolean).slice(0, 5).join("|")}`,
       ),
       recover: recoverCompose,
-    }));
+    });
+    if (record("images", imagesResult)) return finishFailure();
   }
 
   // 2. 标题
@@ -4415,12 +4733,20 @@ export async function publishDryRun(op, plan, {
     }
   }
   // 4b. 动态属性
+  // 推荐区 chip（可选X, X）优先；chip 缺失时按行名点开二级选项（闲置模式：适用性别/尺码等）。
   if (plan.attributes && typeof plan.attributes === "object" && calibrated.attributes !== false) {
     summary.steps.attributes = {};
     for (const [name, value] of Object.entries(plan.attributes)) {
-      const r = await selectPanelChip(op, value, { evidenceDir, label: `attr-${name}` });
+      let r = await selectPanelChip(op, value, { evidenceDir, label: `attr-${name}` });
+      if (!r.ok && /chip-missing/.test(String(r.step || "")) && name) {
+        r = await selectRowOption(op, new RegExp(escapeRegex(String(name))), value, {
+          evidenceDir,
+          label: `attr-${name}`,
+        });
+      }
       summary.steps.attributes[name] = r;
-      if (!r.ok && r.step && !/chip-missing|unverified/.test(r.step)) summary.ok = false;
+      // row-not-present / chip-missing / *-unverified 对闲置动态字段非致命
+      if (!r.ok && r.step && !/chip-missing|row-not-present|unverified/.test(r.step)) summary.ok = false;
     }
   }
   // 5. 成色
@@ -4430,16 +4756,19 @@ export async function publishDryRun(op, plan, {
       ? chipTry
       : await selectCondition(op, plan.condition, { evidenceDir }));
   }
-  // 6. 无 SKU 时发布页设价
+  // 6. 无 SKU 时发布页设价（闲置模式可同 sheet 填库存）
   if (plan.price && !plan.skuSpecs) {
     const { row: field } = await locateRowWithScroll(op, findPriceField, "price");
-    const priceResult = await fillPriceField(op, field, plan.price, { evidenceDir });
+    const priceResult = await fillPriceField(op, field, plan.price, {
+      evidenceDir,
+      stock: plan.stock ?? plan.skuStock ?? null,
+    });
     if (record("price", priceResult)) return finishFailure();
   }
 
   // 7. 规格/SKU（失败不主动三连 BACK 退桌面）
   if (!skipSku && plan.skuSpecs) {
-    record("sku", await sup.run("sku", async () => {
+    const skuResult = await sup.run("sku", async () => {
       const ensured = await recoverCompose();
       if (!ensured.ok) return { ok: false, step: "sku-not-on-compose", package: ensured.package };
       return fillSkuSpecs(op, plan.skuSpecs, plan.skuStock, {
@@ -4452,7 +4781,8 @@ export async function publishDryRun(op, plan, {
       // 长 SKU 失败后整段重跑既慢又会覆盖现场；一次失败立即返回具体 step。
       maxAttempts: 1,
       critical: true,
-    }));
+    });
+    if (record("sku", skuResult)) return finishFailure();
   }
 
   // 8. 运费（要求在 compose）
@@ -4533,6 +4863,11 @@ export async function publishDryRun(op, plan, {
   if (summary.stall?.llmEscalationRecommended) {
     summary.llmEscalationRecommended = true;
     summary.diagnosisHint = summary.stall.diagnosisHint || "stuck_or_slow";
+  }
+  // 人工目检：停在发闲置页，跳过 discard + return-home
+  if (plan.leaveOnCompose === true || plan.awaitingAccept === true) {
+    summary.leaveOnCompose = true;
+    summary.awaitingAccept = true;
   }
   return summary;
 }

@@ -32,6 +32,10 @@ test("shouldReturnHomeAfterJob defaults on and respects opt-out / recovery", () 
     env: {},
     execution: { output: { awaitingAccept: true } },
   }), false);
+  assert.equal(shouldReturnHomeAfterJob({
+    env: {},
+    execution: { output: { leaveOnCompose: true } },
+  }), false);
 });
 
 test("returnDeviceHome presses home and checks launcher focus", async () => {

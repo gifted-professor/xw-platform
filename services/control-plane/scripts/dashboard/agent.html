@@ -85,9 +85,9 @@
     <p class="muted" id="tkhow"></p>
     <div class="cmd">POST /agent/takeover  {"id":"claude-1","kind":"claude"}    # 已有活跃 agent 时返 409,需先 release 或等 30s 超时
 # 操控时:每次调用带上 id 即隐式续命,不必另起心跳循环 ↓
-POST /primitive      {"id":"claude-1","serial":"REPLACE_SERIAL_01","action":"feedCards"}
-POST /task           {"id":"claude-1","serial":"REPLACE_SERIAL_01","action":"start","queue":[{"task":"养号","durationMin":30,"cap":1}]}
-POST /home           {"id":"claude-1","serial":"REPLACE_SERIAL_01"}
+POST /primitive      {"id":"claude-1","serial":"1511f78c","action":"feedCards"}
+POST /task           {"id":"claude-1","serial":"1511f78c","action":"start","queue":[{"task":"养号","durationMin":30,"cap":1}]}
+POST /home           {"id":"claude-1","serial":"1511f78c"}
 # 长时间不操作(>15s 无调用)才需显式 heartbeat ↓
 POST /agent/heartbeat {"id":"claude-1"}        # 每 ≤15s
 POST /agent/release   {"id":"claude-1"}

@@ -159,7 +159,7 @@
 <footer>按时长跑 · 队列依次到点优雅停(当前圈跑完) · 3 秒刷新 · 0 分=手动停 · 停止=清整个队列</footer>
 
 <script>
-const DEVS=["REPLACE_SERIAL_01","REPLACE_SERIAL_03","REPLACE_SERIAL_02","REPLACE_SERIAL_04"];
+const DEVS=["1511f78c","211d0120","9b18cccb","H6NNHU8LLFHAIRLV"];
 let tasks=[]; let state={};
 async function api(p,o){ try{ const r=await fetch(p,o||{}); return await r.json(); }catch(e){ return {error:String(e)}; } }
 const f=(x,d="—")=> (x==null||x==="")?d:x;

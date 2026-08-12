@@ -26,10 +26,10 @@ const RUN_STATE_DIR = String.raw`C:\Users\Public\xhs-agent-runs`;
 const RETRYABLE_HTTP = new Set([502, 503, 504]);
 
 const DEFAULT_PLAN = {
-  'REPLACE_SERIAL_01':       { task: '纯刷', durationMin: 10, cap: 1 },
-  'REPLACE_SERIAL_03':       { task: '纯刷', durationMin: 10, cap: 1 },
-  'REPLACE_SERIAL_02':       { task: '养号', durationMin: 10, cap: 1 },
-  'REPLACE_SERIAL_04': { task: '养号', durationMin: 10, cap: 1 },
+  '1511f78c':       { task: '纯刷', durationMin: 10, cap: 1 },
+  '211d0120':       { task: '纯刷', durationMin: 10, cap: 1 },
+  '9b18cccb':       { task: '养号', durationMin: 10, cap: 1 },
+  'H6NNHU8LLFHAIRLV': { task: '养号', durationMin: 10, cap: 1 },
 };
 
 const STATUS_INTERVAL_S = 60;

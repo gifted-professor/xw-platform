@@ -69,9 +69,9 @@ test("HTTP adapter rejection preserves only bounded sanitized error diagnostics"
             error: {
               code: "XHS_LAUNCH_FAILED",
               step: "xhsLaunchFailed",
-              message: `launcher failed\nserial=REPLACE_SERIAL_02 token=${secret} Authorization: Bearer abc123`,
+              message: `launcher failed\nserial=9b18cccb token=${secret} Authorization: Bearer abc123`,
               stack: `private stack ${secret}`,
-              serial: "REPLACE_SERIAL_02",
+              serial: "9b18cccb",
             },
             raw: `private body ${secret}`,
           };
@@ -89,7 +89,7 @@ test("HTTP adapter rejection preserves only bounded sanitized error diagnostics"
         },
       });
       const serialized = JSON.stringify(error.details);
-      assert.doesNotMatch(serialized, /top-secret-token|REPLACE_SERIAL_02|abc123|private stack|private body/i);
+      assert.doesNotMatch(serialized, /top-secret-token|9b18cccb|abc123|private stack|private body/i);
       return true;
     },
   );

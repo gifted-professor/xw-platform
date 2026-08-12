@@ -78,7 +78,7 @@ Agent 执行 ≠ 死脚本：`publishDryRun` 内置 `createStepSupervisor`：
 `XHS_ALLOW_BYPASS=1` 和 `XHS_BYPASS_REASON`，不能作为生产验收证据。
 
 ```powershell
-$env:LVJIAN_DEVICE='REPLACE_SERIAL_01'
+$env:LVJIAN_DEVICE='1511f78c'
 node scripts/greenarrow-api.mjs start-apk com.taobao.idlefish
 node scripts/greenarrow-api.mjs stop-apk com.taobao.idlefish
 node scripts/greenarrow-api.mjs apk-list
@@ -93,10 +93,10 @@ node scripts/greenarrow-api.mjs apk-list
 同时设置 `XHS_ALLOW_BYPASS=1` 与 `XHS_BYPASS_REASON`，且结果不计入生产验收。
 
 ```powershell
-node scripts/xianyu-operator.mjs --serial REPLACE_SERIAL_01 snapshot
-node scripts/xianyu-operator.mjs --serial REPLACE_SERIAL_01 open-publish
-node scripts/xianyu-operator.mjs --serial REPLACE_SERIAL_01 input-dry-run --text 闲鱼发布页输入测试
-node scripts/xianyu-operator.mjs --serial REPLACE_SERIAL_01 discard-dry-run
+node scripts/xianyu-operator.mjs --serial 1511f78c snapshot
+node scripts/xianyu-operator.mjs --serial 1511f78c open-publish
+node scripts/xianyu-operator.mjs --serial 1511f78c input-dry-run --text 闲鱼发布页输入测试
+node scripts/xianyu-operator.mjs --serial 1511f78c discard-dry-run
 ```
 
 `open-publish` 的固定安全语义：
@@ -127,7 +127,7 @@ node scripts/xianyu-operator.mjs --serial REPLACE_SERIAL_01 discard-dry-run
 
 ## 2026-07-21 · 4 号机现场结果
 
-设备：`REPLACE_SERIAL_04`。
+设备：`H6NNHU8LLFHAIRLV`。
 
 - 自动流程从闲鱼 `MainActivity` 进入“卖闲置”菜单，再进入“发闲置”编辑页：通过。
 - 编辑页识别到发布、添加图片、描述、商品规格、价格、发货方式和位置；最终发布未点击。

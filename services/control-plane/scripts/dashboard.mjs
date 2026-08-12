@@ -225,9 +225,9 @@ const PLAYBOOKS = [
     name: "11 · 自由组合(4 台各干各的)", goal: "同时:A 跑养号队列 / B 精确给第3张点赞 / C 读某作者主页 / D 静默",
     risk: "混合", reversible: "混合",
     steps: [
-      { call: "POST /task", params: { serial: "REPLACE_SERIAL_01", action: "start", queue: [{ task: "养号", durationMin: 30, cap: 1 }] } },
-      { call: "POST /primitive", params: { serial: "REPLACE_SERIAL_03", action: "likeCard", idx: 2 } },
-      { call: "POST /primitive", params: { serial: "REPLACE_SERIAL_02", action: "openProfile", idx: 0 } },
+      { call: "POST /task", params: { serial: "1511f78c", action: "start", queue: [{ task: "养号", durationMin: 30, cap: 1 }] } },
+      { call: "POST /primitive", params: { serial: "211d0120", action: "likeCard", idx: 2 } },
+      { call: "POST /primitive", params: { serial: "9b18cccb", action: "openProfile", idx: 0 } },
       { call: "POST /agent/heartbeat", params: { id: "<你的id>" }, note: "并发操作期间心跳别停" },
     ],
     note: "4 台 serve + adb 独立,可同时调;只有小薇 22222 是共享(评论时串行,serve 内部已排队)。",

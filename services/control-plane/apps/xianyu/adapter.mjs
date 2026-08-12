@@ -72,6 +72,7 @@ function commandArgs({ script, action, device, params, evidenceDirectory = null 
   if (params.descriptionBody !== undefined) args.push("--description-body", String(params.descriptionBody));
   if (params.descriptionLines !== undefined) args.push("--description-lines", JSON.stringify(params.descriptionLines));
   if (params.price !== undefined) args.push("--price", String(params.price));
+  if (params.stock !== undefined) args.push("--stock", String(params.stock));
   if (params.skuPrice !== undefined) args.push("--sku-price", String(params.skuPrice));
   if (params.skuStock !== undefined) args.push("--sku-stock", String(params.skuStock));
   if (params.skuSpecs !== undefined) args.push("--sku-specs", JSON.stringify(params.skuSpecs));
@@ -88,6 +89,10 @@ function commandArgs({ script, action, device, params, evidenceDirectory = null 
   if (params.maxImages !== undefined) args.push("--max-images", String(params.maxImages));
   if (params.attributes !== undefined) args.push("--attributes", JSON.stringify(params.attributes));
   if (action === "full-draft-dry-run" || params.saveDraft === true) args.push("--save-draft");
+  if (params.leaveOnCompose === true || params.awaitingAccept === true) {
+    args.push("--leave-on-compose");
+    args.push("--awaiting-accept");
+  }
   // calibrated: true | "all" | "image" | "sku,freight,image" | { sku:true, freight:true, ... }
   if (params.calibrated === true || params.calibrated === "all") {
     if (command === "publish-dry-run") args.push("--calibrated", "all");
@@ -226,10 +231,16 @@ export function createXianyuAdapter({ run = runJsonCommand, operatorPath = defau
       evidenceDirectory,
       leaseAuthorization,
       recoveryAttempt = false,
+      params = null,
     }) {
       if (!capability.restoration.required) return { ok: true };
       // 已存草稿则不要 discard（草稿即期望副作用）
       if (execution?.output?.savedDraft === true) return { ok: true, skipped: "already-saved-draft" };
+      // 人工目检：停在发闲置编辑页，不 discard、不回桌面（配合 leaveOnCompose / awaitingAccept）
+      if (execution?.output?.leaveOnCompose === true || execution?.output?.awaitingAccept === true
+        || params?.leaveOnCompose === true || params?.awaitingAccept === true) {
+        return { ok: true, skipped: "leave-on-compose-for-inspect", leaveOnCompose: true };
+      }
       requireFile(operatorPath, capability.id);
       const output = await run(process.execPath, commandArgs({
         script: operatorPath,

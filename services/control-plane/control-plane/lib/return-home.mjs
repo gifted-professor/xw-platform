@@ -27,6 +27,7 @@ export function shouldReturnHomeAfterJob({
 } = {}) {
   if (recoveryAttempt) return false;
   if (execution?.output?.awaitingAccept === true) return false;
+  if (execution?.output?.leaveOnCompose === true) return false;
   if (env.XHS_SKIP_RETURN_HOME === "1") return false;
   if (env.XHS_RETURN_HOME_AFTER_JOB === "0") return false;
   if (capability?.automationPolicy?.mode === "lab_only") return false;
