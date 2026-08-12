@@ -1,13 +1,11 @@
 
 ## 2026-08-12 secret → `.env` + GitHub 可分享收口
 
-A 仓密钥从源码硬编码迁到本机 `.env`（gitignore）；入库只留 `.env.example` + `identities.seed.example.json`。
-`identities.seed.json` 改为本地文件（gitignore）；本机保留原 seed。
-`sync-feishu.mjs`、飞书/抖音相关 ops、`install-registry-task.ps1` 改为读 `XHS_*` / `FEISHU_*`；缺键 fail closed。
-根 `README.md` 写清两仓 GitHub 地址 + `copy .env.example` 自建路径。
-本提交合入 `main` 后立即：push origin、**轮换** registry agent/human/observer token、重装 `XhsDeviceRegistry`、用新 token 验 `/api/health`。
-Feishu `FEISHU_BASE_TOKEN` 为 bitable app 标识，不在本轮随机轮换（仍只留在 `.env`）。
-外发说明：`docs/third-party-self-host-pack.md`。
+A 仓密钥迁到本机 `.env`（gitignore）；入库 `.env.example` + `identities.seed.example.json`；`identities.seed.json` 不再跟踪。
+`main` 已 push：`1ff05c5`。已轮换生产 **agent / human / observer** token 并重装 `XhsDeviceRegistry`；Tailscale 复核：新 agent/human/observer 200，旧 agent 401。
+两仓已改为 **private**（曾为 public 且历史 commit 含旧 token；分享用邀请协作者，勿再公开）。
+Feishu `FEISHU_BASE_TOKEN` 未随机轮换（bitable app 标识，仍只在 `.env`）。Mac 侧若跑 `sync-feishu` 须同步更新其 `.env` 的 `XHS_AGENT_TOKEN`。
+说明：`README.md`、`docs/third-party-self-host-pack.md`。
 
 ## 2026-08-12 ADB 01/04 挂回 5038
 
