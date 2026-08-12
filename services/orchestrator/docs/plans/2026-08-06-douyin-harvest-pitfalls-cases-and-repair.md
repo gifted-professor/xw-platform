@@ -1,7 +1,7 @@
 # 抖音分享链接采链：本会话踩坑案例与修复建议
 
 - 日期：2026-08-06
-- 设备：alias `01`（serial `REPLACE_SERIAL_01`）
+- 设备：alias `01`（serial `1511f78c`）
 - 主脚本：`ops/douyin-harvest-share-links.mjs`
 - 目标：关键词搜 → 漏斗「图文」→ 开帖 → 拿 `v.douyin.com` 分享链 → 飞书 Base 写入
 - 飞书：Base/table 见本机 `.env` 的 `FEISHU_BASE_TOKEN` / `FEISHU_DOUYIN_TABLE_ID`（勿把真值写进文档）；总目标约 **200** 唯一 URL

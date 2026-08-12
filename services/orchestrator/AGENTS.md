@@ -115,7 +115,7 @@ AGENTS/modes/skills 路由说明 > 尚未迁移的 App 子 Skill Markdown。
 
 | 什么 | 在哪 |
 |---|---|
-| registry（身份/审批/知识库/面板/舰队/截图/Operator） | Windows `127.0.0.1:17930`（手机经 tailscale `127.0.0.1:17930/?token=...`，token 在 Windows 任务 argLine） |
+| registry（身份/审批/知识库/面板/舰队/截图/Operator） | Windows `127.0.0.1:17930`（手机经 tailscale `100.110.27.67:17930/?token=...`，token 在 Windows 任务 argLine） |
 | 控制面 | Windows `127.0.0.1:17920` |
 | 设备 serve | 01→17895 / 02→17897 / 03→17898 / 04→17896（loopback） |
 | MiMo 委派 | `mimo-ro run --dir <项目> "任务"`（key 池自动轮换） |

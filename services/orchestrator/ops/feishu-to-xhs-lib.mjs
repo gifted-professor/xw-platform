@@ -9,7 +9,7 @@ export const FEISHU_BASE_TOKEN = requireEnv("FEISHU_BASE_TOKEN");
 export const FEISHU_TABLE_ID = requireEnv("FEISHU_PRODUCT_TABLE_ID");
 export const FEISHU_VIEW_ID = requireEnv("FEISHU_PRODUCT_VIEW_ID");
 
-/** record-list fields 数组中的列名（与 view REPLACE_FEISHU_PRODUCT_VIEW_ID 一致） */
+/** record-list fields 数组中的列名（与 view vewbU10Vd2 一致） */
 export const F = {
   sku: "SKU",
   xhsTags: "小红书标签",

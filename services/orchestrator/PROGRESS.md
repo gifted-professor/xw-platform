@@ -1,9 +1,42 @@
 
+## 2026-08-12 闲鱼闲置链路速度优化（稳定为约束）
+
+在已实证稳定（LHJK6MNT01 四机真发）前提下提速，未动 `STAGGER_MS` 8s 提交错开与 1.2s mtime 错开（稳定余量）。
+
+| 改动 | 文件 | 收益 |
+|------|------|------|
+| `waitJobs` 改 HTTP 轮询 `GET /control/v1/jobs/:id`（10s 间隔） | `ops/feishu-to-xianyu-idle-publish.mjs` | 消除每轮每 alias spawn `devicectl job status`（4 台 × 25min × 20s ≈ 300 次进程 spawn） |
+| 跨设备并行推图 `Promise.all(ensureAlbum)` | 同上 | 4 台串行 ≈90s → 并行 ≈22s |
+| 图片下载并行 `Promise.all(larkJsonAsync)` | `ops/feishu-to-xianyu-idle-lib.mjs` | 9 张串行 → 并行 |
+| `fetchQingdaoProduct` 改 `+record-search`（单 SKU） | 同上 | 全表拉 200 行 → 单条查询 |
+| 发布前 SKU 校验 `composeMatchesProduct`（价格独立数字 / 标题 ≥4 字片段；`--skip-compose-check` 逃生口） | lib + publish | 防发错商品，一次 dump 解析零成本 |
+| 删硬编码飞书 token，env fail-closed | lib / mark / publish / `.env.example` | 安全收口（2026-08-12 明文 token 废止决策） |
+
+**验证**：`npm run check` 全过；`tests/feishu-to-xianyu-idle.test.mjs` 4/4（含新增 `composeMatchesProduct` 用例）；`grep PYtZbqyPyafc4sscwdjcQNLNnEh ops/ scripts/ tests/` 为空；`--help` 正常；`--base-token ""` fail-closed 冒烟 exit 4 报缺 token。`npm test` 3 个失败均为既有/环境（repair scope guard 工作区超白名单、registry singleflight 时序 flaky、Windows symlink EPERM），与本次改动无关。
+**顺手**：`/xw xianyu-idle` 登记进 SKILL.md；`xianyu-discard-compose.mjs` ROOT 改 `__dirname` + `loadDotenv` + actor 读 `XHS_ACTOR`；`xianyu-dismiss-tuoguan.mjs` session 文件名去中文。
+**未做**：不跑 live fill/publish（碰设备+真发，需人另行授权）。
+
+## 2026-08-12 闲鱼闲置默认链路（青岛飞书表）已收成
+
+**入口**：`node ops/feishu-to-xianyu-idle-publish.mjs --sku <SKU> --actor <pilot>`
+
+| 阶段 | 命令 | 行为 |
+|------|------|------|
+| prepare / dry-run | `--dry-run` 或 `--phase prepare` | 飞书取货（文案D+图）→ `runtime/plans/qingdao-idle-*` |
+| fill（默认） | `--phase fill` | 推图 `XianyuIdle` → `full_dry_run` 闲置最小字段 + `leaveOnCompose` 停页目检（**不真发**） |
+| publish | `--phase publish --plan <dir> --i-confirm-live-publish` | 点「发布」→ 关托管弹层/底条 → 写回「闲鱼已发布设备」 |
+
+**配套**：`ops/feishu-to-xianyu-idle-lib.mjs`、`ops/feishu-mark-xianyu-published.mjs`、`ops/xianyu-dismiss-tuoguan.mjs`；单测 `tests/feishu-to-xianyu-idle.test.mjs`。  
+表：[自动化飞书](https://v8mfxiqu19.feishu.cn/wiki/BsAJwGzkIiJ0J4kfp2IcUet3nSg?table=tblQ1hKZgbNX65gD&view=vewSOMU6fu)。env：`FEISHU_QINGDAO_*`（见 `.env.example`）。
+
+**实证锚点**：SKU `LHJK6MNT01` 四机真发 + 关托管 + 写回 01–04（record `recvrRNN51QKys`）。prepare 冒烟 `qingdao-idle-1786511677986`（9 图）。  
+**依赖**：routing 侧 `leaveOnCompose` / 库存同 sheet 等本地改动须已加载；真发闸门 `--i-confirm-live-publish` 不可省略。
+
 ## 2026-08-12 secret → `.env` + GitHub 可分享收口
 
 A 仓密钥迁到本机 `.env`（gitignore）；入库 `.env.example` + `identities.seed.example.json`；`identities.seed.json` 不再跟踪。
 `main` 已 push：`1ff05c5`。已轮换生产 **agent / human / observer** token 并重装 `XhsDeviceRegistry`；Tailscale 复核：新 agent/human/observer 200，旧 agent 401。
-两仓已改为 **private**（曾为 public 且历史 commit 含旧 token；分享用邀请协作者，勿再公开）。
+两仓可见性：曾改 private；2026-08-12 按人要求改回 **public**。历史 commit 未做 filter-repo 清洗（旧 registry token 已轮换作废；Feishu base / 旧 serial 仍可能在历史中）。
 Feishu `FEISHU_BASE_TOKEN` 未随机轮换（bitable app 标识，仍只在 `.env`）。Mac 侧若跑 `sync-feishu` 须同步更新其 `.env` 的 `XHS_AGENT_TOKEN`。
 说明：`README.md`、`docs/third-party-self-host-pack.md`。
 
@@ -12,7 +45,7 @@ Feishu `FEISHU_BASE_TOKEN` 未随机轮换（bitable app 标识，仍只在 `.en
 孤儿默认口 **5037**（非效卫托管）占着 01/04。在 active lease/job=0 时只执行 `adb -P 5037 kill-server`，**未** kill 5038。四 serial 立即稳定出现在 5038；`xw-start --check` → `adbOk=true`、`wrongPortAliases=[]`。xiaowei 可能再拉起空的 5037 listen，设备表为空可忽略。证据 closeout `run_ae6fec8b-26bd-4ca5-bda5-e1e942b508ff`。
 # xhs-registry 进度
 
-> 最后更新：2026-08-11 `/xw messages` 小红书消息未读只读入口
+> 最后更新：2026-08-12 闲鱼闲置链路速度优化（HTTP 轮询 / 并行推图下载 / search / SKU 校验）
 
 ## 2026-08-11 `/xw messages`：小红书消息页未读只读
 
@@ -185,7 +218,7 @@ node ops/feishu-to-xhs-publish.mjs --aliases 01,02,03,04 --rows 4 --row-offset 4
 
 ## 2026-08-10 飞书商品表 → 小红书发布 dry-run（6 图 / stay）
 
-**结论**：飞书 view `REPLACE_FEISHU_PRODUCT_VIEW_ID` → 下载 6 图 → ADB 推机 → `xhs.publish.edit_dry_run`（`imageCount:6` + `stayForAccept`）已成默认编排；人工确认标题/正文/话题/图序（四宫格第一）。
+**结论**：飞书 view `vewbU10Vd2` → 下载 6 图 → ADB 推机 → `xhs.publish.edit_dry_run`（`imageCount:6` + `stayForAccept`）已成默认编排；人工确认标题/正文/话题/图序（四宫格第一）。
 
 **routing `main`**：`ace16cf577e5e2b009d0d5fa5fe07f21ab3b6efa`（已 push；`task-launch.json` + 四台 `serve-launch-0N.json` 已对齐；正式计划任务 CP/serve，无需 dirty allow）。
 
@@ -537,7 +570,7 @@ effect lane 或把 draft 的“抖音关键词真实转发”模板晋级 implem
 
 ### 飞书商品表 → 闲鱼发布 dry-run 编排（2026-07-28）
 
-- **`ops/feishu-to-xianyu.mjs` 丝滑化（2026-07-28）**：submit 前只读一次 live，默认从 01–04 动态选择可跑目标；目标 lease/offline/quarantine **以及未知状态**永远 fail-closed，unresolvedFailure 要先恢复，`--force` 收窄为 `FORCE=ready-only`。飞书商品目录表 `REPLACE_FEISHU_PRODUCT_TABLE_ID` 按 SKU+`READY_TO_PUBLISH` 取一条 → 本地下图 → 组装 `xianyu.publish.full_dry_run` fixture → submit+poll。`--dry-run` 只规划 phonePath，**零手机写入**；真要推图用显式 `--prep/--push-only`，每台先通过 devicectl acquire 可见 session lease，推图间 heartbeat，finally release 后退出。终态汇总要求 output/restoration/verification 三者明确为 true，缺字段不再假绿。
+- **`ops/feishu-to-xianyu.mjs` 丝滑化（2026-07-28）**：submit 前只读一次 live，默认从 01–04 动态选择可跑目标；目标 lease/offline/quarantine **以及未知状态**永远 fail-closed，unresolvedFailure 要先恢复，`--force` 收窄为 `FORCE=ready-only`。飞书商品目录表 `tblUcslarq5iLEPB` 按 SKU+`READY_TO_PUBLISH` 取一条 → 本地下图 → 组装 `xianyu.publish.full_dry_run` fixture → submit+poll。`--dry-run` 只规划 phonePath，**零手机写入**；真要推图用显式 `--prep/--push-only`，每台先通过 devicectl acquire 可见 session lease，推图间 heartbeat，finally release 后退出。终态汇总要求 output/restoration/verification 三者明确为 true，缺字段不再假绿。
 - **飞书字段映射（record-list 行序，非 field-list 序）**：SKU=36、商品简称=28、售价=26、颜色=22、尺码=2、闲鱼文案内容=27、商品包状态=11、**Yupoo原图=13**（attachment cell = `[{file_token,name,size}]`）。前缀从 `闲鱼文案内容` 首行派生：奥莱折扣→`【奥莱折扣】`、撤店清仓→`【撤店清仓】`、出全新→`出全新 `、其他→`出闲置 `；body=去首行后剩余行。fixture 写 `descriptionPrefix`/`productTitle`/`descriptionBody` 三字段。
 - **坑①**：`lark-cli --output` **必须相对当前目录**（绝对路径报 `unsafe output path`）→ cwd=下载目录、`--output` 用裸文件名。
 - **坑②**：同 SKU 有空壳重复行（无 Yupoo图）→ 优先取有 Yupoo原图 的那条；多条都有图才算真冲突 fail-closed。
@@ -546,7 +579,7 @@ effect lane 或把 draft 的“抖音关键词真实转发”模板晋级 implem
 - **四机飞书同商品并发未通过但 fleet 已安全恢复（2026-07-28 11:20–11:51 CST）**：在 01 R0 snapshot `job_4bb8ff04-d782-4873-9f8e-b568b9a8d8d1` 刷绿后，`ops/feishu-to-xianyu.mjs --sku DX1488-100 --aliases 01,02,03,04 --actor codex-silk-e2e-conc4` 先为每台 acquire 可见 interactive lease、逐图 heartbeat、release，再提交四个 `xianyu.publish.full_dry_run`。四条 job lease 同时可见，startedAt 为 03:20:21/23/25/28Z，确认真实重叠；fixture 均为 3 图、仅尺码 S/M/L/XL/XXL、`saveDraft=false`。四 job 均在 720000ms 上限到达后进入 restoring，随后统一落 `recovery_required / ADAPTER_TIMEOUT`，output/restoration/verification 均为空，故 **0/4 通过，禁止写成并发绿**：01=`job_1840d4e0-c81d-49f6-b3cc-01a5fe9b6af6`、02=`job_c85faf03-9652-4e22-b2a4-f31a6b5f6ddb`、03=`job_348c76a2-ed2d-4e6b-81f3-d00d66dc5437`、04=`job_2ed5678a-90ed-4415-9aa1-43dd7702bab4`；日志 `/tmp/f2x-e2e-conc4-20260728-1118`。合规 recovery inspection 先确认 01/02=`publish-compose` 0.98，03/04 审计截图实见发布页“发货方式”弹窗；随后每台均通过 `devicectl job recover` 持可见 recovery lease 执行“关闭且不保存/安全 relaunch”，按设计保留隔离等待视觉复核，再由 fresh main-safe 0.98 截图 + zero-action recover 清隔离。01/02/03 用成功 R0 snapshot 刷绿；04 因 snapshot/open routing 不含该 alias，控制面 fail-closed 拒绝后，改用单机两颜色、无图片、`saveDraft=false` 的短 full dry-run `job_429df02e-04dc-43a2-8c10-947c4301f18a`，约 4m25s succeeded 且 output/restoration/verification 全 true。最终 4/4 ready、0 lease、0 running、0 approval、无隔离。全程未使用 bypass；没有发布成功证据，也没有保存草稿动作证据；因四个并发 job verification=null，本轮仍不能把 no-save/no-publish 当并发验收通过项。根因候选为四条 5 尺码长链共享 `transport:xiaowei:22222` 后整体越过 720s；04 单机短链成功增强该假设，但尚未修复或复验并发。
 - **Repo B 已完成并部署（2026-07-28）**：GPFS `xianyu-operator.mjs` 加 `resolveDescriptionLines(plan)` + `fillDescriptionMultiLine`（首行 refocus+inputText+KEYCODE_ENTER，后续 no-refocus+inputText+ENTER，末行不 ENTER，关「完成」+ `descriptionContains` 逐行回读校验 + 整段重输兜底；单行退回老 `fillTextField`），描述步 dispatch。**PR #17 合 main `62918db`**。部署方式已核实：Windows `C:\Users\Public\xhs-routing-v1-1` git pull main + 改 `C:\Users\Public\xhs-agent-control\task-launch.json` 的 `gitCommit`（完整 40 字符，短 hash 会触发 "Repository commit mismatch" 退 1）+ `schtasks /end|/run XhsDeviceControlPlaneV1` + `/control/v1/health` 200。
 - **坑③ adapter 白名单（PR #18 `c2a44c3`）**：`apps/xianyu/adapter.mjs` `commandArgs` 逐 flag 转发，只认 `--description` 单串，**不认 `descriptionPrefix`/`productTitle`/`descriptionBody`/`descriptionLines`** → 飞书 fixture 用三字段时被丢、`resolveDescriptionLines` 返 null、描述步被整个跳过。PR #17 部署后 3 台 job 仍 failed 才发现。修：adapter 加四 flag 转发 + `planFromArgv` 读这四 flag。**已合 main 并部署 Windows**。
-- **多行描述已实证（2026-07-28，核心目标达成）**：Windows `XHS_ALLOW_BYPASS=1 XHS_BYPASS_REASON=…` 直跑 `node scripts/xianyu-operator.mjs --serial REPLACE_SERIAL_01 --transport gateway publish-dry-run --plan <fixture> --calibrated all --skip-category --skip-address`，stdout 全 summary 的 supervisor 事件：`description phase=ok attempt=1 step=desc-filled ok=true`（`verified=true`，4 行【奥莱折扣】JORDAN…/尺码 S-XXL/部分断码/主页实拍 逐行回读全中）。**注意**：control plane `result_json` 只存 `output.{ok,step}`，把 `summary.steps`（含 selectAllMiss 诊断）整段丢 → 看步骤级结果必须靠 `XHS_ALLOW_BYPASS=1` 直跑抓 stdout（gateway 平时强制 `CONTROL_LEASE_REQUIRED`，bypass 是受审计 lab 通道）。
+- **多行描述已实证（2026-07-28，核心目标达成）**：Windows `XHS_ALLOW_BYPASS=1 XHS_BYPASS_REASON=…` 直跑 `node scripts/xianyu-operator.mjs --serial 1511f78c --transport gateway publish-dry-run --plan <fixture> --calibrated all --skip-category --skip-address`，stdout 全 summary 的 supervisor 事件：`description phase=ok attempt=1 step=desc-filled ok=true`（`verified=true`，4 行【奥莱折扣】JORDAN…/尺码 S-XXL/部分断码/主页实拍 逐行回读全中）。**注意**：control plane `result_json` 只存 `output.{ok,step}`，把 `summary.steps`（含 selectAllMiss 诊断）整段丢 → 看步骤级结果必须靠 `XHS_ALLOW_BYPASS=1` 直跑抓 stdout（gateway 平时强制 `CONTROL_LEASE_REQUIRED`，bypass 是受审计 lab 通道）。
 - **坑④ SKU 已解并正道验收（2026-07-28）**：Phase1 证明旧 `skuReplaceExisting` 只删规格值，未删废弃维度；单色 fixture 仍残留空颜色维度。PR #19（merge `fdbaf5f`）改为先有界删旧值与旧维度，再按 fixture 精确重建。首轮后 job 诊断为 `dimensions=['尺码']`、`nodeCount=1` 且页面 marker 全 false，进一步钉死 FlutterBoost 过渡空帧；PR #20（merge **`5c9e9b24cb1bef42841ab167b5265aaeba0b70ed`**）只增加价库业务 marker 的有界等待。02 正道 job **`job_5f770de4-b4ab-427f-8aa9-0424cc45bf2e` succeeded**，verification/restoration true，lease 释放，未 bypass、未存草稿、未发布。Windows HEAD 与 task-launch 已对齐该完整 hash。
 - **单色 SKU 规则（已提交并测试）**：`colorArr.length>1` 才带 `颜色`；单色只留 `尺码`。operator 的 replaceExisting 会把旧颜色维度一起删掉。纯函数测试同时覆盖单色、多色、ready 分级、force 不越过 lease、知识 verifyMode 枚举。
 - **04 局部恢复（2026-07-28）**：旧失败 `job_0b5c725e-...` 为 `failed/VERIFICATION_FAILED` 但 `restoration.ok=true`、未隔离、lease 空；`xianyu.observe.snapshot` 对 04 route plan 明确 `NO_ELIGIBLE_DEVICE`，故不盲跑旧 L1/不写路由。改走单台 R1 campaign dry-run `job_d2565f31-58f4-49db-bb1b-f22c643e11bb`（`saveDraft=false`、`skipUpload=true`），终态 succeeded、verification/restoration true、lease 释放，04 ready 刷绿。
@@ -688,7 +721,7 @@ effect lane 或把 draft 的“抖音关键词真实转发”模板晋级 implem
    - ~~watchdog launchd 权限~~ 已修（tmux 模式，见 watchdog 节）
 9. ~~**阻塞：闲鱼 supervisor 污染 adapter stdout（2026-07-26 Phase B）**~~ 已由 `3a430e5` 修复：进度事件走 stderr、stdout 只保留终态 JSON；01 控制面 job 已实证成功。
 10. ~~**阻塞：02 长 SKU 超时后恢复失败**~~ 恢复与 360s 硬超时均已处理，但**业务验证仍未绿**：`1684fe9` 已完成 fail-closed 安全恢复，`6a83abe` 把纯 dry-run 预算调至 720s，02 单次复验越过 360s 后于约 605.4s 落 `VERIFICATION_FAILED` 且安全恢复。`26aa9b1` 已关闭强退/整段重跑路径并补失败 step，但尚未再次碰机验证；不得把部署成功写成 2x5 业务成功。
-11. ~~编号冲突~~ 已解决（2026-07-24 20:01）：飞书 02/03 编号是 07-13 旧数据，已按 serial 锚定改正为 02=REPLACE_SERIAL_02（棕色手机）、03=REPLACE_SERIAL_03（三店），与 seed 的 07-22/07-24 实证一致
+11. ~~编号冲突~~ 已解决（2026-07-24 20:01）：飞书 02/03 编号是 07-13 旧数据，已按 serial 锚定改正为 02=9b18cccb（棕色手机）、03=211d0120（三店），与 seed 的 07-22/07-24 实证一致
 12. `/control/v1/devices` 公开视图不含 routingProfile（排查要看 control.db 或 query-routing.mjs）
 13. **watchdog 实际驱动者是临时终端循环（2026-07-27 发现）**：launchd `com.xhs.scout-watchdog` 因 macOS TCC 拒绝执行 Desktop 下脚本已被禁用（`.plist.disabled`），当前靠一个手工 `while true; do watchdog.sh; sleep 1800; done` 终端进程（s009 会话）驱动——终端一关 watchdog 就停。待办：把脚本移出 Desktop（或给 bash 授 Full Disk Access）后恢复 launchd 托管。
 14. **xhs.follow.ensure 待部署 + 待实证（2026-07-29）**：capability 代码+测试已就绪（GPFS 233/233、registry 50/50）但**未部署 Windows**；`头像,<name>` 头像 content-desc 格式**已真实 dump 实证**（overlay-01.xml），overlay 关注按钮定位 bug 已修（`findProfileFollowBtn`）；registry parser 实现完成、Engineer 自测与离线 replay 通过，等待 Hermes 独立验证（round-3 补修 4 项 supplemental findings、round-4 补修 Hermes r3 复验的 2 项新 P1：截断 wrapper 含头像当可信 root / 同一 CTA 冲突态按 XML 顺序决定，parse 24/24、full 50/50 绿 + 真实 overlay replay 仍 (254,998) 无回归）——剩 GPFS operator port 同选择器 + 部署 + Hermes 10+ 真机回归（req#12，独立验收，未执行）。详见上文 `xhs.follow.ensure capability` 节。

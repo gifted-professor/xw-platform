@@ -4,7 +4,7 @@
 set -u
 STATE=/Users/a1234/Desktop/Coding/xhs-registry/runtime/pnp-state.json
 TOKEN=REDACTED_OLD_AGENT_TOKEN
-SERIAL_03=REPLACE_SERIAL_03
+SERIAL_03=211d0120
 mkdir -p "$(dirname "$STATE")"
 [ -f "$STATE" ] || echo '{"present":null}' > "$STATE"
 

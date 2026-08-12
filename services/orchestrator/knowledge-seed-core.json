@@ -74,7 +74,7 @@
   {
     "id": "xhs-h6nn-slow-warmup",
     "app": "xhs",
-    "scope": "device:REPLACE_SERIAL_04",
+    "scope": "device:H6NNHU8LLFHAIRLV",
     "category": "unknown",
     "title": "H6NN 慢热评论量长期偏低",
     "content": "H6NN(04 二店) editorLostAfterInput 偶发率明显高于另 3 台，评论 cumC 长期垫底（首轮前 7 loop 全撞，loop 8 才破蛋）。不是设备坏：like/favorite 正常。可能跟它停微信太久刚拉回 xhs 的状态有关，多跑几轮观察是否稳定上量。",

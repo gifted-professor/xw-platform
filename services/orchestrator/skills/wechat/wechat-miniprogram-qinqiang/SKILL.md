@@ -42,7 +42,7 @@ depends:
 |----|----|
 | 宿主包 | `com.tencent.mm` |
 | 小程序 Activity | `…appbrand.ui.AppBrandUI00`（入口亦见 `AppBrandUI01`） |
-| 探索主设备 | **02** / `REPLACE_SERIAL_02`（微信已登录 `芒果好吃` / `mghhc888`） |
+| 探索主设备 | **02** / `9b18cccb`（微信已登录 `芒果好吃` / `mghhc888`） |
 | 辅设备 | 01 同入口曾通 |
 | 素材真源 | `tmp-know/qinqiang-beta-replica/`（`FEATURES.md` + 截图） |
 | 短报 | `tmp-know/EXPLORE-WECHAT-QINQIANG-BETA-20260801.md` |
@@ -65,7 +65,7 @@ node ops/explore-preflight.mjs --alias 02
 node ops/launch-app.mjs --alias 02 --package com.tencent.mm
 node ops/focus.mjs --alias 02
 # 截屏：screenshot-and-analyze 偶发 0 字节 → 用 _win-screencap
-node ops\_win-screencap.mjs --serial REPLACE_SERIAL_02 --out C:\Users\Public\xhs-registry\tmp-know\_shot.png
+node ops\_win-screencap.mjs --serial 9b18cccb --out C:\Users\Public\xhs-registry\tmp-know\_shot.png
 ```
 
 **策略**：`AppBrandUI*` 上 `dump-ui` ≈ NODES=2 / 空 FrameLayout → **禁止 dump-first**；靠截图 + 像素/人眼定坐标。系统权限框（MIUI 定位）例外，可 dump。

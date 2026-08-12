@@ -18,7 +18,7 @@
 
 ---
 
-## 01（serial=REPLACE_SERIAL_01）
+## 01（serial=1511f78c）
 
 | 步骤 | exit | 关键 KV |
 |------|------|--------|
@@ -35,7 +35,7 @@
 
 ---
 
-## 02（serial=REPLACE_SERIAL_02）
+## 02（serial=9b18cccb）
 
 | 步骤 | exit | 关键 KV |
 |------|------|--------|
@@ -50,7 +50,7 @@
 
 ---
 
-## 04（serial=REPLACE_SERIAL_04）
+## 04（serial=H6NNHU8LLFHAIRLV）
 
 | 步骤 | exit | 关键 KV / 备注 |
 |------|------|----------------|

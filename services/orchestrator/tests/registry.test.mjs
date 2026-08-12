@@ -49,7 +49,7 @@ function createRegistryDb(dbPath) {
   const iso = new Date(now).toISOString();
   insert.run("xianyu-2x5-timeout-restoration-recovery-20260726", "global", "xianyu", "pitfall", "02 老超时", "已解决", "[]", 1, iso, iso);
   insert.run("xianyu-02-sku-not-on-compose-recovery-20260726", "global", "xianyu", "pitfall", "02 老指纹", "已解决", "[]", 1, iso, iso);
-  insert.run("xianyu-03-physical-disconnect-gateway-probe-20260726", "device:REPLACE_SERIAL_03", "xianyu", "pitfall", "03 物理断连", "等待现场重插", "[]", 0, iso, iso);
+  insert.run("xianyu-03-physical-disconnect-gateway-probe-20260726", "device:211d0120", "xianyu", "pitfall", "03 物理断连", "等待现场重插", "[]", 0, iso, iso);
   db.close();
 }
 
@@ -205,7 +205,7 @@ test.before(async () => {
   createControlDb(path.join(tempRoot, "control.db"));
   await writeFile(path.join(tempRoot, "seed.json"), JSON.stringify({ identities: [
     { alias: "01", serial: "serial-01", label: "一号 <script>alert(1)</script>", model: "M1", accounts: { xhs: "private-account" }, notes: "private-note" },
-    { alias: "03", serial: "REPLACE_SERIAL_03", label: "三店", model: "M3" },
+    { alias: "03", serial: "211d0120", label: "三店", model: "M3" },
   ] }));
   // cache-only Screen API 的 runs-root：放一张假截图供 evidence 行读取
   runsRoot = path.join(tempRoot, "runs");
@@ -418,7 +418,7 @@ test("agent entry degrades without returning 500 when control plane is unreachab
   const root = await mkdtemp(path.join(os.tmpdir(), "xhs-registry-degraded-"));
   createRegistryDb(path.join(root, "registry.db"));
   createControlDb(path.join(root, "control.db"));
-  await writeFile(path.join(root, "seed.json"), JSON.stringify({ identities: [{ alias: "03", serial: "REPLACE_SERIAL_03", label: "三店" }] }));
+  await writeFile(path.join(root, "seed.json"), JSON.stringify({ identities: [{ alias: "03", serial: "211d0120", label: "三店" }] }));
   const unavailablePort = await freePort();
   const degraded = await startRegistry({ root, controlUrl: `http://127.0.0.1:${unavailablePort}`, requireAuth: false });
   try {
@@ -704,7 +704,7 @@ test("agent entry marks controlDb stale when one approvals query fails", async (
   const partialDb = new DatabaseSync(path.join(root, "control.db"));
   partialDb.exec("DROP TABLE approvals");
   partialDb.close();
-  await writeFile(path.join(root, "seed.json"), JSON.stringify({ identities: [{ alias: "03", serial: "REPLACE_SERIAL_03", label: "三店" }] }));
+  await writeFile(path.join(root, "seed.json"), JSON.stringify({ identities: [{ alias: "03", serial: "211d0120", label: "三店" }] }));
   const partial = await startRegistry({ root, controlUrl: `http://127.0.0.1:${control.server.address().port}`, requireAuth: false });
   try {
     const response = await fetch(`${partial.base}/api/agent-entry`);
@@ -1160,7 +1160,7 @@ test("fleet reports ready=null and degraded=true when control plane is unreachab
   const root = await mkdtemp(path.join(os.tmpdir(), "xhs-registry-degraded-"));
   createRegistryDb(path.join(root, "registry.db"));
   createControlDb(path.join(root, "control.db"));
-  await writeFile(path.join(root, "seed.json"), JSON.stringify({ identities: [{ alias: "03", serial: "REPLACE_SERIAL_03", label: "三店", model: "M3" }] }));
+  await writeFile(path.join(root, "seed.json"), JSON.stringify({ identities: [{ alias: "03", serial: "211d0120", label: "三店", model: "M3" }] }));
   // 控制面不可达：设备只来自身份缓存，online/quarantined/lease 全部未知 → ready=null，绝不假 Ready
   const reg = await startRegistry({ root, controlUrl: "http://127.0.0.1:1" });
   try {

@@ -188,7 +188,7 @@
     "app": "xianyu",
     "category": "pitfall",
     "title": "部分设备发布页无独立标题行，title-field-missing 属预期",
-    "content": "1 号机（REPLACE_SERIAL_01）发布页不存在独立标题输入行：desc 填完 AI 直接选中分类/品牌/成色/尺码 chip。plan 配 title 必报 title-field-missing，属预期不应配 title；API 侧保留为 warning，不能冒充已填标题，也不能用旧 flow.ok=false 判失败。",
+    "content": "1 号机（1511f78c）发布页不存在独立标题输入行：desc 填完 AI 直接选中分类/品牌/成色/尺码 chip。plan 配 title 必报 title-field-missing，属预期不应配 title；API 侧保留为 warning，不能冒充已填标题，也不能用旧 flow.ok=false 判失败。",
     "verifiedBy": []
   },
   {

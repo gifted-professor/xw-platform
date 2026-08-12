@@ -93,10 +93,10 @@ Mac agent
 
 | alias | serial | 备注 |
 |-------|--------|------|
-| 01 | `REPLACE_SERIAL_01` | 全流程成功过 |
-| 02 | `REPLACE_SERIAL_02` | 库存字段顽固残留 40 |
-| 03 | `REPLACE_SERIAL_03` | 战役中期 ADB 离线；xiaowei **adb -P 5038** 上可能看不到 |
-| 04 | `REPLACE_SERIAL_04` | 图校验/编辑页残留不稳 |
+| 01 | `1511f78c` | 全流程成功过 |
+| 02 | `9b18cccb` | 库存字段顽固残留 40 |
+| 03 | `211d0120` | 战役中期 ADB 离线；xiaowei **adb -P 5038** 上可能看不到 |
+| 04 | `H6NNHU8LLFHAIRLV` | 图校验/编辑页残留不稳 |
 
 图源 staging：`XianyuFull4`（`xf4_a.png` / `xf4_b.png`），SHA 见 runner；推图请用 **adb port 5038**（`_stage-xf4-port.mjs`），默认 5037 常为空。
 
@@ -277,7 +277,7 @@ node control-plane/devicectl.mjs --ssh xhs-windows job submit \
 
 ### 立刻（业务未闭环）
 
-1. **重连 03**（确认 `adb -P 5038 devices` 有 `REPLACE_SERIAL_03`）  
+1. **重连 03**（确认 `adb -P 5038 devices` 有 `211d0120`）  
 2. **02 库存探针**：批量 sheet dump 全部 EditText/可点节点；判断 `40` 是真输入框还是只读投影；必要时逐行改库存  
 3. **04 图片**：完成页 settle + 媒体计数；编辑页无「完成」label 时坐标是否打中  
 4. 验证时 **串行 + session/job 占机**，禁止再无 lease 四机并行  
