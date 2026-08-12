@@ -2272,6 +2272,108 @@ export function analyzeImageUploadState(snapshot, {
   };
 }
 
+// 闲鱼会在上传图片后识别二维码，并在发布页顶部显示「请勿上传含二维码的图片」
+// 与「一键打码」。该状态来自本次实际图片内容，不能按 SKU 或飞书字段硬编码。
+// 只接受唯一的语义按钮；有警告但按钮缺失/重复时必须 fail closed。
+export function analyzeQrCodeMaskState(snapshot) {
+  const semanticLines = (node) => String(node?.label || "")
+    .split(/\r?\n/)
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const warningNodes = (snapshot || []).filter((node) => semanticLines(node)
+    .some((value) => /请勿上传含二维码的图片|含二维码的图片/.test(value)));
+  const rawActions = (snapshot || []).filter((node) => {
+    if (!Array.isArray(node?.bounds) || node.bounds.length !== 4) return false;
+    return semanticLines(node).some((value) => /^一键打码(?:[，,]\s*按钮)?$/.test(value));
+  });
+  const actions = rawActions.filter((node, index, all) => all.findIndex((other) => (
+    JSON.stringify(other.bounds) === JSON.stringify(node.bounds)
+  )) === index);
+  const warningPresent = warningNodes.length > 0;
+  const required = warningPresent || actions.length > 0;
+  return {
+    required,
+    warningPresent,
+    actionCount: actions.length,
+    actionBounds: actions.length === 1 ? actions[0].bounds.map(Number) : null,
+  };
+}
+
+export async function applyQrCodeMaskIfRequired(op, {
+  expectedImageCount = 0,
+  snapshotFn = snapshot,
+  settleFn = settle,
+  maxWaitAttempts = 8,
+} = {}) {
+  const before = await snapshotFn(op, "xianyu-qr-mask-before");
+  const beforeState = analyzeQrCodeMaskState(before.nodes);
+  if (!beforeState.required) {
+    return {
+      ok: true,
+      step: "qr-mask-not-required",
+      required: false,
+      applied: false,
+      verified: true,
+      warningDetected: false,
+    };
+  }
+  if (beforeState.actionCount !== 1 || !beforeState.actionBounds) {
+    return {
+      ok: false,
+      step: beforeState.actionCount > 1 ? "qr-mask-action-ambiguous" : "qr-mask-action-missing",
+      required: true,
+      applied: false,
+      verified: false,
+      warningDetected: beforeState.warningPresent,
+      actionCount: beforeState.actionCount,
+    };
+  }
+
+  await op.tap(...center(beforeState.actionBounds));
+  let lastState = beforeState;
+  let lastImageState = null;
+  let composeVisible = false;
+  const want = Math.max(0, Number(expectedImageCount || 0));
+  for (let attempt = 0; attempt < maxWaitAttempts; attempt += 1) {
+    await settleFn(attempt === 0 ? 1400 : 900);
+    const after = await snapshotFn(op, `xianyu-qr-mask-after-${attempt + 1}`);
+    lastState = analyzeQrCodeMaskState(after.nodes);
+    composeVisible = after.publishCompose === true || isPublishCompose(after.nodes || []);
+    lastImageState = want > 0
+      ? analyzeImageUploadState(after.nodes, { picked: want, publishCompose: composeVisible })
+      : null;
+    const imagesPreserved = want === 0 || Number(lastImageState?.mediaCount || 0) >= want;
+    if (composeVisible && !lastState.required && imagesPreserved) {
+      return {
+        ok: true,
+        step: "qr-mask-applied",
+        required: true,
+        applied: true,
+        verified: true,
+        warningDetected: beforeState.warningPresent,
+        actionCount: beforeState.actionCount,
+        imageCount: Number(lastImageState?.mediaCount || want),
+        expectedImageCount: want,
+      };
+    }
+  }
+
+  return {
+    ok: false,
+    step: "qr-mask-unverified",
+    required: true,
+    applied: true,
+    verified: false,
+    warningDetected: beforeState.warningPresent,
+    actionCount: beforeState.actionCount,
+    warningStillPresent: lastState.warningPresent,
+    actionStillPresent: lastState.actionCount > 0,
+    composeVisible,
+    imageCount: Number(lastImageState?.mediaCount || 0),
+    expectedImageCount: want,
+  };
+}
+
 // 失败诊断只能暴露顶部媒体区的结构，不保留原始 label，避免把描述或账号文本写入 result。
 export function summarizeImageMediaNodes(snapshot) {
   const nodes = (snapshot || []).filter((node) => {
@@ -4734,6 +4836,17 @@ export async function publishDryRun(op, plan, {
       imagesResult.diagnostic = firstImageDiagnostic;
     }
     if (record("images", imagesResult)) return finishFailure();
+
+    // 图片内容决定是否出现二维码告警。必须在任何标题/描述输入之前处理，避免把
+    // 「一键打码」误留到最终发布前，也避免按 SKU 写死规则。
+    const qrMaskResult = await sup.run("image-qr-mask", async () => applyQrCodeMaskIfRequired(op, {
+      expectedImageCount: imagesResult.imgCount || imagesResult.expectedImgCount || plan.images.length,
+    }), {
+      maxAttempts: 1,
+      critical: true,
+      expect: async (_snap, result) => result?.ok === true && result?.verified === true,
+    });
+    if (record("imageQrMask", qrMaskResult)) return finishFailure();
   }
 
   // 2. 标题

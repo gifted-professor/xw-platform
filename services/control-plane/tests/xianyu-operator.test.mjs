@@ -5,7 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   APP_NUMPAD_SETTLE_MS,
+  analyzeQrCodeMaskState,
   analyzeImageUploadState,
+  applyQrCodeMaskIfRequired,
   boundsClose,
   createStickyXiaoweiInputSession,
   createStepSupervisor,
@@ -266,6 +268,93 @@ test("image upload state accepts only a full two-row unlabeled button grid witho
     picked: 9,
     publishCompose: true,
   }).mediaCount, 0);
+});
+
+test("QR mask state requires one unique semantic action and never relies on SKU", () => {
+  const warning = {
+    label: "请勿上传含二维码的图片，重新调整图片后再发布。",
+    className: "android.view.View",
+    bounds: [75, 150, 800, 230],
+  };
+  const action = {
+    label: "一键打码，按钮",
+    className: "android.widget.Button",
+    bounds: [880, 150, 1030, 230],
+    clickable: true,
+  };
+  assert.deepEqual(analyzeQrCodeMaskState([warning, action]), {
+    required: true,
+    warningPresent: true,
+    actionCount: 1,
+    actionBounds: [880, 150, 1030, 230],
+  });
+  assert.equal(analyzeQrCodeMaskState([]).required, false);
+  assert.equal(analyzeQrCodeMaskState([warning]).actionCount, 0);
+  assert.equal(analyzeQrCodeMaskState([warning, action, {
+    ...action,
+    bounds: [700, 150, 850, 230],
+  }]).actionCount, 2);
+});
+
+test("QR mask action is tapped once and verified before text entry can continue", async () => {
+  const warning = {
+    label: "请勿上传含二维码的图片，重新调整图片后再发布。",
+    className: "android.view.View",
+    bounds: [75, 150, 800, 230],
+  };
+  const action = {
+    label: "一键打码",
+    className: "android.widget.Button",
+    bounds: [880, 150, 1030, 230],
+    clickable: true,
+  };
+  const media = Array.from({ length: 9 }, (_, index) => ({
+    label: "商品图片",
+    className: "android.widget.Button",
+    bounds: [77 + (index % 5) * 187, 282 + Math.floor(index / 5) * 187,
+      253 + (index % 5) * 187, 458 + Math.floor(index / 5) * 187],
+    clickable: true,
+  }));
+  const snapshots = [
+    { nodes: [warning, action], publishCompose: true },
+    { nodes: media, publishCompose: true },
+  ];
+  const taps = [];
+  const result = await applyQrCodeMaskIfRequired({
+    async tap(x, y) { taps.push([x, y]); },
+  }, {
+    expectedImageCount: 9,
+    snapshotFn: async () => snapshots.shift(),
+    settleFn: async () => {},
+  });
+  assert.deepEqual(taps, [[955, 190]]);
+  assert.deepEqual(result, {
+    ok: true,
+    step: "qr-mask-applied",
+    required: true,
+    applied: true,
+    verified: true,
+    warningDetected: true,
+    actionCount: 1,
+    imageCount: 9,
+    expectedImageCount: 9,
+  });
+});
+
+test("QR warning without one unique mask action fails closed without tapping", async () => {
+  const taps = [];
+  const result = await applyQrCodeMaskIfRequired({
+    async tap(x, y) { taps.push([x, y]); },
+  }, {
+    snapshotFn: async () => ({
+      nodes: [{ label: "请勿上传含二维码的图片", bounds: [75, 150, 800, 230] }],
+      publishCompose: true,
+    }),
+    settleFn: async () => {},
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.step, "qr-mask-action-missing");
+  assert.deepEqual(taps, []);
 });
 
 test("publish failure diagnostic keeps bounded image geometry and drops raw fields", () => {
