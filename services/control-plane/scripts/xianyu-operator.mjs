@@ -840,7 +840,13 @@ async function xianyuDump(op, label) {
   }
 }
 
-export async function startIdlefish(op) {
+export async function startIdlefish(op, { forceStop = true } = {}) {
+  if (forceStop === false) {
+    const focus = await op.currentFocus();
+    if (focus?.package === IDLEFISH_PACKAGE && /MainActivity/.test(String(focus.activity || ""))) {
+      return focus;
+    }
+  }
   await op.shellExec(`am force-stop ${IDLEFISH_PACKAGE}`, 8000);
   // 显式清任务栈启动主 Activity，避免恢复消息订单详情、商品 WebHybrid、图片 picker 等旧页面。
   // 4号机 USB 重插后实证：普通 `am start -n MainActivity` 会短暂到 MainActivity，随后旧商品详情
@@ -1225,9 +1231,25 @@ export async function dismissRestoreDialog(op) {
 }
 
 export async function openPublishDryRun(op, { maxSteps = 6, startApp = true } = {}) {
-  const started = startApp ? await startIdlefish(op) : await op.currentFocus();
+  let started = startApp ? null : await op.currentFocus();
+  let main = null;
+  let skippedForceStop = false;
+  if (startApp) {
+    const focus = await op.currentFocus();
+    const sizeRaw = await op.shellExec("wm size", 8000).catch(() => "");
+    const resolution = parseDisplayResolution(sizeRaw);
+    if (focus?.package === IDLEFISH_PACKAGE && /MainActivity/.test(String(focus.activity || "")) && resolution) {
+      main = await snapshot(op, "xianyu-open-preflight");
+      skippedForceStop = isRecoverySafeMain({
+        focus: main.focus,
+        nodes: main.nodes,
+        resolution,
+      });
+    }
+    started = skippedForceStop ? (main.focus || focus) : await startIdlefish(op);
+  }
   if (started.package !== IDLEFISH_PACKAGE) {
-    return { ok: false, step: "start", started };
+    return { ok: false, step: "start", started, skippedForceStop };
   }
 
   let layoutSource = null;
@@ -1237,9 +1259,9 @@ export async function openPublishDryRun(op, { maxSteps = 6, startApp = true } = 
   if (/MainActivity/.test(started.activity || "")) {
     const sizeRaw = await op.shellExec("wm size", 8000).catch(() => "");
     if (!/1080x2400/.test(String(sizeRaw))) {
-      return { ok: false, step: "unsupported-display-size", started, sizeRaw: String(sizeRaw).trim() };
+      return { ok: false, step: "unsupported-display-size", started, sizeRaw: String(sizeRaw).trim(), skippedForceStop };
     }
-    const main = await snapshot(op, "xianyu-main-tab-layout");
+    if (!main) main = await snapshot(op, "xianyu-main-tab-layout");
     // 首次运行自动探测底栏并落盘；之后 find* 直接读 profile 真实 bounds。
     const layout = await ensureLayoutProfile(op, main.nodes);
     layoutSource = layout.source;
@@ -1305,6 +1327,7 @@ export async function openPublishDryRun(op, { maxSteps = 6, startApp = true } = 
         stage: "publish-compose",
         stoppedBeforePublish: true,
         layoutSource,
+        skippedForceStop,
         trace,
       };
     }
@@ -3160,9 +3183,8 @@ export async function fillPriceField(op, field, price, {
       await settleFn(300);
     }
     entered = await captureFn(op, `${evidenceDir}\\xianyu-price-entered-${safeSerial}.png`);
-    const typed = await snapshotFn(op, "xianyu-price-typed");
-    const kbConfirm = typed.nodes.find((n) => /^确定$/.test(String(n.label || "")) && n.bounds && center(n.bounds)[0] > 700)
-      || sheet.nodes.find((n) => /^确定$/.test(String(n.label || "")) && n.bounds && center(n.bounds)[0] > 700);
+    // 确定键在数字键盘 sheet 上通常一开始就在；再 dump 一次只为找同一颗键。
+    const kbConfirm = sheet.nodes.find((n) => /^确定$/.test(String(n.label || "")) && n.bounds && center(n.bounds)[0] > 700);
     if (!kbConfirm?.bounds) { await cleanup(); return { ok: false, step: "price-keyboard-confirm-missing", evidence: { baseline, entered } }; }
     await op.tap(...center(kbConfirm.bounds));
     await settleFn(1000);
@@ -4947,10 +4969,15 @@ export async function publishDryRun(op, plan, {
   }
   // 6. 无 SKU 时发布页设价（闲置模式可同 sheet 填库存）
   if (plan.price && !plan.skuSpecs) {
-    const { row: field } = await locateRowWithScroll(op, findPriceField, "price");
-    const priceResult = await fillPriceField(op, field, plan.price, {
-      evidenceDir,
-      stock: plan.stock ?? plan.skuStock ?? null,
+    const priceResult = await sup.run("price", async () => {
+      const { row: field } = await locateRowWithScroll(op, findPriceField, "price");
+      return fillPriceField(op, field, plan.price, {
+        evidenceDir,
+        stock: plan.stock ?? plan.skuStock ?? null,
+      });
+    }, {
+      maxAttempts: 1,
+      critical: true,
     });
     if (record("price", priceResult)) return finishFailure();
   }

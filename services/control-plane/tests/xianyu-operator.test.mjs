@@ -20,6 +20,7 @@ import {
   findPublishEntry,
   findSellTab,
   fillPriceField,
+  startIdlefish,
   findSkuRecoveryClose,
   findSkuExitConfirm,
   findSkuBatchEditControls,
@@ -1568,7 +1569,7 @@ test("fillPriceField proves close, persisted readback, and final compose before 
     { label: "宝贝描述", bounds: [77, 300, 1003, 600] },
     { label: "发布", className: "android.widget.Button", bounds: [900, 20, 1070, 150] },
   ];
-  const snapshots = [sheet("价格设置"), sheet("价格设置199"), compose, sheet("价格设置199.00"), compose];
+  const snapshots = [sheet("价格设置"), compose, sheet("价格设置199.00"), compose];
   const taps = [];
   let backs = 0;
   const op = {
@@ -1600,7 +1601,7 @@ test("fillPriceField fails closed when the first price sheet never proves compos
   ];
   const typed = initial.map((node, index) => index === 0 ? { ...node, label: "价格设置199" } : node);
   const sparseOpen = [{ label: "价格设置199", bounds: [44, 912, 1036, 1044] }];
-  const snapshots = [initial, typed, sparseOpen, sparseOpen, sparseOpen];
+  const snapshots = [initial, sparseOpen, sparseOpen, sparseOpen];
   let backs = 0;
   const op = {
     serial: "test-price",
@@ -1638,7 +1639,6 @@ test("fillPriceField fails closed when persisted readback cannot prove the final
   const sparseOpen = [{ label: "价格设置199", bounds: [44, 912, 1036, 1044] }];
   const snapshots = [
     sheet("价格设置"),
-    sheet("价格设置199"),
     compose,
     sheet("价格设置199.00"),
     sparseOpen,
@@ -1662,6 +1662,36 @@ test("fillPriceField fails closed when persisted readback cannot prove the final
   assert.equal(result.step, "price-readback-close-unverified");
   assert.equal(backs, 1);
   assert.equal(snapshots.length, 0);
+});
+
+test("startIdlefish skips force-stop when already on MainActivity and asked not to", async () => {
+  const shells = [];
+  const op = {
+    currentFocus: async () => ({
+      package: "com.taobao.idlefish",
+      activity: "com.taobao.idlefish.maincontainer.activity.MainActivity",
+    }),
+    shellExec: async (cmd) => { shells.push(cmd); return ""; },
+  };
+  const focus = await startIdlefish(op, { forceStop: false });
+  assert.equal(focus.package, "com.taobao.idlefish");
+  assert.equal(shells.some((cmd) => /force-stop/.test(cmd)), false);
+});
+
+test("startIdlefish still force-stops when idlefish is not in the foreground", async () => {
+  let n = 0;
+  const shells = [];
+  const op = {
+    currentFocus: async () => {
+      n += 1;
+      return n === 1
+        ? { package: "com.android.launcher3", activity: "Launcher" }
+        : { package: "com.taobao.idlefish", activity: "com.taobao.idlefish.maincontainer.activity.MainActivity" };
+    },
+    shellExec: async (cmd) => { shells.push(cmd); return ""; },
+  };
+  await startIdlefish(op, { forceStop: false });
+  assert.equal(shells.some((cmd) => /force-stop/.test(cmd)), true);
 });
 
 test("findSkuSelectAll requires comma-prefix and trailing 全选 (recipe success label)", () => {
