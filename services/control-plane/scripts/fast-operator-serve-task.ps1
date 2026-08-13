@@ -22,6 +22,17 @@ function Write-Result([hashtable]$Value) {
     $Value | ConvertTo-Json -Depth 8 -Compress
 }
 
+function Resolve-NodeExe {
+    if (-not [string]::IsNullOrWhiteSpace($env:XHS_NODE_EXE) -and (Test-Path -LiteralPath $env:XHS_NODE_EXE)) {
+        return $env:XHS_NODE_EXE
+    }
+    $pinned = "D:\Program Files\Node\node.exe"
+    if (Test-Path -LiteralPath $pinned) {
+        return $pinned
+    }
+    return (Get-Command node -ErrorAction Stop).Source
+}
+
 function Write-LifecycleEvent([string]$Phase, [int]$ListenerPid = 0) {
     $record = [ordered]@{
         timestamp = (Get-Date).ToUniversalTime().ToString("o")
@@ -96,7 +107,7 @@ if ($Action -eq "Install") {
     }
     if (-not (Test-Path -LiteralPath $worker)) { throw "Worker missing: $worker" }
 
-    $nodeExe = (Get-Command node -ErrorAction Stop).Source
+    $nodeExe = Resolve-NodeExe
     $nodeVersion = (& $nodeExe --no-warnings --version).Trim().TrimStart("v")
     if ($nodeVersion -ne "24.11.1") { throw "Node 24.11.1 required; found $nodeVersion" }
     $gitCommit = (& git -C $repoRoot rev-parse HEAD).Trim()
