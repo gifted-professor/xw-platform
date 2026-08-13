@@ -1,0 +1,19 @@
+{
+  "knowledge": [
+    {
+      "id": "recipe-xw-ops-health-20260813",
+      "category": "recipe",
+      "app": "infra",
+      "title": "xw-ops-health：declared ≠ observed 只读叠加层",
+      "content": "命令面沉淀，待更多真机窗口实证。/xw ops-health 读 harvest/steps/stall/leftover session，推导 unobserved|healthy|flaky|stalled。不是 GET /api/health，不是 xw-start --check。explore leftover 只诊断不判 stalled。知识库金额永不写入。verifyMode=replay。",
+      "appliesTo": ["ops/xw-ops-health.mjs", "xw.ops-health"],
+      "steps": [
+        "node ops/xw-ops-health.mjs --help",
+        "node ops/xw-ops-health.mjs list",
+        "node ops/xw-ops-health.mjs show xianyu-idle"
+      ],
+      "verifyMode": "replay",
+      "lifecycle": "resolved"
+    }
+  ]
+}

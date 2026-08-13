@@ -1,3 +1,181 @@
+## 2026-08-13 跳过 fill 必须当场验本 SKU 发布页
+
+occupancy 说 `already_held` 不够。跳过 fill 前正式 session dump：必须是 publish-compose 且 `composeMatchesProduct`（不用 brand-only）。详情页/主页/对不上本 SKU → 当空闲，走 fill（`startIdlefish` 回干净主页）。避免 01 停在 HH 详情却被当成下一条货已填好。单测覆盖 decideHeldCompose。
+
+## 2026-08-13 已授权 ops 链路 fill 后直接发布，不再二次目检
+
+青岛 runner：`--execute --i-confirm-live-publish` 视为 ops 一级已授权，fill 成功后立刻 publish，不再停 `awaiting_publish_confirmation`。未带该旗仍停页等人。`xw-task --confirm-external-effect` 同样透传并加上发布超时。
+
+## 2026-08-13 按台占页 ledger：ready 不再冒充空闲
+
+`runtime/device-occupancy.v1.json` 记每台声称占页：`idle` / `xianyu-publish-compose` / `unknown`。fill 成功且 leaveOnCompose → 占页+SKU；publish/discard 回 idle。开新 fill 时：同 SKU 占页走 resume-publish、别的 SKU 占页拒绝、idle 才填。运输仍最多 2 台在飞，但 03/04 不再被 01/02 观察器挡住。`/agent-entry` Device occupancy 增加 `page=` 声称字段，**不是 live dump**。当前种子：01/02 占着 HH `SZWEGO-C736185992` 发布页，03/04 idle（上一单拉夫 RL）。改 `registry.mjs` 后需重启 `XhsDeviceRegistry` 才进 live 面板。occupancy + 青岛相关单测 **37/37**。
+
+## 2026-08-13 四机 fill：01/02 失败仍给 03/04 发同一条
+
+不是 03/04 被忘了。`fillConcurrency=2` 仍是 01/02 一波、03/04 下一波；旧闸是上一波验收不过就 `prior-wave-failed`，HH 因此只动了 01/02。现 fill 改为波内仍最多 2 台，但前一波失败也继续提交剩余机。另：无需打码时 job 不带 `imageCount`，观察器不再误判 `expected-image-count-mismatch`。相关单测已过。
+
+## 2026-08-13 闲鱼打码改成分岔口：没出「一键打码」就继续
+
+青岛 fill 之前把 `requireQrMask=true` 写死，页面没出打码按钮也会 `qr-mask-required-action-missing`（HH 第 2 条翻车原因）。现改为默认 `false`：上传后由 operator 在页上等待识别，出现唯一「一键打码」才点一次，等窗口内没有就走无需打码继续填表。有警告但按钮缺失/重复仍 fail-closed。未改 routing（避免再脏 gate）；已部署 operator 本身已支持这条 auto 岔路。`assembleIdleFixture` 单测已改。
+
+## 2026-08-13 青岛 discard + 四机连续真发（1/3 完成，第 2 条 QR mask 停）
+
+**discard**：`SZWEGO-7316170DEA` 01/02 已清。第一次分类器因新闲鱼底栏没有「首页」误判；按 01 dump 补了「闲鱼选中 + 消息/我的/卖闲置」为 semantic main-safe。重跑 discard：01 已在 feed，02 关页+不保存后回 main-safe。lease=0。
+
+**连续 3 条**取飞书视图里已发布块之后、四机都未发布的下 3 个 SKU。第 1 条四机真发成功；第 2 条 fill 在 QR 打码闸失败，按 fail-closed 未发、第 3 条未开。
+
+| # | SKU | 结果 |
+|---|---|---|
+| 1 | `SZWEGO-89FD861685` 拉夫RL 圆领T | 四机 fill 9/9 + 真发 `effect=occurred` + 飞书写回 01–04。run `run_e2a08d73-…` |
+| 2 | `SZWEGO-C736185992` HH 冰感短袖 | 01/02 `imageQrMask:qr-mask-required-action-missing`；03/04 未提交；未真发。restoration=ok |
+| 3 | `D6231RPT41` D家速干裤 | 未开始 |
+
+## 2026-08-13 青岛 Task 补飞书「已发布设备」fail-closed 闸
+
+这是 Task/ops 沉淀，不是 Skill。青岛飞书表「闲鱼已发布设备」本来只在真发成功后写回，fill/publish 读了字段却不当闸——所以 `SZWEGO-7316170DEA` 在飞书已记 01–04 时仍能 conc2 fill。现已补：
+
+- `assertAliasesNotAlreadyPublished`：目标 alias 与飞书已发布集合有交集 → `ALREADY_PUBLISHED_ON_DEVICE` 退出 4
+- **不静默减设备**（部分重叠也整单拒绝）
+- 故意重发必须显式 `--i-confirm-already-published`（listing runner / `xw-task` / 底层 workflow 都透传）
+- 闸在 prepare（下图前）、fill、publish 三处；discard 不受影响
+- `@1` 模板不可变，未改 descriptor；运行时代码是权威
+
+验证：闲鱼 idle + 青岛 listing **33/33**。当前 canary 仍停在 01/02 发布页，建议 discard，不要 publish。
+
+## 2026-08-13 青岛 conc2 Canary A fill 完成（`SZWEGO-7316170DEA` 01/02，未真发）
+
+`node ops/xw-xianyu-qingdao-listing.mjs --sku SZWEGO-7316170DEA --aliases 01,02 --fill-concurrency 2 --actor claude-pilot-20260809 --execute` 一波双机全绿后停在发布页。
+
+| 项 | 值 |
+|---|---|
+| taskRunId | `run_4372046b-79a7-492b-a702-346adf376c4e` |
+| plan | `runtime/plans/qingdao-idle-1786582005153` |
+| planHash | `353f4834e0e8118a3bedbcac7e7a1427d7b4ff6400fc34607523546c75924e31` |
+| jobs | 01 `job_0b327d0b-…` / 02 `job_ddc4d7c6-…` 均为 `succeeded` |
+| 验收 | 9/9 图、`qrMaskVerified=true`、`outputOk=true`、lease=0 |
+| 飞书 | 该 SKU 记录上「闲鱼已发布设备」已含 01–04（再发需人确认是否重复上架） |
+
+未跑 publish / discard。人目检 01/02 compose 后再用同一 run + 同一 planHash 续。
+
+## 2026-08-13 routing `0e0d9c5` 对齐 + `/xw start` READY
+
+**routing dirty gate 已清**：`C:\Users\Public\xhs-routing-v1-1` 本地 `0e0d9c5`（`fix(tasks): pin Node 24 via Resolve-NodeExe`）已 push，`main==origin/main==0e0d9c5`，worktree clean。receipt 47/47（7 个 runtime-critical 文件；`control-plane-core` 里既有 `migrateLegacyPending` JOB_WAIT_TIMEOUT 未纳入）。官方 Install 重钉 `task-launch.json` 与四台 `serve-launch-0N.json` 的 `gitCommit=0e0d9c5`；Medium IL 下 `Register-ScheduledTask` 拒绝访问，既有计划任务定义未改，仍指向同一 launch 文件。控制面 Stop/Start 成功；serve 01 当时 `not_listening`，02/03/04 继续听。
+
+**`/xw start`**：`node ops/xw-start.mjs --actor claude-pilot-20260809` → `ok:true` / `READY` / `allHealthy=true` / `canExecute=true`。只启动了 01 serve（17895），02/03/04 未动；ADB 5038 四机稳定；lease=0 / job=0 / blocker=0。live agent-entry 四机 ready/free。青岛 canary 现可从 `SZWEGO-7316170DEA` 的 01/02 conc2 fill 开始，本轮未提交业务 job。
+
+## 2026-08-13 青岛飞书→闲鱼 conc2 canary 正式清场（source-only，live 被 routing dirty gate 阻塞）
+
+**已补闭环**：`ops/xw-xianyu-qingdao-listing.mjs` 新增同一 Task Run 的 `discard` phase；必须匹配原
+`sku / aliases / fillConcurrency / actor / taskRunId / plan / planHash`。底层
+`ops/xianyu-discard-compose.mjs` 不再使用固定 session 文件或代释放既有 context，而是逐台申请
+run-scoped 可见 Explorer lease，经 preflight 后只接受三个确定状态：发布 compose 的唯一「关闭」、
+保存提示的唯一「不保存/放弃」、或同时具备首页/闲鱼/消息/我的/卖闲置锚点的 semantic main-safe。
+未知页面、目标不唯一、main-safe 不成立、release/evidence/fleet 任一不完整均 fail closed；成功时确认
+未保存草稿、未发布、目标机 ready/free、active jobs/leases=0，再把 canary closeout 记为 completed、
+外部效果 `not_occurred`。`ops/xw-task.mjs` 同步支持受 fence 保护的 discard resume。
+
+**revision staging 修正**：conc2 `@2` 草案移到 `task-templates/candidates/`，不参与 active revision
+解析；稳定目录恢复 `task.xianyu.qingdao-idle-listing@1 implemented/listed`，`node ops/xw-task.mjs list`
+实际为 count=1。两次独立 live canary 全绿后，才把 candidate 以新的不可变 active `@2
+implemented/listed` 保存，避免 draft 静默遮掉当前生产串行入口。
+
+**验证**：青岛 runner + Task CLI + idle workflow 定向 **44/44**；候选模板 validate 通过；三份入口
+`node --check`、`npm run check`、`git diff --check` 通过。全量 `npm test` 仍为 3 个既有失败：repair
+scope guard 因共享 dirty worktree、registry cold-cache singleflight 时序、Windows symlink EPERM；无新增
+青岛链失败。
+
+**live 阻塞**：`xw-start 01,02 --check` 证实 ADB 5038 与设备均健康、01/02 ready/free、0 job/lease，
+但 routing `C:\Users\Public\xhs-routing-v1-1` 在 `main==origin/main==ae179560...` 时仍有另一个会话留下的
+`scripts/control-plane-task.ps1`、`scripts/fast-operator-serve-task.ps1` 两处 `Resolve-NodeExe` 未提交改动，
+严格 release gate 因 worktree dirty 关闭。本轮不设置 dirty override、不提交/清理别人改动，因此尚未
+开始 Canary A；gate 清洁后从 `SZWEGO-7316170DEA` 的 01/02 conc2 fill 开始。
+
+## 2026-08-12 `/xw start` 性能优化（实测 25.4s → 13.1s on `--check`）
+
+**改动（`ops/xw-start.mjs`，独立初审修正后 35/35 xw-start 单测 + `npm run check` 通过）**：
+1. **PnP + ADB 监听端口合并为一次 PS 调用**，监听探测改用 `netstat`（`Get-NetTCPConnection` 同探针贵 ~4x）。原来两次 PS 串行 ~8.5s → 一次 ~4.5s。
+2. **收敛循环按维度局部重查**：`inspect()` 支持 `prev` 复用，但只允许在 recovery→readiness 的短中间阶段使用；终态必须完整重探 serve + ADB，避免长阶段期间 serve 自退或 USB/daemon 变化后误报 READY。
+3. **已收敛快速路径**：`ensureBaseServices` 后 `plan.mutationCount===0` 跳过收敛循环，保留“初始完整探测 + 一次终态完整探测”（不再做第三次局部探测）。期间冒出的 active work 由终态 classify 报 WAITING（ok=false）——无 mutation 在途。
+4. **4 台 serve rebind 并行化**（`ensureServes` → `Promise.all`）：每台独立 task/port，串行 ~44s → 并行 ~12s；单台失败仍隔离在该台结果。
+5. **请求量**：lease 观察 20ms→200ms（单 job 至多 ~1500 次轮询→~150）、readiness job 状态轮询 100ms→300ms。
+6. **去掉 `/api/health?deep=1`**（重端点，服务端重算 28 capability lint）：agent-entry 已带审批事实；只有 `approvals.sourceOk=true` 且 `sources.controlDb` fresh/reachable 才接受 pendingCount，否则 BLOCKED，禁止把不可读降级成 0。
+7. **`chooseActor` 不再回退自创 `xw-start`**：无 `--actor`/`XHS_ACTOR`/单 pilotActor 时抛错（原字面量会撞 `AUTONOMY_PILOT_SCOPE_MISS`）。
+
+**验证**：历史 `--check` 25.4s→13.1s；独立修正后现场约 14.3s。routing worktree dirty、release gate 关闭时已回验顶层 `ready=false/allHealthy=false`，不再与 gate 自相矛盾。新增测试覆盖 gate=false、审批源未知、actor 明确失败、快速路径终态全探、mutation 中间局部复用/终态全探、四 serve 真并发；`tests/xw-start.test.mjs` 35/35，连同 node runtime 为 37/37。全量测试仍只有 3 个既有失败，分别是 dirty-worktree scope guard、registry cold-cache singleflight 时序、Windows symlink EPERM，并非全是 symlink。当前舰队已 idle；**快速路径/rebind 真 start 仍待 routing 仓那两处他人改动提交/清理、严格 gate 打开后执行**，本轮不代清理。
+
+## 2026-08-12 `/xw task` 稳定常态任务目录 + 青岛飞书→闲鱼上架
+
+**结论**：`node ops/xw-task.mjs list` 现在只展示真正可运行的稳定任务，并按
+`App → 功能 → Task` 分组；草稿、未绑定 runner、显式隐藏的模板不会进入默认目录。
+`list --all` 才显示候选/草稿及其不可运行原因。稳定目录的硬准入为：模板
+`status=implemented` + `catalog.visibility=listed` + 存在显式 runner binding；draft
+若声明 `listed` 会直接校验失败。
+
+**首个稳定 Task**：`task.xianyu.qingdao-idle-listing@1`（闲鱼 → 发布 →
+青岛飞书→闲鱼上架）。入口 `/xw xianyu-idle <SKU>`，默认仅 01/02。执行分两段：
+fill 复用既有正式 session/job 链读取飞书、推图、提交
+`xianyu.publish.full_dry_run` 并停在发布页；随后把原 run、计划路径和
+`product.json + manifest.json` SHA-256 冻结到 run-scoped checkpoint。publish 必须带
+同一 run、同一 actor、同一 SKU/设备、原计划哈希和显式真发确认；路径越界、符号链接、
+计划字节变化均 fail-closed。推图逐台 acquire 可见 Explorer session、长操作每 20 秒 heartbeat、
+finally release；发布后必须在目标商品详情同时命中“刚刚擦亮”+“管理”+详情锚点，不能再用
+“离开发页”判成功。只有所有目标发布成功且飞书“闲鱼已发布设备”写回成功，Task 才能
+close 为 completed；写回失败会让底层链路返回失败。fill 异常会 partial close；publish
+timeout/异常按 external effect `unverified` 收口并禁止盲目重发。
+
+**新增业务能力方式**：新增不可变 Task 模板并先保持 draft/hidden；补专用 runner binding、
+确认/数量/断点/验收策略和回归测试；达到稳定证据后才改为 implemented/listed。不得仅靠
+自然语言别名或一段脚本进入默认目录。
+
+**验证**：Task 模板、目录 CLI、青岛 runner、闲鱼 idle 定向测试 **37/37**，`npm run check`
+通过；默认目录仅 1 项，`--all` 显示 4 项且逐项给出 runPolicy。本轮只做离线实现与治理留痕，
+未读飞书、未碰设备、未提交 job、未真发、未部署；真机运行仍必须以当时 live
+ready/free、正式 lease 和人工发布确认闸为准。
+
+## 2026-08-12 青岛飞书→闲鱼 Task 有界 conc2（源码完成，待指定 SKU live canary）
+
+**目标语义**：并发仍走同一个 `task.xianyu.qingdao-idle-listing`、同一个 closeout run、同一份
+plan/hash、人目检确认和飞书回写协议；不另开旁路 runner。已验证的 @1/直接 runner 默认仍为串行；
+新增不可变 `@2` 作为 `draft + hidden` conc2 canary，默认 01/02；显式 01–04 时拆成
+`01/02 → 整波验收 → 03/04` 两波。fill 并发硬上限为 2，传 1 可串行回退，传大于 2 直接拒绝。
+按 Task 最新 revision fail-closed 规则，@2 晋级前 `/xw task` 不会回退展示或运行 @1；真实 publish
+始终逐台串行，未放宽外部效果确认。
+
+**稳定闸门**：推图使用独立 ADB serial 有界并行（最多 4），任何失败会停止新设备，同时等待所有
+已经开始的 Explorer session 完成 finally release。每个 fill 波次只有在所有 job 均
+`succeeded`、`result.output.ok=true`、QR mask evidence=`verified` 且
+`imageCount === expectedImageCount === plan image count` 时才放下一波；
+`recovery_required/ambiguous/waiting_approval/timeout` 都会立即 fail closed，未开始的设备明确记
+`not_submitted/prior-wave-failed`。发布前 compose 匹配增加 brand 兜底，但发布后的正向验收明确禁用
+brand-only，仍要求价格/标题 + “刚刚擦亮” + “管理” + 详情锚点。
+
+**配套修正**：底层默认 aliases 从 01–04 收紧到 01/02；混合合法/非法 alias 不再静默缩窄；batch
+不再硬编码四机，会透传 aliases 与 fillConcurrency，且并发仍拒绝 >2。checkpoint 保存
+fillConcurrency，新的 run 若续跑参数变化会 fail closed；旧 checkpoint 无该字段时保持兼容。
+Task runId 已贯穿到底层：Explorer session 文件、job idempotency key、manifest、checkpoint、session/lease
+evidence 和 closeout refs 均按 run 隔离；发现同名 context 会拒绝替换或代释放。acquire 后 evidence 写入
+为 fail-soft，清理优先，写入失败进入 manifest 与 closeout evidence debt。observer 默认每波 15 分钟；fill
+外层显式计入 prepare/download 10 分钟、9 图并行 push 45 分钟、所有 job 波次及 cleanup 10 分钟，父层
+再多 10 分钟。publish 按每台 45 分钟的最坏 Explorer-op envelope 逐台累加，父层同样多 10 分钟，避免
+任何已持 session/已提交 job 被较短外层 wall timeout 提前杀掉。legacy batch 的同一 SKU fill/publish 也
+复用同一个显式 runId，并分别采用 fill/publish 预算。
+
+**真实发布未知态**：在 dispatch 最终「发布」tap 之前即标记 `commitAttempted=true/effectStatus=unverified`；
+只有目标商品正向证据成立才改为 `occurred`。tap 后任一步骤失败会立即停止剩余 alias，Task closeout 将
+外部效果记为 `unverified` 并输出 `do_not_republish_until_human_verifies_external_state`；飞书只回写
+`row.ok=true + effectStatus=occurred + publishEvidence.ok=true + tuoguanDismissed=true` 的完整闭环设备；
+若内容已发布但托管提示未清，效果账仍诚实记 occurred，飞书不回写。写回失败仍持久化 publishResults
+与已发生效果。
+
+**验证**：相关目标测试 42/42、`npm run check`、相关 diff check 全过；全量测试仍为 3 个既有失败
+（dirty-worktree scope guard、registry cold-cache singleflight 时序、Windows symlink EPERM）。本轮未
+擅自选择历史 SKU，未读飞书、未提交 job/session、未占 lease、未真发、未部署；conc2 源码不能在没有
+明确 SKU 的情况下冒充 live 生产验收。下一步须用人指定的单 SKU 做独立 Task run：先 01/02 conc2，
+再显式 01–04 两波；两次均通过严格 fill 验收、无遗留 session/lease/job 后，才把 @2 晋级
+`implemented + listed`。
+
+独立 watchdog 二轮深审最终 **PASS**，另跑相关集合 **55/55**，无 High/Medium/Low correctness finding；
+知识库 `xianyu-qingdao-task-conc2-canary-guardrails-20260812` 已写入并追加该独立验收身份。
 
 ## 2026-08-12 release 对齐 + `/xw start` ADB 错口自动修复
 
@@ -7,9 +185,10 @@
 
 **验证**：`/xw start` 实跑 `ok:true` / `READY_WITH_LIMITS`（limits=既有 4 条 XHS note locator blocker，不影响闲鱼/微信）/ 0 mutation / 四机 ready / adbOk=true / canExecute=true。`npm test` 3 个失败均为既有/环境（repair scope guard、registry singleflight flaky、Windows symlink EPERM）。
 
-## 2026-08-12 闲鱼闲置链路速度优化（稳定为约束）
+## 2026-08-12 闲鱼闲置链路速度优化（稳定为约束；并发策略已被上方有界 conc2 更新）
 
-在已实证稳定（LHJK6MNT01 四机真发）前提下提速，未动 `STAGGER_MS` 8s 提交错开与 1.2s mtime 错开（稳定余量）。
+在已实证稳定（LHJK6MNT01 四机真发）前提下完成第一轮提速；当时保留 `STAGGER_MS=8s`。后续有界
+conc2 已把 fill 改成最多两台一波、波内 2s stagger，并增加严格图数/终态闸门；1.2s mtime 错开仍保留。
 
 | 改动 | 文件 | 收益 |
 |------|------|------|
@@ -53,7 +232,7 @@ Feishu `FEISHU_BASE_TOKEN` 未随机轮换（bitable app 标识，仍只在 `.en
 孤儿默认口 **5037**（非效卫托管）占着 01/04。在 active lease/job=0 时只执行 `adb -P 5037 kill-server`，**未** kill 5038。四 serial 立即稳定出现在 5038；`xw-start --check` → `adbOk=true`、`wrongPortAliases=[]`。xiaowei 可能再拉起空的 5037 listen，设备表为空可忽略。证据 closeout `run_ae6fec8b-26bd-4ca5-bda5-e1e942b508ff`。
 # xhs-registry 进度
 
-> 最后更新：2026-08-12 闲鱼闲置链路速度优化（HTTP 轮询 / 并行推图下载 / search / SKU 校验）
+> 最后更新：2026-08-12 `/xw task` 稳定目录 + 青岛飞书→闲鱼上架两阶段 Task
 
 ## 2026-08-11 `/xw messages`：小红书消息页未读只读
 
@@ -496,6 +675,139 @@ effect lane 或把 draft 的“抖音关键词真实转发”模板晋级 implem
 
 离线：Registry Explorer gate **14/14**；routing explorer-primitive + return-home **14/14**；`npm run check` 双仓绿。**未 merge、未部署、未真机 canary**；上线需双仓一起部署，并把 Windows `control-plane.devices.json` 加上 `xiaowei.explorer.primitive`。
 
+## ops 沉淀清单（2026-08-12 建立，随脚本增删维护）
+## 2026-08-12 闲鱼含二维码图片“一键打码”闭环
+
+**结论**：`xianyu.publish.full_dry_run` 已在图片上传完成后、标题/描述输入前自动检测闲鱼二维码警告；检测到唯一“一键打码”后只点击一次，并验证警告/入口消失且图片数量不变。普通图片自动跳过；已知含二维码的图片集可传 `requireQrMask=true`，动作未出现、按钮歧义、处理后警告仍在或图片数变化均 fail-closed。
+
+**实现与部署**：routing `main@ae1795603e000ab939ff92c025da8402ca4eb9fd`，release `rel-2026-08-12-xianyu-qr-mask-v3`。operator 增加图片后硬步骤 `imageQrMask`，adapter/capability schema 转发 `requireQrMask`，job 输出仅暴露有界 `qrMask` 证据；聚焦回归 **105/105**。
+
+**真实 replay**：飞书青岛表第 4 条 `record=recvrS1NLsOiRJ` / `SKU=SZWEGO-7316170DEA` 的真实 9 图，经设备 02 正式 session 可见 lease 推入版本化相册后，正式 job `job_10ff249f-befd-4fd8-a692-8daf78ef94af` / run `run_6c400dfe-8f61-49c3-9e87-513a96d48327` **succeeded**。结果 `warningDetected=true`、`actionCount=1`、`applied=true`、`verified=true`、`imageCount=expectedImageCount=9`；`saveDraft=false`，verification/restoration 均通过，回到桌面，最终 4/4 ready/free、0 lease、0 running、无 active blocker。
+
+**入口边界**：打码是 `xianyu.publish.full_dry_run` 内部原子步骤，不提供脱离“上传图片→发闲置编辑页”的独立 `/xw` 命令。飞书 SKU→推图→填表整条稳定链已登记为 `task.xianyu.qingdao-idle-listing@1`，日常入口为 `/xw xianyu-idle <SKU>`；底层 `feishu-to-xianyu-idle-publish.mjs` 保留为 runner 实现，不作为需要人反复手拼参数的首选入口。
+
+> 中央注册表：每个 ops 脚本的三渠道沉淀状态（知识库 / PROGRESS 节 / runtime 产物）。
+> 判定口径与 `node ops/xw-sediment-check.mjs` 一致；新脚本落地检查见 `docs/ops-sediment-checklist.md`。
+> 状态：已沉淀 = 三渠道任一命中；原语豁免 = 低层积木不要求独立留痕；待补 = 三渠道全缺。
+
+**xw 编排**
+
+| 脚本 | 用途 | 知识库 | PROGRESS | runtime | 状态 |
+|---|---|---|---|---|---|
+| `xw-alipay-balance` | 支付宝余额只读（理财 Tab 总资产） | recipe-alipay-wealth-tab-total-assets-20260810<br>recipe-xw-balance-single-task-closeout-20260811 | ✓ | ✓ | 已沉淀 |
+| `xw-auto-adopt` | 任务 closeout 自动收编（证据式） | — | ✓ | ✓ | 已沉淀 |
+| `xw-balance` | 统一余额读取（微信+支付宝+微购） | recipe-alipay-wealth-tab-total-assets-20260810<br>recipe-xw-balance-single-task-closeout-20260811 | ✓ | ✓ | 已沉淀 |
+| `xw-closeout` | task closeout / capability harvest | — | ✓ | ✓ | 已沉淀 |
+| `xw-evolve` | Recipe Catalog evolve CLI | recipe-xw-evolve-20260812 | — | — | 已沉淀 |
+| `xw-evolve-replay-once` | C4 单次正式能力重放 | recipe-douyin-search-image-share-link-20260805 | — | — | 已沉淀 |
+| `xw-evolve-worker` | evolve 队列调度（每轮 claim 1 条） | recipe-xw-evolve-worker-20260812 | — | — | 已沉淀 |
+| `xw-explore-session` | Explorer session acquire/status/release | recipe-wechat-services-balance-four-device-20260806 | — | — | 已沉淀 |
+| `xw-locator` | 视觉块定位器（只读，不 tap） | foundation-capability-discovery-invariant-20260807 | ✓ | — | 已沉淀 |
+| `xw-ops-health` | 只读命令观察成熟度（declared≠observed） | recipe-xw-ops-health-20260813 | ✓ | — | 已沉淀 |
+| `xw-mission` | 多设备 mission 编排（Lead/Worker） | pitfall-xw-capability-deployed-runtime-null-hints-20260811<br>recipe-xw-task-lead-worker-p0-four-device-20260806<br>xw-xhs-4machine-bounded-workflow-20260810 | ✓ | ✓ | 已沉淀 |
+| `xw-sediment-check` | ops 沉淀只读检查器（四通道） | recipe-xw-sediment-check-20260812 | — | — | 已沉淀 |
+| `xw-session-canary-noop` | 多机无动作 Explorer canary | — | ✓ | ✓ | 已沉淀 |
+| `xw-skills` | /xw skills 目录（capability+recipe+workflow） | foundation-capability-discovery-invariant-20260807<br>pitfall-xw-capability-deployed-runtime-null-hints-20260811 | ✓ | ✓ | 已沉淀 |
+| `xw-stall-worker` | stall_queue → shadow L2 决策 | recipe-xw-stall-worker-20260812 | — | — | 已沉淀 |
+| `xw-start` | 幂等一键启动（routing 核对→只启缺失→readiness） | pitfall-xw-adb-split-port-wrong-entry-20260811<br>pitfall-xw-start-partial-task-rebind-20260810<br>recipe-xw-start-active-adb-two-pass-recovery-20260811<br>recipe-xw-start-bounded-self-heal-20260811<br>recipe-xw-start-idempotent-readiness-20260810 | ✓ | ✓ | 已沉淀 |
+| `xw-task` | 多设备 task Lead/Worker | recipe-xw-task-lead-worker-p0-four-device-20260806 | ✓ | ✓ | 已沉淀 |
+| `xw-wechat-balance` | 微信零钱只读（服务页直读+兜底） | recipe-wechat-balance-read-fallback-20260810<br>recipe-xw-balance-single-task-closeout-20260811 | ✓ | ✓ | 已沉淀 |
+| `xw-weigou-balance` | 微购余额只读（我的→钱包→自营收入） | recipe-xw-balance-single-task-closeout-20260811 | ✓ | ✓ | 已沉淀 |
+| `xw-xhs-messages` | 小红书消息页未读只读 | — | ✓ | ✓ | 已沉淀 |
+| `xw-xianyu-qingdao-listing` | 青岛飞书→闲鱼两阶段稳定 Task runner | recipe-xw-stable-task-catalog-qingdao-xianyu-v2-20260812 | ✓ | ✓ | 已沉淀 |
+
+**飞书链路**
+
+| 脚本 | 用途 | 知识库 | PROGRESS | runtime | 状态 |
+|---|---|---|---|---|---|
+| `feishu-mark-xianyu-published` | 发布成功写回飞书「闲鱼已发布设备」 | — | ✓ | — | 已沉淀 |
+| `feishu-to-xhs-lib` | 飞书→小红书字段/图片解析库 | xhs-feishu-publish-dry-run-default-20260810 | ✓ | — | 已沉淀 |
+| `feishu-to-xhs-publish` | 飞书商品表→小红书发布 edit_dry_run | xhs-feishu-publish-dry-run-default-20260810<br>xhs-feishu-publish-last4-rows-20260810<br>xhs-publish-album-mtime-order-20260810 | ✓ | — | 已沉淀 |
+| `feishu-to-xianyu` | 飞书商品表→闲鱼并发 dry-run 编排 | pitfall-feishu-xianyu-conc4-transport-timeout-20260728<br>pitfall-lark-cli-output-relative-path-20260728<br>pitfall-xianyu-multiline-description-not-supported-20260728<br>pitfall-xianyu-sku-select-all-missing-20260728<br>recipe-feishu-product-to-xianyu-fixture-20260728<br>recipe-feishu-xianyu-silk-safe-20260728 | ✓ | — | 已沉淀 |
+| `feishu-to-xianyu-idle-batch` | 批量跑 N 条 idle-publish 管道 | — | — | ✓ | 已沉淀 |
+| `feishu-to-xianyu-idle-lib` | 青岛飞书→闲鱼闲置字段解析库 | — | ✓ | — | 已沉淀 |
+| `feishu-to-xianyu-idle-publish` | 青岛飞书→闲鱼闲置默认链路（prepare/fill/publish） | recipe-xw-stable-task-catalog-qingdao-xianyu-v2-20260812 | ✓ | ✓ | 已沉淀 |
+| `feishu-to-xianyu-lib` | 闲鱼 dry-run 工具库（redact/planPhoneImages） | recipe-feishu-to-xianyu-lib-20260812 | — | — | 已沉淀 |
+
+**小红书**
+
+| 脚本 | 用途 | 知识库 | PROGRESS | runtime | 状态 |
+|---|---|---|---|---|---|
+| `xhs-collect-one` | 打开笔记→收藏→验证→回主页 | — | ✓ | — | 已沉淀 |
+| `xhs-comment-copy-top` | 抄最高赞评论（LLM 门禁后发送） | — | — | ✓ | 已沉淀 |
+| `xhs-comment-one` | 打开笔记→评论→发送→验证 | recipe-xhs-comment-one-20260812 | — | — | 已沉淀 |
+| `xhs-dm-open` | DM 路径探索/打开（默认不发送） | recipe-xhs-dm-open-20260812 | — | — | 已沉淀 |
+| `xhs-dm-user` | 搜索用户→打开主页→私信 | recipe-xhs-dm-user-20260812 | — | — | 已沉淀 |
+| `xhs-engage-one` | 组合互动（赞/藏/评） | — | ✓ | — | 已沉淀 |
+| `xhs-follow-one` | 打开笔记→关注作者→验证 | — | ✓ | — | 已沉淀 |
+| `xhs-free-explore-health` | free-explore 健康检查（HEALTH=OK/PROBLEM） | — | — | ✓ | 已沉淀 |
+| `xhs-free-explore-paced` | 小红书自由探索节流（≤1 业务动作/分钟） | — | — | ✓ | 已沉淀 |
+| `xhs-like-one` | 打开笔记→点赞→验证 | — | ✓ | — | 已沉淀 |
+| `xhs-publish-draft` | 发布草稿路径（选图→填文案，默认不点发布） | explore-xhs-publish-edit-dryrun-task-template-20260810<br>explore-xhs-publish-stay-caption-4device-20260810 | ✓ | — | 已沉淀 |
+| `xhs-publish-edit-dry-run-fanout` | 发布编辑页 edit_dry_run/discard fanout | — | ✓ | — | 已沉淀 |
+| `xhs-publish-entry` | 发布入口探索（绝不真发） | recipe-xhs-publish-entry-20260812 | — | — | 已沉淀 |
+| `xhs-save-draft` | 真存草稿（选图→填文案→存→核对） | — | — | ✓ | 已沉淀 |
+| `xhs-search` | 搜索→dump 结果卡 | pitfall-mission-ttl-routing-parser-coordinate-20260806 | ✓ | — | 已沉淀 |
+
+**抖音**
+
+| 脚本 | 用途 | 知识库 | PROGRESS | runtime | 状态 |
+|---|---|---|---|---|---|
+| `douyin-collect` | 抖音收藏（dry-run 只定位不点） | recipe-douyin-collect-20260812 | — | — | 已沉淀 |
+| `douyin-collect-set` | 多机收藏 dry-run 集合 | recipe-douyin-collect-set-20260812 | — | — | 已沉淀 |
+| `douyin-comment-copy-top` | 抖音抄最高赞纯文本评论（LLM 门禁） | — | — | ✓ | 已沉淀 |
+| `douyin-explore-watch` | 抖音 free-explore 健康探针 | — | — | ✓ | 已沉淀 |
+| `douyin-follow` | 抖音关注（dry-run 只定位不点） | recipe-douyin-follow-20260812 | — | — | 已沉淀 |
+| `douyin-follow-set` | 多机关注 dry-run 集合 | recipe-douyin-follow-set-20260812 | — | — | 已沉淀 |
+| `douyin-free-explore-paced` | 抖音自由探索节流（混合动作） | — | — | ✓ | 已沉淀 |
+| `douyin-harvest-share-links` | 抖音图文分享链采集→飞书 | pitfall-douyin-filter-coord-y-offset-20260805<br>recipe-douyin-filter-funnel-tuwen-20260805 | — | ✓ | 已沉淀 |
+| `douyin-like` | 抖音点赞（默认 dry-run） | recipe-douyin-like-20260812 | — | — | 已沉淀 |
+| `douyin-like-set` | 多机点赞 dry-run 集合 | recipe-douyin-like-set-20260812 | — | — | 已沉淀 |
+| `douyin-live-bulk-download` | 批量下载 Live mp4（不碰手机） | recipe-douyin-live-bulk-download-20260812 | — | — | 已沉淀 |
+| `douyin-live-bulk-score` | 新疆 Live 标题打分/分类 | recipe-douyin-live-bulk-score-20260812 | — | — | 已沉淀 |
+| `douyin-play-once` | 单次业务动作（12 种） | — | — | ✓ | 已沉淀 |
+| `douyin-rail-set` | 右侧栏三连 dry-run（like+collect+follow） | recipe-douyin-rail-set-20260812 | — | — | 已沉淀 |
+| `douyin-search` | 抖音搜索→结果页 Tabs+计数（只读） | — | ✓ | — | 已沉淀 |
+| `douyin-share-friend-consec` | 人控等价：连续 N 条全成功才可上脚本 | recipe-douyin-share-friend-consec-20260812 | — | — | 已沉淀 |
+| `douyin-share-friend-harvest` | 分享给「天才较瘦」+飞书字段附言 | recipe-douyin-share-friend-harvest-20260806 | — | ✓ | 已沉淀 |
+| `douyin-xj-live-pipeline-smoke` | 新疆 live 管道冒烟（搜索→Live→分享→飞书） | — | — | ✓ | 已沉淀 |
+
+**闲鱼**
+
+| 脚本 | 用途 | 知识库 | PROGRESS | runtime | 状态 |
+|---|---|---|---|---|---|
+| `xianyu-discard-compose` | 放弃发闲置 compose（关闭→放弃） | — | ✓ | ✓ | 已沉淀 |
+| `xianyu-dismiss-tuoguan` | 关发布后「托管无忧卖」弹层 | — | ✓ | — | 已沉淀 |
+| `xianyu-published-metrics` | 闲鱼「在卖」指标采集（dump-only） | recipe-xianyu-published-metrics-20260812 | — | — | 已沉淀 |
+
+**闲鱼并发**
+
+| 脚本 | 用途 | 知识库 | PROGRESS | runtime | 状态 |
+|---|---|---|---|---|---|
+| `conc2-full-dry-run` | 闲鱼 2 机并发 full dry-run 编排 | xiaowei-concurrency-conc2-serialized-transport-20260728 | ✓ | — | 已沉淀 |
+| `conc4-full-dry-run` | 闲鱼 4 机并发 full dry-run 编排 | recipe-conc4-full-dry-run-20260812 | — | — | 已沉淀 |
+
+**恢复**
+
+| 脚本 | 用途 | 知识库 | PROGRESS | runtime | 状态 |
+|---|---|---|---|---|---|
+| `recover-main-safe` | 一键 main-safe 零动作恢复 | — | ✓ | ✓ | 已沉淀 |
+
+**原语**
+
+| 脚本 | 用途 | 知识库 | PROGRESS | runtime | 状态 |
+|---|---|---|---|---|---|
+| `back` | 返回上一页 | — | ✓ | — | 原语豁免 |
+| `dump-ui` | dump 当前 UI 层级 | — | — | — | 原语豁免 |
+| `focus` | 聚焦/切前台 | — | ✓ | — | 原语豁免 |
+| `home` | 回系统桌面（经 R0 job） | — | ✓ | — | 原语豁免 |
+| `input-text` | 输入文本 | — | ✓ | — | 原语豁免 |
+| `launch-app` | 启动 App | — | — | — | 原语豁免 |
+| `screenshot-and-analyze` | 截图并分析 | explore-xhs-search-filter-hidden-screenshot-share-layer-20260806<br>pitfall-douyin-filter-coord-y-offset-20260805 | — | — | 原语豁免 |
+| `shell` | shell 命令封装 | — | ✓ | — | 原语豁免 |
+| `swipe` | 滑动 | explore-xhs-search-filter-hidden-screenshot-share-layer-20260806 | ✓ | — | 原语豁免 |
+| `tap` | 点击 | explore-xhs-search-filter-hidden-screenshot-share-layer-20260806<br>pitfall-douyin-filter-coord-y-offset-20260805 | ✓ | — | 原语豁免 |
+
 ## 一句话现状（北极星，所有 agent 必读）
 
 **2026-08-05 抖音分享链接 explore→repair→run 首次正式闭环**：`douyin.observe.share_link` 已在默认 01 通过正式 leased job：搜索关键词 → 精确选择「图片」筛选 → 打开首个可见图片卡片 → 详情分享 → 「分享链接」 → 复制成功 UI → 搜索框回读唯一 `v.douyin.com` URL → 恢复原关键词 → 回 Douyin Splash → 控制面 returnHome。生产 `xhs-device-agent` **main / origin/main / task-launch.gitCommit** 已对齐 **`1e1d7f6cc423c8b7176ebbba199a18bfea58a161`**；runtime-critical **108/108**、release receipt/main-origin/content-hash gates 全绿，overlay 仍为 shadow。修复证据：PR #37（exact `ee453d33`，移除不稳定 Button class 假设，保留精确语义/几何/同 bounds 去重/多目标 fail-closed）与 PR #38（exact `e39140ad`，长分享文案恢复显式用有界 256 DEL，其他调用默认仍 48）均由 DeepSeek V4 Flash 独立 `APPROVE`。最终 job **`job_88bed837-f2e1-4ba3-b2f9-d4409ad198da`** / run **`run_69c48eb4-d73a-444d-8514-7810619dff84`** `succeeded`，`verification.ok=true`、`restoration.ok=true`、`returnHome.ok=true`，verification hash `3d47f55b…`；终态 01–04 ready、lease/job/审批均 0。Catalog 已正式收编 **`douyin.observe.share_link.wrap@1`**，服务器验真 receiptHash **`a39acaf3…`**，当前诚实状态为 **candidate / 1 个独立成功**；尚未达到第 2 独立 worker window，不能称 canary/implemented，overlay 未写入。知识库：`pitfall-douyin-share-link-filter-class-and-long-clipboard-20260805`、`recipe-douyin-search-image-share-link-20260805`。
@@ -733,6 +1045,20 @@ effect lane 或把 draft 的“抖音关键词真实转发”模板晋级 implem
 12. `/control/v1/devices` 公开视图不含 routingProfile（排查要看 control.db 或 query-routing.mjs）
 13. **watchdog 实际驱动者是临时终端循环（2026-07-27 发现）**：launchd `com.xhs.scout-watchdog` 因 macOS TCC 拒绝执行 Desktop 下脚本已被禁用（`.plist.disabled`），当前靠一个手工 `while true; do watchdog.sh; sleep 1800; done` 终端进程（s009 会话）驱动——终端一关 watchdog 就停。待办：把脚本移出 Desktop（或给 bash 授 Full Disk Access）后恢复 launchd 托管。
 14. **xhs.follow.ensure 待部署 + 待实证（2026-07-29）**：capability 代码+测试已就绪（GPFS 233/233、registry 50/50）但**未部署 Windows**；`头像,<name>` 头像 content-desc 格式**已真实 dump 实证**（overlay-01.xml），overlay 关注按钮定位 bug 已修（`findProfileFollowBtn`）；registry parser 实现完成、Engineer 自测与离线 replay 通过，等待 Hermes 独立验证（round-3 补修 4 项 supplemental findings、round-4 补修 Hermes r3 复验的 2 项新 P1：截断 wrapper 含头像当可信 root / 同一 CTA 冲突态按 XML 顺序决定，parse 24/24、full 50/50 绿 + 真实 overlay replay 仍 (254,998) 无回归）——剩 GPFS operator port 同选择器 + 部署 + Hermes 10+ 真机回归（req#12，独立验收，未执行）。详见上文 `xhs.follow.ensure capability` 节。
+
+## 2026-08-12 验证链修复与 replay 结果
+
+- 已部署 release `rel-2026-08-12-lifecycle-image-v1`：routing `fb9313367e655de1235e178de9bcf27a8c0403e3`，registry `d5b8370fa99325dc7ee526d1c3771e21163155c6`；`cross-repo-release.json` 现可读，`evidenceMode=dual`。registry 支持 UTF-8 BOM，agent-entry blocker 摘要携带 scope/appliesTo/verifyMode，xw-start 保留 `device:01` 范围。
+- 闲鱼图片验证已补“满 9 图、无 label/无添加锚点”的严格 5+4 网格兜底，并保留首次失败的脱敏媒体诊断；02/03/04 已用正式 `xiaowei.device.list` R0 job 恢复为 ready。真实 full-dry-run replay 尚未执行，不能宣称图片链真机通过。
+- XHS 01 replay：`job_0fec7667-377e-4491-a96a-1ec36107de44` 命中 `DetailFeedActivity` 后 fail-closed 为 `STABLE_NOTE_LOCATOR_UNAVAILABLE`；`job_1fb6e07d-fc99-4252-9fb7-7ce0b1000f36` 冷启动 fail-closed 为 `xhsFeedUnavailable`。两次前后 serve PID 均为 `19180`，进程启动时间、`worker-start=33`、`worker-exit=4`、计划任务 LastRunTime 均未变化，硬杀未复现；但功能 replay 未通过，因此原 4 条 active blocker **未转 resolved**。按连续两次导航失败红线停止继续撞 01，最终用 R0 readiness job 恢复。
+- 部署时 `control-plane-task.ps1 -Action Install` 写入 launch/manifest 后，当前会话在 `Register-ScheduledTask` 遇到拒绝访问；既有正式任务随后成功从新 launch 启动。后续需以有任务注册权限的运维身份重跑 Install，消除此部署权限债。
+
+### 2026-08-12 继续补证（同一轮 review 的实施结果）
+
+- routing `3228339e720c134107b08dd3f79b58a4999678d3` 补齐 locator probe cascade：`activities` 当前块存在但无稳定 ID 时继续有界尝试 `activity top` / `cmd activity top`；XHS package launcher 等待扩为有界 10 秒，并对恢复到已知详情页的情形只做一次 `backToFeed`。94/94 release suite 通过并部署为 `rel-2026-08-12-xhs-replay-v2`。
+- XHS 01 在新 release 上完成两次正式 `xhs.explore.open_feed_note` replay（`job_de643214-d78c-4bb5-94fe-eca85dd5dca1`、`job_878b37b6-70cb-4cfa-8211-3ba5c4274136`）：两次均实际进入 `DetailFeedActivity` 并经过 hierarchy + activities/top/cmd-top locator，随后因当前 Activity 不暴露稳定 ID 而正确 fail-closed。前后 `xhs.observe.metrics` 均成功，serve PID=`27252`、processStart=`2026-08-12T09:51:04.3855661Z`、`worker-start=34`、`worker-exit=4` 不变。因此 08-02 的 4 条 **serve-exit** active blocker 已按 replay 证据转 resolved；稳定 ID 缺失拆成独立 backlog `pitfall-xhs-detail-stable-id-absent-20260812`，不得把 receipt 功能写成已通过。
+- 闲鱼 02 使用既有 `XianyuFull2` 9 图清单完成正式 `xianyu.publish.full_dry_run`：`job_1496c548-1921-405e-9833-ac8ff5e51b1c` / `run_72438b17-c351-48df-97c9-1b79e2d43d14`。9 图 verifier 通过后继续完成 description、SKU、freight，终态 `succeeded`、`verification.ok=true`、`restoration.ok=true`、return-home 成功；`saveDraft=false`，未发布。`pitfall-xianyu-full-grid-image-verifier-20260812` 已转 resolved。
+- `Register-ScheduledTask` 仍会在当前会话报拒绝访问但脚本继续打印 installed；现有任务可从已写入的 exact launch config 正常启动。本项仍是部署权限/错误传播债，未冒充已修。
 
 ## 工具
 
