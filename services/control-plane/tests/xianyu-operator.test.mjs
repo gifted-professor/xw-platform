@@ -398,6 +398,75 @@ test("explicit QR requirement cannot degrade to a successful no-op", async () =>
   assert.equal(result.applied, false);
 });
 
+test("QR detect window is wall-clock bounded and does not take 8 dumps", async () => {
+  const labels = [];
+  let now = 1_000_000;
+  const result = await applyQrCodeMaskIfRequired({ async tap() {} }, {
+    detectBudgetMs: 10_000,
+    detectPollMs: 4_000,
+    nowFn: () => now,
+    settleFn: async (ms) => { now += Number(ms) || 0; },
+    snapshotFn: async (_op, label) => {
+      labels.push(label);
+      return { nodes: [], publishCompose: true };
+    },
+  });
+  assert.equal(result.step, "qr-mask-not-required");
+  assert.equal(result.ok, true);
+  assert.equal(labels.length, 3, `expected 3 snapshots, got ${labels.length}: ${labels.join(",")}`);
+  assert.equal(now - 1_000_000, 8_000);
+});
+
+test("QR detect stops when the wall-clock budget is exhausted", async () => {
+  const labels = [];
+  let now = 1_000_000;
+  const result = await applyQrCodeMaskIfRequired({ async tap() {} }, {
+    detectBudgetMs: 1_000,
+    detectPollMs: 4_000,
+    maxDetectAttempts: 8,
+    nowFn: () => now,
+    settleFn: async (ms) => { now += Number(ms) || 0; },
+    snapshotFn: async (_op, label) => {
+      labels.push(label);
+      return { nodes: [], publishCompose: true };
+    },
+  });
+  assert.equal(result.step, "qr-mask-not-required");
+  assert.ok(labels.length <= 2, `budget 1s should not dump 8 times, got ${labels.length}`);
+});
+
+test("QR warning that appears within the wall-clock budget is still applied", async () => {
+  const warning = { label: "请勿上传含二维码的图片", bounds: [75, 150, 800, 230] };
+  const action = { label: "一键打码", bounds: [880, 150, 1030, 230], clickable: true };
+  const media = Array.from({ length: 9 }, (_, index) => ({
+    label: "商品图片",
+    className: "android.widget.Button",
+    bounds: [77 + (index % 5) * 187, 282 + Math.floor(index / 5) * 187,
+      253 + (index % 5) * 187, 458 + Math.floor(index / 5) * 187],
+    clickable: true,
+  }));
+  const snapshots = [
+    { nodes: [], publishCompose: true },
+    { nodes: [warning, action], publishCompose: true },
+    { nodes: media, publishCompose: true },
+  ];
+  let now = 1_000_000;
+  const taps = [];
+  const result = await applyQrCodeMaskIfRequired({
+    async tap(x, y) { taps.push([x, y]); },
+  }, {
+    expectedImageCount: 9,
+    detectBudgetMs: 10_000,
+    detectPollMs: 4_000,
+    nowFn: () => now,
+    settleFn: async (ms) => { now += Number(ms) || 0; },
+    snapshotFn: async () => snapshots.shift(),
+  });
+  assert.equal(result.step, "qr-mask-applied");
+  assert.equal(result.warningDetected, true);
+  assert.deepEqual(taps, [[955, 190]]);
+});
+
 test("publish failure diagnostic keeps bounded image geometry and drops raw fields", () => {
   const diagnostic = firstFailedPublishDiagnostic({
     images: {

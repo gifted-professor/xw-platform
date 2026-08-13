@@ -2305,15 +2305,24 @@ export async function applyQrCodeMaskIfRequired(op, {
   forceRequired = false,
   snapshotFn = snapshot,
   settleFn = settle,
-  maxDetectAttempts = 8,
+  nowFn = Date.now,
+  detectBudgetMs = 10_000,
+  detectPollMs = 4_000,
+  maxDetectAttempts = 3,
   maxWaitAttempts = 8,
 } = {}) {
   let before = await snapshotFn(op, "xianyu-qr-mask-before");
   let beforeState = analyzeQrCodeMaskState(before.nodes);
-  // 二维码识别提示由图片内容扫描异步产生；上传页刚返回时可能尚未出现。
-  // 给语义树一个有界等待窗口，再决定 auto 模式是否无需打码。
-  for (let attempt = 1; attempt < maxDetectAttempts && !beforeState.required; attempt += 1) {
-    await settleFn(1000);
+  // 二维码识别是异步的，但等待必须按墙钟而不是 dump 次数。
+  // 默认 10s / 最多 3 次 snapshot（含首次）；无码商品不再烧约 8 轮完整 dump。
+  const budgetMs = Math.max(0, Number(detectBudgetMs) || 0);
+  const pollMs = Math.max(0, Number(detectPollMs) || 0);
+  const detectCap = Math.max(1, Number(maxDetectAttempts) || 1);
+  const deadline = Number(nowFn()) + budgetMs;
+  for (let attempt = 1; attempt < detectCap && !beforeState.required; attempt += 1) {
+    const remaining = deadline - Number(nowFn());
+    if (remaining <= 0) break;
+    await settleFn(Math.min(pollMs > 0 ? pollMs : remaining, remaining));
     before = await snapshotFn(op, `xianyu-qr-mask-detect-${attempt + 1}`);
     beforeState = analyzeQrCodeMaskState(before.nodes);
   }
