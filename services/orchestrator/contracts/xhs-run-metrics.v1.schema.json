@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "xhs-run-metrics.v1.schema.json",
+  "title": "XHS run or attempt metrics",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schemaId", "schemaVersion", "scope", "runId", "attempt",
+    "startedAt", "endedAt", "wallClockMs", "evidenceCoverage"
+  ],
+  "properties": {
+    "schemaId": { "const": "xhs.run-metrics.v1" },
+    "schemaVersion": { "const": 1 },
+    "scope": { "enum": ["attempt", "run"] },
+    "runId": { "type": "string", "pattern": "^run_[A-Za-z0-9._-]+$" },
+    "attempt": { "type": ["integer", "null"], "minimum": 1 },
+    "startedAt": { "type": ["string", "null"], "format": "date-time" },
+    "endedAt": { "type": ["string", "null"], "format": "date-time" },
+    "wallClockMs": { "type": ["integer", "null"], "minimum": 0 },
+    "evidenceCoverage": { "type": "object" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "scope": { "const": "attempt" } } },
+      "then": { "required": ["phases", "commands", "workers", "actions"] }
+    },
+    {
+      "if": { "properties": { "scope": { "const": "run" } } },
+      "then": { "required": ["attempts"], "properties": { "attempt": { "const": null } } }
+    }
+  ]
+}

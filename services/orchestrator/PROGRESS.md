@@ -1,3 +1,9 @@
+## 2026-08-13 `xhs-compose` canary 统一日志层（源码收编，未部署）
+
+新增通用 `xhs.run-event.v1` / `xhs.run-summary.v1` / `xhs.run-metrics.v1` 与只读报告入口 `ops/xw-xhs-compose-report.mjs`。每个 canary attempt 和整个 closeout run 固定生成 `report/{run-report.md,timeline.jsonl,metrics.json,summary.json}`；历史回填只新增 `report/`，不覆盖旧 summary、STOP 或命令证据。目标 run `run_2a539677-a466-4729-b699-fda001e0de5d` 已完成两级回填与校验：attempt1=`partial`、attempt2=`controlled_stop`、attempt3/4=`passed`，run=`completed`；attempt4 自动复算 268 files / 2,859,369 bytes / 194 command records，`search_notes` 5 次平均 60.304s、最大 69.089s。
+
+新 live 入口为 `ops/xw-xhs-compose-canary-v2.mjs`：worker 经 IPC 上报，父进程唯一写 timeline，落盘后才打印 `LIVE_PROGRESS`；命令 retry 新增分次起止与 duration。timeline 写失败会写首因 STOP、通知 worker 不再开始下一原子，仍 finally cleanup/release，attempt 标 `evidence_failed`。旧 `ops/xw-xhs-compose-canary.mjs` 与旧测试保持不动，作为已 closeout attempt1-4 的历史源码哈希锚点。当前只完成 Windows 源码、离线测试、历史回填和 Git 收编，**未部署、未跑新真机 canary、未把 engineering canary 晋级 production**。历史 Explorer 未记录 queue/transportLock span 时报告固定 `null + unobserved`，不得按 0 解释。
+
 ## 2026-08-13 跳过 fill 必须当场验本 SKU 发布页
 
 occupancy 说 `already_held` 不够。跳过 fill 前正式 session dump：必须是 publish-compose 且 `composeMatchesProduct`（不用 brand-only）。详情页/主页/对不上本 SKU → 当空闲，走 fill（`startIdlefish` 回干净主页）。避免 01 停在 HH 详情却被当成下一条货已填好。单测覆盖 decideHeldCompose。
