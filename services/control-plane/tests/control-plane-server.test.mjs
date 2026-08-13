@@ -1037,3 +1037,64 @@ test("GET /control/v1/jobs/:id attaches liveProgress tail and stays 200 when fil
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("GET /control/v1/jobs/:id exposes exclusive 22222 lock and refuses true-split claims", async () => {
+  const root = mkdtempSync(join(tempBase, "transport-lock-job-"));
+  const state = new StateStore({ dbPath: join(root, "control.db") });
+  state.upsertDevice({
+    alias: "01",
+    physicalLabel: "rack-01",
+    nodeId: "DESKTOP-3I1EVHE",
+    runtimeId: "private-rt",
+    routingProfile: { enabled: true, capabilityIds: ["test.observe"] },
+  });
+  const registry = new CapabilityRegistry([capability]);
+  const evidence = new EvidenceStore({
+    runsRoot: join(root, "runs"),
+    state,
+    minFreeBytes: 0,
+    minExternalEffectFreeBytes: 0,
+  });
+  const control = new ControlPlane({
+    state,
+    capabilities: registry,
+    adapters: new AdapterRegistry([{
+      id: "test",
+      async execute() { return {}; },
+      async verify() { return { ok: true }; },
+      async restore() { return { ok: true }; },
+    }]),
+    evidence,
+    transportStatus: () => ({ status: "busy", ageMs: 1800 }),
+  });
+  const router = new ControlRouter({ control, state, capabilities: registry, evidence });
+  try {
+    const created = control.submitJob({
+      idempotencyKey: "transport-lock-1",
+      actorId: "agent-a",
+      capabilityId: "test.observe",
+      params: {},
+    });
+    const hit = await router.handle({
+      method: "GET",
+      path: `/control/v1/jobs/${created.job.jobId}`,
+    });
+    assert.equal(hit.status, 200);
+    assert.deepEqual(hit.body.job.transportLock, {
+      resource: "transport:xiaowei:22222",
+      status: "busy",
+      ageMs: 1800,
+      exclusive: true,
+      trueSplit: false,
+      reason: "single-vendor-ws-and-payment-overlap",
+    });
+    for (let i = 0; i < 40; i += 1) {
+      const s = state.requireJob(created.job.jobId).status;
+      if (["failed", "succeeded", "ambiguous", "recovery_required"].includes(s)) break;
+      await new Promise((r) => setTimeout(r, 25));
+    }
+  } finally {
+    state.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});

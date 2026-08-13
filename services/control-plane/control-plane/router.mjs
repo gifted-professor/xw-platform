@@ -30,6 +30,18 @@ function publicJob(job) {
   };
 }
 
+export function publicTransportLock(lock) {
+  const status = lock && typeof lock === "object" ? lock : {};
+  return {
+    resource: "transport:xiaowei:22222",
+    status: typeof status.status === "string" ? status.status : "unknown",
+    ageMs: Number.isFinite(Number(status.ageMs)) ? Number(status.ageMs) : null,
+    exclusive: true,
+    trueSplit: false,
+    reason: "single-vendor-ws-and-payment-overlap",
+  };
+}
+
 // Mission policy is authoritative control-plane state, but not a public API payload. In
 // particular, account aliases, target fingerprints, controller identities, idempotency keys,
 // and policy/redaction internals must not leave the control-plane boundary through list, submit,
@@ -136,6 +148,18 @@ export class ControlRouter {
     }
   }
 
+  attachTransportLock(job) {
+    let snapshot = { status: "unknown", ageMs: null };
+    try {
+      if (typeof this.control?.transportStatus === "function") {
+        snapshot = this.control.transportStatus() || snapshot;
+      }
+    } catch {
+      snapshot = { status: "unknown", ageMs: null };
+    }
+    return job ? { ...job, transportLock: publicTransportLock(snapshot) } : job;
+  }
+
   async handle({ method, path, query = new URLSearchParams(), body, headers = {} }) {
     let match;
     if (method === "GET" && path === "/control/v1/health") {
@@ -222,7 +246,7 @@ export class ControlRouter {
     if (method === "GET" && match) {
       return {
         status: 200,
-        body: { job: this.attachLiveProgress(publicJob(this.state.requireJob(decodeURIComponent(match[1])))) },
+        body: { job: this.attachTransportLock(this.attachLiveProgress(publicJob(this.state.requireJob(decodeURIComponent(match[1]))))) },
       };
     }
     match = path.match(/^\/control\/v1\/jobs\/([^/]+)\/events$/);
