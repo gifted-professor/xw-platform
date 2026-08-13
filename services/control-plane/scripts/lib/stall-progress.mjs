@@ -10,7 +10,7 @@
  * - LLM escalation only on ui_stall / progress_silence / terminal failure — not on slow success.
  */
 import { createHash } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 export const DEFAULT_STALL_MS = Number(process.env.XIANYU_STALL_MS || 45000);
@@ -175,6 +175,109 @@ export function observeProgressSilence(state, {
 export function progressPathFor(evidenceDir) {
   if (!evidenceDir || typeof evidenceDir !== "string") return null;
   return join(evidenceDir, "progress.jsonl");
+}
+
+export const LIVE_PROGRESS_TAIL_BYTES = 64 * 1024;
+export const LIVE_PROGRESS_CACHE_MS = 2000;
+
+function parseProgressTs(value) {
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+function readFileTail(path, maxBytes) {
+  let st;
+  try {
+    st = statSync(path);
+  } catch {
+    return null;
+  }
+  if (!Number.isFinite(st.size) || st.size <= 0) return null;
+  const bytes = Math.min(st.size, Math.max(1, maxBytes));
+  const buf = Buffer.alloc(bytes);
+  let fd;
+  try {
+    fd = openSync(path, "r");
+    readSync(fd, buf, 0, bytes, st.size - bytes);
+  } catch {
+    return null;
+  } finally {
+    if (fd != null) {
+      try { closeSync(fd); } catch { /* ignore */ }
+    }
+  }
+  let text = buf.toString("utf8");
+  if (st.size > bytes) {
+    const nl = text.indexOf("\n");
+    text = nl >= 0 ? text.slice(nl + 1) : text;
+  }
+  return text;
+}
+
+function parseProgressEventsFromTail(text) {
+  const events = [];
+  for (const line of String(text || "").split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      const row = JSON.parse(trimmed);
+      if (row && typeof row === "object" && !Array.isArray(row)) events.push(row);
+    } catch {
+      // Incomplete first/last line in a tail read is expected; skip.
+    }
+  }
+  return events;
+}
+
+export function summarizeLiveProgress(events, nowMs = Date.now()) {
+  if (!Array.isArray(events) || events.length === 0) return null;
+  const last = events[events.length - 1];
+  const name = last.name ?? null;
+  let startTs = parseProgressTs(last.t);
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const ev = events[i];
+    if (ev.phase === "start" && (name == null || ev.name === name)) {
+      startTs = parseProgressTs(ev.t) ?? startTs;
+      break;
+    }
+  }
+  const elapsedMs = startTs != null ? Math.max(0, Number(nowMs) - startTs) : null;
+  const silenceRaw = Number(last.silenceMs);
+  const seqRaw = Number(last.seq);
+  return {
+    name,
+    step: last.step ?? null,
+    phase: last.phase ?? null,
+    elapsedMs,
+    silenceMs: Number.isFinite(silenceRaw) ? silenceRaw : null,
+    signalType: last.signalType ?? null,
+    seq: Number.isInteger(seqRaw) ? seqRaw : null,
+    t: typeof last.t === "string" ? last.t : null,
+  };
+}
+
+/**
+ * Read-only tail of progress.jsonl for a running job.
+ * Prefers run-root (operator evidenceDir === runDirectory), then evidence/.
+ * Missing/unreadable → null. Never throws. Never returns dump/screenshot bytes.
+ */
+export function readLiveProgressTail(runDirectory, {
+  nowMs = Date.now(),
+  maxTailBytes = LIVE_PROGRESS_TAIL_BYTES,
+} = {}) {
+  if (!runDirectory || typeof runDirectory !== "string") return null;
+  const candidates = [
+    join(runDirectory, "progress.jsonl"),
+    join(runDirectory, "evidence", "progress.jsonl"),
+  ];
+  for (const path of candidates) {
+    if (!existsSync(path)) continue;
+    const text = readFileTail(path, maxTailBytes);
+    if (!text) continue;
+    const summary = summarizeLiveProgress(parseProgressEventsFromTail(text), nowMs);
+    if (summary) return summary;
+  }
+  return null;
 }
 
 export function appendProgressLine(evidenceDir, record) {

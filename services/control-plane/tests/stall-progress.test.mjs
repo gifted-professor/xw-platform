@@ -9,6 +9,8 @@ import {
   observeStall,
   observeProgressSilence,
   uiFingerprint,
+  readLiveProgressTail,
+  summarizeLiveProgress,
   DEFAULT_STALL_MS,
 } from "../scripts/lib/stall-progress.mjs";
 import {
@@ -190,4 +192,67 @@ test("slow success with changing UI does not recommend LLM", () => {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("readLiveProgressTail summarizes current step from run-root progress.jsonl", () => {
+  const dir = mkdtempSync(join(tmpdir(), "live-progress-"));
+  try {
+    writeFileSync(join(dir, "progress.jsonl"), `${JSON.stringify({
+      schemaId: "xhs.stall-progress.v2",
+      seq: 10,
+      t: "2026-08-13T03:08:58.202Z",
+      phase: "start",
+      name: "images",
+      step: null,
+      silenceMs: 1,
+      signalType: null,
+      dumpFingerprint: "secret-fp",
+    })}\n${JSON.stringify({
+      schemaId: "xhs.stall-progress.v2",
+      seq: 19,
+      t: "2026-08-13T03:09:43.272Z",
+      phase: "heartbeat",
+      name: "images",
+      step: "images",
+      silenceMs: 45071,
+      signalType: "progress_silence",
+    })}\n`);
+    const nowMs = Date.parse("2026-08-13T03:09:43.272Z");
+    const live = readLiveProgressTail(dir, { nowMs });
+    assert.equal(live.name, "images");
+    assert.equal(live.step, "images");
+    assert.equal(live.phase, "heartbeat");
+    assert.equal(live.signalType, "progress_silence");
+    assert.equal(live.seq, 19);
+    assert.equal(live.silenceMs, 45071);
+    assert.equal(live.elapsedMs, 45070);
+    assert.equal(Object.hasOwn(live, "dumpFingerprint"), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("readLiveProgressTail prefers run-root over evidence/ and returns null when missing", () => {
+  const dir = mkdtempSync(join(tmpdir(), "live-progress-miss-"));
+  try {
+    assert.equal(readLiveProgressTail(dir), null);
+    mkdirSync(join(dir, "evidence"));
+    writeFileSync(join(dir, "evidence", "progress.jsonl"), `${JSON.stringify({
+      seq: 1, t: "2026-08-13T03:08:21.559Z", phase: "start", name: "open", step: null, silenceMs: 1,
+    })}\n`);
+    const live = readLiveProgressTail(dir, { nowMs: Date.parse("2026-08-13T03:08:31.559Z") });
+    assert.equal(live.name, "open");
+    assert.equal(live.elapsedMs, 10000);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("summarizeLiveProgress skips incomplete tail lines", () => {
+  const events = summarizeLiveProgress([
+    { seq: 1, t: "2026-08-13T03:10:13.000Z", phase: "start", name: "image-qr-mask", step: null, silenceMs: 0 },
+    { seq: 2, t: "2026-08-13T03:11:03.000Z", phase: "ok", name: "image-qr-mask", step: "qr-mask-not-required", silenceMs: 50000, signalType: "ui_stall" },
+  ], Date.parse("2026-08-13T03:11:03.000Z"));
+  assert.equal(events.step, "qr-mask-not-required");
+  assert.equal(events.elapsedMs, 50000);
 });

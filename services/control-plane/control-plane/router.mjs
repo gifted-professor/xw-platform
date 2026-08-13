@@ -1,5 +1,6 @@
 import { ControlPlaneError } from "./lib/errors.mjs";
 import { RUNTIME_POLICY_VERSION } from "./lib/nonpayment-autonomy-policy.mjs";
+import { LIVE_PROGRESS_CACHE_MS, readLiveProgressTail } from "../scripts/lib/stall-progress.mjs";
 
 function requireBody(body) {
   if (!body || typeof body !== "object" || Array.isArray(body)) {
@@ -115,6 +116,24 @@ export class ControlRouter {
     this.delegationGrants = delegationGrants;
     this.canaryEvidenceAuthorizer = canaryEvidenceAuthorizer;
     this.nodeId = nodeId;
+    this.liveProgressCache = new Map();
+  }
+
+  attachLiveProgress(job, nowMs = Date.now()) {
+    if (!job?.runId || !this.evidence?.runDirectory) {
+      return job ? { ...job, liveProgress: null } : job;
+    }
+    try {
+      const cached = this.liveProgressCache.get(job.runId);
+      if (cached && nowMs - cached.at < LIVE_PROGRESS_CACHE_MS) {
+        return { ...job, liveProgress: cached.value };
+      }
+      const liveProgress = readLiveProgressTail(this.evidence.runDirectory(job.runId), { nowMs });
+      this.liveProgressCache.set(job.runId, { at: nowMs, value: liveProgress });
+      return { ...job, liveProgress };
+    } catch {
+      return { ...job, liveProgress: null };
+    }
   }
 
   async handle({ method, path, query = new URLSearchParams(), body, headers = {} }) {
@@ -201,7 +220,10 @@ export class ControlRouter {
 
     match = path.match(/^\/control\/v1\/jobs\/([^/]+)$/);
     if (method === "GET" && match) {
-      return { status: 200, body: { job: publicJob(this.state.requireJob(decodeURIComponent(match[1]))) } };
+      return {
+        status: 200,
+        body: { job: this.attachLiveProgress(publicJob(this.state.requireJob(decodeURIComponent(match[1])))) },
+      };
     }
     match = path.match(/^\/control\/v1\/jobs\/([^/]+)\/events$/);
     if (method === "GET" && match) {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { generateKeyPairSync, sign } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -946,6 +946,92 @@ test("#runJob guard fail-closes a generic capability whose params target a finan
     assert.equal(job.status, "failed");
     assert.equal(job.errorCode, "FINANCIAL_COMMIT_REQUIRES_HUMAN_GATE");
     assert.equal(executeCalls, 0, "adapter.execute must not run for a financial_commit");
+  } finally {
+    state.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("GET /control/v1/jobs/:id attaches liveProgress tail and stays 200 when file missing", async () => {
+  const root = mkdtempSync(join(tempBase, "live-progress-job-"));
+  const state = new StateStore({ dbPath: join(root, "control.db") });
+  state.upsertDevice({
+    alias: "01",
+    physicalLabel: "rack-01",
+    nodeId: "DESKTOP-3I1EVHE",
+    runtimeId: "private-rt",
+    routingProfile: { enabled: true, capabilityIds: ["test.observe"] },
+  });
+  const registry = new CapabilityRegistry([capability]);
+  const evidence = new EvidenceStore({
+    runsRoot: join(root, "runs"),
+    state,
+    minFreeBytes: 0,
+    minExternalEffectFreeBytes: 0,
+  });
+  const control = new ControlPlane({
+    state,
+    capabilities: registry,
+    adapters: new AdapterRegistry([{
+      id: "test",
+      async execute() { return {}; },
+      async verify() { return { ok: true }; },
+      async restore() { return { ok: true }; },
+    }]),
+    evidence,
+  });
+  const router = new ControlRouter({ control, state, capabilities: registry, evidence });
+  try {
+    const created = control.submitJob({
+      idempotencyKey: "live-progress-1",
+      actorId: "agent-a",
+      capabilityId: "test.observe",
+      params: {},
+    });
+    const missing = await router.handle({
+      method: "GET",
+      path: `/control/v1/jobs/${created.job.jobId}`,
+    });
+    assert.equal(missing.status, 200);
+    assert.equal(missing.body.job.liveProgress, null);
+
+    writeFileSync(join(evidence.runDirectory(created.job.runId), "progress.jsonl"), `${JSON.stringify({
+      schemaId: "xhs.stall-progress.v2",
+      seq: 10,
+      t: "2026-08-13T03:08:58.202Z",
+      phase: "start",
+      name: "images",
+      step: null,
+      silenceMs: 1,
+      signalType: null,
+      dumpFingerprint: "do-not-leak",
+    })}\n${JSON.stringify({
+      schemaId: "xhs.stall-progress.v2",
+      seq: 19,
+      t: "2026-08-13T03:09:43.272Z",
+      phase: "heartbeat",
+      name: "images",
+      step: "images",
+      silenceMs: 45071,
+      signalType: "progress_silence",
+    })}\n`);
+    router.liveProgressCache.clear();
+    const hit = await router.handle({
+      method: "GET",
+      path: `/control/v1/jobs/${created.job.jobId}`,
+    });
+    assert.equal(hit.status, 200);
+    assert.equal(hit.body.job.liveProgress.name, "images");
+    assert.equal(hit.body.job.liveProgress.step, "images");
+    assert.equal(hit.body.job.liveProgress.signalType, "progress_silence");
+    assert.equal(hit.body.job.liveProgress.seq, 19);
+    assert.equal(typeof hit.body.job.liveProgress.elapsedMs, "number");
+    assert.doesNotMatch(JSON.stringify(hit.body.job.liveProgress), /do-not-leak|dumpFingerprint/);
+    for (let i = 0; i < 40; i += 1) {
+      const s = state.requireJob(created.job.jobId).status;
+      if (["failed", "succeeded", "ambiguous", "recovery_required"].includes(s)) break;
+      await new Promise((r) => setTimeout(r, 25));
+    }
   } finally {
     state.close();
     rmSync(root, { recursive: true, force: true });
