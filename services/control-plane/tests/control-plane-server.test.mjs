@@ -1088,6 +1088,19 @@ test("GET /control/v1/jobs/:id exposes exclusive 22222 lock and refuses true-spl
       trueSplit: false,
       reason: "single-vendor-ws-and-payment-overlap",
     });
+    const idle = new ControlRouter({
+      control: { transportStatus: () => ({ status: "free", ageMs: null }) },
+      state,
+      capabilities: registry,
+      evidence,
+    });
+    const freeHit = await idle.handle({
+      method: "GET",
+      path: `/control/v1/jobs/${created.job.jobId}`,
+    });
+    assert.equal(freeHit.body.job.transportLock.status, "free");
+    assert.equal(freeHit.body.job.transportLock.ageMs, null);
+    assert.equal(freeHit.body.job.transportLock.trueSplit, false);
     for (let i = 0; i < 40; i += 1) {
       const s = state.requireJob(created.job.jobId).status;
       if (["failed", "succeeded", "ambiguous", "recovery_required"].includes(s)) break;

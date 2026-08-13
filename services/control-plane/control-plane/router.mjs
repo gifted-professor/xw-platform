@@ -35,7 +35,7 @@ export function publicTransportLock(lock) {
   return {
     resource: "transport:xiaowei:22222",
     status: typeof status.status === "string" ? status.status : "unknown",
-    ageMs: Number.isFinite(Number(status.ageMs)) ? Number(status.ageMs) : null,
+    ageMs: Number.isFinite(status.ageMs) ? Number(status.ageMs) : null,
     exclusive: true,
     trueSplit: false,
     reason: "single-vendor-ws-and-payment-overlap",
