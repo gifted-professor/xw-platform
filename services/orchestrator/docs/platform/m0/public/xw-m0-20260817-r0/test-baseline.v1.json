@@ -1,0 +1,44 @@
+{
+  "schemaId": "xhs.m0.test-baseline.v1",
+  "schemaVersion": 1,
+  "baselineId": "xw-m0-20260817-r0",
+  "capturedAt": "2026-08-17T13:00:00.000Z",
+  "scope": [
+    {
+      "repo": "registry",
+      "command": "npm run check",
+      "purpose": "syntax check of runtime + sync + import + ops entrypoints"
+    },
+    {
+      "repo": "registry",
+      "command": "npm test",
+      "purpose": "integration tests (real registry subprocess + temp sqlite + fake control plane)"
+    },
+    {
+      "repo": "deviceAgent",
+      "command": "npm run check",
+      "purpose": "syntax check of device-agent entrypoints"
+    },
+    {
+      "repo": "deviceAgent",
+      "command": "npm test",
+      "purpose": "device-agent unit/integration tests"
+    },
+    {
+      "repo": "deviceAgent",
+      "command": "npm run test:control",
+      "purpose": "control-plane tests (not double-counted with npm test)",
+      "distinctFrom": "npm test"
+    }
+  ],
+  "gatedOn": [
+    "B2: three disposable Windows VMs (same immutable base image, Win10 x64 19045, Node 24.11.1, npm 11.6.2, Git 2.52.0, PowerShell 7.6.4, zh-CN, CST, cp936, core.autocrlf=true)",
+    "B3: candidate C frozen (M0-A/B/C merged), one fresh VM + fresh clone per round"
+  ],
+  "rounds": [
+    { "round": 1, "status": "pending", "vmImage": null, "resultSummary": null },
+    { "round": 2, "status": "pending", "vmImage": null, "resultSummary": null },
+    { "round": 3, "status": "pending", "vmImage": null, "resultSummary": null }
+  ],
+  "conclusion": "PASS_PENDING"
+}

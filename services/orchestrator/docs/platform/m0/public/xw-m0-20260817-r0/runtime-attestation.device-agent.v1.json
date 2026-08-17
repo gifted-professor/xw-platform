@@ -1,0 +1,15 @@
+{
+  "schemaId": "xhs.m0.runtime-attestation.v1",
+  "schemaVersion": 1,
+  "baselineId": "xw-m0-20260817-r0",
+  "capturedAt": "2026-08-17T12:16:55Z",
+  "repo": "deviceAgent",
+  "processLaunchPath": null,
+  "processStartTime": null,
+  "processCommandLineRedacted": null,
+  "diskBytesAtObservation": null,
+  "launchConfigClaim": "device fleet; M0 forbids device/ADB/22222 access; not reachable from this host",
+  "releaseClaim": "43b09ac",
+  "processLoadedBytes": "UNVERIFIABLE",
+  "confidence": "unreachable"
+}

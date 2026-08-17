@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "xhs.m0.state-ownership.v1.schema.json",
+  "title": "M0 state ownership",
+  "description": "For each canonical state, names exactly one authoritativeOwner + authoritativeStore + mutationEntrypoint, lists derivedCopies and constrained projectionWriters, and fixes reconciliationDirection + consistencyModel. Two unconstrained authoritative owners for the same canonical state, or two writers not bound by one transaction/reconciliation protocol, is a BLOCK. Multiple constrained projection writers are allowed.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaId", "schemaVersion", "baselineId", "capturedAt", "states"],
+  "properties": {
+    "schemaId": { "const": "xhs.m0.state-ownership.v1" },
+    "schemaVersion": { "const": 1 },
+    "baselineId": { "type": "string", "pattern": "^xw-m0-[0-9]{8}-r[0-9]+$" },
+    "capturedAt": { "type": "string", "format": "date-time" },
+    "states": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "canonicalState", "authoritativeOwner", "authoritativeStore",
+          "mutationEntrypoint", "derivedCopies", "projectionWriters",
+          "reconciliationDirection", "consistencyModel"
+        ],
+        "properties": {
+          "canonicalState": { "type": "string", "minLength": 1 },
+          "authoritativeOwner": { "type": "string", "minLength": 1 },
+          "authoritativeStore": { "type": "string", "minLength": 1 },
+          "mutationEntrypoint": { "type": "string", "minLength": 1 },
+          "derivedCopies": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 },
+            "uniqueItems": true
+          },
+          "projectionWriters": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["writer", "constraint"],
+              "properties": {
+                "writer": { "type": "string", "minLength": 1 },
+                "constraint": { "type": "string", "minLength": 1 }
+              }
+            },
+            "uniqueItems": true
+          },
+          "reconciliationDirection": { "enum": ["ownerToDerived", "derivedToOwner", "none"] },
+          "consistencyModel": { "enum": ["strong", "eventual", "readYourWrites", "none"] }
+        }
+      }
+    }
+  }
+}

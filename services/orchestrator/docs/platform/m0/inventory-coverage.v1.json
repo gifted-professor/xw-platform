@@ -1,0 +1,76 @@
+{
+  "schemaId": "xhs.m0.inventory-coverage.v1",
+  "schemaVersion": 1,
+  "baselineId": "xw-m0-20260817-r0",
+  "capturedAt": "2026-08-17T12:47:00.000Z",
+  "collectorVersion": "xhs.m0.inventory.v1 (tools/m0/inventory.mjs, trackedOnly)",
+  "discoveryScope": [
+    {
+      "dimension": "packageScripts",
+      "method": "parse package.json scripts (tracked files at frozen commit)"
+    },
+    {
+      "dimension": "shebangs",
+      "method": "first-line #! scan (tracked files)"
+    },
+    {
+      "dimension": "launcherScripts",
+      "method": "extension scan .cmd/.ps1/.sh/.bat (tracked files)"
+    },
+    {
+      "dimension": "opsDir",
+      "method": "ops/**/*.mjs enumeration (tracked files)"
+    },
+    {
+      "dimension": "ports",
+      "method": "regex over source/config/launch/listener text (tracked files)"
+    },
+    {
+      "dimension": "dbReferences",
+      "method": "regex over sqlite/registry.db/control.db/CONTROL_DB_PATH/queryControlDb/readOnly refs (tracked files)"
+    },
+    {
+      "dimension": "deviceControlEntry",
+      "method": "regex over ADB/22222/FastOperator/GatewayOperator + child_process/execFileSync/spawn refs (tracked files); doc mentions classified docMention, executable-code refs deviceControlRef, child_process usage childProcessRef",
+      "notes": "CORRECTION to plan assumption: ADB/22222 static entrypoints DO exist in registry executable code (ops/feishu-to-xhs-publish.mjs ADB push, ops/_win-screencap.mjs 22222 WS + adb fallback, scripts/lib/xw-start.mjs ADB health snapshot). registry.mjs runtime itself has only prohibition comments. Recorded honestly; not an empty dimension."
+    },
+    {
+      "dimension": "taskTemplates",
+      "method": "task-templates/** file enumeration (tracked files)"
+    },
+    {
+      "dimension": "launchConfig",
+      "method": ".env.example files + launch-arg/env refs (CONTROL_DB_PATH/--runs-root/--db/--port/--host/--control) (tracked files)"
+    },
+    {
+      "dimension": "crossRepoRefs",
+      "method": "regex over xhs-device-agent//Volumes/GPFS/gifted-professor/sibling/schema copy refs (tracked files)"
+    },
+    {
+      "dimension": "scheduledTask",
+      "method": "Windows Task Scheduler read-only snapshot (schtasks /query /tn XhsDeviceRegistry /xml, args redacted)"
+    },
+    {
+      "dimension": "sqliteForensics",
+      "method": "SQLite mode=ro + PRAGMA query_only=ON; sqlite_schema + PRAGMA user_version/journal_mode/integrity_check only; no business rows"
+    }
+  ],
+  "inputs": [
+    "git ls-files -z (tracked files at frozen commit 76e67f3, M0 branch off 8c5682a)",
+    "schtasks /query /tn XhsDeviceRegistry /xml (read-only site observation)",
+    "registry.db + control.db (mode=ro SQLite forensics)"
+  ],
+  "exclusions": [
+    { "path": "tmp-know/", "reason": "WIP temp knowledge dir (~1.9GB), not part of frozen source" },
+    { "path": "tmp-imgs/", "reason": "WIP temp screenshots (~51MB), not part of frozen source" },
+    { "path": "runtime/", "reason": "runtime artifacts, not part of frozen source" },
+    { "path": "outbox/", "reason": "outbox artifacts, not part of frozen source" },
+    { "path": "backups/", "reason": "backups, not part of frozen source" },
+    { "path": "node_modules/", "reason": "dependencies, not part of frozen source" },
+    { "path": ".git/", "reason": "git internals" },
+    { "path": ".cache/", "reason": "cache" },
+    { "path": ".env", "reason": "private secrets; keys inventoried via .env.example only" },
+    { "path": "registry.db", "reason": "runtime DB; forensically observed read-only separately (sqliteForensics)" },
+    { "path": "untracked WIP files", "reason": "dirty worktree (73 untracked) is not part of the frozen source; A2 archives it privately" }
+  ]
+}

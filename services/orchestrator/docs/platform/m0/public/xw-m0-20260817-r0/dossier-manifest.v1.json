@@ -1,0 +1,54 @@
+{
+  "schemaId": "xhs.m0.dossier-manifest.v1",
+  "schemaVersion": 1,
+  "baselineId": "xw-m0-20260817-r0",
+  "capturedAt": "2026-08-17T13:00:00.000Z",
+  "files": [
+    {
+      "path": "baseline-identity.v1.json",
+      "sha256": "e306bf2f143b21026be82a99b22faf9172f6c423611cdbe5d49dbca74820f118",
+      "schemaId": "xhs.m0.baseline-identity.v1"
+    },
+    {
+      "path": "runtime-attestation.v1.json",
+      "sha256": "9439675553cec1c134899e196dffe168780c0065e54150779aeb369451c5a47a",
+      "schemaId": "xhs.m0.runtime-attestation.v1"
+    },
+    {
+      "path": "runtime-attestation.device-agent.v1.json",
+      "sha256": "fcb4918032864f97ea3193094b7f50418f8c708323b8bdccdd12bbda7446d6bb",
+      "schemaId": "xhs.m0.runtime-attestation.v1"
+    },
+    {
+      "path": "inventory.v1.json",
+      "sha256": "caf7df9216afda294d2c95143624e2fc2c8c2bd1c0c56e9a551f7037657abe7f",
+      "schemaId": "xhs.m0.inventory.v1"
+    },
+    {
+      "path": "state-ownership.v1.json",
+      "sha256": "f676e55dc549ac34c4a2e10bc5449678e7d1fe3d3667b5b104ea9c0144c9ec92",
+      "schemaId": "xhs.m0.state-ownership.v1"
+    },
+    {
+      "path": "pr-assets.v1.json",
+      "sha256": "1b5f2d3d8deee5ba38976ae9cacccd31d2ec9ad94574e1e1a61473099ff30acd",
+      "schemaId": "xhs.m0.pr-assets.v1"
+    },
+    {
+      "path": "known-debt.v1.json",
+      "sha256": "76becba382632ed63480afb4966a09a74455d0661affe6d5cb8e0297bad7cf4b",
+      "schemaId": "xhs.m0.known-debt.v1"
+    },
+    {
+      "path": "test-baseline.v1.json",
+      "sha256": "86efc6530b2473d86d130b5b19da16086f10ce10ab8d84b908b3b8bca3cf4d51",
+      "schemaId": "xhs.m0.test-baseline.v1"
+    },
+    {
+      "path": "private-evidence.v1.json",
+      "sha256": "b4bb18e48ed7b785534292ae9d1d5ac0d9dd393343cf3028b0b1b8c153d7ea94",
+      "schemaId": "xhs.m0.private-evidence.v1",
+      "status": "pending_age (hash back-filled at B1)"
+    }
+  ]
+}

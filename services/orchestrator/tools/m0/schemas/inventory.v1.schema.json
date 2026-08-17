@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "xhs.m0.inventory.v1.schema.json",
+  "title": "M0 inventory result",
+  "description": "Result of running the inventory-coverage discovery scope against the frozen source pair. Each discovered item is classified into a dimension; unclassified items must be zero (discoverySet - classifiedSet = 0). Dimensions absent from a repo are recorded honestly as empty, not omitted — e.g. ADB/22222/FastOperator/GatewayOperator static entrypoints do not exist in registry executable code (they live in device-agent, frozen read-only).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaId", "schemaVersion", "baselineId", "capturedAt", "coverageRef", "repos", "unclassifiedCount"],
+  "properties": {
+    "schemaId": { "const": "xhs.m0.inventory.v1" },
+    "schemaVersion": { "const": 1 },
+    "baselineId": { "type": "string", "pattern": "^xw-m0-[0-9]{8}-r[0-9]+$" },
+    "capturedAt": { "type": "string", "format": "date-time" },
+    "coverageRef": { "type": "string", "minLength": 1 },
+    "repos": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "dimensions"],
+        "properties": {
+          "name": { "enum": ["registry", "deviceAgent"] },
+          "dimensions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["dimension", "items"],
+              "properties": {
+                "dimension": { "type": "string", "minLength": 1 },
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["locator", "classification"],
+                    "properties": {
+                      "locator": { "type": "string", "minLength": 1 },
+                      "classification": { "type": "string", "minLength": 1 },
+                      "note": { "type": "string" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "unclassifiedCount": { "type": "integer", "minimum": 0 }
+  }
+}
