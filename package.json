@@ -4,7 +4,7 @@
   "type": "module",
   "description": "XW Platform source monorepo. Root scripts forward into services; npm workspaces are not enabled.",
   "scripts": {
-    "check": "npm --prefix services/orchestrator run check && npm --prefix services/control-plane run check && node --check tools/fusion/cli.mjs && node --check tools/fusion/verify.mjs && node --check tools/fusion/git.mjs && node --check tools/fusion/test-gate.mjs",
+    "check": "npm --prefix services/orchestrator run check && npm --prefix services/control-plane run check && node --check tools/fusion/cli.mjs && node --check tools/fusion/verify.mjs && node --check tools/fusion/git.mjs && node --check tools/fusion/test-gate.mjs && node --check tools/fusion/accept.mjs",
     "fusion:verify": "node tools/fusion/cli.mjs verify",
     "test:fusion": "node tools/fusion/cli.mjs test-run",
     "test:m0": "node services/orchestrator/tools/m0/cli.mjs test-run services/orchestrator/tools/m0/test",

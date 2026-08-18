@@ -45,10 +45,10 @@ export function loadBaseline(root) {
 
 export function runSuite(root, name, suite) {
   const cwd = join(root, suite.cwd);
-  const npm = process.platform === "win32" ? "npm.cmd" : "npm";
-  const result = spawnSync(npm, suite.npmArgs, {
+  const result = spawnSync("npm", suite.npmArgs, {
     cwd,
     encoding: "utf8",
+    shell: true,
     maxBuffer: 64 * 1024 * 1024,
   });
   const text = `${result.stdout || ""}\n${result.stderr || ""}`;
