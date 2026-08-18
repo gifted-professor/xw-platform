@@ -6,7 +6,7 @@ Shared kernel for xw-platform. M2-B only adds **byte-identical copies** of contr
 - Service import paths are unchanged. Originals stay in:
   - `services/orchestrator/contracts/`
   - `services/control-plane/contracts/`
-- First batch: the six `repair-*` schemas (SHA-256 match across both services and this package).
+- First batch: the six `repair-*` schemas. Compared with LF-normalized SHA-256 so Windows `core.autocrlf` on service working trees does not false-fail Linux CI.
 
 Check:
 

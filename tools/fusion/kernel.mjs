@@ -15,6 +15,11 @@ function sha256File(path) {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
+function sha256Normalized(path) {
+  const text = readFileSync(path).toString("utf8").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  return createHash("sha256").update(text, "utf8").digest("hex");
+}
+
 export function checkKernel(root) {
   const blockers = [];
   const files = [];
@@ -34,12 +39,17 @@ export function checkKernel(root) {
       files.push({ ...row, match: false });
       continue;
     }
-    const hk = sha256File(kernel);
-    const ho = sha256File(orch);
-    const hc = sha256File(cp);
-    const match = hk === ho && ho === hc;
-    if (!match) blockers.push(`hash mismatch for ${name}`);
-    files.push({ name, sha256: hk, match });
+    const nk = sha256Normalized(kernel);
+    const no = sha256Normalized(orch);
+    const nc = sha256Normalized(cp);
+    const match = nk === no && no === nc;
+    if (!match) blockers.push(`normalized hash mismatch for ${name}`);
+    files.push({
+      name,
+      sha256Normalized: nk,
+      workingTreeMatch: sha256File(kernel) === sha256File(orch) && sha256File(orch) === sha256File(cp),
+      match,
+    });
   }
 
   return {

@@ -7,7 +7,7 @@ import { checkKernel, KERNEL_CONTRACTS } from "../kernel.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 
-test("kernel copies are byte-identical with both services", () => {
+test("kernel copies match both services after LF normalization", () => {
   const report = checkKernel(repoRoot);
   assert.equal(report.status, "PASS", report.blockers.join("\n"));
   assert.equal(report.fileCount, 6);
