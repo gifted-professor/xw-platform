@@ -1,0 +1,26 @@
+{
+  "schemaId": "xhs.m0.amendments.v1",
+  "schemaVersion": 1,
+  "baselineId": "xw-m0-20260817-r0",
+  "amendments": [
+    {
+      "file": "test-baseline.v1.json",
+      "previousSha256": "86efc6530b2473d86d130b5b19da16086f10ce10ab8d84b908b3b8bca3cf4d51",
+      "amendedSha256": "967dc185651e90b107e9c7414249bcfe8f5ddb268036453f960c76865c03cf74",
+      "previousCommit": "1c70551cb100848bae65352d099b66ca2889f927",
+      "sourceCommit": "8ebf215b1cd22b06fe4d2cc04fa62858e02a8231",
+      "sourceCommitReachability": "LOCAL_ONLY_ARCHIVED",
+      "sourcePatchId": "6f34c34c81614e17aa42cd7b01331dfcd44c4ab0",
+      "sourceDiffSha256": "97dd96831f866025bc1fd729481844ea01f6ef8ba7003dca14e35d6fbdecc439",
+      "sourceArchive": {
+        "kind": "git-bundle",
+        "bundleSha256": "5b7c7896f536637340541a17c8c647f5e93d4c94574811eb8a385dffa9659de9",
+        "encryptionStatus": "deferred_to_B1",
+        "storageLocation": "out-of-repo Windows private dir (C:\\Users\\Public\\xhs-m0-private\\)"
+      },
+      "reason": "align B2 gate spec to actual provisioned base image (Win10 Pro index 4, UEFI ESP+MSR+NTFS, Node LTS 24.19.0/npm 11.x, Git 2.55.0.4, PS 7.6.5, m0test non-admin + m0admin admin)",
+      "impact": "does not alter runtime baseline; does not alter source identity; corrects gatedOn B2 text only",
+      "recordedAt": "2026-08-18T09:37:53.000Z"
+    }
+  ]
+}

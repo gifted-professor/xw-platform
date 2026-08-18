@@ -3,10 +3,10 @@ import assert from "node:assert/strict";
 import { validateInstance, loadSchema, loadAllSchemas } from "../validate.mjs";
 
 // Every M0 schema must declare schemaId const + schemaVersion const 1 + be loadable.
-test("loadAllSchemas loads all 11 M0 schemas keyed by schemaId", () => {
+test("loadAllSchemas loads all 12 M0 schemas keyed by schemaId", () => {
   const all = loadAllSchemas();
   const ids = [...all.keys()].sort();
-  assert.equal(all.size, 11, `expected 11 schemas, got ${all.size}: ${ids.join(", ")}`);
+  assert.equal(all.size, 12, `expected 12 schemas, got ${all.size}: ${ids.join(", ")}`);
   for (const [, { schema }] of all) {
     assert.equal(schema.properties.schemaId.const.startsWith("xhs.m0."), true);
     assert.equal(schema.properties.schemaVersion.const, 1);
@@ -121,6 +121,19 @@ function validInstance(schemaId) {
       return {
         schemaId, schemaVersion: 1, baselineId: BASE, capturedAt: NOW,
         files: [{ path: "baseline-identity.v1.json", sha256: SHA64, schemaId: "xhs.m0.baseline-identity.v1", status: "final" }],
+      };
+    case "xhs.m0.amendments.v1":
+      return {
+        schemaId, schemaVersion: 1, baselineId: BASE,
+        amendments: [{
+          file: "test-baseline.v1.json",
+          previousSha256: SHA64, amendedSha256: SHA64,
+          previousCommit: SHA, sourceCommit: SHA,
+          sourceCommitReachability: "LOCAL_ONLY_ARCHIVED",
+          sourcePatchId: SHA, sourceDiffSha256: SHA64,
+          sourceArchive: { kind: "git-bundle", bundleSha256: SHA64, encryptionStatus: "deferred_to_B1" },
+          reason: "align B2 gate spec", impact: "text only", recordedAt: NOW,
+        }],
       };
     default:
       throw new Error(`no fixture for ${schemaId}`);

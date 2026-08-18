@@ -19,6 +19,7 @@ const TITLES = {
   "xhs.m0.private-evidence.v1": "Private Evidence",
   "xhs.m0.dossier-manifest.v1": "Dossier Manifest",
   "xhs.m0.file-manifest.v1": "File Manifest",
+  "xhs.m0.amendments.v1": "M0 Amendments",
 };
 
 /**

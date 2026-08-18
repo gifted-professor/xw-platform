@@ -41,7 +41,7 @@
     },
     {
       "path": "test-baseline.v1.json",
-      "sha256": "86efc6530b2473d86d130b5b19da16086f10ce10ab8d84b908b3b8bca3cf4d51",
+      "sha256": "967dc185651e90b107e9c7414249bcfe8f5ddb268036453f960c76865c03cf74",
       "schemaId": "xhs.m0.test-baseline.v1"
     },
     {
@@ -49,6 +49,11 @@
       "sha256": "b4bb18e48ed7b785534292ae9d1d5ac0d9dd393343cf3028b0b1b8c153d7ea94",
       "schemaId": "xhs.m0.private-evidence.v1",
       "status": "pending_age (hash back-filled at B1)"
+    },
+    {
+      "path": "amendments.v1.json",
+      "sha256": "a909b3a8b1130c169d145c306c5faaac83ac13248c5d41610d12b81bbf193973",
+      "schemaId": "xhs.m0.amendments.v1"
     }
   ]
 }

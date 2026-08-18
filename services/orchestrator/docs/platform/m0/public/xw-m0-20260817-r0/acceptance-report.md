@@ -81,7 +81,7 @@
 
 - **path**: `test-baseline.v1.json`
 - **schemaId**: `xhs.m0.test-baseline.v1`
-- **sha256**: `86efc6530b2473d86d130b5b19da16086f10ce10ab8d84b908b3b8bca3cf4d51`
+- **sha256**: `967dc185651e90b107e9c7414249bcfe8f5ddb268036453f960c76865c03cf74`
 
 ### [9]
 
@@ -89,6 +89,12 @@
 - **schemaId**: `xhs.m0.private-evidence.v1`
 - **sha256**: `b4bb18e48ed7b785534292ae9d1d5ac0d9dd393343cf3028b0b1b8c153d7ea94`
 - **status**: `pending_age (hash back-filled at B1)`
+
+### [10]
+
+- **path**: `amendments.v1.json`
+- **schemaId**: `xhs.m0.amendments.v1`
+- **sha256**: `a909b3a8b1130c169d145c306c5faaac83ac13248c5d41610d12b81bbf193973`
 
 
 - **schemaId**: `xhs.m0.dossier-manifest.v1`
@@ -8279,6 +8285,30 @@
 - **schemaId**: `xhs.m0.known-debt.v1`
 - **schemaVersion**: 1
 
+## M0 Amendments
+
+- **amendments**:
+
+### [1]
+
+- **amendedSha256**: `967dc185651e90b107e9c7414249bcfe8f5ddb268036453f960c76865c03cf74`
+- **file**: `test-baseline.v1.json`
+- **impact**: `does not alter runtime baseline; does not alter source identity; corrects gatedOn B2 text only`
+- **previousCommit**: `1c70551cb100848bae65352d099b66ca2889f927`
+- **previousSha256**: `86efc6530b2473d86d130b5b19da16086f10ce10ab8d84b908b3b8bca3cf4d51`
+- **reason**: `align B2 gate spec to actual provisioned base image (Win10 Pro index 4, UEFI ESP+MSR+NTFS, Node LTS 24.19.0/npm 11.x, Git 2.55.0.4, PS 7.6.5, m0test non-admin + m0admin admin)`
+- **recordedAt**: `2026-08-18T09:37:53.000Z`
+- **sourceArchive**: { bundleSha256=`5b7c7896f536637340541a17c8c647f5e93d4c94574811eb8a385dffa9659de9`; encryptionStatus=`deferred_to_B1`; kind=`git-bundle`; storageLocation=`out-of-repo Windows private dir (C:\Users\Public\xhs-m0-private\)` }
+- **sourceCommit**: `8ebf215b1cd22b06fe4d2cc04fa62858e02a8231`
+- **sourceCommitReachability**: `LOCAL_ONLY_ARCHIVED`
+- **sourceDiffSha256**: `97dd96831f866025bc1fd729481844ea01f6ef8ba7003dca14e35d6fbdecc439`
+- **sourcePatchId**: `6f34c34c81614e17aa42cd7b01331dfcd44c4ab0`
+
+
+- **baselineId**: `xw-m0-20260817-r0`
+- **schemaId**: `xhs.m0.amendments.v1`
+- **schemaVersion**: 1
+
 ## PR Public Assets
 
 - **baselineId**: `xw-m0-20260817-r0`
@@ -8590,7 +8620,7 @@
 - **baselineId**: `xw-m0-20260817-r0`
 - **capturedAt**: `2026-08-17T13:00:00.000Z`
 - **conclusion**: `PASS_PENDING`
-- **gatedOn**: [`B2: three disposable Windows VMs (same immutable base image, Win10 x64 19045, Node 24.11.1, npm 11.6.2, Git 2.52.0, PowerShell 7.6.4, zh-CN, CST, cp936, core.autocrlf=true)`, `B3: candidate C frozen (M0-A/B/C merged), one fresh VM + fresh clone per round`]
+- **gatedOn**: [`B2: three disposable Windows VMs + one B1 drill VM, all clonefile clones of one base snapshot (UTM/QEMU, Windows 10 Pro 19045 via autounattend index 4, UEFI ESP+MSR+NTFS, zh-CN/CST/cp936, m0test non-admin + m0admin admin; toolchain Node LTS 24.19.0/npm 11.x, Git 2.55.0.4, PowerShell 7.6.5, core.autocrlf=true; r-instances network-isolated, drill instance keeps host-isolated net)`, `B3: candidate C frozen (M0-A/B/C merged), one fresh VM + fresh clone per round`]
 - **rounds**:
 
 ### [1]

@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "xhs.m0.amendments.v1.schema.json",
+  "title": "M0 dossier amendments",
+  "description": "Trail of post-freeze amendments to frozen M0 dossier files. Each entry records the file, the previous and amended JCS-canonical SHA-256, the freeze commit and the source commit of the change, the reason, and the impact. The amended value must equal the current pin in dossier-manifest.v1.json.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaId", "schemaVersion", "baselineId", "amendments"],
+  "properties": {
+    "schemaId": { "const": "xhs.m0.amendments.v1" },
+    "schemaVersion": { "const": 1 },
+    "baselineId": { "type": "string", "pattern": "^xw-m0-[0-9]{8}-r[0-9]+$" },
+    "amendments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["file", "previousSha256", "amendedSha256", "previousCommit", "sourceCommit", "reason", "impact", "recordedAt", "sourceCommitReachability", "sourcePatchId", "sourceDiffSha256", "sourceArchive"],
+        "properties": {
+          "file": { "type": "string", "minLength": 1 },
+          "previousSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+          "amendedSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+          "previousCommit": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+          "sourceCommit": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+          "reason": { "type": "string", "minLength": 1 },
+          "impact": { "type": "string", "minLength": 1 },
+          "recordedAt": { "type": "string", "format": "date-time" },
+          "sourceCommitReachability": { "type": "string", "minLength": 1 },
+          "sourcePatchId": { "type": "string", "pattern": "^[a-f0-9]{40,}$" },
+          "sourceDiffSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+          "sourceArchive": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "bundleSha256", "encryptionStatus"],
+            "properties": {
+              "kind": { "const": "git-bundle" },
+              "bundleSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+              "encryptionStatus": { "type": "string", "minLength": 1 },
+              "storageLocation": { "type": "string", "minLength": 1 },
+              "ciphertextSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+              "ageRecipientFingerprint": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
+      },
+      "uniqueItems": true
+    }
+  }
+}
