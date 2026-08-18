@@ -1,0 +1,1589 @@
+{
+  "schemaId": "xhs.platform.fusion.import-receipt.v1",
+  "schemaVersion": 1,
+  "importId": "xw-f1d-device-agent-20260818T122302Z-43b09ac",
+  "originalRepo": "gifted-professor/xhs-device-agent",
+  "originalCommit": "43b09accba3364a23917f43224fc0772ef17a217",
+  "originalTreeSha": "cdcb731208c72f8d42c29e487f54ea4aaea6797f",
+  "targetRepo": "gifted-professor/xw-platform",
+  "targetBaseCommit": "61d0a35d2fb54fb5b4c3a6d0dff2fceb5c72fc5b",
+  "importDirectory": "services/control-plane",
+  "rewrittenTipCommit": "f632c2ccf470b6d7d8c0f8ca154e6b41165775f3",
+  "fusionMergeCommit": "2c1930cb87102e3670912f1ed20c828b397f1a1e",
+  "originalTrackedFileCount": 256,
+  "importedTrackedFileCount": 256,
+  "blobMismatchCount": 0,
+  "modeMismatchCount": 0,
+  "missingFileCount": 0,
+  "extraFileCount": 0,
+  "advanceCommitCount": 0,
+  "sourceTreeMatchesLock": true,
+  "rewrittenTipMapsFromImportCommit": true,
+  "originalReachableCommitCount": 367,
+  "rewrittenReachableCommitCount": 367,
+  "commitCountMismatch": 0,
+  "originalTreeListing": [
+    {
+      "path": ".env.example",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "ea80889e703d430125472e31550013ecb051eb7a"
+    },
+    {
+      "path": ".gitignore",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "f5294387daaf75983f429f5e96a774beaf6293ec"
+    },
+    {
+      "path": ".node-version",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "9e2934aa3435d33ec4682de5f713d4134a68d803"
+    },
+    {
+      "path": "AGENTS.md",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "b81c885c1e6fe5725d6d0df023079fb71addd664"
+    },
+    {
+      "path": "README.md",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "e6b6de2fdfcde6afd9799e80efd159fdfc923e24"
+    },
+    {
+      "path": "apps/douyin/adapter.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "58398da538df1206434f795943c50eb955009ec1"
+    },
+    {
+      "path": "apps/douyin/capabilities.json",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "564dbab20de951da75154be93ef9c5c73d9b6185"
+    },
+    {
+      "path": "apps/vision/adapter.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "391270ace80f5c3c33df56dbf3f46c6a435bc8fc"
+    },
+    {
+      "path": "apps/vision/capabilities.json",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "f29ce36992194de18312f8319767bd5b1ea052cc"
+    },
+    {
+      "path": "apps/wechat/adapter.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "6d5a7146964a78a5a55408c16e29d28807bc3b81"
+    },
+    {
+      "path": "apps/wechat/capabilities.json",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "803ae617d93ff07b6bf068e3ddd4fcf7a1e7fa64"
+    },
+    {
+      "path": "apps/xhs/adapter.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "a125fe9ccf8ef8baad908204d6055652713a2476"
+    },
+    {
+      "path": "apps/xhs/capabilities.json",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "67726c8cf10050483ca552c642ecff301af1bbef"
+    },
+    {
+      "path": "apps/xhs/publish-edit-dry-run.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "7b84c04e556d033755fd5e59d972ab63b70a245d"
+    },
+    {
+      "path": "apps/xianyu/adapter.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "68eba98e20c49ccdfd80c910ed5d36696936cabd"
+    },
+    {
+      "path": "apps/xianyu/capabilities.json",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "3d3dcd77a78e529745db86ab3ab1ada3fee4aea9"
+    },
+    {
+      "path": "apps/xiaowei/adapter.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "6eb2a0eb9a75cfee676543310b9074bfc5dfcaf4"
+    },
+    {
+      "path": "apps/xiaowei/capabilities.json",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "ee835009fa816a6942c1425bb2a851ea48a54da6"
+    },
+    {
+      "path": "apps/xiaowei/explorer-primitive.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "4b195da2cd924b07535b72de2dddecedf222d666"
+    },
+    {
+      "path": "config/control-plane.devices.example.json",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "d2f1036c59fbf1203f3aeb3c184eedbd61b31cc0"
+    },
+    {
+      "path": "config/devices.example.psd1",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "8826f0d126bc3e0c95e306e047aacb221dbb6611"
+    },
+    {
+      "path": "config/standing-grant-issuer-keys.example.json",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "138848cc510b96b9c49973fcf7342bf03c6e8778"
+    },
+    {
+      "path": "contracts/repair-completion.v1.schema.json",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "008646b7696e78d3aa004101b4278c6d9cbc42bc"
+    },
+    {
+      "path": "contracts/repair-event.v1.schema.json",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "ffcecc17d660586131126e51148ccf8f6874da1f"
+    },
+    {
+      "path": "contracts/repair-proposal.v1.schema.json",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "29e137401e007b7b0203eef69b6e34b47a9eeaaa"
+    },
+    {
+      "path": "contracts/repair-replay-authorization.v1.schema.json",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "2bea1c6cb2d8240bc07a44c9b64634fa54598358"
+    },
+    {
+      "path": "contracts/repair-review-authority.v1.schema.json",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "2c3996b5a5f306a883ad4fce659d24024d39494e"
+    },
+    {
+      "path": "contracts/repair-source-checkpoint.v1.schema.json",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "8c291572686e6d3dbbe38f41562ec9f61919009a"
+    },
+    {
+      "path": "contracts/stall-progress.v2.schema.json",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "f628ecc5ef879df0fdb5d94315400fe7fd477f93"
+    },
+    {
+      "path": "contracts/stall-verdict.v1.schema.json",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "3d97038d2f351de74c686a61df277b04b8e9cabf"
+    },
+    {
+      "path": "control-plane/bootstrap.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "81c809c4bc02994c02521618a8cfc7e338ba081d"
+    },
+    {
+      "path": "control-plane/devicectl.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "c55485dd0437735e07ccedad98320655f5c5fb42"
+    },
+    {
+      "path": "control-plane/index-legacy-evidence.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "e5ff97dda16652e751072df4e1cf745cfa4274d2"
+    },
+    {
+      "path": "control-plane/lib/authorization-decision.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "d69bb193149b6c57df4e723404e48b56e50ea6c9"
+    },
+    {
+      "path": "control-plane/lib/canonical.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "1b6ed0b550edea03bc8eba5412e762cc53a7bc84"
+    },
+    {
+      "path": "control-plane/lib/capability-effect.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "1754357a7541701ddff82c95fbe28b4459766c0e"
+    },
+    {
+      "path": "control-plane/lib/capability-registry.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "3c4b853b7018000a173c16bf9327cf3ec3991683"
+    },
+    {
+      "path": "control-plane/lib/command-runner.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "90d0d7303c399f64c9b65985fd7b57ee0fb3353f"
+    },
+    {
+      "path": "control-plane/lib/control-plane.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "3766b39be9819ddbcdcb3db153261e66d9696aaa"
+    },
+    {
+      "path": "control-plane/lib/delegation-grant-policy.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "dce1fc5b643fae2e31c5b1c8a92c05e04312427f"
+    },
+    {
+      "path": "control-plane/lib/delegation-grant-runtime.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "f1195c1d540270b236750bd37a4761dbcf49992d"
+    },
+    {
+      "path": "control-plane/lib/device-run.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "4c4ca38b2907e22e4fc5e6b97f6c4d3ae3c5830b"
+    },
+    {
+      "path": "control-plane/lib/discovery-session.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "42c92c6a49d07c871d94f2f38b02de47ccddc71e"
+    },
+    {
+      "path": "control-plane/lib/effect-commit-protocol.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "5118984c90fb78f1e0fca1d206594c1cbb0d2942"
+    },
+    {
+      "path": "control-plane/lib/effect-firewall.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "bbb5328e0dc23cd88d38b623a0440499a45c9bad"
+    },
+    {
+      "path": "control-plane/lib/effect-ledger.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "b71ce416cf142558d6178b34a790d8ccbab64d1c"
+    },
+    {
+      "path": "control-plane/lib/errors.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "b14a34690a1f9f7a232578a7f5f82671e77cd370"
+    },
+    {
+      "path": "control-plane/lib/evidence-exporter.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "bf8a732aaa463ba8cd0536f0cf3594717632a53a"
+    },
+    {
+      "path": "control-plane/lib/evidence-spool.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "6a746a192ab9a7c948efc23401f533781f8a11b5"
+    },
+    {
+      "path": "control-plane/lib/evidence-store.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "3623c535d448d506d11ab8cdfef899f11b924135"
+    },
+    {
+      "path": "control-plane/lib/explorer-session-bridge.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "b45a0d11f7fccc4a6b61fd96f86d170603ed0f52"
+    },
+    {
+      "path": "control-plane/lib/financial-commit-classifier.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "391d95a2b87e81d50f148aa5be8f507091eaa60a"
+    },
+    {
+      "path": "control-plane/lib/generated-overlay.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "bcc19af3930e50e8179c8c477958f33ae2262686"
+    },
+    {
+      "path": "control-plane/lib/implementation-closure.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "b0a989141dcc1663ef802a9af3206464b6429935"
+    },
+    {
+      "path": "control-plane/lib/json-schema-validator.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "c93d06e7e5140d07d138a6ae129c0b5fb51dc9ce"
+    },
+    {
+      "path": "control-plane/lib/legacy-guard.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "b82c319039e8bc1f5d74024b5751aad8edd561ff"
+    },
+    {
+      "path": "control-plane/lib/mission-policy.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "46ed20b4c2b637444e06d2dfb04eaa5222d58fd7"
+    },
+    {
+      "path": "control-plane/lib/mission-runtime.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "5a7475b319534949e1b6203f4972272edaaa74b5"
+    },
+    {
+      "path": "control-plane/lib/nonpayment-autonomy-policy.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "949f2e17f90a95999bce8bb02bfcfa299304e8d6"
+    },
+    {
+      "path": "control-plane/lib/operator-access.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "029796394293e935d94b14af7d7c99f179baaf80"
+    },
+    {
+      "path": "control-plane/lib/payment-approval-verifier.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "9c516cb4665f42fa284e9ca6264b5a765292e114"
+    },
+    {
+      "path": "control-plane/lib/placement.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "6b73d24ea8ce21dcdae56f7562d99a2536ace87f"
+    },
+    {
+      "path": "control-plane/lib/policy.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "5bdf9a8f8e739a72993df758c698d269fa6db056"
+    },
+    {
+      "path": "control-plane/lib/protected-commit-policy.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "0ea7ebc23cc8aa28f3950faff7818e9272637a2a"
+    },
+    {
+      "path": "control-plane/lib/protected-human-commit.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "a6774789d1f8c7a147ef0207d5d2c6e7acc94291"
+    },
+    {
+      "path": "control-plane/lib/raw-primitive-policy.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "b749ce5b7a1835dd55c0a2a0324be8811b41eec6"
+    },
+    {
+      "path": "control-plane/lib/recipe-interpreter.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "a1d598b130e385521f8b113b1c99cf343d0980ef"
+    },
+    {
+      "path": "control-plane/lib/recovery-inspection.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "0952340f4b943c0ee72b24c5098a8893efb7aa63"
+    },
+    {
+      "path": "control-plane/lib/return-home.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "ed0385c053fef6a7bd202b151e6adf7b8f538e14"
+    },
+    {
+      "path": "control-plane/lib/runtime-integrity.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "ac282fca4963be0141f8b64b5312d048df502e01"
+    },
+    {
+      "path": "control-plane/lib/state-store.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "f7041f3732b66fa0dbcdddba5e8d0e6c14570dce"
+    },
+    {
+      "path": "control-plane/lib/tcb-manifest.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "d7086ac2dd34b1580b064b95bd89be7bfff911c2"
+    },
+    {
+      "path": "control-plane/lib/transport-action-authorization.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "f49b71c43bae986d286279538f08ba69399845bf"
+    },
+    {
+      "path": "control-plane/lib/trusted-human-issuer.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "00020d7549212f8470ea29a5d9a0e023c97c9641"
+    },
+    {
+      "path": "control-plane/lib/typed-transport.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "d4c049905d8f02e7834f061bb09fed04af9c7022"
+    },
+    {
+      "path": "control-plane/lib/xiaowei-transport.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "554e195686d4303470a635ba5710060627395eb6"
+    },
+    {
+      "path": "control-plane/router.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "56c1be171aadd49ee100857636260d3e1e43ecd1"
+    },
+    {
+      "path": "control-plane/schema/capability.schema.json",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "4a4ac3daaa2eed3c62ea0a259e6739f47df0e655"
+    },
+    {
+      "path": "control-plane/schema/cross-repo-release.schema.json",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "a76f38b53de7802955f59dbdde2ac328c4ec6927"
+    },
+    {
+      "path": "control-plane/schema/delegation-grant.schema.json",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "626fe30690adf4b30bef034be6a8af6d72e2eb9c"
+    },
+    {
+      "path": "control-plane/schema/effect-intent.schema.json",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "8ab30e11cb9da2062baf8f98ee932c954c24b1c3"
+    },
+    {
+      "path": "control-plane/schema/explorer-run.schema.json",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "4532cde5a0d9d014c39aa27896c587ee8c451db1"
+    },
+    {
+      "path": "control-plane/schema/implementation-closure.v1.schema.json",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "fd943b89d51f540528aa8dd7d3817b6b23c8d148"
+    },
+    {
+      "path": "control-plane/schema/mission.schema.json",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "b0f356e50cc85536828625ffc0d2418b7aa678de"
+    },
+    {
+      "path": "control-plane/schema/nonpayment-autonomy.schema.json",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "0cbbb84b65620c864aaf0061359d9eb44ed47a9e"
+    },
+    {
+      "path": "control-plane/schema/payment-approval.schema.json",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "17f8a060f534851ccbc833b5658872989b737eed"
+    },
+    {
+      "path": "control-plane/schema/tcb.manifest.v1.schema.json",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "4859f98ed81adb67feca3290eb02975ca0345afe"
+    },
+    {
+      "path": "control-plane/schema/trace.schema.json",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "6a658583c40e12858cabd53aa8d45085c30afcbd"
+    },
+    {
+      "path": "control-plane/schema/transport-action-authorization.v1.schema.json",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "045c9a8381983bd73850c46bf1ed94f7c3f54cb0"
+    },
+    {
+      "path": "control-plane/server.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "35d699a5898ad3153111ed7642e0ddaa6920eb44"
+    },
+    {
+      "path": "data/.gitkeep",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "8b137891791fe96927ad78e64b0aad7bded08bdc"
+    },
+    {
+      "path": "docs/ARCHITECTURE.md",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "e12b63e8e373adf746e1663ad104c58346cf932f"
+    },
+    {
+      "path": "docs/SAFETY.md",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "093bd7f8228a8517f8a865d64904ab785e4a005e"
+    },
+    {
+      "path": "docs/adr/0001-windows-authority-and-ssh-cli.md",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "3a11baece0e1e301c554523b19977874ee53184e"
+    },
+    {
+      "path": "docs/adr/0002-two-layer-resource-locking.md",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "38463c6d7478f368955db6abb4826762fbd82508"
+    },
+    {
+      "path": "docs/adr/0003-durable-state-and-evidence.md",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "6a8f4c42bbf62c45f5539a7bd9cb32b3de2adbe1"
+    },
+    {
+      "path": "docs/adr/0004-maturity-risk-and-approval.md",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "76726acf0a9c88d81b3ce7d33e1f09e651cf159d"
+    },
+    {
+      "path": "docs/adr/0005-legacy-entrypoint-migration.md",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "d58ea0c2d1c0af8b257959de2474efe2feee162e"
+    },
+    {
+      "path": "docs/adr/0006-atomic-agent-placement-entry.md",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "9cfc3687c1316f2a7cd41ae13ca30d6cca36746c"
+    },
+    {
+      "path": "docs/adr/0007-recovery-inspection-analysis-placement.md",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "a7cc09d7d13efe77491999e53d094167fff9c15b"
+    },
+    {
+      "path": "docs/adr/0008-mission-driven-exploration-authorization.md",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "f4f13290287203a39483bf0a40e8e8e9e2e14222"
+    },
+    {
+      "path": "docs/adr/0009-standing-grant-delegation.md",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "464d468e78a297cba2ef247ddfd86d06eb8f13e0"
+    },
+    {
+      "path": "docs/adr/0010-standing-grant-discovery-session.md",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "474e1e574a1d3e0378b96300b51b21eb023737ea"
+    },
+    {
+      "path": "docs/agent-entry.md",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "2b9d82814f9cb70efe9e3c1fb94a0274cded5be1"
+    },
+    {
+      "path": "docs/app-explorations/2026-07-24-微信-连发10-1三机全发.md",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "682249a585920e18b4edaec2f339a3d694484574"
+    },
+    {
+      "path": "docs/control-plane.md",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "6a93246beba96e42ae58b9f5ab25aa1d887313ca"
+    },
+    {
+      "path": "docs/control-plane/2026-07-24-capability-map-audit.md",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "29c7bebc018917df1461dee71bf254ef390a68be"
+    },
+    {
+      "path": "docs/device-task-handoffs/2026-07-19-fast-operator-bypass-plan.md",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "363729c4ea7fe0bbe0d63ef01cb4b99125678ce5"
+    },
+    {
+      "path": "docs/device-task-handoffs/2026-07-20-slice2-comment-autonomy.md",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "b15bbff622410dc59238d1ef8b023907af910ff7"
+    },
+    {
+      "path": "docs/device-task-handoffs/2026-07-20-task-runner-plan.md",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "830755262bb69d23625b07f2b815f3cea137431c"
+    },
+    {
+      "path": "docs/evidence/2026-07-30-discovery-receipt-deferred-red-test.md",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "47725304792dfb25eb912fea2dadbcaffa4fc74e"
+    },
+    {
+      "path": "docs/explorations/README.md",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "5a39ba92f2239a4ffe504225f28ab48ae5204b33"
+    },
+    {
+      "path": "docs/explorations/TEMPLATE.md",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "504e10cd53573fa74d049619ddeec04a322fd8b6"
+    },
+    {
+      "path": "docs/handoffs/2026-08-02-windows-repair-consumer-contract.md",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "2ad92b094f4a19045c6d7c177773535778222109"
+    },
+    {
+      "path": "docs/handoffs/2026-08-02-xhs-observe-feed-repair-proposal.v1.json",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "4a31e26b2db80473d731fc8853069fea6bbf29cb"
+    },
+    {
+      "path": "docs/plans/2026-07-30-discovery-feed-to-profile-producer-design.md",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "87f0e211d42c646c887299c722238a9c8a19d6d3"
+    },
+    {
+      "path": "docs/plans/2026-07-30-explicit-target-phase1-implementation-batches.md",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "39d001a4a07fd077e5f0b6627e7f825d8bbd98f2"
+    },
+    {
+      "path": "docs/plans/2026-07-30-phase1-acceptance-checklist.md",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "9c1e95f480f475dd2e039cb801f87d5beb135bb3"
+    },
+    {
+      "path": "docs/plans/2026-07-30-premission-discovery-session-design.md",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "81ac0b165614e5e0455d25fd65ce8638ce6002d9"
+    },
+    {
+      "path": "docs/plans/2026-07-30-standing-grant-batch5-supported-path.md",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "09cf03f76b2dfb814cfe7d6b249f552c568d7701"
+    },
+    {
+      "path": "docs/plans/2026-07-30-standing-grant-discovery-session-implementation-plan.md",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "066d323c508a6f1f456529c6bc71fb8c8c2d193b"
+    },
+    {
+      "path": "docs/plans/2026-07-30-standing-grant-phase1-explicit-target-only.md",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "d167e765671486c90468620759b3da3ede425427"
+    },
+    {
+      "path": "docs/plans/2026-07-30-standing-grant-phased-enablement-implementation-plan.md",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "af8bc4d0d1a0bd1c3c6716ae04f707b7d8f34eff"
+    },
+    {
+      "path": "docs/plans/2026-08-08-foundation-pr2-branch.md",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "285abc72581384fb38238e6744d1707eecb247c6"
+    },
+    {
+      "path": "docs/plans/2026-08-08-foundation-pr3-branch.md",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "cff03de50484dcd3c1ea4306fe66b0a06b99b57e"
+    },
+    {
+      "path": "docs/xianyu-publish-dryrun.md",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "508993679ebef5790dbc4b2a5d17a12665c6ddbb"
+    },
+    {
+      "path": "package.json",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "230a462e9b170239eeb1a655973bcfd477a322af"
+    },
+    {
+      "path": "prompts/xhs-page-classifier.txt",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "1d97237b2777ebed9308d6d84ddd06ab8f934e3d"
+    },
+    {
+      "path": "scout/scout.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "452b0f0cb5b58dae5c9ae95d98ada429c7d3c2ba"
+    },
+    {
+      "path": "scout/scripts/list-recipes.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "14a17fea875336abc23696dd95fa3c4036e5293a"
+    },
+    {
+      "path": "scout/scripts/post-finding.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "dfca6435def726536497023ab79abc758227fd88"
+    },
+    {
+      "path": "scripts/Collect-PhoneAssets.ps1",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "fb8fb4659dc5a16a7a0633ab8dd20530cda6b528"
+    },
+    {
+      "path": "scripts/Run-Pipeline.ps1",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "f03dc7894bed9b6fe90be1bb2af9d9e789e65105"
+    },
+    {
+      "path": "scripts/Sync-LarkBase.ps1",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "f74de794f25e351016a2ad0a05f88c61819335af"
+    },
+    {
+      "path": "scripts/Test-Project.ps1",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "05ddc59ec168f5aeadf58a2326daa37c3e7fd2c8"
+    },
+    {
+      "path": "scripts/assert-release-gates.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "5c81565d11ebe01112db6587308fc748011e939f"
+    },
+    {
+      "path": "scripts/build-recovery-analysis.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "fe58e965b9d6e552b2cb678784ac67cb27959e4b"
+    },
+    {
+      "path": "scripts/check-adapter-imports.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "b149816f19d6dbed6f349bbbc4c70efe813d57fb"
+    },
+    {
+      "path": "scripts/check-js.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "3a7bcd45547ac89dec14a1f8c2adbb232216f42f"
+    },
+    {
+      "path": "scripts/cloud-vision.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "fb178dbffc3d330c0699bd736740c9e7c6efbd00"
+    },
+    {
+      "path": "scripts/control-plane-task.ps1",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "7d83edeb09463af1164cab998fdf91789b47a1b9"
+    },
+    {
+      "path": "scripts/control-plane-worker.ps1",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "f63e1ceffc37dd3d0a8d87a72e7f5e018ed76bc2"
+    },
+    {
+      "path": "scripts/create-repair-proposal.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "0ddb9e83942a80de73bc838b3e2dea9779bbcdda"
+    },
+    {
+      "path": "scripts/dashboard.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "d7c59b7d07e71e2cbb3a45c3cd5edc829923aa3a"
+    },
+    {
+      "path": "scripts/dashboard/README.md",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "1a99d200246494ba51ce99bd9aec4db5a5099fc8"
+    },
+    {
+      "path": "scripts/dashboard/agent.html",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "09f1d2aa3753644e265be4da83c6ca18146989bc"
+    },
+    {
+      "path": "scripts/dashboard/index.html",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "69cee45fc600f607452fa2d259df89b6b0d2a5a2"
+    },
+    {
+      "path": "scripts/douyin-operator.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "8ba9bbaa5aa8b814eefe994eba91eda0d4b82d10"
+    },
+    {
+      "path": "scripts/fast-operator-serve-task.ps1",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "bb9ece18be24bedf6d15b8a6371728af36540fac"
+    },
+    {
+      "path": "scripts/fast-operator-serve-worker.ps1",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "f17acfebd2f3620c915cdf09cdf010322fb6d682"
+    },
+    {
+      "path": "scripts/fast-operator.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "d3088ea36c7033704f4ea3ca5045790d6707ada3"
+    },
+    {
+      "path": "scripts/gateway-operator.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "8904db616e716157d8c9f61311b8ebc274cb3426"
+    },
+    {
+      "path": "scripts/greenarrow-api.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "9e489ce311debcbed742c9e3554027a97edc3f7e"
+    },
+    {
+      "path": "scripts/install-scout-task.ps1",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "d7aaed1ecc9ad15cfa9b8b8ad12cabcae35c0900"
+    },
+    {
+      "path": "scripts/lib/repair-authority-verifiers.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "6d776466cb48a612c76e2d04b0eba0b1e75db48b"
+    },
+    {
+      "path": "scripts/lib/repair-consumer.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "91ccbf69b47b71c8390589cdb37457d30b13729e"
+    },
+    {
+      "path": "scripts/lib/repair-inbox.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "ad3d7e934cb3245baab3f9286835959df836d7fc"
+    },
+    {
+      "path": "scripts/lib/repair-proposal.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "057ef80ea7537c04eba4ee08671cdeeb6d35827a"
+    },
+    {
+      "path": "scripts/lib/stall-progress.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "14fcd4c59e6d2a26182ed128131a05091c2646c8"
+    },
+    {
+      "path": "scripts/lib/stall-verdict.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "e7bd5e4351b48775dec61d89d0fd992d26fe6934"
+    },
+    {
+      "path": "scripts/recovery-page-classifier.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "03613628e43f1789803d8c18d039c74e05ec6577"
+    },
+    {
+      "path": "scripts/repair-consumer-scope-guard.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "78535eca54e85bf21f657e8bd9730a788aae2266"
+    },
+    {
+      "path": "scripts/repair-consumer.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "fd0d7f27d7d6ca83499c7f473197bb53902e3bf1"
+    },
+    {
+      "path": "scripts/repair-inbox.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "b4adbc99317ac6042c169c447b70b2a12ab1e1f9"
+    },
+    {
+      "path": "scripts/run-dashboard.bat",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "12441f91d31c5e46823de31b3999d34870c92418"
+    },
+    {
+      "path": "scripts/secret-scan.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "58685f9fb346bedb5665c30d15bd87f5c78f08ae"
+    },
+    {
+      "path": "scripts/task-runner.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "0c302efb8a1129bde1bd594a6b90521eadd3bf6b"
+    },
+    {
+      "path": "scripts/tasks/互动.json",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "55a4c6eb70feaaed4eb55ad39c0e52affcad0752"
+    },
+    {
+      "path": "scripts/tasks/养号.json",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "23ef6a05dd8592f5d7af95d5fa21472ce5d0a1f6"
+    },
+    {
+      "path": "scripts/tasks/涨粉.json",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "920befcd018c5b17f9cd6efdf5660abf6bf30a8e"
+    },
+    {
+      "path": "scripts/tasks/纯刷.json",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "9c44c66cadf3e0514622368f9c59157e561c1461"
+    },
+    {
+      "path": "scripts/tasks/自主.json",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "315f80c073182ccaa68434e877fc39d04206f221"
+    },
+    {
+      "path": "scripts/vision-safety.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "5df2cfe5388e718e1cbd5c86bafa901a0bd3e806"
+    },
+    {
+      "path": "scripts/wechat-operator.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "29f4289767a691d609fa04545c637b89c55d0486"
+    },
+    {
+      "path": "scripts/write-release-test-receipt.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "a3ebaa8da35664492c9942fa348103b12b7f6e0b"
+    },
+    {
+      "path": "scripts/xhs-watcher-launch.ps1",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "de384ac2e2f9e15d2efea8dbb3ef82616567fb5c"
+    },
+    {
+      "path": "scripts/xhs-watcher.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "2a90e39e707910f26582869779a0dbccb54aa414"
+    },
+    {
+      "path": "scripts/xianyu-operator.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "6d28a0846ecdf92a22a421b6478c254681ec7f2e"
+    },
+    {
+      "path": "scripts/xianyu-page-classifier.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "4709e180e0bee0e5729f3144a546011e98487946"
+    },
+    {
+      "path": "scripts/xiaowei-http-adapter.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "55683780a4b9d44c607f8ca4a1ca442740415aae"
+    },
+    {
+      "path": "skills/repair-inbox/SKILL.md",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "967278f017526fe5d6c04de4464e470eceb1b6bc"
+    },
+    {
+      "path": "skills/xhs-device-operator/SKILL.md",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "87c899c570ed5c2eacb53b7bf2304674750794fb"
+    },
+    {
+      "path": "tests/ambiguous-effect.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "f2979160db05c7fdf15d38e6540afca713e10f7e"
+    },
+    {
+      "path": "tests/assert-release-gates.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "b84b3fce1dd5204759593e662257f5cd0e8474da"
+    },
+    {
+      "path": "tests/autonomous-lease.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "0b72ff48f1ef223bb175ee4ecd47fdc3c7273b01"
+    },
+    {
+      "path": "tests/capability-registry.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "48ffe623b6aa571c0d98628b862b2ee327519ba1"
+    },
+    {
+      "path": "tests/control-plane-adapters.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "878f7e298acbbc57ffdf6ef755148f27075ece6c"
+    },
+    {
+      "path": "tests/control-plane-command-runner.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "1b933a2f8b9af9606f3b31756d931284c34cc66b"
+    },
+    {
+      "path": "tests/control-plane-core.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "a58364c2c518564e99ad890568ad069062756cf6"
+    },
+    {
+      "path": "tests/control-plane-evidence.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "86350c5f2312c1a89f41c369bba0c7c84cf41f7b"
+    },
+    {
+      "path": "tests/control-plane-legacy-index.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "43216cb1787acb987d4bfa0d14cbe3d4fe68bd3b"
+    },
+    {
+      "path": "tests/control-plane-legacy.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "f4bd38573c5716db34cee81413e65e998ff221bc"
+    },
+    {
+      "path": "tests/control-plane-mission.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "ea876cd3dd4257aaada4ab59411b72272cf9d157"
+    },
+    {
+      "path": "tests/control-plane-placement.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "467473dadbe0c57194dced311d56a4057aaa70bf"
+    },
+    {
+      "path": "tests/control-plane-server.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "1c68236404231034b8781dda2db61ff90c888b30"
+    },
+    {
+      "path": "tests/control-plane-state.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "cdb596e3576b01f1be634a9d4de632f797ce95cb"
+    },
+    {
+      "path": "tests/control-plane-transport.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "484bf7c23a0b4c9a35cc35287efc1e803708ca11"
+    },
+    {
+      "path": "tests/cross-repo-contract-parity.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "81bd64e1c8616665a046f7185b96eca6b5fe9ade"
+    },
+    {
+      "path": "tests/delegation-grant-policy.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "12344160ffb03dcc53c88c210648bcb1b5bc037f"
+    },
+    {
+      "path": "tests/delegation-grant-runtime.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "359984f513e3fb6f0d6b6b54671948a71469c95c"
+    },
+    {
+      "path": "tests/device-run.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "6e8322ba1dc1f4bc74c76b34079a6b061fb2b761"
+    },
+    {
+      "path": "tests/devicectl.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "a4c86a992d86b42ec6835cf2a2634323ad0e32b4"
+    },
+    {
+      "path": "tests/discovery-session-state.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "60ae9cb19c7eea2ce1b00a2e83a0695a53f9f872"
+    },
+    {
+      "path": "tests/discovery-session.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "b524685fa2532539f674d40f7ce74de3f9b7400f"
+    },
+    {
+      "path": "tests/douyin-observe-snapshot.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "874859f045bd67be3630938f6504724f7cad3dc4"
+    },
+    {
+      "path": "tests/douyin-share-link.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "ad82b540718e0bf0c280c810d07397ebacfb952a"
+    },
+    {
+      "path": "tests/effect-commit-protocol.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "150682254217a335c2cdc4bcb1aa56da5d6d2b54"
+    },
+    {
+      "path": "tests/effect-ledger.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "526996b020841811be721613b5bb073a47b23bcc"
+    },
+    {
+      "path": "tests/evidence-debt.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "3566840502f2bf31dfdf68b43db8b7f3660b2717"
+    },
+    {
+      "path": "tests/evidence-exporter.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "79fc32a97cb0e0b2f1634ad20ccb7e54399dec0b"
+    },
+    {
+      "path": "tests/explicit-observation-receipt.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "2759caf2afae30d6c2459da112c273d778fdbc86"
+    },
+    {
+      "path": "tests/explorer-hotpath-parity.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "9e53a5a8497d56a1b8fbf14680bb7c12f1fab86f"
+    },
+    {
+      "path": "tests/explorer-primitive.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "dcc19685fe8381da1bb7e6e5d81e899a166b5620"
+    },
+    {
+      "path": "tests/fast-operator-auth.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "bc942a85d02964453d32742b75e614bce3b0893f"
+    },
+    {
+      "path": "tests/fast-operator-serve-dispatch.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "e9389e08ee9900ec098654f20b36821d0e032d33"
+    },
+    {
+      "path": "tests/fast-operator-serve-lifecycle.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "c5955f6d69244a4cbd5cbe38c5def5269f768cea"
+    },
+    {
+      "path": "tests/fixtures/evidence-v1/writer-failures.json",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "ec1881c2aabc559f17d4092d4d0cd9faa867693e"
+    },
+    {
+      "path": "tests/fixtures/explorer-hotpath/sequence.json",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "5e5ce90df482346d87a6ff651e06854c39a60857"
+    },
+    {
+      "path": "tests/fixtures/mission-freedom-single-device.fixture.json",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "4d8befad9f04433679b002325e55969b0ce56643"
+    },
+    {
+      "path": "tests/fixtures/nonpayment-autonomy/cases.json",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "35f02bd737b26ccc3fb0b4aa50e6e8a6a7b47a60"
+    },
+    {
+      "path": "tests/fixtures/payment-tripwire/cases.json",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "692fcfd88d140513084e69bf6c9db9f38fcbdbe7"
+    },
+    {
+      "path": "tests/foundation-pr1-core.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "7efbf9d6a382e991b0db4812a294c5b8cb11afd7"
+    },
+    {
+      "path": "tests/foundation-pr2-runtime-integrity.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "f31ed69cd253bb7e5e3b619b2f1eb5a45647fd55"
+    },
+    {
+      "path": "tests/foundation-pr2-submit-integrity-lock.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "e061ea36e0aa8e7cfecdaf98fd721f64e7209c24"
+    },
+    {
+      "path": "tests/foundation-pr3-transport-boundary.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "1f01560b69f9af1bce45a554c83d7534efa370a3"
+    },
+    {
+      "path": "tests/gateway-operator.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "76d029dfedf6164adeecaa794efb422570ba3830"
+    },
+    {
+      "path": "tests/generated-overlay.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "25bf6fc46d847b945e10d12086bcc65d69e9b3a6"
+    },
+    {
+      "path": "tests/implementation-closure.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "a9eec2554f390fdd8712f0a2157348f5b1762da2"
+    },
+    {
+      "path": "tests/mission-explorer-firewall.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "0290f906ba17f5b264d2b541dc30c07cb42b2a5d"
+    },
+    {
+      "path": "tests/mission-freedom-acceptance.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "d9e6dff57d94c02417a4dde79ac3926b87f716dd"
+    },
+    {
+      "path": "tests/mission-runtime.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "f2dbf05ac807e020d46bd34d6c69065f68f346dc"
+    },
+    {
+      "path": "tests/non-financial-autonomy.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "4872fac6f00edaaaca928f58b83a94e6ebafef0a"
+    },
+    {
+      "path": "tests/nonpayment-liveness.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "9aac993b8af8ee7cc538a2c2865cbacfd77b6149"
+    },
+    {
+      "path": "tests/operator-access.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "ee44f0b4638deae7516a2d5e93865083249f0425"
+    },
+    {
+      "path": "tests/payment-tripwire.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "62bf8464588543136365bc5020c4db1209d3c6ef"
+    },
+    {
+      "path": "tests/protected-human-commit.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "dab006aaa380ebe0d1abd3a202d88b169657a6ca"
+    },
+    {
+      "path": "tests/recipe-interpreter.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "6b33f62013d394f7b10cd6efebb5c6e0c6a0cb42"
+    },
+    {
+      "path": "tests/recovery-inspection.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "d4300559bcfe70ce8685e98c05f450395438531f"
+    },
+    {
+      "path": "tests/repair-consumer-matrix.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "c921bcb8453b03bac60523319950e86330a28ec3"
+    },
+    {
+      "path": "tests/repair-consumer.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "8421d153a057fa302a0cb689aca14d5fa730f57a"
+    },
+    {
+      "path": "tests/repair-inbox.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "86054c7ca01404687f238ae5f55c849d409f7389"
+    },
+    {
+      "path": "tests/repair-proposal.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "ff3c9b079df7817e485d3e5f6491305a9c735cdc"
+    },
+    {
+      "path": "tests/return-home.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "394e273a27e4e6bbc820b5d33f5751e97692ed0c"
+    },
+    {
+      "path": "tests/scout-exploreFresh.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "357c5652e87f0ef5f216eb32dd7cb8f9af3e3237"
+    },
+    {
+      "path": "tests/stall-progress.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "0d6013570b824437296b5f79de4f7f5fbd91b9d4"
+    },
+    {
+      "path": "tests/standing-grant-canary-state.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "509260a4302fcd79d69fe387b9e12b18139bf08b"
+    },
+    {
+      "path": "tests/standing-grant-supported-path.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "f5f0cf58b2b75b74278a3875d98deb4714da2af3"
+    },
+    {
+      "path": "tests/transport-action-authorization.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "8a2d959cf143916e9bfe2d64ed0f24433e08c832"
+    },
+    {
+      "path": "tests/vision-safety.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "968c1f690bf9288999a4fb41931024b1f5e72810"
+    },
+    {
+      "path": "tests/wechat-observe-slice1.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "b0a2a4686666219fc61d5b1c016fb94c6b6689ea"
+    },
+    {
+      "path": "tests/xhs-collect-standing-grant.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "a8b5a139a4da3234704dfc4828e32e697d089e57"
+    },
+    {
+      "path": "tests/xhs-explore-open-feed-note.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "9d2edb16fd61b009efec79554bbb30814160c1b6"
+    },
+    {
+      "path": "tests/xhs-publish-edit-dry-run.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "76d3f217c7bd77ad273c2b82bdfaa0e9132ea9a0"
+    },
+    {
+      "path": "tests/xianyu-operator.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "3968388996996d6e1a4a9252cc9eedd0b9897da7"
+    },
+    {
+      "path": "tests/xianyu-page-classifier.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "7d940f907f76d930e1d4f4f9426b7b5fc1d78303"
+    },
+    {
+      "path": "tests/xiaowei-http-adapter.test.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "d7c985f4f4979fc4cb0eed69836f6cecaaed3be9"
+    }
+  ],
+  "originalTreeListingSha256": "f5335adb8ce81a088ffd5c941f203844853e4ebd6b59ed14c24ed8723782c010",
+  "importedTreeListingSha256": "f5335adb8ce81a088ffd5c941f203844853e4ebd6b59ed14c24ed8723782c010",
+  "commitMapSha256": "6878ae96ffbec8f960beb30eb309bf09aa6d956ad434312526e75345d93a7e47",
+  "historyProbes": [
+    {
+      "path": "services/control-plane/control-plane/devicectl.mjs",
+      "historyReachable": true
+    },
+    {
+      "path": "services/control-plane/control-plane/lib/control-plane.mjs",
+      "historyReachable": true
+    },
+    {
+      "path": "services/control-plane/scripts/fast-operator.mjs",
+      "historyReachable": true
+    },
+    {
+      "path": "services/control-plane/apps/xhs/adapter.mjs",
+      "historyReachable": true
+    }
+  ],
+  "toolVersion": "git-filter-repo 2.47.0",
+  "sourceFusionGate": "OPEN",
+  "runtimeCutoverGate": "CLOSED",
+  "runtimeCutoverAllowed": false,
+  "verifiedAt": "2026-08-18T12:27:17Z"
+}
