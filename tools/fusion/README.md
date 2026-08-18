@@ -4,8 +4,11 @@ Offline Physical Fusion verifier. It reads frozen receipts and the current Git t
 
 ```bash
 node tools/fusion/cli.mjs verify
-node --test tools/fusion/test/*.test.mjs
+node tools/fusion/cli.mjs test-gate
+node --test tools/fusion/test
 ```
+
+Root `package.json` forwards `check` / `fusion:verify` / `test:m0` / `test:gate` into the two services. It does **not** enable npm workspaces.
 
 `verify` checks:
 
