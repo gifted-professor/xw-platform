@@ -31,6 +31,9 @@ jobs:
       - name: Verify imported trees and receipts
         run: npm run fusion:verify
 
+      - name: Authority boundary static check
+        run: npm run authority
+
       - name: Fusion tool tests
         run: npm run test:fusion
 

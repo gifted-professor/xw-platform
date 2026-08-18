@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { verifyRepo } from "./verify.mjs";
 import { runTestGate } from "./test-gate.mjs";
+import { checkAuthority } from "./authority.mjs";
 
 const VERSION = "xhs.fusion.cli.v1";
 
@@ -68,6 +69,16 @@ export function main(argv = process.argv) {
       }
       return 0;
     }
+    if (cmd === "authority") {
+      const root = resolve(args[1] || ".");
+      const report = checkAuthority(root);
+      emit({ subcommand: "authority", root, ...report });
+      if (report.status !== "PASS") {
+        process.exitCode = 1;
+        return 1;
+      }
+      return 0;
+    }
     if (cmd === "test-gate") {
       const rest = args.slice(1);
       const suiteIdx = rest.indexOf("--suite");
@@ -82,7 +93,7 @@ export function main(argv = process.argv) {
       }
       return 0;
     }
-    diag("usage: cli.mjs <verify|test-gate|test-run|version> [repoRoot]");
+    diag("usage: cli.mjs <verify|authority|test-gate|test-run|version> [repoRoot]");
     emit({ subcommand: cmd || "unknown", status: "BLOCK", reason: `unknown command: ${cmd}` });
     process.exitCode = 2;
     return 2;

@@ -1,0 +1,113 @@
+{
+  "schemaId": "xhs.platform.authority-boundary.v1",
+  "schemaVersion": 1,
+  "title": "Authority boundary — xw-platform M2-A",
+  "description": "Machine-checkable owner/store/mutation map. Dual authority is BLOCK. Source-only: this file does not authorize runtime cutover.",
+  "sourceFusionGate": "OPEN",
+  "runtimeCutoverGate": "CLOSED",
+  "runtimeCutoverAllowed": false,
+  "ports": {
+    "orchestrator": 17930,
+    "controlPlane": 17920
+  },
+  "stores": {
+    "registry.db": { "owner": "orchestrator", "writeFrom": ["services/orchestrator"] },
+    "control.db": { "owner": "controlPlane", "writeFrom": ["services/control-plane"] }
+  },
+  "states": [
+    {
+      "canonicalState": "device identities",
+      "authoritativeOwner": "feishu-bitable",
+      "authoritativeStore": "Feishu identity table",
+      "mutationEntrypoint": "sync-feishu.mjs PUT /api/identities",
+      "derivedCopies": ["registry.db identities"],
+      "forbid": ["control-plane writing identities"]
+    },
+    {
+      "canonicalState": "knowledge base",
+      "authoritativeOwner": "orchestrator",
+      "authoritativeStore": "registry.db knowledge",
+      "mutationEntrypoint": "POST/PATCH /api/knowledge",
+      "derivedCopies": [],
+      "forbid": ["control-plane writing knowledge"]
+    },
+    {
+      "canonicalState": "goal-task-mission-evolution-closeout",
+      "authoritativeOwner": "orchestrator",
+      "authoritativeStore": "orchestrator run/outbox artifacts",
+      "mutationEntrypoint": "orchestrator task/mission/closeout APIs and ops",
+      "derivedCopies": [],
+      "forbid": ["control-plane owning goal/task/mission documents"]
+    },
+    {
+      "canonicalState": "approval decisions",
+      "authoritativeOwner": "controlPlane",
+      "authoritativeStore": "control.db approvals",
+      "mutationEntrypoint": "POST /control/v1/approvals/:jobId",
+      "derivedCopies": ["registry.db approval_audit"],
+      "forbid": ["orchestrator writing control.db approvals"]
+    },
+    {
+      "canonicalState": "fleet devices-leases-jobs-sessions",
+      "authoritativeOwner": "controlPlane",
+      "authoritativeStore": "control.db devices/leases/jobs/sessions",
+      "mutationEntrypoint": "control plane + device agent reports",
+      "derivedCopies": ["orchestrator aggregate() read-only view"],
+      "forbid": ["orchestrator writing control.db", "orchestrator triggering device Screen/job/lease"]
+    },
+    {
+      "canonicalState": "transport-and-device-execution",
+      "authoritativeOwner": "controlPlane",
+      "authoritativeStore": "control plane transport + device evidence",
+      "mutationEntrypoint": "control plane adapters / FastOperator / session_action",
+      "derivedCopies": [],
+      "forbid": ["orchestrator opening 22222/ADB as authority"]
+    },
+    {
+      "canonicalState": "payment-final-commit",
+      "authoritativeOwner": "controlPlane",
+      "authoritativeStore": "control plane payment / protected commit",
+      "mutationEntrypoint": "control plane protected human commit",
+      "derivedCopies": [],
+      "forbid": ["orchestrator committing payment transport"]
+    },
+    {
+      "canonicalState": "fleet screenshots",
+      "authoritativeOwner": "deviceAgent",
+      "authoritativeStore": "control.db evidence + disk bytes",
+      "mutationEntrypoint": "device agent capture",
+      "derivedCopies": ["orchestrator screenCache"],
+      "forbid": ["orchestrator /api/fleet/screen triggering capture"]
+    }
+  ],
+  "staticChecks": [
+    {
+      "id": "orch-no-write-control-db",
+      "root": "services/orchestrator",
+      "glob": "*.{mjs,js,cjs}",
+      "ifContains": ["control.db", "DatabaseSync"],
+      "requireNearby": "readOnly",
+      "block": "orchestrator must open control.db read-only"
+    },
+    {
+      "id": "cp-no-registry-db",
+      "root": "services/control-plane",
+      "glob": "*.{mjs,js,cjs}",
+      "ifContains": ["registry.db"],
+      "block": "control-plane must not reference registry.db"
+    },
+    {
+      "id": "no-workspaces",
+      "root": ".",
+      "file": "package.json",
+      "forbidKey": "workspaces",
+      "block": "root package.json must not enable npm workspaces"
+    },
+    {
+      "id": "cutover-closed",
+      "file": "docs/fusion/source-lock.v1.json",
+      "requireFalse": "runtimeCutoverAllowed",
+      "block": "runtimeCutoverAllowed must be false"
+    }
+  ]
+}

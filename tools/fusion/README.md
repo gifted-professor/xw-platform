@@ -4,6 +4,7 @@ Offline Physical Fusion verifier. It reads frozen receipts and the current Git t
 
 ```bash
 node tools/fusion/cli.mjs verify
+node tools/fusion/cli.mjs authority
 node tools/fusion/cli.mjs test-gate
 node --test tools/fusion/test
 ```
