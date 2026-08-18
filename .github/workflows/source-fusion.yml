@@ -40,6 +40,9 @@ jobs:
       - name: Fusion tool tests
         run: npm run test:fusion
 
+      - name: Kernel protocol tests
+        run: npm run test:kernel
+
       - name: M0 tool tests
         run: npm run test:m0
 

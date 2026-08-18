@@ -1,0 +1,17 @@
+{
+  "schemaId": "xw.open-action.events.v1",
+  "schemaVersion": 1,
+  "events": [
+    "device_session.created",
+    "observation.captured",
+    "primitive.requested",
+    "effect.assessed",
+    "primitive.executed",
+    "observation.after_captured",
+    "primitive.verified",
+    "primitive.ambiguous",
+    "primitive.rejected",
+    "device_session.released",
+    "payment.hold_created"
+  ]
+}
