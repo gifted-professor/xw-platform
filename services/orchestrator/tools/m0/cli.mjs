@@ -138,7 +138,8 @@ async function cmdCollect(args) {
 async function cmdRender(args) {
   const dir = args[0];
   if (!dir) throw new Error("render: missing dossier dir");
-  const out = args[1]; // optional output path
+  // optional output path; a flag-looking arg[1] (e.g. --compare) is not an out path
+  const out = args[1] && !args[1].startsWith("--") ? args[1] : null;
   const compare = args.includes("--compare") ? args[args.indexOf("--compare") + 1] : null;
   const { renderDir } = await import("./render.mjs");
   const md = await renderDir(dir);
