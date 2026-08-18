@@ -1,0 +1,33 @@
+{
+  "schemaId": "xhs.platform.fusion.verify-contract.v1",
+  "schemaVersion": 1,
+  "title": "Offline import verification contract — F1-E",
+  "description": "Defines the source-only checks tools/fusion must perform against frozen receipts. The tool never talks to devices, ADB, 22222, 17920, or 17930.",
+  "cli": "tools/fusion/cli.mjs",
+  "commands": ["verify"],
+  "receipts": {
+    "registry": "docs/fusion/import-registry.v1.json",
+    "deviceAgent": "docs/fusion/import-device-agent.v1.json"
+  },
+  "sourceLock": "docs/fusion/source-lock.v1.json",
+  "checks": [
+    "receipt.originalCommit == sourceLock.<repo>.importCommit",
+    "receipt.originalTreeSha == sourceLock.<repo>.importTreeSha",
+    "receipt mismatch counts are all 0",
+    "receipt.advanceCommitCount == 0",
+    "receipt.runtimeCutoverAllowed == false",
+    "current HEAD:services/<dir> listing matches receipt.originalTreeListing (path/mode/type/oid)",
+    "fusionMergeCommit is a 2-parent ancestor of HEAD",
+    "rewrittenTipCommit is parent 2 of fusionMergeCommit and an ancestor of HEAD",
+    "history probes remain reachable via git log --follow"
+  ],
+  "forbids": [
+    "runtime cutover",
+    "rewriting imported files",
+    "device / ADB / 22222 access",
+    "port or database changes"
+  ],
+  "sourceFusionGate": "OPEN",
+  "runtimeCutoverGate": "CLOSED",
+  "runtimeCutoverAllowed": false
+}
