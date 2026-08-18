@@ -77,9 +77,18 @@ export function runSuite(root, name, suite) {
   };
 }
 
-export function runTestGate(root) {
+export function runTestGate(root, { only } = {}) {
   const baseline = loadBaseline(root);
-  const suites = Object.entries(baseline.suites).map(([name, suite]) => runSuite(root, name, suite));
+  const selected = Object.entries(baseline.suites).filter(([name]) => !only || name === only);
+  if (only && selected.length === 0) {
+    return {
+      status: "BLOCK",
+      runtimeCutoverAllowed: false,
+      unexpectedFailures: [`unknown suite: ${only}`],
+      suites: [],
+    };
+  }
+  const suites = selected.map(([name, suite]) => runSuite(root, name, suite));
   const unexpected = suites.flatMap((s) => s.unexpectedFailures.map((n) => `${s.name}: ${n}`));
   const status = unexpected.length
     ? "BLOCK"

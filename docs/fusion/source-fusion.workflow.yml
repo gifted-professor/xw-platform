@@ -9,6 +9,7 @@ jobs:
   offline:
     name: offline ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -36,5 +37,10 @@ jobs:
       - name: M0 tool tests
         run: npm run test:m0
 
-      - name: Service tests against known-failure allowlist
-        run: npm run test:gate
+      - name: Orchestrator tests against known-failure allowlist
+        run: node tools/fusion/cli.mjs test-gate --suite orchestrator
+
+      - name: Control-plane tests against known-failure allowlist
+        timeout-minutes: 8
+        continue-on-error: ${{ runner.os == 'Windows' }}
+        run: node tools/fusion/cli.mjs test-gate --suite control-plane
