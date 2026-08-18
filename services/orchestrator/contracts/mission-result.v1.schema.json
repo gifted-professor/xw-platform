@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "xhs.mission-result.v1",
+  "title": "XW deterministic orchestration result",
+  "type": "object",
+  "required": ["schemaId", "schemaVersion", "taskRunId", "planId", "planHash", "status", "summary", "results", "orderedItems"],
+  "properties": {
+    "schemaId": { "const": "xhs.mission-result.v1" },
+    "schemaVersion": { "const": 1 },
+    "taskRunId": { "type": "string" },
+    "planId": { "type": "string" },
+    "planHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "status": { "enum": ["completed", "partial", "failed", "blocked", "ambiguous"] },
+    "summary": { "type": "object" },
+    "results": { "type": "array" },
+    "orderedItems": { "type": "array" }
+  },
+  "additionalProperties": true
+}

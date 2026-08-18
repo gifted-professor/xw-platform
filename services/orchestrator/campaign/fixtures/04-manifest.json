@@ -1,0 +1,12 @@
+{
+ "images": [
+  {
+   "phonePath": "/sdcard/Pictures/XianyuFull4/a.png",
+   "sha256": "cf66e9b86cc1bcfa31c41a2721d34702217a464a620fa846c2d6b70d43514be2"
+  },
+  {
+   "phonePath": "/sdcard/Pictures/XianyuFull4/b.png",
+   "sha256": "4c436dfb2f3cb6edcd3ff364211580bb60ae34970b8a10ec71ac6608b14fdd85"
+  }
+ ]
+}

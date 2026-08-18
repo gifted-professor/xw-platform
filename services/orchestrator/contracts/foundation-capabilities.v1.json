@@ -1,0 +1,55 @@
+{
+  "schemaId": "xhs.foundation-capability-catalog.v1",
+  "schemaVersion": 1,
+  "capabilities": [
+    {
+      "id": "locator.visual-block.v1",
+      "title": "视觉图层块安全定位",
+      "description": "当 UI dump 为空、稀疏或无法唯一定位时，把可信截图解析为图层块；Vision 只选择 blockId，确定性代码生成并校验 sourceSafePoint。",
+      "role": "locator",
+      "scope": "cross_app",
+      "compatibleApps": [
+        "xhs",
+        "douyin",
+        "wechat",
+        "xianyu",
+        "weigou"
+      ],
+      "intentAliases": [
+        "图层块定位",
+        "确认坐标",
+        "视觉安全点",
+        "visual block locator",
+        "verified point"
+      ],
+      "status": "implemented",
+      "executionStatus": "canary_only",
+      "maturity": "E2",
+      "effect": "none",
+      "directRun": false,
+      "entry": "node C:\\Users\\Public\\xhs-registry\\ops\\xw-locator.mjs status",
+      "provides": [
+        "locator.visual-target.v1"
+      ],
+      "requires": [
+        "xiaowei.explorer.primitive",
+        "trusted-session-screenshot"
+      ],
+      "trustOrder": [
+        "semantic_bounds",
+        "visual_block_verified_point",
+        "fail_closed"
+      ],
+      "evidence": [
+        "run_38548d5b-45c0-459d-b3e6-995e58932eb5",
+        "02/03/04 微信空 dump 页面 6 次可逆实点全部命中",
+        "visual resolver contract tests: 38 cases defined"
+      ],
+      "limitations": [
+        "定位输出保持 effect=none、tapAuthorized=false",
+        "自动实点在 trusted capture 与 one-shot tap permit 接通前仅为 canary",
+        "禁止把任一设备或旧截图的坐标复用到另一设备或新画面"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "schemaId": "xhs.m0.runtime-attestation.v1",
+  "schemaVersion": 1,
+  "baselineId": "xw-m0-20260817-r0",
+  "capturedAt": "2026-08-17T12:16:55Z",
+  "repo": "registry",
+  "processLaunchPath": "node.exe",
+  "processStartTime": "2026-08-17T04:26:45Z",
+  "processCommandLineRedacted": "\"C:\\Users\\Public\\xhs-registry\\registry.mjs\" --port 17930 --host 0.0.0.0 --control http://127.0.0.1:17920 --db \"C:\\Users\\Public\\xhs-registry\\registry.db\" --agent-token <redacted> --human-token <redacted> --human-actor <redacted> --observer-token <redacted> --runs-root \"C:\\Users\\Public\\xhs-agent-runs\"",
+  "diskBytesAtObservation": {
+    "entryPath": "C:\\Users\\Public\\xhs-registry\\registry.mjs",
+    "sha256": "3e3e6a7aa52f966fd38e8d55f296a424693ab6b90f23093fd186cd28abab3ce8",
+    "size": 143367,
+    "mtimeIso": "2026-08-17T04:24:11.768Z"
+  },
+  "launchConfigClaim": "Windows scheduled task XhsDeviceRegistry (BootTrigger); node.exe; port 17930; host 0.0.0.0; control http://127.0.0.1:17920",
+  "releaseClaim": "8c5682a",
+  "processLoadedBytes": "UNVERIFIABLE",
+  "confidence": "directlyObserved"
+}

@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "xhs.m0.pr-assets.v1.schema.json",
+  "title": "M0 PR public assets",
+  "description": "Per-PR public asset record (base, merge-base, head, tree, commit list, paths, diffstat, stable patch-id). M0 audits and archives PRs and creates port issues but does NOT close PRs (closing is M0-E/B4). ref restore is verified independently per PR; prArchiveRefsVerified counts how many PR refs were restored and checked.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaId", "schemaVersion", "baselineId", "capturedAt", "prArchiveRefsVerified", "prs"],
+  "properties": {
+    "schemaId": { "const": "xhs.m0.pr-assets.v1" },
+    "schemaVersion": { "const": 1 },
+    "baselineId": { "type": "string", "pattern": "^xw-m0-[0-9]{8}-r[0-9]+$" },
+    "capturedAt": { "type": "string", "format": "date-time" },
+    "prArchiveRefsVerified": { "type": "integer", "minimum": 0 },
+    "prs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "repo", "number", "base", "mergeBase", "head", "tree",
+          "commits", "paths", "diffstat", "stablePatchId", "refRestoreVerified"
+        ],
+        "properties": {
+          "repo": { "enum": ["registry", "deviceAgent"] },
+          "number": { "type": "integer", "minimum": 1 },
+          "base": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+          "mergeBase": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+          "head": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+          "tree": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+          "commits": {
+            "type": "array",
+            "items": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+            "uniqueItems": true
+          },
+          "paths": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 },
+            "uniqueItems": true
+          },
+          "diffstat": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["filesChanged", "insertions", "deletions"],
+            "properties": {
+              "filesChanged": { "type": "integer", "minimum": 0 },
+              "insertions": { "type": "integer", "minimum": 0 },
+              "deletions": { "type": "integer", "minimum": 0 }
+            }
+          },
+          "stablePatchId": { "type": "string", "pattern": "^[0-9a-f]+$" },
+          "refRestoreVerified": { "type": "boolean" },
+          "portIssue": { "type": ["string", "null"] }
+        }
+      }
+    }
+  }
+}

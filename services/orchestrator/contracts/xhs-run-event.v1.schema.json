@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "xhs-run-event.v1.schema.json",
+  "title": "XHS run event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaId", "schemaVersion", "eventId", "seq", "occurredAt", "recordedAt",
+    "runId", "attempt", "source", "event", "status", "alias", "sequenceIndex",
+    "actionId", "commandId", "retryIndex", "detail", "evidenceRefs", "provenance"
+  ],
+  "properties": {
+    "schemaId": { "const": "xhs.run-event.v1" },
+    "schemaVersion": { "const": 1 },
+    "eventId": { "type": "string", "pattern": "^evt_[a-f0-9]{24}$" },
+    "seq": { "type": "integer", "minimum": 1 },
+    "occurredAt": { "type": "string", "format": "date-time" },
+    "recordedAt": { "type": "string", "format": "date-time" },
+    "runId": { "type": "string", "pattern": "^run_[A-Za-z0-9._-]+$" },
+    "attempt": { "type": ["integer", "null"], "minimum": 1 },
+    "source": { "enum": ["parent", "worker", "backfill", "task", "validation", "closeout"] },
+    "event": {
+      "enum": [
+        "run_started", "run_step", "validation_recorded", "closeout_recorded",
+        "attempt_started", "session_acquired", "preflight_completed", "concurrency_started",
+        "heartbeat", "worker_started", "sequence_started", "action_started",
+        "command_started", "retry_started", "retry_finished", "command_finished",
+        "action_finished", "sequence_finished", "stop_requested", "evidence_failure",
+        "cleanup_started", "cleanup_finished", "worker_finished", "session_released",
+        "attempt_finished"
+      ]
+    },
+    "status": { "type": ["string", "null"] },
+    "alias": { "anyOf": [{ "type": "string", "pattern": "^0[1-4]$" }, { "type": "null" }] },
+    "sequenceIndex": { "type": ["integer", "null"], "minimum": 0 },
+    "actionId": { "type": ["string", "null"] },
+    "commandId": { "type": ["string", "null"] },
+    "retryIndex": { "type": ["integer", "null"], "minimum": 0 },
+    "detail": { "type": "object" },
+    "evidenceRefs": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "precision"],
+      "properties": {
+        "mode": { "enum": ["live", "backfill"] },
+        "precision": { "enum": ["exact", "inferred", "unobserved"] }
+      }
+    }
+  }
+}

@@ -1,0 +1,29 @@
+{
+ "calibrated": {
+  "freight": true,
+  "sku": true
+ },
+ "description": "控制面库存验证 不保存草稿 不发布",
+ "freightTemplate": "包邮",
+ "price": 12.34,
+ "saveDraft": false,
+ "skipAddress": true,
+ "skipCategory": true,
+ "skipUpload": true,
+ "skuPrice": 12.34,
+ "skuReplaceExisting": true,
+ "skuSpecs": {
+  "尺码": [
+   "S",
+   "M",
+   "L",
+   "XL",
+   "XXL"
+  ],
+  "颜色": [
+   "蓝色",
+   "白色"
+  ]
+ },
+ "skuStock": "2"
+}

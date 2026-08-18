@@ -1,0 +1,322 @@
+[
+  {
+    "id": "xhs-task-scheduler-double-trigger",
+    "app": "xhs",
+    "category": "pitfall",
+    "title": "计划任务 TimeTrigger 与主动 /Run 双触发同一 runId",
+    "content": "症状：同一 runId 被执行两遍（日志出现两组完整生命周期）。根因：Task Scheduler XML 自带 TimeTrigger(+5s)，launcher 注册后又立即 /Run。绕法：移除 TimeTrigger 改纯按需执行（保留 AllowStartOnDemand），同一 runId 若 task/JSON/JSONL/XML 任一已存在即拒绝复用。",
+    "verifiedBy": []
+  },
+  {
+    "id": "xhs-watcher-fail-closed-runid",
+    "app": "xhs",
+    "category": "recipe",
+    "title": "watcher 显式模式 + 原子状态 + 统一 finally 收尾配方",
+    "content": "launcher 必须显式 -statusOnly 或 -execute 二选一，未指定 fail-closed 不创建任何文件。run-state 用临时文件+rename 原子替换；progress 写入做 CAS 检查，冲突返回 progress-conflict 不伪装 completed。失败一律抛错汇入统一 finally 确保 release 执行。status-only 只 GET /status，不 takeover/heartbeat/release。",
+    "verifiedBy": []
+  },
+  {
+    "id": "xhs-task-scheduler-stdout-swallowed",
+    "app": "xhs",
+    "category": "pitfall",
+    "title": "计划任务环境 shell 重定向日志被吞",
+    "content": "症状：stdout 依赖 cmd /c shell 重定向时，计划任务环境下日志可能丢失。绕法：Task Scheduler 直接调用 node，不经 cmd /c；watcher 内部自行追加写入逐行 JSONL 日志。",
+    "verifiedBy": []
+  },
+  {
+    "id": "xianyu-flutter-input-refocus",
+    "app": "xianyu",
+    "category": "recipe",
+    "title": "Flutter 中文输入：切 IME 后重新点击字段再 inputText",
+    "content": "配方：SogouIME → 切 XwIME（真身熊猫键盘 com.android.xwkeyboard/.XwIME）→ 不收键盘直接再点一次目标字段重建 InputConnection → inputText。时序：切 IME 成功 +400ms 后 refocus，再等 600ms 才 inputText。不要发 KEYCODE_BACK 收键盘（会破坏聚焦甚至退出页面）。",
+    "verifiedBy": []
+  },
+  {
+    "id": "xiaowei-inputtext-silent-fail",
+    "app": "xiaowei",
+    "category": "pitfall",
+    "title": "效卫 inputText 返回 SUCCESS 但字没落进 Flutter 字段",
+    "content": "症状：网关 inputText/code=10000 返回成功，但 readback 全 unverified、字段实际为空。根因：切 IME 后 Flutter input connection 随旧 IME 销毁，XwIME commitText 无处落地。绕法：code=10000 只记 inputAccepted，必须 refocus 配方 + 语义 readback 实证才算写入；此机 cmd clipboard set-text 无实现，剪贴板路线不可用。",
+    "verifiedBy": []
+  },
+  {
+    "id": "xianyu-desc-verify-placeholder-gone",
+    "app": "xianyu",
+    "category": "pitfall",
+    "title": "落字后占位提示消失，占位关键词反查会假阴性",
+    "content": "症状：中文真实写入后验收器仍报 textVerified=false。根因：落字后占位提示「描述一下宝贝的品牌型号、货品来源」消失，旧逻辑按占位关键词反查描述节点失效。绕法：在当前发布页全部语义节点中查找完整测试串来验收。",
+    "verifiedBy": []
+  },
+  {
+    "id": "xianyu-extra-back-exits-page",
+    "app": "xianyu",
+    "category": "pitfall",
+    "title": "切回原 IME 后多发一次 BACK 会退出编辑页",
+    "content": "症状：keep-until-discard 模式收尾时整表证据阶段提前结束。根因：Flutter 键盘已自动收起，多余的 BACK 直接退出发布编辑页。绕法：区分「键盘清理」与「整页退出」边界，切回原输入法后不再发送额外 BACK。",
+    "verifiedBy": []
+  },
+  {
+    "id": "xianyu-dynamic-category-fields",
+    "app": "xianyu",
+    "category": "pitfall",
+    "title": "分类属性随图片动态生成，不能复用固定字段表/坐标",
+    "content": "闲鱼根据图片 AI 识别分类后动态生成品牌、成色、尺码、季节等字段，字段集合不是固定表单。每次必须现场重新枚举推荐区 chips，一套永久坐标无法覆盖所有类别；上次验证过的字段集合不能外推。",
+    "verifiedBy": []
+  },
+  {
+    "id": "xianyu-discard-dry-run-recipe",
+    "app": "xianyu",
+    "category": "recipe",
+    "title": "安全丢弃配方：语义精确匹配「不保存」后回 MainActivity",
+    "content": "discard-dry-run：只允许从已识别的发布编辑页执行「关闭 → 语义精确匹配不保存」→ 验证前台返回闲鱼 MainActivity，结果含 savedDraft=false、stoppedBeforePublish=true。不按左右坐标猜按钮，无法精确识别「不保存」即 fail-closed。恢复对话框「你有未编辑完成的宝贝」一律点「放弃」。",
+    "verifiedBy": []
+  },
+  {
+    "id": "xianyu-recommend-chips-order",
+    "app": "xianyu",
+    "category": "recipe",
+    "title": "推荐区 chips 模型与「先属性后 SKU」顺序",
+    "content": "分类/品牌/成色/尺码真实形态是推荐区 chips：label 前缀「可选X, X」「已选中X, X」即状态，selected 标志无效；desc 编辑器必须点「完成」才渲染 chips；AI 按描述自动选中。硬顺序约束：填 SKU 后推荐区 chips 全消失，属性必须先设。整表真人顺序：图片→文案→推荐区属性→SKU→运费→所在地。",
+    "verifiedBy": []
+  },
+  {
+    "id": "xianyu-sku-sheet-typing",
+    "app": "xianyu",
+    "category": "recipe",
+    "title": "SKU sheet 打字优先配方（维度命名+逐值提交）",
+    "content": "sheet 有双初始状态需状态自适应。「添加规格类型」的灰色标题是可编辑文本框，直接输维度名。维度值 EditText 无 label 按 class 找，输完按 ENTER 提交，每值提交后需重定位（布局挤压），按分区定位防串行。注意：输「XS」会被联想成「2XS及以下」。",
+    "verifiedBy": []
+  },
+  {
+    "id": "xianyu-batch-price-coord-keyboard",
+    "app": "xianyu",
+    "category": "pitfall",
+    "title": "批量编辑页数字键盘不在 semantics，input text 不进",
+    "content": "症状：SKU 批量价格页 input text 不进字。根因：批量编辑页数字键盘不在语义树（与运费键盘相反）。绕法：按实测布局用固定坐标敲数字键盘。价格库存页双模式，行=大 radio；全选 radio/文字/慢触 tap 均不响应时逐行点。",
+    "verifiedBy": []
+  },
+  {
+    "id": "xianyu-gateway-ws-pacing",
+    "app": "xiaowei",
+    "category": "pitfall",
+    "title": "高频 WS connect/close 崩 libuv，网关 Screen 会疲劳",
+    "content": "症状1：node 高频 WS connect/close 触发 libuv UV_HANDLE_CLOSING 崩溃——绕法：GatewayOperator _invoke 加 200ms 起搏。症状2：网关疲劳时 Screen 偶发 connection failed（devices 在线但截图失败）——绕法：45s 缓和重试 + 运行级 3 次重试。",
+    "verifiedBy": []
+  },
+  {
+    "id": "xianyu-a11y-tree-frozen",
+    "app": "xianyu",
+    "category": "pitfall",
+    "title": "Flutter a11y 树冻结：导航页返回后 dump 恒回旧树",
+    "content": "症状：从地区选择页（独立导航页）返回发布页后，uiautomator dump 恒返回进地区页之前的旧树（裸「选择位置」38 节点），swipe nudge ×5 刷不动，但像素早已回填。sheet 类页内交互（如运费）无此现象。绕法：此类字段必须截图补证或改页面迁移校验，不能只信语义树。",
+    "verifiedBy": []
+  },
+  {
+    "id": "xianyu-location-dual-verify",
+    "app": "xianyu",
+    "category": "recipe",
+    "title": "所在地双路校验：label 或页面迁移标记任一成立",
+    "content": "①label 校验（semantics 新鲜时：出现「所在位置」或行 label 非裸「选择位置」）；②页面迁移校验（地区页标记 宝贝所在地/搜索地址/常用地址 消失 + 发布页标记 描述一下宝贝/发闲置 出现 = 已自动回填；点漏会停在地区页，自动重试一次）。任一成立即 filled。地址文字属隐私，只输出布尔+截图 hash。",
+    "verifiedBy": []
+  },
+  {
+    "id": "infra-bridge-stderr-kills-process",
+    "app": "infra",
+    "category": "pitfall",
+    "title": "bridge PowerShell 把首条 stderr 变终止错误",
+    "content": "症状：远程 node 脚本经 windows bridge exec 运行时无声死亡。根因：bridge 侧 PowerShell $ErrorActionPreference=Stop + 2>&1，把首条 stderr 升级为终止错误。绕法：经 bridge 跑的 node 脚本必须禁 console.error。",
+    "verifiedBy": []
+  },
+  {
+    "id": "infra-chunkpush-large-file",
+    "app": "infra",
+    "category": "recipe",
+    "title": "bridge 大文件传输：分块 base64 + exec 组装 + 双端 sha256",
+    "content": "bridge 直接 push 大文件（>~60KB）会 stall。配方：分块 base64 推送 + 远端 exec 组装（/tmp/chunkpush.sh 模式），完成后双端 sha256 比对 MATCH 才算同步成功。脚本、plan JSON、进度文件同步 Windows 均走此通道。",
+    "verifiedBy": []
+  },
+  {
+    "id": "xianyu-publish-step-order",
+    "app": "xianyu",
+    "category": "recipe",
+    "title": "publishDryRun 按真人顺序重排步骤",
+    "content": "步骤顺序：images（skip 也记录 images-skipped）→ title → desc → category → attributes → condition →（price 仅无 SKU 时）→ sku → freight → address。与真人操作一致，且满足「推荐区 chips 必须先于 SKU」的硬约束。",
+    "verifiedBy": []
+  },
+  {
+    "id": "xianyu-sku-dim-title-multiline",
+    "app": "xianyu",
+    "category": "pitfall",
+    "title": "SKU 维度标题 label 是多行整块，精确匹配恒 false",
+    "content": "症状：SKU sheet 明明有维度区却报 section-missing。根因：状态C 维度标题 label 为「颜色\\n选择推荐的\\n颜色」整块（dump 中 &#10; 换行），label.trim()===dimName 永远 false。绕法：isDimTitle 用 label===dim || label.startsWith(dim+'\\n')。chip label 形如「咖啡色，按钮, 咖啡色」，值判定要加 startsWith(val+'，')。",
+    "verifiedBy": []
+  },
+  {
+    "id": "xianyu-semantics-classname-not-cls",
+    "app": "xianyu",
+    "category": "pitfall",
+    "title": "semanticSnapshot 字段是 className，用 n.cls 恒 undefined",
+    "content": "症状：typeValues/sectionInput 过滤 EditText 恒空 → input-missing。根因：semanticSnapshot 产出的节点字段叫 className，代码用 n.cls 过滤恒 undefined。绕法：全部改走 n.className；排查语义过滤失效时先核对字段名。",
+    "verifiedBy": []
+  },
+  {
+    "id": "xianyu-sku-delete-two-levels",
+    "app": "xianyu",
+    "category": "recipe",
+    "title": "SKU 删除入口两级形态：只删值级不碰维级",
+    "content": "值级（值行右侧垃圾桶）：ImageView label「删除，按钮」——可删目标。维级（维度标题行右侧）：View label「删除，按钮, 删除」——绝不能碰（会删掉要填的维度本身）。配方：skuReplaceExisting:true 时值级逐条删、fresh dump 重定位、删不净返回 sku-replace-unverified 中止不自建，不混填。",
+    "verifiedBy": []
+  },
+  {
+    "id": "xianyu-image-tile-no-label",
+    "app": "xianyu",
+    "category": "pitfall",
+    "title": "发布页图片 tile 无「商品图片」label 致验证假阴性",
+    "content": "症状：picked=2、截图眼见两张 tile，但 imgCount>=picked 恒 0 报 images-unverified。根因：发布页真实图片 tile 在 a11y dump 中没有「商品图片」label，只有顶部 ImageView 删除角标（中文或 mojibake）。绕法：改用删除角标计数+结构兜底回读，picked=2 必须回读 imgCount=2。",
+    "verifiedBy": []
+  },
+  {
+    "id": "infra-ps-no-chinese-cmdline",
+    "app": "infra",
+    "category": "pitfall",
+    "title": "禁止 PowerShell 命令行直传中文",
+    "content": "症状：plan 中文经 PowerShell 命令行传参乱码（mojibake），被灌入发布页描述，产生脏草稿。绕法：plan JSON/API 请求必须走 chunkpush 文件传输或从 UTF-8 JSON 文件读取（node xianyu-api-client.mjs submit <file.json>），任何含中文的参数不进命令行。",
+    "verifiedBy": []
+  },
+  {
+    "id": "xianyu-no-title-field-device",
+    "app": "xianyu",
+    "category": "pitfall",
+    "title": "部分设备发布页无独立标题行，title-field-missing 属预期",
+    "content": "1 号机（1511f78c）发布页不存在独立标题输入行：desc 填完 AI 直接选中分类/品牌/成色/尺码 chip。plan 配 title 必报 title-field-missing，属预期不应配 title；API 侧保留为 warning，不能冒充已填标题，也不能用旧 flow.ok=false 判失败。",
+    "verifiedBy": []
+  },
+  {
+    "id": "xianyu-image-picker-staging-album",
+    "app": "xianyu",
+    "category": "recipe",
+    "title": "受控选图：专用相册精确定位 + 手机端复算 SHA",
+    "content": "测试图 macOS→Windows→设备三端 sha256 一致；选图前在手机端复算 SHA。图片先隔离到专用相册（如 XianyuStaging），picker 必须找到该相册名精确选取，不盲选相册前两张；相册项数必须与请求图片数精确一致。",
+    "verifiedBy": []
+  },
+  {
+    "id": "xianyu-sku-batch-select-all",
+    "app": "xianyu",
+    "category": "recipe",
+    "title": "SKU 批量页全选与价格库存填写顺序",
+    "content": "真全选节点 label「全选，按钮 0, 全选」，点击后必须回读「已选 10」。批量编辑页价格、库存两个 EditText 同时存在，正确顺序：价格输入 → 点库存输入 → 输入库存 → 最后只按一次数字键盘确定。完成前滚动采集全部组合，要求每个组合同时出现目标价格与目标库存。",
+    "verifiedBy": []
+  },
+  {
+    "id": "xianyu-flutter-visible-nodes-only",
+    "app": "xianyu",
+    "category": "pitfall",
+    "title": "Flutter 只暴露可视节点，滚动后字段离开语义树",
+    "content": "症状：滚到 SKU/运费/所在地后描述和图片入口从语义树消失，发布页下半部校验假阴性。绕法：发布页识别用双门控——文本模式（顶栏发布位+商务字段）与结构模式（左上关闭+右上顶栏按钮+至少 3 条全宽商务行）任一成立即可。",
+    "verifiedBy": []
+  },
+  {
+    "id": "xianyu-dryrun-api-usage",
+    "app": "xianyu",
+    "category": "recipe",
+    "title": "闲鱼 dry-run HTTP API 用法与闸门",
+    "content": "127.0.0.1:17912：POST /xianyu/v1/dry-runs 返回 202+jobId，GET /xianyu/v1/jobs/{jobId} 轮询。requestId 幂等：同键同 payload 返回原 job，同键不同 payload 409；网络超时后查原 job 禁止换键重跑。每设备原子租约，并发 409 device_busy；publish=true 返回 400 publish_disabled。只有 accepted=true 算通过；收尾必须 savedDraft=false。",
+    "verifiedBy": []
+  },
+  {
+    "id": "xianyu-clear-task-launch",
+    "app": "xianyu",
+    "category": "pitfall",
+    "title": "普通启动旧 WebHybridActivity 置顶，底栏固定坐标点错",
+    "content": "症状：普通启动闲鱼后旧商品 WebHybridActivity 重新置顶；底栏从 y=2227 开始，旧固定坐标 (108,2220) 实际落在商品卡。绕法：CLEAR_TASK 启动 MainActivity，并从语义树真实 bounds 找首页/卖闲置入口，不用固定坐标。",
+    "verifiedBy": []
+  },
+  {
+    "id": "wechat-a11y-empty-ocr",
+    "app": "wechat",
+    "category": "pitfall",
+    "title": "微信不暴露 a11y 节点，只能截图+本地 OCR",
+    "content": "微信（8.0.64）UI hierarchy dump 仅约 382 字节空 root XML，标题/会话行/按钮 bounds 全不可读。绕法：currentFocus（dumpsys，微信可用）做粗粒度页面指纹 + Windows 本地 OCR（macOS Vision 离线，不上传截图）+ PowerShell find-*.ps1 行中心精确定位。OCR 低置信则停止。",
+    "verifiedBy": []
+  },
+  {
+    "id": "wechat-back-consumed-by-focus",
+    "app": "wechat",
+    "category": "pitfall",
+    "title": "系统 Back 被输入焦点/IME 消费，停在聊天页",
+    "content": "症状：聊天页发系统 Back 后未离开（BACK_CONSUMED_BY_FOCUS）。根因：输入框焦点或 IME 消费了 Back。绕法：改用视觉确认的应用内左上返回按钮，按返回栈逐级退回主消息页。",
+    "verifiedBy": []
+  },
+  {
+    "id": "wechat-search-contact-unique",
+    "app": "wechat",
+    "category": "recipe",
+    "title": "搜索打开会话：只接受联系人分区精确唯一结果",
+    "content": "主消息页右上角放大镜（相对坐标 x=82.8%, y=6.2%，仅主页面指纹通过后点击）→ 输目标名 → 搜索聚合「联系人/群聊/聊天记录」三域，真实布局是联系人名称在上、类型标签「联系人」在下 → 只点联系人分区精确唯一结果 → 会话顶部标题回验（容 1-2 ASCII 尾缀，拒中文后缀防重名）。匹配不唯一或标题不符 fail-closed。",
+    "verifiedBy": []
+  },
+  {
+    "id": "wechat-send-two-phase-confirm",
+    "app": "wechat",
+    "category": "recipe",
+    "title": "发消息两阶段确认接口设计（prepare+send）",
+    "content": "POST /wechat/v1/messages/prepare：固定设备、联系人、单行消息（1-80 字）和 idempotencyKey，返回 5 分钟确认令牌+完整预览。POST /messages/send：必须同时提交确认令牌和 confirmedByHuman=true。防双发：同一幂等键成功后只返回缓存结果；点击发送后新气泡无法确认则锁定 AMBIGUOUS 状态，禁止自动重试。",
+    "verifiedBy": []
+  },
+  {
+    "id": "wechat-keyevent-digit-input",
+    "app": "wechat",
+    "category": "recipe",
+    "title": "数字落字用 input keyevent 逐位，清草稿 MOVE_END+DEL",
+    "content": "数字：input keyevent 逐位（'0'→7,'1'→8,…,'9'→16，即 charCodeAt(0)-48+7），实证稳定。input text（commitText）冷聚焦竞态：键盘从收起弹起后 1.1-2.6s 内 InputConnection 未就绪静默不落字，不用于连发。清草稿：KEYCODE_MOVE_END + 24×DEL（shell while 循环）。中文需走 XwIME refocus 配方。",
+    "verifiedBy": []
+  },
+  {
+    "id": "wechat-forward-screenshot-pill",
+    "app": "wechat",
+    "category": "pitfall",
+    "title": "截图后「转发截图」浮层盖发送按钮拦截点击",
+    "content": "症状：微信截图后约 0-1s 右下角弹「转发截图」浮层，盖住发送按钮并拦截 x>739 的点击、使输入框失焦，~1.3-2.8s 自消（只拦点击不拦 keyevent）。绕法：typing → find-send-btn 定位 → 等 3s 浮层消 → 再点发送；typing 与点发送之间不点背景不截图（点背景收键盘、移走发送按钮）。",
+    "verifiedBy": []
+  },
+  {
+    "id": "wechat-send-btn-disappear-verify",
+    "app": "wechat",
+    "category": "recipe",
+    "title": "发送回验：发送按钮消失法",
+    "content": "find-send-btn.ps1 绿簇检测定位发送按钮；发送后按钮消失（available:false）= 字段清空 = 已发，空字段无误报；vision 看新绿泡作次级确认。注意：OCR 读不到字段小数字和小气泡（假阴性稳定重现），不能用 OCR 字段文本或气泡计数回验。按钮仍在则等浮层消再按新坐标重试，最多 2 次。",
+    "verifiedBy": []
+  },
+  {
+    "id": "wechat-enter-not-send",
+    "app": "wechat",
+    "category": "pitfall",
+    "title": "回车不发送：必须点发送按钮",
+    "content": "症状：input keyevent 66（Enter）后字留在输入框不产生新气泡。根因：设备 enter-to-send 设置关闭，稳定重现。绕法：必须定位并点击「发送」按钮完成发送。",
+    "verifiedBy": []
+  },
+  {
+    "id": "wechat-concurrent-burst-leftover",
+    "app": "wechat",
+    "category": "pitfall",
+    "title": "Mac exec 超时不杀 Windows 端 node，残留进程互踩",
+    "content": "症状：两进程同时操控一部手机，一个 force-stop 把另一个踢出聊天页。根因：Mac Bash 前台 exec 超时（exit 143）不杀 Windows 端 node，旧 burst 在 Windows 继续跑，又起第二个。绕法：起 burst 前先 probe-node.ps1 杀残留 wechat-send-burst node，确保串行单设备。",
+    "verifiedBy": []
+  },
+  {
+    "id": "wechat-empty-messages-falsy-bug",
+    "app": "wechat",
+    "category": "pitfall",
+    "title": "空字符串在 JS || 下 falsy 回退默认跑满发送",
+    "content": "症状：意图 WECHAT_MESSAGES=\"\" 只读 inspect，却静默跑成满 10..1 burst。根因：\"\" 在 JS || 下 falsy → 回退默认消息列表。绕法：脚本改用 ??（空字符串显式=不发送）；或用 \" \"（空格 truthy，split/trim/filter 后为空数组）。",
+    "verifiedBy": []
+  },
+  {
+    "id": "wechat-search-icon-y-drift",
+    "app": "wechat",
+    "category": "recipe",
+    "title": "搜索图标跨机型 y 漂移，动态暗像素扫描定位",
+    "content": "固定坐标 (895,149) 在棕色手机点空（实际 y≈160，偏 11px；同 X 不同 Y）。配方：find-search-icon.ps1 动态扫 y100-220/x800-960 区域暗像素 bbox 取中心，失败回退 (895,149)。同理发送按钮/输入框 y 随键盘起落变，每条用上一条 post-截图坐标重点聚焦。",
+    "verifiedBy": []
+  }
+]

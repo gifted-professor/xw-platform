@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "xhs.m0.baseline-identity.v1.schema.json",
+  "title": "M0 baseline identity",
+  "description": "Freezes four identity classes per repo: source (frozen commit), local worktree (read-only, may be dirty), deployment claim (scheduled-task argLine / release claim), and — separately — observed runtime (see runtime-attestation.v1). The input pair is the authoritative fixed source pair; any divergence from it stops the freeze.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaId", "schemaVersion", "baselineId", "capturedAt", "inputPair", "repos"],
+  "properties": {
+    "schemaId": { "const": "xhs.m0.baseline-identity.v1" },
+    "schemaVersion": { "const": 1 },
+    "baselineId": { "type": "string", "pattern": "^xw-m0-[0-9]{8}-r[0-9]+$" },
+    "capturedAt": { "type": "string", "format": "date-time" },
+    "inputPair": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["registry", "deviceAgent"],
+      "properties": {
+        "registry": { "$ref": "#/$defs/inputRef" },
+        "deviceAgent": { "$ref": "#/$defs/inputRef" }
+      }
+    },
+    "repos": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "path", "source", "worktree", "deployment"],
+        "properties": {
+          "name": { "enum": ["registry", "deviceAgent"] },
+          "path": { "type": "string", "minLength": 1 },
+          "source": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["commitSha", "ref", "verifiedAgainstInputPair"],
+            "properties": {
+              "commitSha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+              "ref": { "type": ["string", "null"] },
+              "repoOrigin": { "type": ["string", "null"] },
+              "verifiedAgainstInputPair": { "type": "boolean" }
+            }
+          },
+          "worktree": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["commitSha", "dirty", "stagedCount", "unstagedCount", "untrackedCount"],
+            "properties": {
+              "commitSha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+              "dirty": { "type": "boolean" },
+              "stagedCount": { "type": "integer", "minimum": 0 },
+              "unstagedCount": { "type": "integer", "minimum": 0 },
+              "untrackedCount": { "type": "integer", "minimum": 0 },
+              "observedVia": { "enum": ["localWorktree", "originOnly", "unreachable"], "description": "How the worktree state was observed. localWorktree = a local checkout was read directly; originOnly = no local checkout on this host, state inferred from the verified origin/main ref; unreachable = no observation possible." }
+            }
+          },
+          "deployment": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "releaseClaim"],
+            "properties": {
+              "kind": { "enum": ["windowsScheduledTask", "deviceFleet", "none"] },
+              "taskName": { "type": ["string", "null"] },
+              "argLineRedacted": { "type": ["string", "null"] },
+              "portClaimed": { "type": ["integer", "null"] },
+              "releaseClaim": { "type": "string" },
+              "runtimeReachable": { "type": "boolean" }
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "inputRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["commitSha", "ref"],
+      "properties": {
+        "commitSha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "ref": { "type": ["string", "null"] },
+        "repoOrigin": { "type": ["string", "null"] }
+      }
+    }
+  }
+}

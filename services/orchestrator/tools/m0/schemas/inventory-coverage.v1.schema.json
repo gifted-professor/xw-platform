@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "xhs.m0.inventory-coverage.v1.schema.json",
+  "title": "M0 inventory coverage scope",
+  "description": "Fixes the discovery scope, collector version, inputs, and exclusions for the M0-A inventory. The inventory validator checks discoverySet - classifiedSet = 0 against THIS scope. unclassified=0 only means no omissions relative to this versioned scope.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaId", "schemaVersion", "baselineId", "capturedAt", "collectorVersion", "discoveryScope", "inputs", "exclusions"],
+  "properties": {
+    "schemaId": { "const": "xhs.m0.inventory-coverage.v1" },
+    "schemaVersion": { "const": 1 },
+    "baselineId": { "type": "string", "pattern": "^xw-m0-[0-9]{8}-r[0-9]+$" },
+    "capturedAt": { "type": "string", "format": "date-time" },
+    "collectorVersion": { "type": "string", "minLength": 1 },
+    "discoveryScope": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["dimension", "method"],
+        "properties": {
+          "dimension": { "type": "string", "minLength": 1 },
+          "method": { "type": "string", "minLength": 1 },
+          "notes": { "type": "string" }
+        }
+      },
+      "uniqueItems": true
+    },
+    "inputs": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "exclusions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "reason"],
+        "properties": {
+          "path": { "type": "string", "minLength": 1 },
+          "reason": { "type": "string", "minLength": 1 }
+        }
+      },
+      "uniqueItems": true
+    }
+  }
+}

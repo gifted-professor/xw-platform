@@ -1,0 +1,140 @@
+[
+  {
+    "id": "recipe-xhs-compose-conc4-zero-effect-canary-20260813",
+    "app": "xiaohongshu",
+    "category": "recipe",
+    "lifecycle": "resolved",
+    "title": "xhs-compose 四机零效果 pair-cover canary",
+    "content": "工程入口 ops/xw-xhs-compose-canary.mjs 默认只生成计划；真机必须传同一个 /xw closeout --run，并显式 --execute --canary-authorized。计划用 7 个长度为 4 的序列覆盖浏览/搜索/点赞/收藏/关注之间全部 20 个有向衔接，轮询分给 4 台设备；每台一个控制面可见 xiaowei.explorer.primitive session、单机串行，四个 worker 同时启动。每个原子动作前恢复并核验小红书首页；点赞、收藏、关注机械强制 --dry-run，搜索和下滑无外部效果，maximumTotal=0。共享 22222 的 trueSplit=false 仍表示任务重叠、传输串行。2026-08-13 首轮 run_101d784d-707a-4e55-99e7-b7d73f6cfc05：01/02/03 完成 6/6 序列、24/24 原子动作，约 6 分钟墙钟；04 在首动作之前 hierarchy 缺失，整轮为 partial，不得晋级 production。首轮还暴露 dump 抛错未写全局 STOP，源码已修为 focus 空、dump invalid、验证码、登录墙、风控或未知页都写 STOP，peer 只在当前零效果原子边界停；修复后待下一次 4/4 replay。",
+    "appliesTo": [
+      "ops/xw-xhs-compose-canary.mjs",
+      "scripts/lib/xhs-compose-canary.mjs",
+      "tests/xhs-compose-canary.test.mjs",
+      "skill:xhs-compose",
+      "xiaowei.explorer.primitive"
+    ],
+    "steps": [
+      "先运行 node ops/xw-xhs-compose-canary.mjs，核对 20/20 pair coverage 与 effectBudget.maximumTotal=0",
+      "只对四台 ready/free 设备执行；使用 live pilot actor 和同一个 closeout runId",
+      "执行 node ops/xw-xhs-compose-canary.mjs --aliases 01,02,03,04 --run <runId> --actor <live-pilot> --execute --canary-authorized",
+      "直播区分 worker overlap 与 transportTrueSplit=false；不得把单机慢写成并发锁故障",
+      "任一 STOP、action failure 或 4/4 未完成都保持 canary/partial，释放全部 session 后再诊断"
+    ],
+    "verifyMode": "replay",
+    "verifiedBy": [
+      "run_101d784d-707a-4e55-99e7-b7d73f6cfc05 partial: aliases 01/02/03 pass, 04 fail before first business action",
+      "tests/xhs-compose-canary.test.mjs 5/5 and compose combined 15/15"
+    ]
+  },
+  {
+    "id": "pitfall-xhs-conc4-alias04-dump-invalid-not-transport-20260813",
+    "app": "xiaohongshu",
+    "category": "pitfall",
+    "lifecycle": "resolved",
+    "resolution": "2026-08-13 run_2a539677-a466-4729-b699-fda001e0de5d：/xw start 04 恢复权威 ADB 5038；单机正式 Explorer session focus=IndexActivityV2、dump=39855 bytes/110 nodes；随后 attempt1 与 attempt3 中 04 均完整通过 search/browse/follow-dry-run/collect-dry-run，effects=0。",
+    "title": "XHS conc4 的 04 首屏 dump invalid 是单机 I/O，不是 transport 并发故障",
+    "content": "2026-08-13 四机并发前 registry 曾显示 04 ready/free 且 serve listening，但 xw-start 对效卫 ADB 5038 的三次采样均为 absent（PnP present）。正式 Explorer session 可 acquire，launch_app 也返回 exit 0；实际 focus 为空，随后 dump-ui 返回 `dump missing hierarchy`，控制面落 unresolvedFailure=EXPLORER_DUMP_INVALID。04 在搜索动作之前退出，未发生搜索、滑动、点赞、收藏或关注；同波 01/02/03 持各自可见 lease 完成 24 个零效果原子动作。结论是 04 的设备执行/hierarchy I/O 假绿，不能归因于共享 22222 锁，也不能因 registry ready 直接声称 App/ADB 可用。恢复 04 的 5038/设备 I/O 并用单机 focus+dump replay 成功前，不要重跑四机组合。",
+    "appliesTo": [
+      "ops/xw-xhs-compose-canary.mjs",
+      "ops/xw-start.mjs",
+      "ops/explore-preflight.mjs",
+      "alias:04",
+      "xiaowei.explorer.primitive"
+    ],
+    "steps": [
+      "读取 xw-start ADB 5038 三次采样，不把 PnP present 当执行可用",
+      "只用正式 session 做 04 单机 focus+dump replay；focus 空或 hierarchy 缺失立即停止",
+      "成功恢复前保留 EXPLORER_DUMP_INVALID，不用 readiness 假刷绿掩盖 I/O 根因",
+      "04 单机通过后再重放四机 canary；不把 01/02/03 成功外推为 04 成功"
+    ],
+    "verifyMode": "replay",
+    "verifiedBy": [
+      "run_101d784d-707a-4e55-99e7-b7d73f6cfc05 alias 04 result",
+      "session action jobs job_5c944331-f6b6-4c3b-9cf0-b27aed88cd4c and job_0f688c5c-f72e-4a61-9f42-d332d96a30bc",
+      "outbox/work/run_101d784d-707a-4e55-99e7-b7d73f6cfc05/xhs-compose-conc4/04/seq-1/1-search_notes",
+      "run_2a539677-a466-4729-b699-fda001e0de5d alias04-focus-dump-replay",
+      "run_2a539677-a466-4729-b699-fda001e0de5d xhs-compose-conc4-attempt3/04/result.json"
+    ]
+  },
+  {
+    "id": "pitfall-xw-start-pilot-actor-exact-scope-20260813",
+    "app": "xiaowei",
+    "category": "pitfall",
+    "lifecycle": "resolved",
+    "title": "pilotOnly release 下 readiness 必须使用 live 精确 actor",
+    "content": "xw-start 使用自定义 actor codex-xhs-compose-conc4-20260813 给 01/02 提交 xiaowei.device.list 时，route authorization 均拒绝；control /health 同时明确 pilotOnly=true 且 pilotActors 只有 claude-pilot-20260809。改用该 live actor 后，01 job_47021d19-b714-481c-895c-e5044dbcbf94、02 job_1d7f759e-e3c7-47aa-ba64-dba713d5b252 均 succeeded，leaseObserved/verification/restoration/readyObserved 全为 true。不要为多机可读性给 actor 自动加 -01/-02 后缀；设备、session 与 job 已有 alias 字段可追踪。",
+    "appliesTo": [
+      "ops/xw-start.mjs",
+      "ops/xw-xhs-compose-canary.mjs",
+      "policyMode:pilotOnly"
+    ],
+    "steps": [
+      "先读 GET /control/v1/health 的 policyMode.pilotActors",
+      "pilotOnly=true 时只使用列表中的精确 actorId，不自行发明或加 alias 后缀",
+      "route authorization 拒绝时先核 actor scope，不重启服务、不放宽策略"
+    ],
+    "verifyMode": "replay",
+    "verifiedBy": [
+      "job_47021d19-b714-481c-895c-e5044dbcbf94",
+      "job_1d7f759e-e3c7-47aa-ba64-dba713d5b252"
+    ]
+  },
+  {
+    "id": "recipe-xhs-compose-conc4-zero-effect-canary-4of4-20260813",
+    "app": "xiaohongshu",
+    "category": "recipe",
+    "lifecycle": "resolved",
+    "title": "xhs-compose 四机零效果 pair-cover canary 4/4 实证",
+    "content": "2026-08-13 follow-up run=run_2a539677-a466-4729-b699-fda001e0de5d。先以正式 /xw start 恢复 04 的权威 ADB 5038，并用独立 visible Explorer session 完成 focus=IndexActivityV2、dump=39855 bytes/110 nodes。attempt3 在 01/02/03/04 各自可见 session、单机串行、四 worker 重叠条件下完成 7/7 序列、28/28 原子和 browse/search/like/collect/follow 全部 20/20 directed pairs；01 restore-home 和 03 search 各真实触发一次精确 binding-changed 有界重验后成功。独立 reviewer 提出的证据并发窗口随后通过 attempt 根排他创建、STOP wx、parent run/attempt/nonce 绑定关闭；硬化版 attempt4 再次 4/4、7/7、28/28、20/20 全通过，墙钟 466.5s，worker exit 4/4=0，STOP=null，release 4/4。like/collect/follow 全部机械 dry-run，like/collect/follow/comment/publish effects 均为 0。transportTrueSplit=false 仍只表示共享 22222 传输串行，不宣称真拆。终态 /xw start --check 四 serial 在 5038 连续三次稳定，ready/free、lease/job/blocker=0。该证据只支持独立工程 canary，不自动晋级日常 runner 或真互动权限。",
+    "appliesTo": [
+      "ops/xw-xhs-compose-canary.mjs",
+      "scripts/lib/xhs-compose-canary.mjs",
+      "tests/xhs-compose-canary.test.mjs",
+      "skill:xhs-compose",
+      "xiaowei.explorer.primitive"
+    ],
+    "steps": [
+      "用 /xw start --check 确认四机 5038 三次稳定、ready/free 且 lease/job/blocker=0",
+      "同一个 closeout run 使用显式 --attempt 保存每轮证据，不覆盖历史失败",
+      "每个 attempt 编号只能使用一次；根目录以排他 mkdir 创建，重复编号在 acquire session 前 fail closed",
+      "执行 --aliases 01,02,03,04 --run <runId> --actor <live-pilot> --attempt <n> --execute --canary-authorized",
+      "验收 7/7 序列、28/28 原子、20/20 directed pairs、worker exit 4/4=0、effects=0、release 4/4",
+      "结束后再次运行 /xw start --check；发现 5037 漂移时先正式 start 收敛，不把业务成功冒充 ADB 终态健康"
+    ],
+    "verifyMode": "replay",
+    "verifiedBy": [
+      "outbox/work/run_2a539677-a466-4729-b699-fda001e0de5d/xhs-compose-conc4-attempt3/summary.json",
+      "outbox/work/run_2a539677-a466-4729-b699-fda001e0de5d/xhs-compose-conc4-attempt4/summary.json",
+      "tests/xhs-compose-canary.test.mjs 10/10",
+      "tests/xhs-compose-canary.test.mjs + tests/xhs-compose.test.mjs 20/20"
+    ]
+  },
+  {
+    "id": "pitfall-xhs-compose-binding-snapshot-global-stop-20260813",
+    "app": "xiaohongshu",
+    "category": "pitfall",
+    "lifecycle": "resolved",
+    "title": "四机 Explorer binding 快照瞬变必须有界重验且普通失败也要写全局 STOP",
+    "content": "run_2a539677-a466-4729-b699-fda001e0de5d attempt1 中 02 browse 滑动后的 focus 返回 exit 4 + `alias/device/serial binding changed while session was active`，但 02 单机同 session 的 launch/focus/dump/swipe/focus/dump 随后全部成功，证明不是设备或动作脚本持续故障。attempt2 中 xhs-search 又把同一精确 gate 文本包装为 exit 2；同时实证修后的共享 STOP 会让 01/03/04 只完成当前零效果原子后 peer_stop。最终规则：仅当任意非零退出精确包含 binding-changed 文本时，完整重跑同一个零效果原子一次；重验仍经过原 lease/device/serial gate，不得缓存放行或绕过。持续同错或其它错误立即 fail closed，并由非 peer worker 原子写 STOP.json；使用 --attempt 隔离证据。attempt3 中两次有界重验真实发生且 4/4 clean。",
+    "appliesTo": [
+      "ops/xw-xhs-compose-canary.mjs",
+      "ops/_explore-lease.mjs",
+      "ops/xhs-search.mjs",
+      "xiaowei.explorer.primitive"
+    ],
+    "steps": [
+      "先检查失败日志是否为非零退出且精确包含 binding-changed 文本；不要把任意 timeout/dump/risk 错误归为可重验",
+      "只允许同一零效果原子完整重验一次，第二次仍失败则写 STOP 并结束",
+      "普通 action_failure 在 cleanup 前原子写共享 STOP；peer_stop 不覆盖首个根因",
+      "STOP.json 以 wx 排他创建保存首个根因；worker 必须匹配 parent run/attempt/nonce，禁止直接伪造内部 worker",
+      "其它 worker 只完成当前原子，在下一 action/sequence 边界停止",
+      "验收 STOP、effects=0、release 清场以及独立 attempt 日志"
+    ],
+    "verifyMode": "replay",
+    "verifiedBy": [
+      "xhs-compose-conc4 attempt1 02 browse-after-focus",
+      "xhs-compose-conc4-attempt2 STOP.json and 02 search_notes log",
+      "xhs-compose-conc4-attempt3 4/4 summary with two retryCount=1 records"
+    ]
+  }
+]

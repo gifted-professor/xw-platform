@@ -1,0 +1,69 @@
+{
+  "schemaId": "xhs.m0.baseline-identity.v1",
+  "schemaVersion": 1,
+  "baselineId": "xw-m0-20260817-r0",
+  "capturedAt": "2026-08-17T12:16:55Z",
+  "inputPair": {
+    "registry": {
+      "commitSha": "8c5682afd5aea2dda9d4a7f4f0fa3a1e4c81c21d",
+      "ref": "refs/heads/main",
+      "repoOrigin": "https://github.com/gifted-professor/xhs-registry.git"
+    },
+    "deviceAgent": {
+      "commitSha": "43b09accba3364a23917f43224fc0772ef17a217",
+      "ref": "refs/heads/main",
+      "repoOrigin": "https://github.com/gifted-professor/xhs-device-agent.git"
+    }
+  },
+  "repos": [
+    {
+      "name": "registry",
+      "path": "C:\\Users\\Public\\xhs-registry",
+      "source": {
+        "commitSha": "8c5682afd5aea2dda9d4a7f4f0fa3a1e4c81c21d",
+        "ref": "refs/heads/main",
+        "repoOrigin": "https://github.com/gifted-professor/xhs-registry.git",
+        "verifiedAgainstInputPair": true
+      },
+      "worktree": {
+        "commitSha": "3495bdd3aff42b0f3d4a7658b8e769b13dba3459",
+        "dirty": true,
+        "stagedCount": 0,
+        "unstagedCount": 35,
+        "untrackedCount": 73,
+        "observedVia": "localWorktree"
+      },
+      "deployment": {
+        "kind": "windowsScheduledTask",
+        "taskName": "XhsDeviceRegistry",
+        "argLineRedacted": "\"C:\\Users\\Public\\xhs-registry\\registry.mjs\" --port 17930 --host 0.0.0.0 --control http://127.0.0.1:17920 --db \"C:\\Users\\Public\\xhs-registry\\registry.db\" --agent-token <redacted> --human-token <redacted> --human-actor <redacted> --observer-token <redacted> --runs-root \"C:\\Users\\Public\\xhs-agent-runs\"",
+        "portClaimed": 17930,
+        "releaseClaim": "8c5682a",
+        "runtimeReachable": true
+      }
+    },
+    {
+      "name": "deviceAgent",
+      "path": "(no local checkout on this host; GPFS not mounted)",
+      "source": {
+        "commitSha": "43b09accba3364a23917f43224fc0772ef17a217",
+        "ref": "refs/heads/main",
+        "repoOrigin": "https://github.com/gifted-professor/xhs-device-agent.git",
+        "verifiedAgainstInputPair": true
+      },
+      "worktree": {
+        "commitSha": "43b09accba3364a23917f43224fc0772ef17a217",
+        "dirty": false,
+        "stagedCount": 0,
+        "unstagedCount": 0,
+        "untrackedCount": 0,
+        "observedVia": "originOnly"
+      },
+      "deployment": {
+        "kind": "deviceFleet",
+        "releaseClaim": "43b09ac",
+        "runtimeReachable": false
+      }
+    }
+  ]
+}

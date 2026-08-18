@@ -1,0 +1,35 @@
+{
+  "schemaId": "xhs.platform.fusion.source-only-gate.v1",
+  "schemaVersion": 1,
+  "baselineId": "xw-m0-20260817-r0",
+  "capturedAt": "2026-08-18T09:02:45.000Z",
+  "gates": {
+    "SOURCE_FUSION": "OPEN",
+    "RUNTIME_CUTOVER": "CLOSED"
+  },
+  "permits": [
+    "source-level repo merge into a new monorepo (xw-platform)",
+    "directory restructuring under services/{orchestrator,control-plane}",
+    "offline tests + CI construction (GitHub Actions, incl. Windows Runner)",
+    "new xw-platform repository creation",
+    "import receipts and fusion verification tooling under docs/fusion + tools/fusion"
+  ],
+  "forbids": [
+    "runtime cutover / deployment / restart",
+    "database migration (registry.db, control.db)",
+    "device operations / ADB / 22222 / 17920 / 17930 changes",
+    "modifying the frozen M0 dossier hashes (docs/platform/m0/public/xw-m0-20260817-r0/**)",
+    "closing legacy PRs",
+    "dual-tagging the M0 baseline"
+  ],
+  "m0Status": "M0_CANDIDATE",
+  "m0Certification": "UNCERTIFIED",
+  "deferred": ["B1", "B2", "B3", "B4"],
+  "gatedOn": [
+    "XWP-0002 accepted; source fusion is not a runtime migration and does not consume G1-G6",
+    "GitHub Actions Windows Runner substitutes the G3 disposable-VM replay for the source-only track only",
+    "real-device and runtime verification deferred until RUNTIME_CUTOVER",
+    "no UTM required on Mac mini"
+  ],
+  "conclusion": "SOURCE_FUSION_PERMITTED"
+}

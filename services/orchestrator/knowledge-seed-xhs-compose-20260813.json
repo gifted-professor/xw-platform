@@ -1,0 +1,51 @@
+[
+  {
+    "id": "recipe-xhs-compose-intent-compiler-p0-20260813",
+    "app": "xiaohongshu",
+    "category": "recipe",
+    "lifecycle": "resolved",
+    "title": "xhs-compose：自然语言→有界动作计划的 source-only 编译器",
+    "content": "入口：$xhs-compose 或 node ops/xw-xhs-compose.mjs plan --goal <目标>。编译器只从 contracts/xhs-compose-actions.v1.json allowlist 选择 observe/browse/search/like/collect/follow/engage/publish-edit/home 与 human gate，保留用户顺序并提取 aliases、时长、节流、次数和关键词；输出 xhs.compose-plan.v1、稳定 planHash、同 alias 单可见 session 策略和最大 effectBudget。定位模式把赞/藏/关数量归零并给支持脚本加 --dry-run。当前为 source-only，run --execute 必须返回 xhs_compose_workflow_canary_required；不能碰设备或把 candidate Explorer 动作说成正式 workflow。",
+    "appliesTo": [
+      "ops/xw-xhs-compose.mjs",
+      "scripts/lib/xhs-compose.mjs",
+      "contracts/xhs-compose-actions.v1.json",
+      "contracts/xhs-compose-plan.v1.schema.json",
+      "skill:xhs-compose"
+    ],
+    "steps": [
+      "用 plan --goal 编译用户原话，不自行增加动作或数量",
+      "核对 actions 顺序、placement、sessionStrategy、effectBudget 与 unresolved",
+      "缺参一次性向用户补齐；human_gate 保持独立确认",
+      "execution.reason=xhs_compose_workflow_canary_required 时停在计划，不获取 lease",
+      "未来 canary 必须每台 JIT acquire 一个 visible session，并把同一 session-file 传给全部子动作"
+    ],
+    "verifyMode": "constraint",
+    "verifiedBy": [
+      "tests/xhs-compose.test.mjs 10/10",
+      "skill-creator quick_validate agents+codex",
+      "source-only examples effectBudget=0 and bounded=3"
+    ]
+  },
+  {
+    "id": "pitfall-xhs-free-explore-paced-not-compose-default-20260813",
+    "app": "xiaohongshu",
+    "category": "pitfall",
+    "lifecycle": "resolved",
+    "title": "xhs-free-explore-paced 是旧固定 playbook，不能直接当 xhs-compose runner",
+    "content": "历史 ops/xhs-free-explore-paced.mjs 已有 basic/rich 动作表和每分钟节流，但它直接 spawn like/collect/follow/search/engage/draft/browse 子脚本，未申请并贯穿同一个可见 Explorer session-file；子脚本现已要求 session-file。不能简单在新 Skill 里复用该执行入口，否则会在运行时失败或诱导旁路。可复用的是动作词典与节流经验；新执行器必须从 xhs.compose-plan.v1 出发，JIT acquire、heartbeat、传同 session-file、finally release，并先走授权 canary。",
+    "appliesTo": [
+      "ops/xhs-free-explore-paced.mjs",
+      "ops/xw-xhs-compose.mjs",
+      "contracts/xhs-compose-actions.v1.json",
+      "skill:xhs-compose"
+    ],
+    "steps": [
+      "不要从 xhs-compose 直接 spawn xhs-free-explore-paced",
+      "只从动作 catalog 解析 allowlist 和 effectBudget",
+      "动态执行器晋级前 run --execute 保持 fail-closed"
+    ],
+    "verifyMode": "constraint",
+    "verifiedBy": ["source inspection 2026-08-13"]
+  }
+]

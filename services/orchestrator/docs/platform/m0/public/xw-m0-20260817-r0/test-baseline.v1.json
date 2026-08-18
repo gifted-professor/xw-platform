@@ -1,0 +1,44 @@
+{
+  "schemaId": "xhs.m0.test-baseline.v1",
+  "schemaVersion": 1,
+  "baselineId": "xw-m0-20260817-r0",
+  "capturedAt": "2026-08-17T13:00:00.000Z",
+  "scope": [
+    {
+      "repo": "registry",
+      "command": "npm run check",
+      "purpose": "syntax check of runtime + sync + import + ops entrypoints"
+    },
+    {
+      "repo": "registry",
+      "command": "npm test",
+      "purpose": "integration tests (real registry subprocess + temp sqlite + fake control plane)"
+    },
+    {
+      "repo": "deviceAgent",
+      "command": "npm run check",
+      "purpose": "syntax check of device-agent entrypoints"
+    },
+    {
+      "repo": "deviceAgent",
+      "command": "npm test",
+      "purpose": "device-agent unit/integration tests"
+    },
+    {
+      "repo": "deviceAgent",
+      "command": "npm run test:control",
+      "purpose": "control-plane tests (not double-counted with npm test)",
+      "distinctFrom": "npm test"
+    }
+  ],
+  "gatedOn": [
+    "B2: three disposable Windows VMs + one B1 drill VM, all clonefile clones of one base snapshot (UTM/QEMU, Windows 10 Pro 19045 via autounattend index 4, UEFI ESP+MSR+NTFS, zh-CN/CST/cp936, m0test non-admin + m0admin admin; toolchain Node LTS 24.19.0/npm 11.x, Git 2.55.0.4, PowerShell 7.6.5, core.autocrlf=true; r-instances network-isolated, drill instance keeps host-isolated net)",
+    "B3: candidate C frozen (M0-A/B/C merged), one fresh VM + fresh clone per round"
+  ],
+  "rounds": [
+    { "round": 1, "status": "pending", "vmImage": null, "resultSummary": null },
+    { "round": 2, "status": "pending", "vmImage": null, "resultSummary": null },
+    { "round": 3, "status": "pending", "vmImage": null, "resultSummary": null }
+  ],
+  "conclusion": "PASS_PENDING"
+}

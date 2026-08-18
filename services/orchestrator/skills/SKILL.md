@@ -1,0 +1,186 @@
+---
+name: xhs-device
+description: 小红书/闲鱼/抖音/微信多设备自动化 Skills 总入口。路由到具体的 device/xhs/xianyu/douyin/wechat skill，管理进化机制和知识沉淀。
+triggers:
+  - xhs-device
+  - 设备操作
+  - douyin
+  - 抖音操作
+  - wechat
+  - 微信操作
+  - 手机操作
+  - 小红书操作
+  - 闲鱼操作
+---
+
+# XHS Device Skills 总入口
+
+> 一句话：把散落的 ops/ 脚本沉淀成可发现、可组合、可进化的 Skills。
+> 授权理念：**先探索能力边界，能做的越多越好。除了支付以外，agent 自主执行。**
+
+### 运行代码为准 + 文档债明示（REX Phase 6 起）
+
+权威顺序：**deployed release code + live agent-entry/task packet** > 顶层
+AGENTS/modes/skills 路由说明 > 尚未迁移的 App 子 Skill Markdown。
+
+- 开工先读 live 入口的 **Release / runtime policy** 段（JSON `release` 块）：
+  `ssh xhs-windows 'curl.exe -s http://127.0.0.1:17930/agent-entry.md'`
+  字段：`releaseId / runtimePolicyVersion / effectiveDecisionSource / policyMode /
+  evidenceMode / policyDocDebt`。
+- `policyDocDebt` 只提醒哪些旧文档仍未迁移，**不阻止任何任务**；它列出的文件里的
+  「需审批」旧文案若已被当前 release 的 policy/task packet superseded，以 release 为准。
+- 本契约与旧 App 子 Skill 文案都不能放宽唯一硬闸：**真实资金 final commit → 等人类
+  确认，transport 保持 0**。
+
+## 三层架构
+
+```
+┌─────────────────────────────────────────────┐
+│ 业务层（xhs/xianyu）                         │
+│  点赞、收藏、关注、评论、搜索、发布、私信       │
+│  → 组合原子操作，有业务语义                   │
+├─────────────────────────────────────────────┤
+│ 原子层（device）                             │
+│  tap、swipe、dump、input、screenshot、focus  │
+│  → 单一职责，可复用，可组合                   │
+├─────────────────────────────────────────────┤
+│ 共享层（shared）                             │
+│  传输、解析、前置检查、坑点手册                │
+│  → 所有 skill 的公共依赖和知识沉淀            │
+└─────────────────────────────────────────────┘
+```
+
+## 授权模型（路线 B：自由优先）
+
+```
+完全自主（agent 直接做，不需要问人）
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✅ 所有 Explorer lab 操作（22222 通道）
+   - tap / swipe / dump / input / screenshot / focus / launch / back / shell
+   - 点赞 / 收藏 / 关注 / 搜索 / 浏览
+✅ R0 只读（observe.* 系列）
+✅ R1 dry-run（publish.*_dry_run 系列）
+✅ 探索新页面 / 新 App / 新流程
+
+需要人审批（不可逆外发）
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚠️ 真发评论（xhs.comment.send）
+⚠️ 真存草稿 / 真发布
+⚠️ 真发私信
+
+永远需要人（红线）
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🔴 支付 / 转账 / 充值
+🔴 删除内容 / 注销账号
+🔴 修改账号密码 / 绑定手机
+```
+
+### 原则
+
+1. **默认自主**：agent 遇到没做过的操作，先尝试，不要先问「我能不能做」
+2. **失败回退**：遇到验证码/风控/登录墙，立即停止并记录，不要硬闯
+3. **留痕契约**：做了什么都要记录（知识库/pitfall/recipe），下次别人不重复踩坑
+4. **探索优先**：新页面、新 App、新流程，先探索再固化成 skill
+
+## 路由表
+
+| 你想做什么 | 去哪 | 自由度 |
+|-----------|------|--------|
+| 点赞笔记 | `skills/xhs/xhs-like` | ✅ 自主 |
+| 收藏笔记 | `skills/xhs/xhs-collect` | ✅ 自主 |
+| 关注作者 | `skills/xhs/xhs-follow` | ✅ 自主 |
+| 评论笔记 | `skills/xhs/xhs-comment` | ⚠️ 需审批 |
+| 综合互动 | `skills/xhs/xhs-engage` | ✅ 自主（评论除外） |
+| 搜索笔记 | `skills/xhs/xhs-search` | ✅ 自主 |
+| 发布笔记 | `skills/xhs/xhs-publish` | ✅ 填草稿自主，真发布需审批 |
+| 私信用户 | `skills/xhs/xhs-dm` | ⚠️ 需审批 |
+| 闲鱼发布 | `skills/xianyu/xianyu-publish` | ✅ dry-run 自主 |
+| 闲鱼快照 | `skills/xianyu/xianyu-snapshot` | ✅ 自主 |
+| 抖音搜索 | `skills/douyin/douyin-search` | ✅ 自主（真机 exit=0 / biz ok） |
+| 抖音点赞 | `skills/douyin/douyin-like` | ✅ 自主（dry-run exit=0；真赞 dump 校验待定） |
+| 抖音点赞集合 | `skills/douyin/douyin-like-set` | ✅ 自主（dry-run @01,02） |
+| 抖音收藏 | `skills/douyin/douyin-collect` | ✅ 自主（dry-run exit=0；真藏@02 dump 翻转确认，@01 偶发 dump-fail） |
+| 抖音收藏集合 | `skills/douyin/douyin-collect-set` | ✅ 自主（dry-run @01,02；04 未登录排除） |
+| 抖音关注 | `skills/douyin/douyin-follow` | ✅ 自主（dry-run exit=0；真关注未验） |
+| 抖音关注集合 | `skills/douyin/douyin-follow-set` | ✅ 自主（dry-run @01,02） |
+| 抖音右侧栏三连 | `skills/douyin/douyin-rail-set` | ✅ 自主（dry-run @01,02 PASS=6） |
+| 抖音能力地图 | `skills/douyin/SKILL.md` | v0.1 探索态 |
+| 微信能力地图 | `skills/wechat/SKILL.md` | ⚠️ v0.1 / vision-only（op 表 stale 待 Win 改） |
+| 点击屏幕 | `skills/device/device-tap` | ✅ 自主 |
+| UI dump | `skills/device/device-dump` | ✅ 自主 |
+| 输入中文 | `skills/device/device-input` | ✅ 自主 |
+| 截屏 | `skills/device/device-screenshot` | ✅ 自主 |
+| 滑动 | `skills/device/device-swipe` | ✅ 自主 |
+| 返回 | `skills/device/device-back` | ✅ 自主 |
+| 启动 App | `skills/device/device-launch` | ✅ 自主 |
+| ADB shell | `skills/device/device-shell` | ✅ 自主 |
+| 前台焦点 | `skills/device/device-focus` | ✅ 自主 |
+| 前置检查 | `skills/shared/preflight` | — |
+| 传输层 | `skills/shared/transport` | — |
+| 解析库 | `skills/shared/parse` | — |
+| 坑点手册 | `skills/shared/pitfalls` | — |
+
+## 开工前
+
+```bash
+# Windows（Explorer 必须先持有正式可见 lease；context 只能放用户私有目录）
+set XHS_LOCAL=1
+$xwSession = "$env:USERPROFILE\.xhs-explorer-sessions\xw-explore-<runId>-01.json"
+node ops/xw-explore-session.mjs acquire --alias 01 --actor <actor> --session-file $xwSession
+node ops/explore-preflight.mjs --alias 01 --session-file $xwSession
+```
+
+**只有 acquire + preflight 都通过才可碰机；结束必须 release。** Mac 治理侧不碰设备。
+
+## 进化机制
+
+### Skills 怎么变强
+
+```
+agent 自主探索 → 发现新能力/新坑 → 写入知识库 → 更新 skill → 再验证
+    ↑                                                        |
+    └──────────────── 版本升级 ←─────────────────────────────┘
+```
+
+### 知识沉淀规则
+
+1. **踩坑必记**：遇到新的坑 → 写入 `skills/shared/pitfalls.md` + 知识库
+2. **验证必留**：真机验证通过 → 更新 skill 的 `verified` 字段
+3. **失败必查**：skill 执行失败 → 检查是否已有同题 pitfall
+4. **新能力必固化**：探索发现新操作 → 固化成新 skill 或更新现有 skill
+
+### 版本号规则
+
+- `v0.x` — 实验性，未真机验证
+- `v1.0` — 首次真机验证通过
+- `v1.x` — 小修（坑点补充、参数调整）
+- `v2.0` — 行为变更（不向后兼容）
+
+### 谁可以改 skills
+
+按 [`skills/CONTRIBUTING.md`](CONTRIBUTING.md) 三层执行：
+
+| 层 | 改什么 | 门槛 |
+|----|--------|------|
+| 坑点 | `shared/pitfalls.md` 等 | 直接写，踩坑即记 |
+| 契约 | 单个 skill 的 `SKILL.md` | 带 `verified` + 验证证据；升 `v1.0` 要真机跑过 |
+| 权限 | 授权模型 / 红线 / 自由度列 / 本文 | **仅人**，agent 只能写提案 |
+
+**Windows 侧 skills 只读**：源在 Mac 仓库，改在 Mac push 后同步。
+
+## 红线（只有这些）
+
+| 禁止 | 原因 |
+|------|------|
+| 支付/转账/充值 | 资金安全 |
+| 删除内容/注销账号 | 不可逆 |
+| 遇验证码/风控继续点 | 账号安全 |
+| 写 control.db | 数据完整性 |
+
+**不在红线里的，都可以做。**
+
+## 环境
+
+- **调用面**：Mac（SSH）或 Windows（`XHS_LOCAL=1` / `--local` / win32 自动）
+- **执行面（始终）**：Windows — 控制面 17920 + registry 17930 + `_win-xiaowei` → 小薇 22222
+- **手机**：01-04 经 USB → Windows → 小薇 22222

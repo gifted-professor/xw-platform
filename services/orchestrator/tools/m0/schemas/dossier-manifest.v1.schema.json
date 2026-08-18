@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "xhs.m0.dossier-manifest.v1.schema.json",
+  "title": "M0 dossier manifest",
+  "description": "Manifest of all public dossier JSON files for a baseline. Lists each file's path and SHA-256 over its canonical bytes, plus the schemaId it conforms to. This manifest does NOT contain its own hash (that hash is written into the two tag annotations at M0-E/B4). The final evidence commit E's own SHA is not written into E's internal files. The private-evidence hash is back-filled at B1.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaId", "schemaVersion", "baselineId", "capturedAt", "files"],
+  "properties": {
+    "schemaId": { "const": "xhs.m0.dossier-manifest.v1" },
+    "schemaVersion": { "const": 1 },
+    "baselineId": { "type": "string", "pattern": "^xw-m0-[0-9]{8}-r[0-9]+$" },
+    "capturedAt": { "type": "string", "format": "date-time" },
+    "files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "sha256", "schemaId"],
+        "properties": {
+          "path": { "type": "string", "minLength": 1 },
+          "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+          "schemaId": { "type": "string", "minLength": 1 },
+          "status": { "type": "string", "minLength": 1 }
+        }
+      },
+      "uniqueItems": true
+    }
+  }
+}

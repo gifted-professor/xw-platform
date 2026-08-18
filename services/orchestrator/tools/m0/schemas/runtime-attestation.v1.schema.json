@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "xhs.m0.runtime-attestation.v1.schema.json",
+  "title": "M0 runtime attestation",
+  "description": "Read-only observation of a live deployment. We attest only what we can observe: launch path, process start time, redacted command line, and disk bytes at observation. processLoadedBytes is fixed to UNVERIFIABLE — we never assert that the running process has loaded the current on-disk WIP into memory. confidence records how directly the runtime was observed.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaId", "schemaVersion", "baselineId", "capturedAt", "repo",
+    "processLaunchPath", "processStartTime", "processCommandLineRedacted",
+    "diskBytesAtObservation", "launchConfigClaim", "releaseClaim",
+    "processLoadedBytes", "confidence"
+  ],
+  "properties": {
+    "schemaId": { "const": "xhs.m0.runtime-attestation.v1" },
+    "schemaVersion": { "const": 1 },
+    "baselineId": { "type": "string", "pattern": "^xw-m0-[0-9]{8}-r[0-9]+$" },
+    "capturedAt": { "type": "string", "format": "date-time" },
+    "repo": { "enum": ["registry", "deviceAgent"] },
+    "processLaunchPath": { "type": ["string", "null"] },
+    "processStartTime": { "type": ["string", "null"], "format": "date-time" },
+    "processCommandLineRedacted": { "type": ["string", "null"] },
+    "diskBytesAtObservation": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["entryPath", "sha256", "size", "mtimeIso"],
+      "properties": {
+        "entryPath": { "type": "string" },
+        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "size": { "type": "integer", "minimum": 0 },
+        "mtimeIso": { "type": "string", "format": "date-time" }
+      }
+    },
+    "launchConfigClaim": { "type": "string" },
+    "releaseClaim": { "type": "string" },
+    "processLoadedBytes": { "const": "UNVERIFIABLE" },
+    "confidence": { "enum": ["directlyObserved", "claimedOnly", "unreachable"] }
+  }
+}

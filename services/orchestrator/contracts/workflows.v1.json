@@ -1,0 +1,86 @@
+{
+  "schemaId": "xhs.workflow-catalog.v1",
+  "schemaVersion": 1,
+  "workflows": [
+    {
+      "workflowId": "workflow.wechat.balance-read.v1",
+      "version": 1,
+      "title": "微信零钱余额只读",
+      "description": "在可见 Explorer session 内只读解析微信零钱/钱包页金额。P1 canary 竖切：paymentTransport=0、finalCommit=false；隐私金额不进公共知识库。",
+      "appId": "wechat",
+      "maturity": "canary_only",
+      "status": "canary_only",
+      "entry": "session",
+      "capabilityId": "xiaowei.explorer.primitive",
+      "replaySafety": "read_only",
+      "effectClass": "none",
+      "resources": [
+        "transport:xiaowei:22222"
+      ],
+      "intentAliases": [
+        "微信余额",
+        "微信零钱",
+        "零钱余额",
+        "wechat balance",
+        "wallet balance"
+      ],
+      "expectedApp": {
+        "package": "com.tencent.mm",
+        "activityIncludes": [
+          "Wallet",
+          "LuckyMoney",
+          "balance",
+          "mall"
+        ]
+      },
+      "actions": [
+        {
+          "actionId": "launch_wechat",
+          "primitive": "launch_app",
+          "params": {
+            "package": "com.tencent.mm"
+          }
+        },
+        {
+          "actionId": "capture_services_screen",
+          "primitive": "screen",
+          "params": {}
+        }
+      ],
+      "acceptance": {
+        "requiredFields": [
+          "amountCny",
+          "currency",
+          "capturedAt"
+        ],
+        "amountMustBeUniqueOnScreen": true,
+        "paymentTransport": 0,
+        "finalCommit": false,
+        "privacy": {
+          "publicKnowledge": false,
+          "redactInCommonLogs": [
+            "amountCny"
+          ]
+        }
+      },
+      "placement": {
+        "compileMode": "one_shard_per_alias",
+        "fixedAliases": [
+          "01",
+          "02",
+          "03",
+          "04"
+        ],
+        "allowReassign": false
+      },
+      "tapAuthorized": false,
+      "directRun": false,
+      "limitations": [
+        "session_workflow 运行时（SessionWorkflowWorker）未上线前，不得 begin 真机 fan-out",
+        "tapAuthorized=false：需要自动导航实点时必须先有 trusted-capture one-shot permit",
+        "金额与账户证据不得写入公共 knowledge",
+        "共享 22222 只称任务并发/传输串行"
+      ]
+    }
+  ]
+}

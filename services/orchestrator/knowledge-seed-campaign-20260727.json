@@ -1,0 +1,72 @@
+[
+  {
+    "id": "campaign-3round-stability-recipe-20260727",
+    "app": "xianyu",
+    "category": "recipe",
+    "lifecycle": "resolved",
+    "title": "三机 3 连轮真机稳定性 campaign 配方（02/04 达成，01 fail-closed 隔离）",
+    "content": "目标：3 台设备（01/02/04）各跑连续 3 轮免审批 dry-run 能力链，证跨设备并行 + 22222 锁无干扰 + streak 可靠。链：01=open→input→image→full(4步)、02=open→input→full(3步)、04=manifest→image→full(3步)。能力全免审批（R0/R1 非外部效应）：xianyu.publish.{open,input,image,full}_dry_run + xianyu.observe.image_manifest。fixture 参数固定（campaign/fixtures/<alias>-<step>.json），每步换幂等键重放。原语 campaign/step.sh（submit→15s poll→终态，退出码 0/2/3/4/5/6）。主会话后台驱动 campaign/arm-driver.sh 跑三臂真并行（控制面按 deviceId 键控泵，跨设备并发）。结果（2026-07-27）：02、04 各 3 连轮 COMPLETE（green_steps=6），01 r1+r2 全绿 + r3 open 绿后 r3 input 触发 recovery_required（设备前台微信非闲鱼）→ 保持隔离。leases 全释放。验收口径=Codex 独立 ssh 复核 control.db job 终态 + registry streak。",
+    "appliesTo": ["campaign/step.sh", "campaign/arm-driver.sh", "campaign/fixtures", "campaign/ARM-PROTOCOL.md"],
+    "steps": [
+      "fleet_clean 预检：leases=[] pending=[] 隔离集⊆{03}",
+      "三臂后台并发：nohup arm-driver.sh <alias> <uuid> <plan> &",
+      "每步 step.sh 退出码 0=绿前进 2=红重试1次 3=recovery停臂 5=超时停臂 6=infra重试",
+      "3 连轮=连续3个完整绿轮；recovery 成功则计数清零重计；总轮上限6",
+      "Codex --output-schema acceptance-schema.json 独立验收"
+    ],
+    "verifyMode": "replay",
+    "verifiedBy": ["claude-fable-20260727"]
+  },
+  {
+    "id": "step-sh-fullwidth-paren-set-u-bug-20260727",
+    "app": "xianyu",
+    "category": "pitfall",
+    "lifecycle": "resolved",
+    "title": "step.sh 全角括号紧跟 $VAR + set -u + 非 UTF-8 locale → 误判 unbound 变量 exit 1，掩盖 recovery_required exit 3",
+    "content": "campaign/step.sh 原 line 46：log \"RECOVERY_REQUIRED $JOB（设备已隔离）\"; exit 3。后台 nohup 进程 locale 非 UTF-8 时，bash 把 $JOB 后的全角（（U+FF08，字节 EF BC 88）误并入变量名解析，触发 set -u 的 unbound variable 错误，脚本以 exit 1 终止——抢在 exit 3 前。后果：01 臂 r3 input 实际是 recovery_required（设备已隔离），却被 arm-driver 当成「未知退出码 rc=1」归类为 ABORTED_UNKNOWN，且没走 recovery 分支。控制面照常隔离了设备（与 step.sh 退出码无关），所以隔离状态正确，只是 step.sh 的退出码语义错了。修法：全角括号改 ASCII + 变量加花括号 → log \"RECOVERY_REQUIRED ${JOB} (设备已隔离)\"。教训：set -u 脚本里 $VAR 后禁止紧跟多字节字符；日志中文标点用 ASCII 或在 $VAR 加 ${}。扫描全角括号：grep -nP '[\\x{FF08}\\x{FF09}]'——注释里的无妨，$VAR 紧跟的必改。",
+    "appliesTo": ["campaign/step.sh", "campaign/arm-driver.sh"],
+    "steps": [
+      "set -u 脚本中 $VAR 后禁紧跟多字节字符",
+      "日志中文标点用 ASCII 或 ${VAR} 隔离",
+      "grep -nP 全角括号扫描 $VAR 紧跟处"
+    ],
+    "verifyMode": "replay",
+    "verifiedBy": ["claude-fable-20260727"]
+  },
+  {
+    "id": "recovery-visual-elements-sha-contract-20260727",
+    "app": "xianyu",
+    "category": "pitfall",
+    "lifecycle": "active_blocker",
+    "title": "recover-inspect-record 要求 xhs.visual-elements.v1 视觉元素分析（按截图 SHA 审计），不接受简化 classification JSON",
+    "content": "恢复三连第 4 步 recover-inspect-record --analysis 的 analysis 不是 ARM-PROTOCOL 示例的 {classification,confidence,safeStateVerified} 简单 JSON——控制面按 inspection.analysis.protocol（xhs.visual-elements.v1）+ requiredImageSha256 审计，analysis 必须匹配该截图的视觉元素契约。传简化 JSON 会被 RECOVERY_ANALYSIS_REJECTED / RECOVERY_ANALYSIS_SCHEMA_INVALID 拒。含义：① 恢复分类必须有真实视觉能力（看图枚举视觉元素），不能凭 focus.package 元数据猜；② ARM-PROTOCOL 的 analysis 示例过简化，需更新为 xhs.visual-elements.v1 结构；③ 视觉 sidecar 不可用时无法完成恢复分析 → fail-closed 保持隔离（正确行为）。01 案例恢复被此契约 + 设备在微信前台双重阻断，保持隔离等带视觉的 agent/人工导航回闲鱼。recover-inspect 输出含 inspectionId、screenshot.path（在 run 目录 C:\\Users\\Public\\xhs-agent-runs\\<runId>\\evidence\\<file>）、focus.package、pageClassification（默认 unknown 待视觉）。",
+    "appliesTo": ["campaign/ARM-PROTOCOL.md", "control-plane/recovery", "campaign/recover-03.md"],
+    "steps": [
+      "recover-inspect 取 inspectionId + screenshot.path（run 目录下）",
+      "scp 截图回本地用视觉能力枚举 xhs.visual-elements.v1 元素",
+      "analysis 须匹配截图 SHA 审计契约，非简化 classification",
+      "视觉不可用 → fail-closed 保持隔离，不猜"
+    ],
+    "verifyMode": "constraint",
+    "needsEngineer": true,
+    "verifiedBy": ["claude-fable-20260727"]
+  },
+  {
+    "id": "registry-p1-runnableAsJob-routing-appliesTo-fix-20260727",
+    "app": "",
+    "category": "recipe",
+    "lifecycle": "resolved",
+    "title": "registry P1 derivePolicy 推导 runnableAsJob + 路由 disabled + appliesTo json_each 精确匹配（Codex review 修复）",
+    "content": "Codex 无头 diff review P1 后修 4 处（2026-07-27，registry.mjs aa93924a）：① derivePolicy 新增 availability/runnableAsJob/runnableAsCanarySession——autonomous（免审批）≠ 可直接 job 自跑；wechat.* availability=dependency_pending_wechat_operator 标 autonomous=true 但 runnableAsJob=false，task-packet 不再给它生成 job submit 骨架（改给 submitNote）。approval_gated→approvalRequired，canary_only/canaryOnly/低成熟度→canaryRequired→runnableAsCanarySession。② routingMatrix 只在 routing.enabled!==false 时把 alias 计入 byCapability——placement 拒 disabled profile，否则 eligibleAliases 会误导 agent 提交后被拒。③ listKnowledge appliesTo 过滤改 json_each 精确元素匹配（EXISTS SELECT 1 FROM json_each(applies_to_json) WHERE value=?），不再 LIKE '%x%'——?appliesTo=% 不再返回全部，registry 不再误匹配 registry.mjs。④ task-packet 意图词补 save_draft/草稿 + 发布/发商品/上架/不保存/no-save；无意图匹配时返回空推荐 + noIntentNote，不按基础分瞎猜。capabilityLint 加 autonomous&&!runnableAsJob 告警。17 集成测试全过，含 disabled-routing/appliesTo 通配符/no-intent/save_draft 无骨架反例。Codex #1 高危项（LEGACY_AUTH 可 approve）是文档化迁移兼容契约（prod 带 --human-token 不激活），未改——记 backlog 待人定。",
+    "appliesTo": ["registry.mjs", "tests/registry.test.mjs"],
+    "steps": [
+      "derivePolicy 加 availability/runnableAsJob/runnableAsCanarySession",
+      "routingMatrix 只 enabled!==false 计入 byCapability",
+      "appliesTo 过滤改 json_each value=? 精确匹配",
+      "task-packet 无意图空推荐 + save_draft 不给骨架",
+      "npm test 17/17 + Windows SHA 部署 + curl 矩阵验证"
+    ],
+    "verifyMode": "replay",
+    "verifiedBy": ["claude-fable-20260727", "codex-review-20260727"]
+  }
+]
