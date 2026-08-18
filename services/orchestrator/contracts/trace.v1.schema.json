@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:xhs:contract:trace:v1",
+  "title": "Run and effect trace event",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schemaId",
+    "schemaVersion",
+    "eventId",
+    "eventType",
+    "runId",
+    "sequence",
+    "recordedAt"
+  ],
+  "properties": {
+    "schemaId": { "const": "xhs.trace.v1" },
+    "schemaVersion": { "const": 1 },
+    "eventId": { "type": "string", "minLength": 1 },
+    "eventType": { "type": "string", "minLength": 1 },
+    "runId": { "type": "string", "pattern": "^run_" },
+    "flowId": { "type": ["string", "null"] },
+    "branchId": { "type": ["string", "null"] },
+    "effectId": { "type": ["string", "null"] },
+    "idempotencyKey": { "type": ["string", "null"] },
+    "sequence": { "type": "integer", "minimum": 0 },
+    "recordedAt": { "type": "string", "format": "date-time" },
+    "outcome": { "type": ["string", "null"] },
+    "evidenceDebt": { "type": "array", "items": { "type": "object" } }
+  }
+}

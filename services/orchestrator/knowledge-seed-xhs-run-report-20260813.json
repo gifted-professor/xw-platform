@@ -1,0 +1,29 @@
+[
+  {
+    "id": "recipe-xhs-compose-unified-run-report-20260813",
+    "app": "xiaohongshu",
+    "category": "recipe",
+    "lifecycle": "resolved",
+    "title": "xhs-compose canary 两级统一日志与 append-only 回填",
+    "content": "新 canary 入口 ops/xw-xhs-compose-canary-v2.mjs 使用父进程单写 xhs.run-event.v1 timeline；LIVE_PROGRESS 只从已落盘事件生成。每个 attempt 与整个 closeout run 固定产出 report/run-report.md、timeline.jsonl、metrics.json、summary.json。历史 run 用 node ops/xw-xhs-compose-report.mjs backfill --run <runId>，随后 validate；回填不得覆盖原 summary、STOP、命令 JSON 或 closeout。旧证据缺少 per-retry 时间、queue/transportLock span 时必须输出 null+unobserved。timeline 写失败属于 engineering canary 失败：STOP 保首因，worker 不开始下一原子，finally cleanup/release。成熟度仍是 engineering_canary_not_production。",
+    "appliesTo": [
+      "ops/xw-xhs-compose-canary-v2.mjs",
+      "ops/xw-xhs-compose-report.mjs",
+      "scripts/lib/xhs-run-report.mjs",
+      "contracts/xhs-run-event.v1.schema.json",
+      "contracts/xhs-run-summary.v1.schema.json",
+      "contracts/xhs-run-metrics.v1.schema.json"
+    ],
+    "steps": [
+      "新执行默认使用 canary-v2 并保持 --execute --canary-authorized 双闸",
+      "新人先读 run 根 report/run-report.md，再按 attempt 和 evidenceRefs 钻取",
+      "历史证据先 backfill，再 validate；validate 必须保持 sealed run evidence 无 mismatch",
+      "未观测等待耗时保持 null+unobserved，不从墙钟推测"
+    ],
+    "verifyMode": "constraint",
+    "verifiedBy": [
+      "tests/xhs-run-report.test.mjs",
+      "run_2a539677-a466-4729-b699-fda001e0de5d backfill+validate"
+    ]
+  }
+]

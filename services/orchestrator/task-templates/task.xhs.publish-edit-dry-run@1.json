@@ -1,0 +1,128 @@
+{
+  "aliases": [
+    "小红书发布dryrun",
+    "小红书选图填文案停页",
+    "xhs publish draft stay",
+    "小红书发布话题标签",
+    "xhs publish title body tags"
+  ],
+  "checkpointPolicy": {
+    "dedupe": false,
+    "enabled": false
+  },
+  "description": "正式 job：打开小红书→点发布→相册选1张图→填 title/body→逐个加话题 tags（工具栏「话题」+候选确认，蓝色 chip）→ stayForAccept 停编辑页验收；验收后 xhs.publish.discard_editor 退出不存草稿。外发预算恒为 0。",
+  "effectPolicy": {
+    "confirmation": "none",
+    "kind": "none"
+  },
+  "fixedConstraints": {
+    "appId": "xhs",
+    "entryScripts": [
+      "ops/xhs-publish-edit-dry-run-fanout.mjs --aliases 01,02,03,04 --title 标题 --body 正文 --tags Adidas,百搭 --stay",
+      "ops/xhs-publish-edit-dry-run-fanout.mjs --aliases 01,02,03,04 --discard"
+    ],
+    "formalCapability": "xhs.publish.edit_dry_run",
+    "discardCapability": "xhs.publish.discard_editor",
+    "neverPublish": true,
+    "neverSaveDraftUnlessAuthorized": true,
+    "pilotActorRequired": "claude-pilot-20260809",
+    "resultMode": "dry_run_stay_then_discard",
+    "unknownExternalCommit": "stop"
+  },
+  "name": "小红书发布编辑页 dry-run",
+  "originRunId": "run_2d17087b-4a58-4d0d-bbf5-acff8437d08e",
+  "parameterSchema": {
+    "properties": {
+      "aliases": {
+        "default": [
+          "01",
+          "02",
+          "03",
+          "04"
+        ],
+        "items": {
+          "type": "string"
+        },
+        "minItems": 1,
+        "prompt": "要跑哪些设备 alias？",
+        "promptPolicy": "if_missing",
+        "type": "array"
+      },
+      "title": {
+        "default": "",
+        "prompt": "标题是什么？（可留空）",
+        "promptPolicy": "if_missing",
+        "type": "string"
+      },
+      "body": {
+        "default": "测试",
+        "prompt": "正文文案是什么？",
+        "promptPolicy": "if_missing",
+        "type": "string"
+      },
+      "tags": {
+        "default": [],
+        "items": {
+          "type": "string"
+        },
+        "prompt": "话题标签有哪些？（不含 #，逗号分隔，可留空）",
+        "promptPolicy": "if_missing",
+        "type": "array"
+      },
+      "exitNoSave": {
+        "default": true,
+        "prompt": "验收后是否退出且不存草稿？",
+        "promptPolicy": "effect_summary",
+        "type": "boolean"
+      },
+      "stayForAccept": {
+        "default": true,
+        "prompt": "填完后是否停在编辑页等人验收？",
+        "promptPolicy": "effect_summary",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "aliases",
+      "body"
+    ],
+    "type": "object"
+  },
+  "revision": 2,
+  "schemaId": "xhs.task-template.v1",
+  "schemaVersion": 1,
+  "status": "implemented",
+  "steps": [
+    {
+      "id": "enter_publish_fill",
+      "intent": "每台提交 xhs.publish.edit_dry_run title={{title}} body={{body}} tags={{tags}} stayForAccept={{stayForAccept}}；正式 job，无 Explorer session",
+      "kind": "run"
+    },
+    {
+      "dependsOn": [
+        "enter_publish_fill"
+      ],
+      "id": "human_accept_gate",
+      "intent": "当 stayForAccept=true 时停在 CapaPostNotePlatformActivity 等人验收；外发预算保持 0",
+      "kind": "human"
+    },
+    {
+      "dependsOn": [
+        "human_accept_gate"
+      ],
+      "id": "exit_no_save",
+      "intent": "当 exitNoSave=true 时提交 xhs.publish.discard_editor；禁止存草稿与发布",
+      "kind": "run"
+    },
+    {
+      "dependsOn": [
+        "exit_no_save"
+      ],
+      "id": "release_sessions",
+      "intent": "核对 leases=[]、无 content_published/draft_saved",
+      "kind": "verify"
+    }
+  ],
+  "templateId": "task.xhs.publish-edit-dry-run",
+  "descriptorHash": "a8d3b3849d6f46aa55a33db2850e556ef2fd4dfa43950d4ef77f9d75ef9f887c"
+}

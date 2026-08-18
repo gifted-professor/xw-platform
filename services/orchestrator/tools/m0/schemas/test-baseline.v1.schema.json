@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "xhs.m0.test-baseline.v1.schema.json",
+  "title": "M0 test baseline",
+  "description": "The test template/scope fixed at M0. The actual three-round results are produced in M0-D/B3 on disposable VMs; this schema records the fixed scope (what is run, on what, how) so B3 results are comparable. Final conclusion is recorded here only after B3 confirms it; pre-B3 it stays PASS_PENDING.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaId", "schemaVersion", "baselineId", "capturedAt", "scope", "gatedOn", "rounds", "conclusion"],
+  "properties": {
+    "schemaId": { "const": "xhs.m0.test-baseline.v1" },
+    "schemaVersion": { "const": 1 },
+    "baselineId": { "type": "string", "pattern": "^xw-m0-[0-9]{8}-r[0-9]+$" },
+    "capturedAt": { "type": "string", "format": "date-time" },
+    "scope": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["repo", "command", "purpose"],
+        "properties": {
+          "repo": { "enum": ["registry", "deviceAgent"] },
+          "command": { "type": "string", "minLength": 1 },
+          "purpose": { "type": "string", "minLength": 1 },
+          "distinctFrom": { "type": "string" }
+        }
+      },
+      "uniqueItems": true
+    },
+    "gatedOn": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "rounds": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["round", "status", "vmImage"],
+        "properties": {
+          "round": { "type": "integer", "minimum": 1 },
+          "status": { "enum": ["pending", "pass", "fail", "blocked"] },
+          "vmImage": { "type": ["string", "null"] },
+          "resultSummary": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "conclusion": { "enum": ["PASS_PENDING", "PASS_WITH_TRACKED_DEBT", "FAIL", "BLOCKED"] }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "schemaId": "xhs.m0.private-evidence.v1",
+  "schemaVersion": 1,
+  "baselineId": "xw-m0-20260817-r0",
+  "capturedAt": "2026-08-17T13:00:00.000Z",
+  "status": "pending_age",
+  "ciphertextSha256": null,
+  "ageRecipientFingerprint": null,
+  "fileCount": null,
+  "restoreReceipt": null,
+  "privatePackagePath": null
+}

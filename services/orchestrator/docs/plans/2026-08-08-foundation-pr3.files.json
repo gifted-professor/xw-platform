@@ -1,0 +1,52 @@
+{
+  "schemaId": "xhs.foundation-pr3-scope.v1",
+  "title": "Foundation PR3: Transport Boundary",
+  "branch": "foundation/pr3-transport-boundary",
+  "baselines": {
+    "routing": "16fac8e7f5cb042eed3abdc128b9dff05bf3a331",
+    "registry": "945a5fe"
+  },
+  "authorization": {
+    "sourceImplementation": true,
+    "windowsDeploy": false,
+    "deviceActions": false,
+    "activatePilot": false
+  },
+  "invariants": ["INV-02", "INV-04", "INV-08", "INV-10"],
+  "mergeOrder": ["routing", "registry"],
+  "repositories": {
+    "routing": {
+      "allowedPrefixes": [
+        "control-plane/lib/transport-action-authorization.mjs",
+        "control-plane/lib/typed-transport.mjs",
+        "control-plane/schema/transport-action-authorization.v1.schema.json",
+        "control-plane/lib/state-store.mjs",
+        "control-plane/lib/control-plane.mjs",
+        "control-plane/lib/return-home.mjs",
+        "control-plane/lib/operator-access.mjs",
+        "control-plane/lib/xiaowei-transport.mjs",
+        "control-plane/bootstrap.mjs",
+        "apps/xiaowei/adapter.mjs",
+        "scripts/check-adapter-imports.mjs",
+        "scripts/fast-operator.mjs",
+        "tests/transport-action-authorization.test.mjs",
+        "tests/foundation-pr3-transport-boundary.test.mjs",
+        "tests/operator-access.test.mjs",
+        "tests/control-plane-placement.test.mjs",
+        "tests/discovery-session-state.test.mjs",
+        "docs/plans/2026-08-08-foundation-pr3-branch.md"
+      ]
+    },
+    "registry": {
+      "allowedPrefixes": [
+        "docs/plans/2026-08-08-foundation-pr3-baseline.md",
+        "docs/plans/2026-08-08-foundation-pr3.files.json",
+        "docs/plans/2026-08-08-foundation-pr3-progress.md",
+        "scripts/lib/typed-transport.mjs",
+        "scripts/lib/transport-action-authorization.mjs",
+        "tests/transport-action-authorization.test.mjs",
+        "tests/foundation-pr3-transport-boundary.test.mjs"
+      ]
+    }
+  }
+}

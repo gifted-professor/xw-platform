@@ -1,0 +1,68 @@
+{
+  "schemaId": "xhs.m0.state-ownership.v1",
+  "schemaVersion": 1,
+  "baselineId": "xw-m0-20260817-r0",
+  "capturedAt": "2026-08-17T12:50:00.000Z",
+  "states": [
+    {
+      "canonicalState": "device identities",
+      "authoritativeOwner": "Feishu bitable (sync-feishu.mjs)",
+      "authoritativeStore": "Feishu 多维表格 (identity table)",
+      "mutationEntrypoint": "sync-feishu.mjs PUT /api/identities (registry caches; seed identities.seed.json is cold-start only)",
+      "derivedCopies": ["registry.db identities table (cache)"],
+      "projectionWriters": [
+        { "writer": "sync-feishu.mjs", "constraint": "only via PUT /api/identities; serial is identity anchor (physical), alias is mutable slot" }
+      ],
+      "reconciliationDirection": "ownerToDerived",
+      "consistencyModel": "eventual"
+    },
+    {
+      "canonicalState": "knowledge base",
+      "authoritativeOwner": "registry knowledge API",
+      "authoritativeStore": "registry.db knowledge table",
+      "mutationEntrypoint": "POST /api/knowledge + PATCH /api/knowledge/:id (no DELETE)",
+      "derivedCopies": [],
+      "projectionWriters": [
+        { "writer": "import-knowledge.mjs", "constraint": "only via POST/PATCH API; 409 on duplicate id unless --update" }
+      ],
+      "reconciliationDirection": "none",
+      "consistencyModel": "strong"
+    },
+    {
+      "canonicalState": "approval decisions",
+      "authoritativeOwner": "control plane",
+      "authoritativeStore": "control.db approvals",
+      "mutationEntrypoint": "control plane /control/v1/approvals/:jobId",
+      "derivedCopies": ["registry.db approval_audit (registry-side audit log)"],
+      "projectionWriters": [
+        { "writer": "registry approve/deny proxy", "constraint": "only via control plane API; binding taken from control plane list, never from body; human token only" }
+      ],
+      "reconciliationDirection": "none",
+      "consistencyModel": "strong"
+    },
+    {
+      "canonicalState": "fleet devices/leases",
+      "authoritativeOwner": "control plane",
+      "authoritativeStore": "control.db devices/leases",
+      "mutationEntrypoint": "control plane (device agent reports)",
+      "derivedCopies": ["registry aggregate() view (read-only)"],
+      "projectionWriters": [
+        { "writer": "registry aggregate()", "constraint": "read-only projection of /control/v1/health|devices|leases; never writes control.db; degrades to identity cache when control plane unreachable" }
+      ],
+      "reconciliationDirection": "none",
+      "consistencyModel": "strong"
+    },
+    {
+      "canonicalState": "fleet screenshots (evidence)",
+      "authoritativeOwner": "device agent (screen capture)",
+      "authoritativeStore": "control.db evidence table + disk bytes",
+      "mutationEntrypoint": "device agent capture (registry never triggers)",
+      "derivedCopies": ["registry screenCache (in-process cache)"],
+      "projectionWriters": [
+        { "writer": "registry /api/fleet/screen", "constraint": "cache-only read of evidence table + disk bytes; realpath escape guard + SHA-256 + magic-number check; never triggers device Screen/job/lease" }
+      ],
+      "reconciliationDirection": "ownerToDerived",
+      "consistencyModel": "eventual"
+    }
+  ]
+}

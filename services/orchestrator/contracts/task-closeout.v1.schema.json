@@ -1,0 +1,222 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:xhs:contract:task-closeout:v1",
+  "title": "Minimal run-bound task closeout",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaId", "schemaVersion", "taskId", "runId", "actor", "machine", "mode",
+    "startedAt", "endedAt", "producer", "sources", "checks", "runtime", "deviceRefs",
+    "effects", "artifacts", "candidates", "closure", "claims", "evidenceDebt",
+    "acceptanceConditions"
+  ],
+  "properties": {
+    "schemaId": { "const": "xhs.task-closeout.v1" },
+    "schemaVersion": { "const": 1 },
+    "taskId": { "$ref": "#/$defs/text" },
+    "runId": { "type": "string", "pattern": "^run_[A-Za-z0-9._-]+$" },
+    "actor": { "$ref": "#/$defs/text" },
+    "machine": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "platform"],
+      "properties": {
+        "id": { "$ref": "#/$defs/text" },
+        "platform": { "enum": ["windows", "macos", "linux", "other"] }
+      }
+    },
+    "mode": { "enum": ["explorer", "runner", "repair", "engineering"] },
+    "startedAt": { "type": "string", "format": "date-time" },
+    "endedAt": { "type": "string", "format": "date-time" },
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "commit", "scriptSha256", "contractSha256"],
+      "properties": {
+        "name": { "$ref": "#/$defs/text" },
+        "version": { "$ref": "#/$defs/text" },
+        "commit": { "anyOf": [{ "$ref": "#/$defs/gitHash" }, { "type": "null" }] },
+        "scriptSha256": { "$ref": "#/$defs/sha256" },
+        "contractSha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "sources": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/source" } },
+    "checks": { "type": "array", "items": { "$ref": "#/$defs/check" } },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["deployment", "reload", "serve"],
+      "properties": {
+        "deployment": { "$ref": "#/$defs/observation" },
+        "reload": { "$ref": "#/$defs/observation" },
+        "serve": { "$ref": "#/$defs/observation" }
+      }
+    },
+    "deviceRefs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["devices", "runs", "jobs", "sessions", "leases", "evidenceRefs"],
+      "properties": {
+        "devices": { "$ref": "#/$defs/textArray" },
+        "runs": { "$ref": "#/$defs/textArray" },
+        "jobs": { "$ref": "#/$defs/textArray" },
+        "sessions": { "$ref": "#/$defs/textArray" },
+        "leases": { "$ref": "#/$defs/textArray" },
+        "evidenceRefs": { "$ref": "#/$defs/textArray" }
+      }
+    },
+    "effects": { "type": "array", "items": { "$ref": "#/$defs/effect" } },
+    "artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact" } },
+    "candidates": { "type": "array", "items": { "$ref": "#/$defs/candidate" } },
+    "closure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "completed", "remainingWork", "blockers"],
+      "properties": {
+        "status": { "enum": ["completed", "partial", "blocked", "unverified"] },
+        "completed": { "$ref": "#/$defs/textArray" },
+        "remainingWork": { "$ref": "#/$defs/textArray" },
+        "blockers": { "$ref": "#/$defs/textArray" }
+      }
+    },
+    "claims": { "type": "array", "items": { "$ref": "#/$defs/claim" } },
+    "evidenceDebt": { "type": "array", "items": { "$ref": "#/$defs/debt" } },
+    "acceptanceConditions": { "$ref": "#/$defs/textArray" }
+  },
+  "$defs": {
+    "text": { "type": "string", "minLength": 1 },
+    "textArray": { "type": "array", "items": { "$ref": "#/$defs/text" }, "uniqueItems": true },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "gitHash": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "safePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?![A-Za-z]:)(?![/\\\\])(?!.*(?:^|[/\\\\])\\.\\.(?:[/\\\\]|$))(?!.*[\\u0000-\\u001f]).+$"
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repo", "branch", "head", "worktree", "changedFiles", "commit", "ahead", "behind", "pushed"],
+      "properties": {
+        "repo": { "$ref": "#/$defs/text" },
+        "branch": { "type": ["string", "null"] },
+        "head": { "anyOf": [{ "$ref": "#/$defs/gitHash" }, { "type": "null" }] },
+        "worktree": { "enum": ["clean", "dirty", "not_applicable", "unverified"] },
+        "changedFiles": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "status"],
+            "properties": {
+              "path": { "$ref": "#/$defs/safePath" },
+              "status": { "enum": ["added", "modified", "deleted", "renamed", "untracked", "unknown"] },
+              "sha256": { "anyOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] }
+            }
+          }
+        },
+        "commit": { "anyOf": [{ "$ref": "#/$defs/gitHash" }, { "type": "null" }] },
+        "ahead": { "type": ["integer", "null"], "minimum": 0 },
+        "behind": { "type": ["integer", "null"], "minimum": 0 },
+        "pushed": { "type": ["boolean", "null"] }
+      }
+    },
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "status", "exitCode", "observedAt", "evidenceRefs"],
+      "properties": {
+        "id": { "$ref": "#/$defs/text" },
+        "kind": { "enum": ["test", "check", "scope_guard", "secret_scan", "other"] },
+        "status": { "enum": ["pass", "fail", "not_run", "unverified"] },
+        "exitCode": { "type": ["integer", "null"] },
+        "observedAt": { "type": ["string", "null"], "format": "date-time" },
+        "evidenceRefs": { "$ref": "#/$defs/textArray" }
+      }
+    },
+    "observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "observedAt", "evidenceRefs"],
+      "properties": {
+        "status": { "enum": ["performed", "not_performed", "not_applicable", "unverified"] },
+        "observedAt": { "type": ["string", "null"], "format": "date-time" },
+        "evidenceRefs": { "$ref": "#/$defs/textArray" }
+      }
+    },
+    "effect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["effectId", "kind", "status", "quantity", "payment", "evidenceRefs"],
+      "properties": {
+        "effectId": { "$ref": "#/$defs/text" },
+        "kind": { "enum": ["feishu_upload", "draft_saved", "content_published", "file_written", "external_api", "payment", "other"] },
+        "status": { "enum": ["occurred", "not_occurred", "partial", "unverified"] },
+        "quantity": { "type": ["integer", "null"], "minimum": 0 },
+        "payment": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["involved", "transportCount", "finalCommit"],
+          "properties": {
+            "involved": { "type": "boolean" },
+            "transportCount": { "type": "integer", "minimum": 0 },
+            "finalCommit": { "type": "boolean" }
+          }
+        },
+        "evidenceRefs": { "$ref": "#/$defs/textArray" }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifactId", "kind", "rootRef", "path", "sha256", "bytes", "availability", "redacted"],
+      "properties": {
+        "artifactId": { "$ref": "#/$defs/text" },
+        "kind": { "enum": ["screenshot", "ui_dump", "log", "table", "attachment", "manifest", "source", "receipt", "other"] },
+        "rootRef": { "$ref": "#/$defs/text" },
+        "path": { "$ref": "#/$defs/safePath" },
+        "sha256": { "anyOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
+        "bytes": { "type": ["integer", "null"], "minimum": 0 },
+        "availability": { "enum": ["present", "missing", "unverified"] },
+        "redacted": { "type": "boolean" }
+      }
+    },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["candidateId", "kind", "title", "basis", "status", "evidenceRefs", "acceptanceConditions"],
+      "properties": {
+        "candidateId": { "$ref": "#/$defs/text" },
+        "kind": { "enum": ["recipe", "capability", "skill", "knowledge", "repair", "debt"] },
+        "title": { "$ref": "#/$defs/text" },
+        "basis": { "enum": ["repeatable_workflow", "verified_pitfall", "source_defect", "evidence_gap", "temporary_asset"] },
+        "status": { "enum": ["proposed", "promotion_required", "blocked", "unverified"] },
+        "evidenceRefs": { "$ref": "#/$defs/textArray" },
+        "acceptanceConditions": { "$ref": "#/$defs/textArray" }
+      }
+    },
+    "claim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["claimId", "narrative", "status", "evidenceRefs"],
+      "properties": {
+        "claimId": { "$ref": "#/$defs/text" },
+        "narrative": { "$ref": "#/$defs/text" },
+        "status": { "enum": ["proven", "contradicted", "unverified"] },
+        "evidenceRefs": { "$ref": "#/$defs/textArray" }
+      }
+    },
+    "debt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["debtId", "code", "severity", "summary", "evidenceRefs"],
+      "properties": {
+        "debtId": { "$ref": "#/$defs/text" },
+        "code": { "type": "string", "pattern": "^[A-Z0-9_]+$" },
+        "severity": { "enum": ["low", "medium", "high"] },
+        "summary": { "$ref": "#/$defs/text" },
+        "evidenceRefs": { "$ref": "#/$defs/textArray" }
+      }
+    }
+  }
+}

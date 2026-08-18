@@ -1,0 +1,14 @@
+{
+ "imageAlbum": "XianyuStg2",
+ "images": [
+  {
+   "phonePath": "/sdcard/Pictures/XianyuStg2/a.png",
+   "sha256": "22445379e4674d72c7947473570e3da41d1d4f2a367e5365a3c38c77e4be2dbe"
+  },
+  {
+   "phonePath": "/sdcard/Pictures/XianyuStg2/b.png",
+   "sha256": "e607402fd15b9c7db88800198db7c3154f0f72968884a20e9b835ce89d209797"
+  }
+ ],
+ "maxImages": 2
+}

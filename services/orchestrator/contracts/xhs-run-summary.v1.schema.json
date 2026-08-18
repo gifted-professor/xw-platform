@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "xhs-run-summary.v1.schema.json",
+  "title": "XHS run or attempt summary",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schemaId", "schemaVersion", "scope", "runId", "attempt", "status",
+    "ok", "startedAt", "endedAt", "effects", "maturity", "provenance"
+  ],
+  "properties": {
+    "schemaId": { "const": "xhs.run-summary.v1" },
+    "schemaVersion": { "const": 1 },
+    "scope": { "enum": ["attempt", "run"] },
+    "runId": { "type": "string", "pattern": "^run_[A-Za-z0-9._-]+$" },
+    "attempt": { "type": ["integer", "null"], "minimum": 1 },
+    "status": {
+      "enum": [
+        "passed", "partial", "controlled_stop", "failed", "evidence_failed",
+        "unverified", "completed", "passed_unclosed"
+      ]
+    },
+    "ok": { "type": "boolean" },
+    "startedAt": { "type": ["string", "null"], "format": "date-time" },
+    "endedAt": { "type": ["string", "null"], "format": "date-time" },
+    "effects": { "type": "object" },
+    "maturity": { "const": "engineering_canary_not_production" },
+    "provenance": {
+      "type": "object",
+      "required": ["mode", "inputFileCount", "inputBytes", "sourceDigest"],
+      "properties": {
+        "mode": { "enum": ["live", "backfill"] },
+        "inputFileCount": { "type": "integer", "minimum": 0 },
+        "inputBytes": { "type": "integer", "minimum": 0 },
+        "sourceDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "scope": { "const": "run" } } },
+      "then": { "required": ["attempts"], "properties": { "attempt": { "const": null } } }
+    },
+    {
+      "if": { "properties": { "scope": { "const": "attempt" } } },
+      "then": { "properties": { "attempt": { "type": "integer", "minimum": 1 } } }
+    }
+  ]
+}

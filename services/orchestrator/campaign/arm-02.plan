@@ -1,0 +1,6 @@
+2 open xianyu.publish.open_dry_run /Users/a1234/Desktop/Coding/xhs-registry/campaign/fixtures/02-open.json 180
+2 input xianyu.publish.input_dry_run /Users/a1234/Desktop/Coding/xhs-registry/campaign/fixtures/02-input.json 270
+2 full xianyu.publish.full_dry_run /Users/a1234/Desktop/Coding/xhs-registry/campaign/fixtures/02-full.json 840
+3 open xianyu.publish.open_dry_run /Users/a1234/Desktop/Coding/xhs-registry/campaign/fixtures/02-open.json 180
+3 input xianyu.publish.input_dry_run /Users/a1234/Desktop/Coding/xhs-registry/campaign/fixtures/02-input.json 270
+3 full xianyu.publish.full_dry_run /Users/a1234/Desktop/Coding/xhs-registry/campaign/fixtures/02-full.json 840

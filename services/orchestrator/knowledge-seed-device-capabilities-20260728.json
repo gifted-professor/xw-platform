@@ -1,0 +1,37 @@
+[
+  {
+    "id": "xianyu-flutter-typed-http-tap-verified-20260728",
+    "app": "xianyu",
+    "category": "recipe",
+    "lifecycle": "resolved",
+    "title": "闲鱼 Flutter 点击必须用 strict typed HTTP 并验证页面状态跃迁",
+    "content": "能力 xianyu.probe.flutter_pointer_tap 只允许可见独占 canary session。它从 publish-compose 点 SKU 行，强制 input.pointer.tap typed HTTP，禁止 Gateway tap fallback，不编辑、不保存、不发布；验收必须看到 sku-specs 状态而不是只看 HTTP 200。01 真机 job_3be1ff61-9267-41a5-9e25-32177c3c7b09 succeeded：3/3 HTTP taps、0 fallback、verification/restoration 均 true，session 已释放。部署 commit 1b81c3cfda549f5b1a009cbbafbea2b7277acfa1。",
+    "appliesTo": ["xianyu.probe.flutter_pointer_tap", "input.pointer.tap", "scripts/xiaowei-http-adapter.mjs", "scripts/xianyu-operator.mjs"],
+    "steps": [
+      "读取 agent-entry，要求目标 ready=yes 且 lease=free",
+      "session acquire --canary，并在 GET /control/v1/leases 确认可见",
+      "session action 参数仅 {saveDraft:false}",
+      "要求 transition=publish-compose→sku-specs、HTTP taps 全成功且 fallback=0",
+      "要求 restoration=true 并释放 session"
+    ],
+    "verifyMode": "replay",
+    "verifiedBy": ["codex-20260728"]
+  },
+  {
+    "id": "xiaowei-concurrency-conc2-serialized-transport-20260728",
+    "app": "xianyu",
+    "category": "recipe",
+    "lifecycle": "resolved",
+    "title": "效卫单连接下的 01/02 受控并发入口",
+    "content": "效卫 22222 当前不是多实例/多连接。控制面可让不同设备 job 重叠，但所有网关请求继续由全局传输锁串行化；长链可能因排队超过 capability timeout。临时生产默认只走设备 01/02：ops/conc2-full-dry-run.mjs 硬固定 aliases=01,02，拒绝 --aliases 扩围，并复用 conc4 的 live preflight、控制面提交、可见 lease、poll、verification/restoration 判定。03/04 暂不进入默认并发。",
+    "appliesTo": ["ops/conc2-full-dry-run.mjs", "transport:xiaowei:22222", "control-plane", "device:01", "device:02"],
+    "steps": [
+      "先运行 node ops/conc2-full-dry-run.mjs --actor <id> --dry-run",
+      "确认输出仅含 01/02 且两台 ready、leaseFree、online",
+      "正式运行仍只通过 job submit，不旁路 22222",
+      "同一设备禁止两个重业务 job；终态必须检查 verification/restoration"
+    ],
+    "verifyMode": "constraint",
+    "verifiedBy": ["codex-20260728"]
+  }
+]

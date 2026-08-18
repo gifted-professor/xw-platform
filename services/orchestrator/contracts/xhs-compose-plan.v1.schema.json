@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "xhs-compose-plan.v1.schema.json",
+  "title": "XHS natural-language composition plan",
+  "type": "object",
+  "required": [
+    "schemaId",
+    "schemaVersion",
+    "planId",
+    "planHash",
+    "goal",
+    "normalizedIntent",
+    "placement",
+    "execution",
+    "actions",
+    "effectBudget",
+    "unresolved"
+  ],
+  "properties": {
+    "schemaId": {"const": "xhs.compose-plan.v1"},
+    "schemaVersion": {"const": 1},
+    "planId": {"type": "string", "pattern": "^xcp_[a-f0-9]{16}$"},
+    "planHash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "goal": {"type": "string", "minLength": 1},
+    "normalizedIntent": {"type": "object"},
+    "placement": {"type": "object"},
+    "execution": {"type": "object"},
+    "actions": {"type": "array"},
+    "effectBudget": {"type": "object"},
+    "unresolved": {"type": "array"}
+  },
+  "additionalProperties": true
+}

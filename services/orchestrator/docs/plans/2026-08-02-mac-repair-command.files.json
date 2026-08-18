@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "schemaId": "xhs.mac-repair-command-scope.v1",
+  "taskId": "MAC-REVIEW-REPAIR-COMMAND-V1",
+  "sourceThreadId": "019fc111-84d0-7581-b249-616ee56da79d",
+  "baseline": "755fa6573e9d12ddd5d5834cda99c0838e6aa303",
+  "authorization": {
+    "macSourceDesign": true,
+    "macSourceImplementation": true,
+    "tests": true,
+    "commitAndPush": true,
+    "windowsDeploy": false,
+    "deviceActions": false,
+    "jobOrSessionSubmit": false,
+    "reviewVerdictByWindows": false
+  },
+  "repositories": {
+    "A": {
+      "name": "xhs-registry",
+      "baseline": "755fa6573e9d12ddd5d5834cda99c0838e6aa303",
+      "allowedFiles": [
+        ".claude/skills/registry-review/SKILL.md",
+        "contracts/repair-completion.v1.schema.json",
+        "contracts/repair-event.v1.schema.json",
+        "contracts/repair-proposal.v1.schema.json",
+        "contracts/repair-replay-authorization.v1.schema.json",
+        "contracts/repair-review-authority.v1.schema.json",
+        "contracts/repair-source-checkpoint.v1.schema.json",
+        "contracts/review-receipt.v1.schema.json",
+        "docs/handoffs/2026-08-02-windows-repair-consumer-contract.md",
+        "docs/handoffs/2026-08-02-xhs-observe-feed-repair-proposal.v1.json",
+        "docs/plans/2026-08-02-mac-repair-command.files.json",
+        "package.json",
+        "scripts/create-repair-proposal.mjs",
+        "scripts/lib/repair-proposal.mjs",
+        "scripts/lib/repair-authority-verifiers.mjs",
+        "scripts/review-run-bundle.mjs",
+        "tests/nonpayment-liveness.test.mjs",
+        "tests/repair-proposal.test.mjs",
+        "tests/review-run-bundle.test.mjs"
+      ],
+      "allowedPrefixes": [],
+      "forbiddenFiles": [
+        "skills/SKILL.md",
+        "registry.mjs",
+        "install-registry-task.ps1",
+        "control.db",
+        "task-launch.json"
+      ],
+      "forbiddenPrefixes": [
+        "skills/.SYNCED-FROM",
+        "tmp-know/",
+        "xhs-agent-runs/"
+      ]
+    }
+  }
+}

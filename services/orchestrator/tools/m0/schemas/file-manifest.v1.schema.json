@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "xhs.m0.file-manifest.v1.schema.json",
+  "title": "M0 canonical file manifest",
+  "description": "Canonical manifest of files in an M0 projection. Paths are posix (forward slash), case preserved, sorted by UTF-8 path bytes. gitMode is the git stage mode (100644/100755/120000/160000). sha256 is over the raw file content bytes. The projection hash is SHA-256 over the JCS-canonical bytes of this object (see tools/m0/jcs.mjs + hash.mjs).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaId", "schemaVersion", "files"],
+  "properties": {
+    "schemaId": { "const": "xhs.m0.file-manifest.v1" },
+    "schemaVersion": { "const": 1 },
+    "files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "gitMode", "size", "sha256"],
+        "properties": {
+          "path": { "type": "string", "minLength": 1 },
+          "gitMode": { "enum": ["100644", "100755", "120000", "160000"] },
+          "size": { "type": "integer", "minimum": 0 },
+          "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+        }
+      }
+    }
+  }
+}

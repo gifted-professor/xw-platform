@@ -1,0 +1,185 @@
+{
+  "schemaId": "xhs.compose-action-catalog.v1",
+  "schemaVersion": 1,
+  "actions": [
+    {
+      "actionId": "observe_feed",
+      "title": "观察首页信息流",
+      "intentAliases": ["观察首页", "查看首页", "看首页信息流", "观察信息流"],
+      "entry": "formal_job",
+      "maturity": "implemented",
+      "directRun": true,
+      "capabilityId": "xhs.observe.feed",
+      "skillRef": "skills/xhs/xhs-observe-feed",
+      "effects": [],
+      "limitations": ["只读观察，不下滑、不互动"]
+    },
+    {
+      "actionId": "browse_feed",
+      "title": "浏览与下滑信息流",
+      "intentAliases": ["浏览", "下滑", "刷一会", "刷小红书", "养号"],
+      "entry": "explorer_session",
+      "maturity": "candidate",
+      "directRun": false,
+      "capabilityId": "xiaowei.explorer.primitive",
+      "skillRef": "skills/xhs/xhs-observe-feed",
+      "runner": {
+        "scripts": ["ops/focus.mjs", "ops/swipe.mjs", "ops/dump-ui.mjs"],
+        "requiresSessionFile": true,
+        "supportsDryRun": true
+      },
+      "effects": [],
+      "limitations": ["当前只生成计划；动态浏览 workflow 尚未完成 live canary"]
+    },
+    {
+      "actionId": "search_notes",
+      "title": "搜索笔记",
+      "intentAliases": ["搜索", "搜一下", "搜小红书"],
+      "entry": "explorer_session",
+      "maturity": "candidate",
+      "directRun": false,
+      "capabilityId": "xiaowei.explorer.primitive",
+      "skillRef": "skills/xhs/xhs-search",
+      "runner": {
+        "scripts": ["ops/xhs-search.mjs"],
+        "requiresSessionFile": true,
+        "supportsDryRun": true
+      },
+      "effects": [],
+      "limitations": ["搜索脚本已存在，但尚未注册为正式 XHS workflow"]
+    },
+    {
+      "actionId": "like_note",
+      "title": "点赞笔记",
+      "intentAliases": ["点赞", "点个赞", "赞一条"],
+      "entry": "explorer_session",
+      "maturity": "candidate",
+      "directRun": false,
+      "capabilityId": "xiaowei.explorer.primitive",
+      "skillRef": "skills/xhs/xhs-like",
+      "runner": {
+        "scripts": ["ops/xhs-like-one.mjs"],
+        "requiresSessionFile": true,
+        "supportsDryRun": true
+      },
+      "effects": [{"effectId": "xhs_like", "kind": "social_like", "quantityPerUnit": 1}],
+      "limitations": ["真实点赞必须展示有界数量；未晋级前只允许计划或定位 dry-run"]
+    },
+    {
+      "actionId": "collect_note",
+      "title": "收藏笔记",
+      "intentAliases": ["收藏", "藏一条"],
+      "entry": "explorer_session",
+      "maturity": "candidate",
+      "directRun": false,
+      "capabilityId": "xiaowei.explorer.primitive",
+      "skillRef": "skills/xhs/xhs-collect",
+      "runner": {
+        "scripts": ["ops/xhs-collect-one.mjs"],
+        "requiresSessionFile": true,
+        "supportsDryRun": true
+      },
+      "effects": [{"effectId": "xhs_collect", "kind": "social_collect", "quantityPerUnit": 1}],
+      "limitations": ["真实收藏必须展示有界数量；未晋级前只允许计划或定位 dry-run"]
+    },
+    {
+      "actionId": "follow_author",
+      "title": "关注作者",
+      "intentAliases": ["关注", "关注作者", "关注博主"],
+      "entry": "explorer_session",
+      "maturity": "candidate",
+      "directRun": false,
+      "capabilityId": "xiaowei.explorer.primitive",
+      "skillRef": "skills/xhs/xhs-follow",
+      "runner": {
+        "scripts": ["ops/xhs-follow-one.mjs"],
+        "requiresSessionFile": true,
+        "supportsDryRun": true
+      },
+      "effects": [{"effectId": "xhs_follow", "kind": "social_follow", "quantityPerUnit": 1}],
+      "limitations": ["真实关注必须展示有界数量；未晋级前只允许计划或定位 dry-run"]
+    },
+    {
+      "actionId": "engage_note",
+      "title": "点赞并收藏",
+      "intentAliases": ["综合互动", "点赞并收藏", "赞藏"],
+      "entry": "explorer_session",
+      "maturity": "candidate",
+      "directRun": false,
+      "capabilityId": "xiaowei.explorer.primitive",
+      "skillRef": "skills/xhs/xhs-engage",
+      "runner": {
+        "scripts": ["ops/xhs-engage-one.mjs"],
+        "requiresSessionFile": true,
+        "supportsDryRun": true
+      },
+      "effects": [
+        {"effectId": "xhs_like", "kind": "social_like", "quantityPerUnit": 1},
+        {"effectId": "xhs_collect", "kind": "social_collect", "quantityPerUnit": 1}
+      ],
+      "limitations": ["默认组合只含点赞和收藏；评论不随综合互动自动获得权限"]
+    },
+    {
+      "actionId": "publish_edit_dry_run",
+      "title": "填发布编辑页并停页",
+      "intentAliases": ["发布编辑页", "填标题正文", "填一篇", "添加话题", "停在发布页"],
+      "entry": "implemented_task",
+      "maturity": "implemented",
+      "directRun": true,
+      "taskTemplateId": "task.xhs.publish-edit-dry-run",
+      "skillRef": "skills/xhs/xhs-publish",
+      "effects": [],
+      "limitations": ["发布与存草稿预算恒为 0；验收后同 run discard"]
+    },
+    {
+      "actionId": "return_xhs_home",
+      "title": "回到小红书首页",
+      "intentAliases": ["回首页", "返回首页", "结束回首页", "最后回首页"],
+      "entry": "explorer_session",
+      "maturity": "candidate",
+      "directRun": false,
+      "capabilityId": "xiaowei.explorer.primitive",
+      "skillRef": "skills/xhs/xhs-observe-feed",
+      "runner": {
+        "scripts": ["ops/back.mjs", "ops/launch-app.mjs", "ops/focus.mjs"],
+        "requiresSessionFile": true,
+        "supportsDryRun": true
+      },
+      "effects": [],
+      "limitations": ["必须在同一可见 session 内验证小红书首页语义"]
+    },
+    {
+      "actionId": "comment_send",
+      "title": "发送评论",
+      "intentAliases": ["评论", "发评论"],
+      "entry": "human_gate",
+      "maturity": "gated",
+      "directRun": false,
+      "skillRef": "skills/xhs/xhs-comment",
+      "effects": [{"effectId": "xhs_comment", "kind": "content_comment", "quantityPerUnit": 1}],
+      "limitations": ["评论发送是独立外部效果，不继承浏览或互动授权"]
+    },
+    {
+      "actionId": "dm_send",
+      "title": "发送私信",
+      "intentAliases": ["私信", "发私信"],
+      "entry": "human_gate",
+      "maturity": "gated",
+      "directRun": false,
+      "skillRef": "skills/xhs/xhs-dm",
+      "effects": [{"effectId": "xhs_dm", "kind": "direct_message", "quantityPerUnit": 1}],
+      "limitations": ["私信接收人和正文必须唯一且单独确认"]
+    },
+    {
+      "actionId": "publish_live",
+      "title": "真实发布笔记",
+      "intentAliases": ["真实发布", "真发布", "点击发布", "直接发布", "发布一篇", "发笔记"],
+      "entry": "human_gate",
+      "maturity": "gated",
+      "directRun": false,
+      "skillRef": "skills/xhs/xhs-publish",
+      "effects": [{"effectId": "xhs_content_publish", "kind": "content_published", "quantityPerUnit": 1}],
+      "limitations": ["真实发布不属于 compose 自动执行范围，必须独立确认"]
+    }
+  ]
+}

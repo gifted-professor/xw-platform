@@ -1,0 +1,108 @@
+{
+  "schemaId": "xhs.m0.known-debt.v1",
+  "schemaVersion": 1,
+  "baselineId": "xw-m0-20260817-r0",
+  "capturedAt": "2026-08-17T13:00:00.000Z",
+  "entries": [
+    {
+      "failureId": "debt_control_17920_unreachable",
+      "critical": false,
+      "owner": "user",
+      "issue": "gifted-professor/xhs-registry#14",
+      "expiresAt": "2026-09-30T00:00:00Z",
+      "blocksGates": [],
+      "allowsGates": ["G1"],
+      "waiverReason": "control plane 17920 not reachable from this host (curl 000); M0 only needs read-only observations, which degrade to identity cache — not a health certification"
+    },
+    {
+      "failureId": "debt_fleet_ready_lease_unknown",
+      "critical": false,
+      "owner": "user",
+      "issue": "gifted-professor/xhs-registry#14",
+      "expiresAt": "2026-09-30T00:00:00Z",
+      "blocksGates": [],
+      "allowsGates": ["G1"],
+      "waiverReason": "fleet ready/lease status is unknown from this host; M0 does not render unknown as ready/healthy"
+    },
+    {
+      "failureId": "debt_release_claim_drift",
+      "critical": false,
+      "owner": "user",
+      "issue": "gifted-professor/xhs-registry#14",
+      "expiresAt": "2026-09-30T00:00:00Z",
+      "blocksGates": [],
+      "allowsGates": ["G1"],
+      "waiverReason": "release claim (8c5682a) is a claim, not a verified loaded-bytes match; recorded as claim in runtime-attestation"
+    },
+    {
+      "failureId": "debt_process_loaded_bytes_unverifiable",
+      "critical": false,
+      "owner": "user",
+      "issue": "gifted-professor/xhs-registry#14",
+      "expiresAt": "2026-09-30T00:00:00Z",
+      "blocksGates": [],
+      "allowsGates": ["G1"],
+      "waiverReason": "processLoadedBytes is fixed to UNVERIFIABLE — we never assert the running process has loaded the current on-disk WIP into memory"
+    },
+    {
+      "failureId": "debt_env_example_bitable_id_candidates",
+      "critical": false,
+      "owner": "user",
+      "issue": "gifted-professor/xhs-registry#14",
+      "expiresAt": "2026-08-31T00:00:00Z",
+      "blocksGates": ["G4"],
+      "allowsGates": [],
+      "waiverReason": "tracked .env.example contains two real-looking Feishu bitable ID candidates (FEISHU_QINGDAO_TABLE_ID tblQ…, FEISHU_QINGDAO_VIEW_ID vewS…) instead of placeholders; M0 does not publish .env.example, but the candidates should be replaced before any public/third-party delivery"
+    },
+    {
+      "failureId": "debt_cursor_renewal_monitor_no_tracked_installer",
+      "critical": false,
+      "owner": "user",
+      "issue": "gifted-professor/xhs-registry#14",
+      "expiresAt": "2026-09-30T00:00:00Z",
+      "blocksGates": [],
+      "allowsGates": ["G2"],
+      "waiverReason": "ops/cursor-renewal-monitor.mjs is untracked (WIP); archived in A2 private package, not part of frozen source"
+    },
+    {
+      "failureId": "debt_task_templates_candidates_legacy_untracked",
+      "critical": false,
+      "owner": "user",
+      "issue": "gifted-professor/xhs-registry#14",
+      "expiresAt": "2026-09-30T00:00:00Z",
+      "blocksGates": [],
+      "allowsGates": ["G2"],
+      "waiverReason": "task-templates/candidates + legacy-invalid are untracked (WIP); archived in A2 private package, not part of frozen source"
+    },
+    {
+      "failureId": "debt_run_begin_ps1_local_gitignored",
+      "critical": false,
+      "owner": "user",
+      "issue": "gifted-professor/xhs-registry#14",
+      "expiresAt": "2026-09-30T00:00:00Z",
+      "blocksGates": [],
+      "allowsGates": ["G2"],
+      "waiverReason": "run_begin.ps1 exists locally but is gitignored (ignored-private); archived in A2 private package"
+    },
+    {
+      "failureId": "debt_tools_m0_not_in_npm_check",
+      "critical": false,
+      "owner": "m0",
+      "issue": "gifted-professor/xhs-registry#14",
+      "expiresAt": "2026-09-30T00:00:00Z",
+      "blocksGates": [],
+      "allowsGates": ["G5"],
+      "waiverReason": "tools/m0 self-tests run via node --test tools/m0/**/*.test.mjs, deliberately NOT added to npm run check (package.json must not change during M0)"
+    },
+    {
+      "failureId": "debt_npm_test_wip_failures",
+      "critical": false,
+      "owner": "wip-author",
+      "issue": "gifted-professor/xhs-registry#14",
+      "expiresAt": "2026-08-31T00:00:00Z",
+      "blocksGates": ["B3"],
+      "allowsGates": [],
+      "waiverReason": "4 pre-existing npm test failures in tests/xw-task-cli.test.mjs (task template filename identity) — the test file and scripts/lib/task-template.mjs are modified in pre-M0 dirty WIP, NOT in the M0 commit; must be resolved before B3 three-round testing"
+    }
+  ]
+}

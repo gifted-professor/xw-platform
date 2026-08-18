@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "xhs-compose-canary-execution-summary.v1.schema.json",
+  "title": "XHS compose canary raw execution summary",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["schemaId", "schemaVersion", "mode", "runId", "attempt", "ok", "results", "releases"],
+  "properties": {
+    "schemaId": { "const": "xhs.compose-conc4-canary-execution-summary.v1" },
+    "schemaVersion": { "const": 1 },
+    "mode": { "const": "execute" },
+    "runId": { "type": "string", "pattern": "^run_[A-Za-z0-9._-]+$" },
+    "attempt": { "type": "integer", "minimum": 1 },
+    "ok": { "type": "boolean" },
+    "results": { "type": "array" },
+    "releases": { "type": "array" }
+  }
+}

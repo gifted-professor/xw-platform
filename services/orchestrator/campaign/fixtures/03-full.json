@@ -1,0 +1,14 @@
+{
+ "calibrated": { "freight": true, "sku": true },
+ "description": "控制面安全验证03 不保存草稿 不发布",
+ "freightTemplate": "包邮",
+ "price": 12.34,
+ "saveDraft": false,
+ "skipAddress": true,
+ "skipCategory": true,
+ "skipUpload": true,
+ "skuPrice": 12.34,
+ "skuReplaceExisting": true,
+ "skuSpecs": { "颜色": ["蓝色", "白色"] },
+ "skuStock": "2"
+}
