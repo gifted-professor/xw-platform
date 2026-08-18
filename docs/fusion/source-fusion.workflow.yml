@@ -34,6 +34,9 @@ jobs:
       - name: Authority boundary static check
         run: npm run authority
 
+      - name: Shared kernel contract parity
+        run: npm run kernel:check
+
       - name: Fusion tool tests
         run: npm run test:fusion
 
