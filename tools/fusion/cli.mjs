@@ -69,9 +69,10 @@ export function main(argv = process.argv) {
       return 0;
     }
     if (cmd === "test-gate") {
-      const suiteIdx = args.indexOf("--suite");
-      const only = suiteIdx >= 0 ? args[suiteIdx + 1] : null;
-      const positional = args.filter((a, i) => !a.startsWith("--") && (suiteIdx < 0 || i !== suiteIdx + 1));
+      const rest = args.slice(1);
+      const suiteIdx = rest.indexOf("--suite");
+      const only = suiteIdx >= 0 ? rest[suiteIdx + 1] : null;
+      const positional = rest.filter((a, i) => !a.startsWith("--") && (suiteIdx < 0 || i !== suiteIdx + 1));
       const root = resolve(positional[0] || ".");
       const report = runTestGate(root, { only });
       emit({ subcommand: "test-gate", root, ...report });

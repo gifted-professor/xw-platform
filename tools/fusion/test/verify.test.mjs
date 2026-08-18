@@ -30,6 +30,18 @@ test("verifyRepo blocks when a receipt is missing", () => {
   assert.ok(report.blockers.some((b) => b.includes("missing")));
 });
 
+test("cli test-gate --suite does not treat the flag as a repo root", () => {
+  const cli = join(repoRoot, "tools/fusion/cli.mjs");
+  const r = spawnSync(process.execPath, [cli, "test-gate", "--suite", "does-not-exist", repoRoot], {
+    encoding: "utf8",
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  assert.equal(r.status, 1, r.stderr || r.stdout);
+  const json = JSON.parse(r.stdout.trim().split("\n").at(-1));
+  assert.equal(json.status, "BLOCK");
+  assert.deepEqual(json.unexpectedFailures, ["unknown suite: does-not-exist"]);
+});
+
 test("cli verify emits PASS JSON and exit 0", () => {
   const cli = join(repoRoot, "tools/fusion/cli.mjs");
   const r = spawnSync(process.execPath, [cli, "verify", repoRoot], {
