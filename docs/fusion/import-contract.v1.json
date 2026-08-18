@@ -1,0 +1,87 @@
+{
+  "schemaId": "xhs.platform.fusion.import-contract.v1",
+  "schemaVersion": 1,
+  "title": "Monorepo import contract — xw-platform",
+  "description": "Frozen rules for importing xhs-registry and xhs-device-agent full git history into the new xw-platform monorepo. Every import operation (F2/F3) MUST declare compliance with this contract. The contract is source-only: it permits source fusion and forbids runtime cutover.",
+  "targetRepo": "gifted-professor/xw-platform",
+  "targetRepoVisibility": "PUBLIC",
+  "layout": {
+    "services/orchestrator": { "from": "gifted-professor/xhs-registry", "method": "git filter-repo --to-subdirectory-filter services/orchestrator --refs <registry.importCommit> --force" },
+    "services/control-plane": { "from": "gifted-professor/xhs-device-agent", "method": "git filter-repo --to-subdirectory-filter services/control-plane --refs <deviceAgent.importCommit> --force" }
+  },
+  "importMethod": {
+    "tool": "git filter-repo",
+    "version": "2.47.0",
+    "mode": "fresh HTTPS clone into scratch dir; never touch live clones; never push back to source repos",
+    "refScoping": "MUST pass --refs <importCommit> (read from source-lock.v1.json) so filter-repo rewrites only that SHA and its ancestors, NOT the whole repo history. Without --refs, filter-repo's default rewrites every ref in the fresh clone; if the source-repo tip advances between lock and import, or stray local refs exist, the rewritten tip may diverge from the GitHub merge commit. --refs binds the rewrite to the locked importCommit."
+  },
+  "scratch": {
+    "root": "C:\\Users\\Public\\xw-fusion",
+    "workingDirectoryTemplate": "<root>\\<importId>\\<sourceRepo>",
+    "importIdFormat": "xw-f1c-registry-<UTC>-<shortSHA> | xw-f1d-device-agent-<UTC>-<shortSHA>",
+    "subdirs": ["source", "rewritten", "target"],
+    "precondition": "working directory must not exist",
+    "onExistingPath": "BLOCK",
+    "reuseAllowed": false,
+    "overwriteAllowed": false,
+    "rules": "directory does not exist -> create; directory already exists -> BLOCK; never auto-delete, never overwrite, never clear-and-reuse. This is the only way to guarantee a fresh import free of leftover refs, objects, worktree files, or receipts from a prior import."
+  },
+  "historyRequirement": "git log --follow must trace every imported path back to the source repo history",
+  "verification": {
+    "blobMismatchCount": 0,
+    "modeMismatchCount": 0,
+    "missingFileCount": 0,
+    "extraFileCount": 0,
+    "blobParity": "blob OIDs reused; verify original blobs still present via git cat-file --batch-check",
+    "modeParity": "executable mode unchanged",
+    "treeParity": "missingFileCount=0 and extraFileCount=0",
+    "fileCountParity": "imported tracked file count equals original tracked file count",
+    "sourceTreeMatchesLock": true,
+    "sourceTreeMatchesLockNote": "receipt.originalTreeSha MUST equal sourceLock.<repo>.importTreeSha and receipt.originalCommit MUST equal sourceLock.<repo>.importCommit",
+    "rewrittenTipMapsFromImportCommit": true,
+    "rewrittenTipMapsFromImportCommitNote": "git-filter-repo commit-map MUST map sourceLock.<repo>.importCommit -> rewrittenTipCommit",
+    "importedCommitBeyondLockCount": 0,
+    "importedCommitBeyondLockCountNote": "commits after the locked importCommit accidentally brought into import history MUST be 0 (recorded as advanceCommitCount in the receipt)"
+  },
+  "forbids": [
+    "runtime changes",
+    "dependency merge",
+    "package.json rewrite",
+    "import path rewrite",
+    "formatting",
+    "CRLF<->LF changes",
+    "deleting legacy files",
+    "extracting shared contracts",
+    "renaming",
+    "moving M0 tools",
+    "modifying registry.mjs",
+    "modifying ports",
+    "modifying DB paths",
+    "modifying launch scripts"
+  ],
+  "receipts": {
+    "registry": "docs/fusion/import-registry.v1.json",
+    "deviceAgent": "docs/fusion/import-device-agent.v1.json"
+  },
+  "receiptFields": [
+    "schemaVersion", "importId", "originalRepo", "originalCommit", "originalTreeSha",
+    "targetBaseCommit", "rewrittenTipCommit", "fusionMergeCommit",
+    "importDirectory",
+    "originalTrackedFileCount", "importedTrackedFileCount",
+    "blobMismatchCount", "modeMismatchCount", "missingFileCount", "extraFileCount",
+    "advanceCommitCount", "originalTreeListing", "verifiedAt", "toolVersion"
+  ],
+  "receiptTimeline": [
+    "targetBaseCommit — xw-platform main tip the unrelated-histories merge lands on",
+    "rewrittenTipCommit — filter-repo output tip (services/<prefix> subtree, --refs scoped to importCommit)",
+    "fusionMergeCommit — git merge --allow-unrelated-histories --no-ff of rewrittenTip into targetBase"
+  ],
+  "receiptSelfCommitNote": "The commit that adds this receipt file is queryable via git log -1 --format=%H -- docs/fusion/import-<importId>.v1.json; it is NOT a field in the receipt (self-reference: the SHA only exists after the file is committed). The GitHub PR merge commit is recorded post-merge in acceptance artifacts, not in the import receipt.",
+  "sourceLock": "docs/fusion/source-lock.v1.json",
+  "gates": {
+    "sourceFusionGate": "OPEN",
+    "runtimeCutoverGate": "CLOSED",
+    "m0Status": "M0_CANDIDATE",
+    "m0Certification": "UNCERTIFIED"
+  }
+}
