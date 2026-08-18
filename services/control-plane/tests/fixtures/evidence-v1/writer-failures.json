@@ -1,0 +1,5 @@
+[
+  { "code": "ENOSPC", "expectedDebtLayer": "sqlite", "adapterCalls": 1 },
+  { "code": "EACCES", "expectedDebtLayer": "spool", "adapterCalls": 1 },
+  { "code": "ENOENT", "expectedDebtLayer": "artifact", "adapterCalls": 1 }
+]

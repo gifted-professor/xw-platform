@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://xhs-device-agent.local/schema/transport-action-authorization.v1.json",
+  "title": "Transport action authorization v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaId",
+    "authorizationId",
+    "kind",
+    "purpose",
+    "leaseId",
+    "deviceId",
+    "operationKey",
+    "capabilityContractHash",
+    "nonceHash",
+    "issuedAt",
+    "expiresAt"
+  ],
+  "properties": {
+    "schemaId": { "const": "xhs.transport-action-auth.v1" },
+    "authorizationId": { "type": "string", "minLength": 1 },
+    "kind": { "enum": ["capability_job", "mission_device_run"] },
+    "purpose": { "enum": ["execute", "verify", "restore", "return_home", "observe"] },
+    "jobId": { "type": ["string", "null"] },
+    "runId": { "type": ["string", "null"] },
+    "missionId": { "type": ["string", "null"] },
+    "deviceRunId": { "type": ["string", "null"] },
+    "leaseId": { "type": "string", "minLength": 1 },
+    "deviceId": { "type": "string", "minLength": 1 },
+    "operationKey": { "type": "string", "minLength": 1 },
+    "capabilityContractHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "implementationClosureHash": { "type": ["string", "null"], "pattern": "^[a-f0-9]{64}$" },
+    "nonceHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "issuedAt": { "type": "string", "minLength": 1 },
+    "expiresAt": { "type": "string", "minLength": 1 },
+    "consumedAt": { "type": ["string", "null"] },
+    "source": { "type": ["string", "null"] }
+  }
+}

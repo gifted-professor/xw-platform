@@ -1,0 +1,15 @@
+{
+  "session": { "alias": "01", "releaseId": "fixture-release", "leaseAcquireCount": 1 },
+  "primitives": [
+    { "type": "tap", "x": 100, "y": 200 },
+    { "type": "input", "text": "synthetic" },
+    { "type": "focus" },
+    { "type": "back" }
+  ],
+  "expected": {
+    "preflightCount": 1,
+    "leaseAcquireCount": 1,
+    "synchronousClassifierObservationCount": 0,
+    "transportDispatchCount": 4
+  }
+}

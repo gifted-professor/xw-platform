@@ -1,0 +1,11 @@
+{
+  "name": "养号",
+  "loops": 20,
+  "restBetweenLoops": { "minMs": 8000, "maxMs": 20000 },
+  "onError": "skip",
+  "steps": [
+    { "action": "scrollN", "n": 3 },
+    { "action": "likeCard", "idx": 0 },
+    { "action": "likeCard", "idx": 1 }
+  ]
+}

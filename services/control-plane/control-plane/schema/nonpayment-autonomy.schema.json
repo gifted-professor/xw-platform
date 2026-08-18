@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:xhs:contract:nonpayment-autonomy:v1",
+  "title": "Nonpayment autonomy verdict",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaId",
+    "schemaVersion",
+    "actionClass",
+    "decision",
+    "humanApprovalRequired",
+    "paymentHold"
+  ],
+  "properties": {
+    "schemaId": { "const": "xhs.nonpayment-autonomy.v1" },
+    "schemaVersion": { "const": 1 },
+    "actionClass": {
+      "enum": [
+        "financial_observe",
+        "financial_prepare",
+        "financial_commit_candidate",
+        "financial_commit",
+        "nonfinancial_effect",
+        "navigation",
+        "unknown"
+      ]
+    },
+    "decision": {
+      "enum": [
+        "dispatch_known",
+        "dispatch_explorer",
+        "queue_resource",
+        "retry_technical",
+        "defer_branch_technical",
+        "reconcile_effect",
+        "wait_financial_commit"
+      ]
+    },
+    "humanApprovalRequired": { "type": "boolean" },
+    "paymentHold": { "type": "boolean" },
+    "reasonCode": { "type": "string", "minLength": 1 },
+    "runtimePolicyVersion": { "const": "xhs.nonpayment-autonomy.v1" },
+    "effectiveDecisionSource": { "enum": ["deployed-runtime", "shadow"] }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "actionClass": { "const": "financial_commit" } },
+        "required": ["actionClass"]
+      },
+      "then": {
+        "properties": {
+          "decision": { "const": "wait_financial_commit" },
+          "humanApprovalRequired": { "const": true },
+          "paymentHold": { "const": true }
+        }
+      },
+      "else": {
+        "properties": {
+          "decision": { "not": { "const": "wait_financial_commit" } },
+          "humanApprovalRequired": { "const": false },
+          "paymentHold": { "const": false }
+        }
+      }
+    }
+  ]
+}
