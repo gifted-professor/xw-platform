@@ -1,0 +1,6 @@
+{
+  "name": "@xw-platform/kernel",
+  "private": true,
+  "type": "module",
+  "description": "Shared source-only kernel contracts. Not an npm workspace member. Services still keep their original copies."
+}

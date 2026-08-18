@@ -1,0 +1,222 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:xhs:contract:repair-proposal:v1",
+  "title": "Immutable Mac repair proposal",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaId",
+    "schemaVersion",
+    "proposalId",
+    "idempotencyKey",
+    "createdAt",
+    "status",
+    "source",
+    "target",
+    "finding",
+    "policy",
+    "attempt",
+    "claim",
+    "supersession",
+    "circuitBreaker",
+    "transport"
+  ],
+  "properties": {
+    "schemaId": { "const": "xhs.repair-proposal.v1" },
+    "schemaVersion": { "const": 1 },
+    "proposalId": { "type": "string", "pattern": "^repair_[0-9a-f]{24}$" },
+    "idempotencyKey": { "type": "string", "pattern": "^repair:[0-9a-f]{64}$" },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "status": { "const": "proposed" },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bundleId", "manifestSha256", "primaryRunId", "runIds", "producerCommit", "releaseId", "review"],
+      "properties": {
+        "bundleId": { "type": "string", "minLength": 1 },
+        "manifestSha256": { "$ref": "#/$defs/sha256" },
+        "primaryRunId": { "$ref": "#/$defs/runId" },
+        "runIds": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/runId" } },
+        "producerCommit": { "$ref": "#/$defs/gitSha" },
+        "releaseId": { "type": ["string", "null"] },
+        "review": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["reviewId", "receiptSha256", "reviewedAt", "disposition"],
+          "properties": {
+            "reviewId": { "type": "string", "minLength": 1 },
+            "receiptSha256": { "$ref": "#/$defs/sha256" },
+            "reviewedAt": { "type": "string", "format": "date-time" },
+            "disposition": { "enum": ["repairable_debt", "request_changes", "approved_with_debt"] }
+          }
+        }
+      }
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "branch", "baseCommit", "app", "capabilityId"],
+      "properties": {
+        "repository": { "type": "string", "minLength": 1 },
+        "branch": { "type": "string", "minLength": 1 },
+        "baseCommit": { "$ref": "#/$defs/gitSha" },
+        "app": { "type": "string", "minLength": 1 },
+        "capabilityId": { "type": "string", "minLength": 1 },
+        "skillBinding": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "version", "sourceSha256"],
+          "properties": {
+            "path": { "$ref": "#/$defs/repoPath" },
+            "version": { "type": "string", "minLength": 1 },
+            "sourceSha256": { "$ref": "#/$defs/sha256" }
+          }
+        }
+      }
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["findingId", "code", "severity", "summary", "repairable", "evidenceRefs", "observed", "evidenceDebt"],
+      "properties": {
+        "findingId": { "type": "string", "minLength": 1 },
+        "code": { "type": "string", "pattern": "^[A-Z0-9_]+$" },
+        "severity": { "enum": ["low", "medium", "high"] },
+        "summary": { "type": "string", "minLength": 1 },
+        "repairable": { "const": true },
+        "evidenceRefs": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+        "observed": { "type": "object" },
+        "evidenceDebt": { "type": "array", "items": { "type": "object" } }
+      }
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "lane",
+        "effectClass",
+        "evidenceFailureMode",
+        "allowedChangeKinds",
+        "allowedPaths",
+        "forbiddenPaths",
+        "acceptanceConditions",
+        "prohibitions",
+        "limits",
+        "heartbeat",
+        "circuitBreaker",
+        "authorities"
+      ],
+      "properties": {
+        "lane": { "const": "source_only" },
+        "effectClass": { "const": "none" },
+        "evidenceFailureMode": { "const": "debt_only" },
+        "allowedChangeKinds": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string" } },
+        "allowedPaths": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/repoPath" } },
+        "forbiddenPaths": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/repoPath" } },
+        "acceptanceConditions": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+        "prohibitions": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+        "limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["maxFiles", "maxDiffLines", "maxAttempts"],
+          "properties": {
+            "maxFiles": { "type": "integer", "minimum": 1, "maximum": 20 },
+            "maxDiffLines": { "type": "integer", "minimum": 1, "maximum": 2000 },
+            "maxAttempts": { "type": "integer", "minimum": 1, "maximum": 5 }
+          }
+        },
+        "heartbeat": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["intervalSeconds", "claimTtlSeconds"],
+          "properties": {
+            "intervalSeconds": { "type": "integer", "minimum": 15, "maximum": 600 },
+            "claimTtlSeconds": { "type": "integer", "minimum": 60, "maximum": 7200 }
+          }
+        },
+        "circuitBreaker": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["failureThreshold", "windowSeconds"],
+          "properties": {
+            "failureThreshold": { "type": "integer", "minimum": 1, "maximum": 5 },
+            "windowSeconds": { "type": "integer", "minimum": 60, "maximum": 86400 }
+          }
+        },
+        "authorities": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["windows", "mac", "windowsCannot", "macCannot"],
+          "properties": {
+            "windows": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+            "mac": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+            "windowsCannot": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+            "macCannot": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } }
+          }
+        }
+      }
+    },
+    "attempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["current", "max"],
+      "properties": {
+        "current": { "const": 0 },
+        "max": { "type": "integer", "minimum": 1, "maximum": 5 }
+      }
+    },
+    "claim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["holder", "claimEventId", "claimedAt", "heartbeatAt", "expiresAt", "lockRef", "lockSha256"],
+      "properties": {
+        "holder": { "type": "null" },
+        "claimEventId": { "type": "null" },
+        "claimedAt": { "type": "null" },
+        "heartbeatAt": { "type": "null" },
+        "expiresAt": { "type": "null" },
+        "lockRef": { "type": "null" },
+        "lockSha256": { "type": "null" }
+      }
+    },
+    "supersession": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["supersedes", "supersededBy"],
+      "properties": {
+        "supersedes": { "type": "array", "uniqueItems": true, "items": { "type": "string", "pattern": "^repair_[0-9a-f]{24}$" } },
+        "supersededBy": { "type": ["string", "null"], "pattern": "^repair_[0-9a-f]{24}$" }
+      }
+    },
+    "circuitBreaker": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "consecutiveFailures", "threshold", "windowSeconds", "openedAt", "reason"],
+      "properties": {
+        "state": { "const": "closed" },
+        "consecutiveFailures": { "const": 0 },
+        "threshold": { "type": "integer", "minimum": 1 },
+        "windowSeconds": { "type": "integer", "minimum": 60 },
+        "openedAt": { "type": "null" },
+        "reason": { "type": "null" }
+      }
+    },
+    "transport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["discovery", "updates", "knowledgeId", "outboxNamespace"],
+      "properties": {
+        "discovery": { "const": "registry.knowledge" },
+        "updates": { "const": "registry.knowledge+sealed_outbox" },
+        "knowledgeId": { "type": "string", "pattern": "^repair_[0-9a-f]{24}$" },
+        "outboxNamespace": { "type": "string", "pattern": "^repair/repair_[0-9a-f]{24}$" }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "gitSha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "runId": { "type": "string", "pattern": "^run_" },
+    "repoPath": { "type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*\\\\)(?!.*(?:^|/)\\.\\.(?:/|$)).+$" }
+  }
+}

@@ -7,7 +7,8 @@ xw-platform/
 ├── services/
 │   ├── orchestrator/       ← xhs-registry 全历史（F1-C）
 │   └── control-plane/      ← xhs-device-agent 全历史（F1-D）
-├── packages/               ← 后续共享内核
+├── packages/
+│   └── kernel/             ← M2-B 共享契约（先复制，不删服务原件）
 ├── plugins/                ← 后续 XW 插件
 ├── integrations/           ← 后续 DSH 等 Harness Adapter
 ├── docs/

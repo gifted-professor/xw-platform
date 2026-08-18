@@ -1,0 +1,2 @@
+# Keep contract bytes identical to the imported service copies.
+contracts/** -text

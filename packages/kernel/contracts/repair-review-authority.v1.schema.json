@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:xhs:contract:repair-review-authority:v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaId", "schemaVersion", "proposalId", "proposalSha256", "sourceCheckpointSha256", "verdict", "resultCommit", "reviewedAt", "reviewerId"],
+  "properties": {
+    "schemaId": { "const": "xhs.repair-review-authority.v1" },
+    "schemaVersion": { "const": 1 },
+    "proposalId": { "type": "string", "pattern": "^repair_[0-9a-f]{24}$" },
+    "proposalSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "sourceCheckpointSha256": { "oneOf": [{ "type": "string", "pattern": "^[0-9a-f]{64}$" }, { "type": "null" }] },
+    "verdict": { "enum": ["approved", "request_changes", "deployable", "cancelled"] },
+    "resultCommit": { "oneOf": [{ "type": "string", "pattern": "^[0-9a-f]{40}$" }, { "type": "null" }] },
+    "reviewedAt": { "type": "string", "format": "date-time" },
+    "reviewerId": { "type": "string", "minLength": 1 }
+  }
+}
