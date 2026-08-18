@@ -28,6 +28,18 @@ export function parseSummary(text) {
   return out;
 }
 
+export function platformKey() {
+  return process.platform === "win32" ? "win32" : "posix";
+}
+
+export function allowedNamesFor(suite, platform = platformKey()) {
+  const base = suite.allowedFailures || [];
+  const extra = platform === "win32"
+    ? suite.allowedFailuresWin32 || []
+    : suite.allowedFailuresPosix || [];
+  return [...base, ...extra];
+}
+
 export function evaluateSuite(allowedFailures, failingNames) {
   const allowed = new Set(allowedFailures);
   const unexpectedFailures = failingNames.filter((name) => !allowed.has(name));
@@ -54,7 +66,7 @@ export function runSuite(root, name, suite) {
   const text = `${result.stdout || ""}\n${result.stderr || ""}`;
   const failingNames = parseFailingNames(text);
   const summary = parseSummary(text);
-  const verdict = evaluateSuite(suite.allowedFailures || [], failingNames);
+  const verdict = evaluateSuite(allowedNamesFor(suite), failingNames);
   return {
     name,
     cwd: suite.cwd,
@@ -65,9 +77,18 @@ export function runSuite(root, name, suite) {
   };
 }
 
-export function runTestGate(root) {
+export function runTestGate(root, { only } = {}) {
   const baseline = loadBaseline(root);
-  const suites = Object.entries(baseline.suites).map(([name, suite]) => runSuite(root, name, suite));
+  const selected = Object.entries(baseline.suites).filter(([name]) => !only || name === only);
+  if (only && selected.length === 0) {
+    return {
+      status: "BLOCK",
+      runtimeCutoverAllowed: false,
+      unexpectedFailures: [`unknown suite: ${only}`],
+      suites: [],
+    };
+  }
+  const suites = selected.map(([name, suite]) => runSuite(root, name, suite));
   const unexpected = suites.flatMap((s) => s.unexpectedFailures.map((n) => `${s.name}: ${n}`));
   const status = unexpected.length
     ? "BLOCK"

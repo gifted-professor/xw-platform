@@ -69,8 +69,12 @@ export function main(argv = process.argv) {
       return 0;
     }
     if (cmd === "test-gate") {
-      const root = resolve(args[1] || ".");
-      const report = runTestGate(root);
+      const rest = args.slice(1);
+      const suiteIdx = rest.indexOf("--suite");
+      const only = suiteIdx >= 0 ? rest[suiteIdx + 1] : null;
+      const positional = rest.filter((a, i) => !a.startsWith("--") && (suiteIdx < 0 || i !== suiteIdx + 1));
+      const root = resolve(positional[0] || ".");
+      const report = runTestGate(root, { only });
       emit({ subcommand: "test-gate", root, ...report });
       if (report.status === "BLOCK") {
         process.exitCode = 1;

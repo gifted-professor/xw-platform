@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { evaluateSuite, parseFailingNames, parseSummary } from "../test-gate.mjs";
+import { allowedNamesFor, evaluateSuite, parseFailingNames, parseSummary, runTestGate } from "../test-gate.mjs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const sample = `
 ✔ ok test (1ms)
@@ -51,4 +53,21 @@ test("evaluateSuite blocks names outside the allowlist", () => {
 
 test("evaluateSuite passes when nothing failed", () => {
   assert.equal(evaluateSuite(["allowed flake"], []).status, "PASS");
+});
+
+test("runTestGate blocks unknown suite names", () => {
+  const root = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
+  const report = runTestGate(root, { only: "does-not-exist" });
+  assert.equal(report.status, "BLOCK");
+  assert.deepEqual(report.unexpectedFailures, ["unknown suite: does-not-exist"]);
+});
+
+test("allowedNamesFor unions posix extras only on posix", () => {
+  const suite = {
+    allowedFailures: ["shared"],
+    allowedFailuresPosix: ["linux only"],
+    allowedFailuresWin32: ["windows only"],
+  };
+  assert.deepEqual(allowedNamesFor(suite, "posix"), ["shared", "linux only"]);
+  assert.deepEqual(allowedNamesFor(suite, "win32"), ["shared", "windows only"]);
 });
