@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:xw:contract:open-action-device-session:v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaId",
+    "schemaVersion",
+    "sessionId",
+    "sessionKind",
+    "deviceId",
+    "leaseId",
+    "actor",
+    "createdAt",
+    "capabilityId"
+  ],
+  "properties": {
+    "schemaId": { "const": "xw.open-action.device-session.v1" },
+    "schemaVersion": { "const": 1 },
+    "sessionId": { "type": "string", "minLength": 1 },
+    "sessionKind": { "enum": ["capability", "open_action", "discovery"] },
+    "deviceId": { "type": "string", "minLength": 1 },
+    "leaseId": { "type": "string", "minLength": 1 },
+    "actor": { "type": "string", "minLength": 1 },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "capabilityId": { "type": ["string", "null"] }
+  }
+}

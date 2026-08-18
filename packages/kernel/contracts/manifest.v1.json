@@ -1,0 +1,22 @@
+{
+  "schemaId": "xw.kernel.manifest.v1",
+  "schemaVersion": 1,
+  "sharedCopies": [
+    "contracts/repair-completion.v1.schema.json",
+    "contracts/repair-event.v1.schema.json",
+    "contracts/repair-proposal.v1.schema.json",
+    "contracts/repair-replay-authorization.v1.schema.json",
+    "contracts/repair-review-authority.v1.schema.json",
+    "contracts/repair-source-checkpoint.v1.schema.json"
+  ],
+  "openAction": [
+    "contracts/open-action/observation.v1.schema.json",
+    "contracts/open-action/primitive-action.v1.schema.json",
+    "contracts/open-action/action-result.v1.schema.json",
+    "contracts/open-action/effect-assessment.v1.schema.json",
+    "contracts/open-action/device-session.v1.schema.json"
+  ],
+  "events": ["event-protocol/events.v1.json"],
+  "errorCodes": ["error-codes/error-codes.v1.json"],
+  "note": "sharedCopies must remain LF-normalized identical in both services. openAction contracts are kernel-only until M3-B+."
+}

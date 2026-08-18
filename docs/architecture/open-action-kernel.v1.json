@@ -1,0 +1,54 @@
+{
+  "schemaId": "xhs.platform.open-action-kernel.v1",
+  "schemaVersion": 1,
+  "title": "Open Action Kernel — M3-A source contract",
+  "phase": "M3-A",
+  "sourceFusionGate": "OPEN",
+  "runtimeCutoverGate": "CLOSED",
+  "runtimeCutoverAllowed": false,
+  "m3SourceGate": "PENDING",
+  "liveCanaryGate": "CLOSED",
+  "lanes": ["legacy_capability", "open_action"],
+  "publicPrimitives": [
+    "observe",
+    "tap",
+    "long_press",
+    "swipe",
+    "drag",
+    "scroll",
+    "type_text",
+    "press_key",
+    "back",
+    "home",
+    "recents",
+    "open_app",
+    "wait"
+  ],
+  "forbiddenPublicPrimitives": [
+    "raw_adb",
+    "shell",
+    "arbitrary_subprocess",
+    "payment_override",
+    "policy_override"
+  ],
+  "mutatingPrimitives": [
+    "tap",
+    "long_press",
+    "swipe",
+    "drag",
+    "scroll",
+    "type_text",
+    "press_key",
+    "back",
+    "home",
+    "recents",
+    "open_app"
+  ],
+  "effectPolicy": {
+    "nonpayment": "ALLOW_WITH_TRACE",
+    "payment_credential": "HUMAN_REQUIRED",
+    "payment_final_commit": "HUMAN_REQUIRED",
+    "payment_context_uncertain": "REOBSERVE_REQUIRED"
+  },
+  "servicesChanged": false
+}

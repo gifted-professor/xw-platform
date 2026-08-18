@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:xw:contract:open-action-primitive:v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaId", "schemaVersion", "kind"],
+  "properties": {
+    "schemaId": { "const": "xw.open-action.primitive.v1" },
+    "schemaVersion": { "const": 1 },
+    "kind": {
+      "enum": [
+        "observe",
+        "tap",
+        "long_press",
+        "swipe",
+        "drag",
+        "scroll",
+        "type_text",
+        "press_key",
+        "back",
+        "home",
+        "recents",
+        "open_app",
+        "wait"
+      ]
+    },
+    "actionId": { "type": "string", "minLength": 1 },
+    "idempotencyKey": { "type": "string", "minLength": 1 },
+    "basedOnObservationId": { "type": "string", "minLength": 1 },
+    "text": { "type": "string" },
+    "key": { "type": "string" },
+    "packageName": { "type": "string" },
+    "durationMs": { "type": "integer", "minimum": 0 },
+    "target": { "$ref": "#/$defs/target" }
+  },
+  "$defs": {
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "elementId": { "type": "string", "minLength": 1 },
+        "absoluteCoordinate": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["x", "y"],
+          "properties": {
+            "x": { "type": "number" },
+            "y": { "type": "number" }
+          }
+        },
+        "normalizedCoordinate": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["x", "y"],
+          "properties": {
+            "x": { "type": "number", "minimum": 0, "maximum": 1 },
+            "y": { "type": "number", "minimum": 0, "maximum": 1 }
+          }
+        },
+        "text": { "type": "string", "minLength": 1 },
+        "resourceId": { "type": "string", "minLength": 1 },
+        "accessibilityRole": { "type": "string", "minLength": 1 },
+        "accessibilityName": { "type": "string", "minLength": 1 },
+        "imageAnchor": { "type": "string", "minLength": 1 },
+        "boundingBoxRelativePoint": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["x", "y"],
+          "properties": {
+            "x": { "type": "number", "minimum": 0, "maximum": 1 },
+            "y": { "type": "number", "minimum": 0, "maximum": 1 }
+          }
+        }
+      }
+    }
+  }
+}

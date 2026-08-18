@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:xw:contract:open-action-result:v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaId",
+    "schemaVersion",
+    "actionId",
+    "ok",
+    "retryable",
+    "nextAction",
+    "errorCode",
+    "beforeObservationId",
+    "afterObservationId",
+    "effect",
+    "evidenceRefs"
+  ],
+  "properties": {
+    "schemaId": { "const": "xw.open-action.result.v1" },
+    "schemaVersion": { "const": 1 },
+    "actionId": { "type": "string", "minLength": 1 },
+    "ok": { "type": "boolean" },
+    "retryable": { "type": "boolean" },
+    "nextAction": { "enum": ["NONE", "REOBSERVE", "HUMAN", "STOP"] },
+    "errorCode": { "type": ["string", "null"] },
+    "beforeObservationId": { "type": ["string", "null"] },
+    "afterObservationId": { "type": ["string", "null"] },
+    "effect": { "type": ["object", "null"] },
+    "evidenceRefs": { "type": "array", "items": { "type": "string" } }
+  }
+}

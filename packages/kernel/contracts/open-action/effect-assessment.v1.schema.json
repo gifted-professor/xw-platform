@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:xw:contract:open-action-effect:v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaId", "schemaVersion", "category", "decision", "authority", "reasons"],
+  "properties": {
+    "schemaId": { "const": "xw.open-action.effect-assessment.v1" },
+    "schemaVersion": { "const": 1 },
+    "category": {
+      "enum": [
+        "nonpayment",
+        "payment_credential",
+        "payment_final_commit",
+        "payment_context_uncertain"
+      ]
+    },
+    "decision": {
+      "enum": ["ALLOW_WITH_TRACE", "HUMAN_REQUIRED", "REOBSERVE_REQUIRED"]
+    },
+    "authority": { "const": "control_plane" },
+    "agentClaimedCategory": {
+      "enum": [
+        "nonpayment",
+        "payment_credential",
+        "payment_final_commit",
+        "payment_context_uncertain"
+      ]
+    },
+    "reasons": { "type": "array", "items": { "type": "string" } }
+  }
+}
