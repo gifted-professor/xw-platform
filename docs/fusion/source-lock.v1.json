@@ -1,0 +1,20 @@
+{
+  "schemaId": "xhs.platform.fusion.source-lock.v1",
+  "schemaVersion": 1,
+  "title": "Source lock — xw-platform import commits",
+  "description": "Locks the exact source commits AND their trees to import into xw-platform. importCommit + importTreeSha values read from real remote main SHAs after PR #17 (M0 amendment) and PR #16 (F0 source-only gate) merged. Each import receipt MUST verify receipt.originalCommit == sourceLock.<repo>.importCommit AND receipt.originalTreeSha == sourceLock.<repo>.importTreeSha.",
+  "lockedAt": "2026-08-18T11:10:00.000Z",
+  "registry": {
+    "importCommit": "3fa099c1c7c3228717bf2009bd4a81e1df755810",
+    "importTreeSha": "0bed6b8f92e7f6d995532ecc9e74f44b274b5453",
+    "runtimeBaselineCommit": "8c5682afd5aea2dda9d4a7f4f0fa3a1e4c81c21d"
+  },
+  "deviceAgent": {
+    "importCommit": "43b09accba3364a23917f43224fc0772ef17a217",
+    "importTreeSha": "cdcb731208c72f8d42c29e487f54ea4aaea6797f",
+    "runtimeBaselineCommit": "43b09accba3364a23917f43224fc0772ef17a217"
+  },
+  "m0Status": "M0_CANDIDATE",
+  "m0Certification": "UNCERTIFIED",
+  "runtimeCutoverAllowed": false
+}

@@ -1,0 +1,24 @@
+{
+  "schemaId": "xhs.platform.fusion.bootstrap-receipt.v1",
+  "schemaVersion": 1,
+  "title": "xw-platform F1-B bootstrap receipt",
+  "description": "Records the F1-B skeleton bootstrap: the empty base commit on main, byte-identical copy of import-contract + source-lock from registry main (PR #18 merge), and the F1-B acceptance boundary.",
+  "targetRepo": "gifted-professor/xw-platform",
+  "sourceContractRepo": "gifted-professor/xhs-registry",
+  "sourceContractCommit": "b9bf2f7e37d87d36eacd0984c596d563a372da51",
+  "contractCopySha256": "dc4b5a714d9a6f905ccbbd031743ec8df7fb3418fa0190e6b642145a920f6d06",
+  "sourceLockCopySha256": "a22aa9f36b3c34cbe821553ca298b5da97d4e2cb9ef71b1538f1db48a99adcd4",
+  "bootstrapBaseCommit": "c875435e62e67988478790c2ae841364dc0b6519",
+  "skeletonFiles": [
+    "README.md",
+    ".gitignore",
+    "docs/architecture/target-layout.md",
+    "docs/architecture/runtime-boundaries.md",
+    "docs/fusion/import-contract.v1.json",
+    "docs/fusion/source-lock.v1.json",
+    "docs/fusion/bootstrap-receipt.v1.json"
+  ],
+  "runtimeFilesAdded": 0,
+  "runtimeCutoverAllowed": false,
+  "verifiedAt": null
+}
