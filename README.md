@@ -41,5 +41,6 @@
 - `docs/architecture/runtime-boundaries.md` — 运行时边界与不变量。
 - `docs/fusion/` — 合仓合同、source lock、导入收据、Physical Fusion 验收。
 - `tools/fusion/` — 离线导入验证与 test-gate。
-- 根命令：`npm run check` / `fusion:verify` / `test:m0` / `test:gate`（无 workspaces）。
+- 根命令：`npm run check` / `fusion:verify` / `authority` / `test:m0` / `test:gate`（无 workspaces）。
+- 权威边界：`docs/architecture/authority-boundary.md`（M2-A，source-only）。
 - 离线 CI：`.github/workflows/source-fusion.yml`（`ubuntu-latest` + `windows-latest`，源文件仍在 `docs/fusion/source-fusion.workflow.yml`）。
