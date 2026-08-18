@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { evaluateSuite, parseFailingNames, parseSummary } from "../test-gate.mjs";
+import { allowedNamesFor, evaluateSuite, parseFailingNames, parseSummary } from "../test-gate.mjs";
 
 const sample = `
 ✔ ok test (1ms)
@@ -51,4 +51,14 @@ test("evaluateSuite blocks names outside the allowlist", () => {
 
 test("evaluateSuite passes when nothing failed", () => {
   assert.equal(evaluateSuite(["allowed flake"], []).status, "PASS");
+});
+
+test("allowedNamesFor unions posix extras only on posix", () => {
+  const suite = {
+    allowedFailures: ["shared"],
+    allowedFailuresPosix: ["linux only"],
+    allowedFailuresWin32: ["windows only"],
+  };
+  assert.deepEqual(allowedNamesFor(suite, "posix"), ["shared", "linux only"]);
+  assert.deepEqual(allowedNamesFor(suite, "win32"), ["shared", "windows only"]);
 });

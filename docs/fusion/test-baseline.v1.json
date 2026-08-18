@@ -21,6 +21,10 @@
         "concurrent observer screen requests on a cold cache share exactly one disk load (singleflight)",
         "filesystem and Git verifiers enforce real lock, Mac receipt, replay authorization and completion bindings",
         "CLI validates a repository-local frozen plan"
+      ],
+      "allowedFailuresPosix": [
+        "buildChildEnv pins XHS_NODE_EXE and prepends Node directory to PATH",
+        "recovery evidence paths are bound to the inspected run and reject traversal"
       ]
     },
     "control-plane": {
@@ -60,6 +64,9 @@
         "governed offline chain runs observe job, seals receipt, then ECP collects and restores",
         "supported one-command canary re-observes, collects once, restores, and releases its lease",
         "a closed persistent adb shell is poisoned immediately instead of hanging the next command"
+      ],
+      "allowedFailuresPosix": [
+        "RI-01: closure hash is stable across path separator and absolute root forms"
       ]
     }
   }
