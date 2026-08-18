@@ -1,0 +1,40 @@
+name: source-fusion
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  offline:
+    name: offline ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Syntax check (no install, no workspaces)
+        run: npm run check
+
+      - name: Verify imported trees and receipts
+        run: npm run fusion:verify
+
+      - name: Fusion tool tests
+        run: npm run test:fusion
+
+      - name: M0 tool tests
+        run: npm run test:m0
+
+      - name: Service tests against known-failure allowlist
+        run: npm run test:gate

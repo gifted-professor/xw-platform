@@ -134,6 +134,15 @@ export function verifyRepo(root) {
     .filter((name) => name !== "orchestrator" && name !== "control-plane");
   if (extraServices.length) blockers.push(`unexpected services/: ${extraServices.join(", ")}`);
 
+  const pkgPath = join(root, "package.json");
+  if (existsSync(pkgPath)) {
+    const pkg = loadJson(pkgPath);
+    if (pkg.workspaces) blockers.push("root package.json must not enable npm workspaces");
+    for (const script of ["check", "fusion:verify", "test:m0", "test:gate", "test:control-critical"]) {
+      if (!pkg.scripts?.[script]) blockers.push(`root package.json missing script ${script}`);
+    }
+  }
+
   return {
     status: blockers.length ? "BLOCK" : "PASS",
     runtimeCutoverAllowed: false,

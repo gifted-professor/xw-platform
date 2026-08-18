@@ -1,0 +1,18 @@
+{
+  "name": "xw-platform",
+  "private": true,
+  "type": "module",
+  "description": "XW Platform source monorepo. Root scripts forward into services; npm workspaces are not enabled.",
+  "scripts": {
+    "check": "npm --prefix services/orchestrator run check && npm --prefix services/control-plane run check && node --check tools/fusion/cli.mjs && node --check tools/fusion/verify.mjs && node --check tools/fusion/git.mjs && node --check tools/fusion/test-gate.mjs",
+    "fusion:verify": "node tools/fusion/cli.mjs verify",
+    "test:fusion": "node tools/fusion/cli.mjs test-run",
+    "test:m0": "node services/orchestrator/tools/m0/cli.mjs test-run services/orchestrator/tools/m0/test",
+    "test:orchestrator": "npm --prefix services/orchestrator test",
+    "test:control-plane": "npm --prefix services/control-plane test",
+    "test:control": "npm --prefix services/control-plane run test:control",
+    "test:control-critical": "npm --prefix services/control-plane run test:control",
+    "test:gate": "node tools/fusion/cli.mjs test-gate",
+    "test": "npm run test:fusion && npm run test:gate"
+  }
+}

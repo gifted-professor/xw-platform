@@ -1,0 +1,66 @@
+{
+  "schemaId": "xhs.platform.fusion.test-baseline.v1",
+  "schemaVersion": 1,
+  "title": "Known offline test failures captured at locked import commits",
+  "description": "Allowlist of test names that already fail in the locked source clones. F1-F CI must BLOCK on any other failure. Allowed names may pass or fail (environment flake / Windows symlink privilege). Counts are informational, not a gate.",
+  "capturedAt": "2026-08-18T12:30:00.000Z",
+  "capturedHost": "windows",
+  "policy": {
+    "unexpectedFailure": "BLOCK",
+    "allowedFailureMayPass": true,
+    "prefixInducedNewFailure": "BLOCK"
+  },
+  "suites": {
+    "orchestrator": {
+      "cwd": "services/orchestrator",
+      "npmArgs": ["test"],
+      "captured": { "tests": 339, "pass": 334, "fail": 5 },
+      "allowedFailures": [
+        "the earlier approved implementation remains frozen inside its own scope",
+        "repository A current changes stay exclusively inside the repair command scope",
+        "concurrent observer screen requests on a cold cache share exactly one disk load (singleflight)",
+        "filesystem and Git verifiers enforce real lock, Mac receipt, replay authorization and completion bindings",
+        "CLI validates a repository-local frozen plan"
+      ]
+    },
+    "control-plane": {
+      "cwd": "services/control-plane",
+      "npmArgs": ["test"],
+      "captured": { "tests": 759, "pass": 725, "fail": 32 },
+      "allowedFailures": [
+        "failed JSON adapter surfaces only its bounded diagnostic code",
+        "nonpayment_v1: migrateLegacyPending frees a legacy waiting job and dispatches the fresh job",
+        "EvidenceStore fails closed on missing, escaped, or tampered private evidence files",
+        "writeJson legacy throws on write failure (no debtRecorder = fail-closed)",
+        "attachFile legacy throws on write failure (no debtRecorder = fail-closed)",
+        "Discovery primitive invokes only its fenced R0 producer once after durable intent",
+        "authorized exact primitive and candidate retries reuse before exhausted quota checks",
+        "Discovery candidate reservation requires a signed one-hop anchor and is idempotent",
+        "Discovery candidate rejects unsigned relation pairing before a second candidate charge",
+        "default production allowlist rejects metrics/feed even with a valid parser-job lineage",
+        "a receipt can be minted only through an explicit test-only capability and adapter allowlist entry",
+        "final send boundary atomically rejects an expired parent without consuming its receipt",
+        "a consumed receipt remains unreplayable after restart recovery",
+        "matrix: outbox corruption and symlink attacks are rejected safely",
+        "matrix: report counters",
+        "claim/heartbeat/checkpoint symlink escapes are rejected with no outside files",
+        "scope guard exact allowlist rejects repair-extra and invalid baseline",
+        "filesystem and Git verifiers enforce real lock, Mac receipt, replay authorization and completion bindings",
+        "grepFile finds commentCap in task-runner.mjs",
+        "grepFile finds timeoutMs in capabilities.json",
+        "verifyConstraint confirms comment-cap constraint",
+        "verifyConstraint confirms timeout-90s constraint",
+        "verifyConstraint confirms fail-closed constraint",
+        "verifyConstraint dry-run mode returns result without side effects",
+        "grepRepo finds a known token in the repo dirs",
+        "locateEvidence finds a real file by basename",
+        "note-detail producer fails closed when the top activity has no stable note locator",
+        "note-detail producer logs a secret-free shape when the current activity block is missing",
+        "note-detail producer ignores a stable locator retained only by an older history entry",
+        "governed offline chain runs observe job, seals receipt, then ECP collects and restores",
+        "supported one-command canary re-observes, collects once, restores, and releases its lease",
+        "a closed persistent adb shell is poisoned immediately instead of hanging the next command"
+      ]
+    }
+  }
+}
