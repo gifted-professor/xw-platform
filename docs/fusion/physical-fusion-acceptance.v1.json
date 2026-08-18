@@ -1,0 +1,271 @@
+{
+  "schemaId": "xhs.platform.fusion.physical-fusion-acceptance.v1",
+  "schemaVersion": 1,
+  "title": "Physical Fusion / M1 acceptance",
+  "targetRepo": "gifted-professor/xw-platform",
+  "acceptedAt": "2026-08-18T12:56:42.844Z",
+  "baseCommit": "41783a79717efa8a87750702d0fc684a5c8bac97",
+  "status": "PASS",
+  "runtimeCutoverAllowed": false,
+  "sourceFusionGate": "OPEN",
+  "runtimeCutoverGate": "CLOSED",
+  "m0Status": "M0_CANDIDATE",
+  "m0Certification": "UNCERTIFIED",
+  "phases": {
+    "F1-B": "MERGED",
+    "F1-C": "MERGED",
+    "F1-D": "MERGED",
+    "F1-E": "MERGED",
+    "F1-F": "MERGED",
+    "F1-G": "READY"
+  },
+  "layout": {
+    "orchestrator": "services/orchestrator",
+    "controlPlane": "services/control-plane",
+    "fusionTools": "tools/fusion",
+    "rootPackageJson": true,
+    "workspacesEnabled": false,
+    "githubActionsLive": false,
+    "githubActionsSource": "docs/fusion/source-fusion.workflow.yml"
+  },
+  "verify": {
+    "status": "PASS",
+    "runtimeCutoverAllowed": false,
+    "sourceFusionGate": "OPEN",
+    "runtimeCutoverGate": "CLOSED",
+    "blockers": [],
+    "services": [
+      {
+        "service": "registry",
+        "importDir": "services/orchestrator",
+        "originalCommit": "3fa099c1c7c3228717bf2009bd4a81e1df755810",
+        "originalTreeSha": "0bed6b8f92e7f6d995532ecc9e74f44b274b5453",
+        "rewrittenTipCommit": "6c55eeab897a54504914c36ae995019cc6c100d5",
+        "fusionMergeCommit": "229806c1a19853b33550691ffc4982a591a0ebf9",
+        "trackedFileCount": 399,
+        "blobMismatchCount": 0,
+        "modeMismatchCount": 0,
+        "missingFileCount": 0,
+        "extraFileCount": 0,
+        "expectedCount": 399,
+        "actualCount": 399,
+        "probes": [
+          {
+            "path": "services/orchestrator/registry.mjs",
+            "expected": true,
+            "reachable": true
+          },
+          {
+            "path": "services/orchestrator/scripts/lib/task-orchestrator.mjs",
+            "expected": true,
+            "reachable": true
+          },
+          {
+            "path": "services/orchestrator/ops/xw-start.mjs",
+            "expected": true,
+            "reachable": true
+          },
+          {
+            "path": "services/orchestrator/contracts/nonpayment-autonomy.v1.schema.json",
+            "expected": true,
+            "reachable": true
+          }
+        ],
+        "detailCount": 0
+      },
+      {
+        "service": "deviceAgent",
+        "importDir": "services/control-plane",
+        "originalCommit": "43b09accba3364a23917f43224fc0772ef17a217",
+        "originalTreeSha": "cdcb731208c72f8d42c29e487f54ea4aaea6797f",
+        "rewrittenTipCommit": "f632c2ccf470b6d7d8c0f8ca154e6b41165775f3",
+        "fusionMergeCommit": "2c1930cb87102e3670912f1ed20c828b397f1a1e",
+        "trackedFileCount": 256,
+        "blobMismatchCount": 0,
+        "modeMismatchCount": 0,
+        "missingFileCount": 0,
+        "extraFileCount": 0,
+        "expectedCount": 256,
+        "actualCount": 256,
+        "probes": [
+          {
+            "path": "services/control-plane/control-plane/devicectl.mjs",
+            "expected": true,
+            "reachable": true
+          },
+          {
+            "path": "services/control-plane/control-plane/lib/control-plane.mjs",
+            "expected": true,
+            "reachable": true
+          },
+          {
+            "path": "services/control-plane/scripts/fast-operator.mjs",
+            "expected": true,
+            "reachable": true
+          },
+          {
+            "path": "services/control-plane/apps/xhs/adapter.mjs",
+            "expected": true,
+            "reachable": true
+          }
+        ],
+        "detailCount": 0
+      }
+    ]
+  },
+  "commands": {
+    "check": {
+      "exitCode": 0
+    },
+    "test:fusion": {
+      "exitCode": 0,
+      "report": {
+        "subcommand": "test-run",
+        "status": "PASS",
+        "exitCode": 0,
+        "tests": 11,
+        "pass": 11,
+        "fail": 0,
+        "skipped": 0,
+        "cliVersion": "xhs.fusion.cli.v1"
+      }
+    },
+    "test:m0": {
+      "exitCode": 0,
+      "report": {
+        "subcommand": "test-run",
+        "status": "PASS",
+        "exitCode": 0,
+        "tests": 84,
+        "pass": 83,
+        "fail": 0,
+        "skipped": 1,
+        "cliVersion": "xhs.m0.cli.v1"
+      }
+    },
+    "test:gate": {
+      "exitCode": 0,
+      "report": {
+        "subcommand": "test-gate",
+        "root": "C:\\Users\\Public\\xw-fusion\\xw-platform-m1",
+        "status": "KNOWN_FAILURE_MATCH",
+        "runtimeCutoverAllowed": false,
+        "unexpectedFailures": [],
+        "suites": [
+          {
+            "name": "orchestrator",
+            "cwd": "services/orchestrator",
+            "exitCode": 1,
+            "tests": 339,
+            "pass": 334,
+            "fail": 5,
+            "skipped": 0,
+            "failingNames": [
+              "the earlier approved implementation remains frozen inside its own scope",
+              "repository A current changes stay exclusively inside the repair command scope",
+              "concurrent observer screen requests on a cold cache share exactly one disk load (singleflight)",
+              "filesystem and Git verifiers enforce real lock, Mac receipt, replay authorization and completion bindings",
+              "CLI validates a repository-local frozen plan"
+            ],
+            "unexpectedFailures": [],
+            "allowedFailuresHit": [
+              "the earlier approved implementation remains frozen inside its own scope",
+              "repository A current changes stay exclusively inside the repair command scope",
+              "concurrent observer screen requests on a cold cache share exactly one disk load (singleflight)",
+              "filesystem and Git verifiers enforce real lock, Mac receipt, replay authorization and completion bindings",
+              "CLI validates a repository-local frozen plan"
+            ],
+            "status": "KNOWN_FAILURE_MATCH"
+          },
+          {
+            "name": "control-plane",
+            "cwd": "services/control-plane",
+            "exitCode": 1,
+            "tests": 759,
+            "pass": 725,
+            "fail": 32,
+            "skipped": 2,
+            "failingNames": [
+              "failed JSON adapter surfaces only its bounded diagnostic code",
+              "nonpayment_v1: migrateLegacyPending frees a legacy waiting job and dispatches the fresh job",
+              "EvidenceStore fails closed on missing, escaped, or tampered private evidence files",
+              "writeJson legacy throws on write failure (no debtRecorder = fail-closed)",
+              "attachFile legacy throws on write failure (no debtRecorder = fail-closed)",
+              "Discovery primitive invokes only its fenced R0 producer once after durable intent",
+              "authorized exact primitive and candidate retries reuse before exhausted quota checks",
+              "Discovery candidate reservation requires a signed one-hop anchor and is idempotent",
+              "Discovery candidate rejects unsigned relation pairing before a second candidate charge",
+              "default production allowlist rejects metrics/feed even with a valid parser-job lineage",
+              "a receipt can be minted only through an explicit test-only capability and adapter allowlist entry",
+              "final send boundary atomically rejects an expired parent without consuming its receipt",
+              "a consumed receipt remains unreplayable after restart recovery",
+              "matrix: outbox corruption and symlink attacks are rejected safely",
+              "matrix: report counters",
+              "claim/heartbeat/checkpoint symlink escapes are rejected with no outside files",
+              "scope guard exact allowlist rejects repair-extra and invalid baseline",
+              "filesystem and Git verifiers enforce real lock, Mac receipt, replay authorization and completion bindings",
+              "grepFile finds commentCap in task-runner.mjs",
+              "grepFile finds timeoutMs in capabilities.json",
+              "verifyConstraint confirms comment-cap constraint",
+              "verifyConstraint confirms timeout-90s constraint",
+              "verifyConstraint confirms fail-closed constraint",
+              "verifyConstraint dry-run mode returns result without side effects",
+              "grepRepo finds a known token in the repo dirs",
+              "locateEvidence finds a real file by basename",
+              "note-detail producer fails closed when the top activity has no stable note locator",
+              "note-detail producer logs a secret-free shape when the current activity block is missing",
+              "note-detail producer ignores a stable locator retained only by an older history entry",
+              "governed offline chain runs observe job, seals receipt, then ECP collects and restores",
+              "supported one-command canary re-observes, collects once, restores, and releases its lease",
+              "a closed persistent adb shell is poisoned immediately instead of hanging the next command"
+            ],
+            "unexpectedFailures": [],
+            "allowedFailuresHit": [
+              "failed JSON adapter surfaces only its bounded diagnostic code",
+              "nonpayment_v1: migrateLegacyPending frees a legacy waiting job and dispatches the fresh job",
+              "EvidenceStore fails closed on missing, escaped, or tampered private evidence files",
+              "writeJson legacy throws on write failure (no debtRecorder = fail-closed)",
+              "attachFile legacy throws on write failure (no debtRecorder = fail-closed)",
+              "Discovery primitive invokes only its fenced R0 producer once after durable intent",
+              "authorized exact primitive and candidate retries reuse before exhausted quota checks",
+              "Discovery candidate reservation requires a signed one-hop anchor and is idempotent",
+              "Discovery candidate rejects unsigned relation pairing before a second candidate charge",
+              "default production allowlist rejects metrics/feed even with a valid parser-job lineage",
+              "a receipt can be minted only through an explicit test-only capability and adapter allowlist entry",
+              "final send boundary atomically rejects an expired parent without consuming its receipt",
+              "a consumed receipt remains unreplayable after restart recovery",
+              "matrix: outbox corruption and symlink attacks are rejected safely",
+              "matrix: report counters",
+              "claim/heartbeat/checkpoint symlink escapes are rejected with no outside files",
+              "scope guard exact allowlist rejects repair-extra and invalid baseline",
+              "filesystem and Git verifiers enforce real lock, Mac receipt, replay authorization and completion bindings",
+              "grepFile finds commentCap in task-runner.mjs",
+              "grepFile finds timeoutMs in capabilities.json",
+              "verifyConstraint confirms comment-cap constraint",
+              "verifyConstraint confirms timeout-90s constraint",
+              "verifyConstraint confirms fail-closed constraint",
+              "verifyConstraint dry-run mode returns result without side effects",
+              "grepRepo finds a known token in the repo dirs",
+              "locateEvidence finds a real file by basename",
+              "note-detail producer fails closed when the top activity has no stable note locator",
+              "note-detail producer logs a secret-free shape when the current activity block is missing",
+              "note-detail producer ignores a stable locator retained only by an older history entry",
+              "governed offline chain runs observe job, seals receipt, then ECP collects and restores",
+              "supported one-command canary re-observes, collects once, restores, and releases its lease",
+              "a closed persistent adb shell is poisoned immediately instead of hanging the next command"
+            ],
+            "status": "KNOWN_FAILURE_MATCH"
+          }
+        ],
+        "cliVersion": "xhs.fusion.cli.v1"
+      }
+    }
+  },
+  "blockers": [],
+  "notes": [
+    "Imported service files were not modified.",
+    "Root package.json forwards commands and does not enable npm workspaces.",
+    "GitHub Actions YAML is stored at docs/fusion/source-fusion.workflow.yml because the current GitHub token lacks workflow scope.",
+    "Runtime ports, databases, scheduled tasks, and devices are unchanged."
+  ]
+}
