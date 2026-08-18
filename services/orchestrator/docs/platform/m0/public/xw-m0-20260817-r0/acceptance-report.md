@@ -8590,7 +8590,7 @@
 - **baselineId**: `xw-m0-20260817-r0`
 - **capturedAt**: `2026-08-17T13:00:00.000Z`
 - **conclusion**: `PASS_PENDING`
-- **gatedOn**: [`B2: three disposable Windows VMs (same immutable base image, Win10 x64 19045, Node 24.11.1, npm 11.6.2, Git 2.52.0, PowerShell 7.6.4, zh-CN, CST, cp936, core.autocrlf=true)`, `B3: candidate C frozen (M0-A/B/C merged), one fresh VM + fresh clone per round`]
+- **gatedOn**: [`B2: three disposable Windows VMs + one B1 drill VM, all clonefile clones of one base snapshot (UTM/QEMU, Windows 10 Pro 19045 via autounattend index 4, UEFI ESP+MSR+NTFS, zh-CN/CST/cp936, m0test non-admin + m0admin admin; toolchain Node LTS 24.19.0/npm 11.x, Git 2.55.0.4, PowerShell 7.6.5, core.autocrlf=true; r-instances network-isolated, drill instance keeps host-isolated net)`, `B3: candidate C frozen (M0-A/B/C merged), one fresh VM + fresh clone per round`]
 - **rounds**:
 
 ### [1]

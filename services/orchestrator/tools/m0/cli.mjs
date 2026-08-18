@@ -147,8 +147,10 @@ async function cmdRender(args) {
   if (out) writeFileSync(out, md);
   let compareResult = null;
   if (compare && existsSync(compare)) {
-    const existing = readFileSync(compare, "utf8");
-    compareResult = existing === md ? "MATCH" : "DIFF";
+    // autocrlf 下工作树可能是 CRLF；比对以 LF 归一化（仓库 index 为 LF 规范形）
+    const existing = readFileSync(compare, "utf8").replace(/\r\n/g, "\n");
+    const mdNorm = md.replace(/\r\n/g, "\n");
+    compareResult = existing === mdNorm ? "MATCH" : "DIFF";
   }
   emit({
     subcommand: "render",
