@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:xhs:contract:repair-completion:v1",
+  "title": "Windows repair completion bundle after separately authorized replay",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaId",
+    "schemaVersion",
+    "completionId",
+    "proposalId",
+    "proposalSha256",
+    "attempt",
+    "completedAt",
+    "sourceCheckpointSha256",
+    "resultCommit",
+    "macReview",
+    "replay",
+    "evidenceDebt",
+    "evidenceDebtAffectsBusinessResult",
+    "authority"
+  ],
+  "properties": {
+    "schemaId": { "const": "xhs.repair-completion.v1" },
+    "schemaVersion": { "const": 1 },
+    "completionId": { "type": "string", "pattern": "^repair_completion_[0-9a-f]{24}$" },
+    "proposalId": { "type": "string", "pattern": "^repair_[0-9a-f]{24}$" },
+    "proposalSha256": { "$ref": "#/$defs/sha256" },
+    "attempt": { "type": "integer", "minimum": 1, "maximum": 5 },
+    "completedAt": { "type": "string", "format": "date-time" },
+    "sourceCheckpointSha256": { "$ref": "#/$defs/sha256" },
+    "resultCommit": { "$ref": "#/$defs/gitSha" },
+    "macReview": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["approvedEventId", "deployableEventId"],
+      "properties": {
+        "approvedEventId": { "type": "string", "pattern": "^repair_event_" },
+        "deployableEventId": { "type": "string", "pattern": "^repair_event_" }
+      }
+    },
+    "replay": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["authorizationRef", "authorizationSha256", "authorizationCommit", "runId", "manifestSha256", "externalEffect", "paymentTransport"],
+      "properties": {
+        "authorizationRef": { "type": "string", "minLength": 1 },
+        "authorizationSha256": { "$ref": "#/$defs/sha256" },
+        "authorizationCommit": { "$ref": "#/$defs/gitSha" },
+        "runId": { "type": "string", "pattern": "^run_" },
+        "manifestSha256": { "$ref": "#/$defs/sha256" },
+        "externalEffect": { "const": false },
+        "paymentTransport": { "const": 0 }
+      }
+    },
+    "evidenceDebt": { "type": "array", "items": { "type": "object" } },
+    "evidenceDebtAffectsBusinessResult": { "const": false },
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["actorId", "actorRole", "reviewVerdictModified", "macWritePerformed"],
+      "properties": {
+        "actorId": { "type": "string", "minLength": 1 },
+        "actorRole": { "const": "windows_consumer" },
+        "reviewVerdictModified": { "const": false },
+        "macWritePerformed": { "const": false }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "gitSha": { "type": "string", "pattern": "^[0-9a-f]{40}$" }
+  }
+}

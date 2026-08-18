@@ -1,0 +1,341 @@
+import {
+  appendFileSync,
+  createReadStream,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  statfsSync,
+  writeFileSync,
+} from "node:fs";
+import { createHash } from "node:crypto";
+import { basename, dirname, join, resolve } from "node:path";
+
+import { canonicalJson } from "./canonical.mjs";
+import { ControlPlaneError } from "./errors.mjs";
+
+const SENSITIVE_KEYS = /(?:serial|runtime.?id|token|secret|password|authorization|cookie|api.?key)/i;
+
+export function redactRuntimeData(value) {
+  if (Array.isArray(value)) return value.map(redactRuntimeData);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([key]) => !SENSITIVE_KEYS.test(key))
+        .map(([key, child]) => [key, redactRuntimeData(child)]),
+    );
+  }
+  return value;
+}
+
+function atomicWriteJson(path, value) {
+  mkdirSync(dirname(path), { recursive: true });
+  const temporary = `${path}.${process.pid}.tmp`;
+  writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+  renameSync(temporary, path);
+}
+
+async function fileHash(path) {
+  const hash = createHash("sha256");
+  for await (const chunk of createReadStream(path)) hash.update(chunk);
+  return hash.digest("hex");
+}
+
+export class EvidenceStore {
+  constructor({
+    runsRoot,
+    state,
+    minFreeBytes = 128 * 1024 * 1024,
+    minExternalEffectFreeBytes = 1024 * 1024 * 1024,
+    debtRecorder = null,
+  }) {
+    this.runsRoot = resolve(runsRoot);
+    this.state = state;
+    this.minFreeBytes = minFreeBytes;
+    this.minExternalEffectFreeBytes = minExternalEffectFreeBytes;
+    // REX Phase 5 §8.4 #1：非支付 run 中证据写失败 → evidence_debt（不抛、不阻断派发）。
+    // debtRecorder 是 (entry) => void 回调；只在 nonpayment_v1 active 时由 ControlPlane
+    // 注入。缺省 null = legacy，写失败仍抛（fail-closed，与旧版一致）。
+    this.debtRecorder = typeof debtRecorder === "function" ? debtRecorder : null;
+    mkdirSync(this.runsRoot, { recursive: true });
+  }
+
+  freeBytes() {
+    const info = statfsSync(this.runsRoot);
+    return Number(info.bavail) * Number(info.bsize);
+  }
+
+  assertCapacity({ externalEffect = false, debtOnLowDisk = false, debtSink = null } = {}) {
+    const freeBytes = this.freeBytes();
+    const required = externalEffect ? this.minExternalEffectFreeBytes : this.minFreeBytes;
+    if (freeBytes < required) {
+      // REX Phase 5 §8.4：非支付 evidence 容量失败走 debt 旁路，不阻断派发。
+      // debtOnLowDisk=true 时记录 evidence_debt（经 debtSink 回调 + 返回 debt 标志），
+      // 不抛 EVIDENCE_DISK_LOW；唯一硬闸是资金最终提交（支付路径仍 fail-closed，
+      // 传 debtOnLowDisk=false/缺省即 legacy 抛错）。debtSink 缺省时只返回 debt 标志。
+      if (debtOnLowDisk) {
+        const debtEntry = {
+          code: "EVIDENCE_DISK_LOW",
+          externalEffect,
+          freeBytes,
+          requiredBytes: required,
+          createdAt: new Date().toISOString(),
+        };
+        if (typeof debtSink === "function") debtSink(debtEntry);
+        return { debt: true, ...debtEntry };
+      }
+      throw new ControlPlaneError("EVIDENCE_DISK_LOW", "not enough free space for a new run", {
+        status: 507,
+        details: { freeBytes, requiredBytes: required, externalEffect },
+      });
+    }
+    return freeBytes;
+  }
+
+  runDirectory(runId) {
+    return join(this.runsRoot, runId);
+  }
+
+  storageForRun(runId) {
+    const runDirectory = this.runDirectory(runId);
+    return {
+      runDirectory,
+      manifestPath: join(runDirectory, "manifest.json"),
+      eventsPath: join(runDirectory, "events.jsonl"),
+      evidenceDirectory: join(runDirectory, "evidence"),
+    };
+  }
+
+  getManifest(runId) {
+    const path = join(this.runDirectory(runId), "manifest.json");
+    if (!existsSync(path)) {
+      throw new ControlPlaneError("RUN_NOT_FOUND", `unknown run ${runId}`, { status: 404 });
+    }
+    return JSON.parse(readFileSync(path, "utf8"));
+  }
+
+  findByIdAndHash(evidenceId, sha256) {
+    const record = this.state.getEvidenceRecordInternal?.(evidenceId) || this.state.getEvidenceRecord(evidenceId);
+    if (!record) throw new ControlPlaneError("EVIDENCE_NOT_FOUND", "evidence record is absent", { status: 404 });
+    if (record.sha256 !== sha256) throw new ControlPlaneError("EVIDENCE_HASH_MISMATCH", "evidence hash does not match", { status: 409 });
+    if (typeof record.path !== "string" || record.path === "" || record.path.includes("\\")) {
+      throw new ControlPlaneError("EVIDENCE_PATH_INVALID", "evidence path is not a permitted relative path", { status: 409 });
+    }
+    const absolutePath = resolve(this.runDirectory(record.runId), record.path);
+    const allowedRoot = `${this.runDirectory(record.runId)}${process.platform === "win32" ? "\\" : "/"}`;
+    if (!absolutePath.startsWith(allowedRoot)) {
+      throw new ControlPlaneError("EVIDENCE_PATH_INVALID", "evidence path escapes its run directory", { status: 409 });
+    }
+    if (!existsSync(absolutePath) || !statSync(absolutePath).isFile()) {
+      throw new ControlPlaneError("EVIDENCE_FILE_MISSING", "evidence file is absent", { status: 409 });
+    }
+    const actualHash = createHash("sha256").update(readFileSync(absolutePath)).digest("hex");
+    if (actualHash !== record.sha256) {
+      throw new ControlPlaneError("EVIDENCE_HASH_MISMATCH", "evidence file no longer matches its durable hash", { status: 409 });
+    }
+    // Path is private storage metadata; callers receive an allowlisted evidence descriptor.
+    return { evidenceId: record.evidenceId, jobId: record.jobId, runId: record.runId, kind: record.kind, sha256: record.sha256, bytes: record.bytes };
+  }
+
+  initializeRun({ job, device, gitCommit = process.env.CONTROL_PLANE_GIT_COMMIT || "unknown", debtOnLowDisk = false, debtSink = null } = {}) {
+    this.assertCapacity({ externalEffect: job.externalEffect, debtOnLowDisk, debtSink });
+    const directory = this.runDirectory(job.runId);
+    const storage = this.storageForRun(job.runId);
+    const manifest = {
+      schemaVersion: 2,
+      runId: job.runId,
+      jobId: job.jobId,
+      actorId: job.actorId,
+      nodeId: device.nodeId,
+      deviceId: device.deviceId,
+      deviceAlias: device.alias,
+      capabilityId: job.capabilityId,
+      capabilityMaturity: job.capability.maturity,
+      capabilityRisk: job.capability.risk,
+      gitCommit,
+      createdAt: job.createdAt,
+      routeDecision: job.routeDecision,
+      storage,
+      evidence: [],
+    };
+    // REX Phase 5 §8.4 #1：run 初始化的 mkdirSync + manifest 写在 debtRecorder 注入时
+    // （nonpayment_v1）走 debt 旁路——manifest 缺失是 evidence debt，不阻断派发。appendEvent
+    // 已自带 debt 弹性。legacy（无 recorder）仍向上抛，保持旧 fail-closed。
+    try {
+      mkdirSync(join(directory, "evidence"), { recursive: true });
+      atomicWriteJson(join(directory, "manifest.json"), redactRuntimeData(manifest));
+    } catch (error) {
+      if (this.debtRecorder) {
+        this.debtRecorder({
+          code: "EVIDENCE_WRITE_FAILED",
+          runId: job.runId,
+          eventType: "manifest",
+          cause: error.code || String(error.message || error),
+          createdAt: new Date().toISOString(),
+        });
+      } else {
+        throw error;
+      }
+    }
+    this.appendEvent(job.runId, {
+      type: "route.assigned",
+      jobId: job.jobId,
+      routeDecision: job.routeDecision,
+      createdAt: new Date().toISOString(),
+    });
+    this.appendEvent(job.runId, {
+      type: "run.initialized",
+      jobId: job.jobId,
+      deviceId: device.deviceId,
+      capabilityId: job.capabilityId,
+      createdAt: new Date().toISOString(),
+    });
+    return { directory, manifest };
+  }
+
+  appendEvent(runId, event) {
+    const directory = this.runDirectory(runId);
+    try {
+      mkdirSync(directory, { recursive: true });
+      appendFileSync(
+        join(directory, "events.jsonl"),
+        `${canonicalJson(redactRuntimeData(event))}\n`,
+        { mode: 0o600 },
+      );
+    } catch (error) {
+      // REX Phase 5 §8.4 #1：debtRecorder 注入时（nonpayment_v1 active），证据写失败
+      // 记 evidence_debt 并吞错——非支付 run 不因证据写失败而阻断派发。legacy（无
+      // recorder）仍向上抛，保持旧 fail-closed 语义。cause 取 err.code 优先（ENOSPC/
+      // ENOTDIR/EACCES 等），回落 message。
+      if (this.debtRecorder) {
+        this.debtRecorder({
+          code: "EVIDENCE_WRITE_FAILED",
+          runId,
+          eventType: event && typeof event === "object" && "type" in event ? event.type : null,
+          cause: error.code || String(error.message || error),
+          createdAt: new Date().toISOString(),
+        });
+        return;
+      }
+      throw error;
+    }
+  }
+
+  async attachFile({ job, sourcePath, kind, label }) {
+    if (!existsSync(sourcePath)) {
+      throw new ControlPlaneError("EVIDENCE_FILE_MISSING", "adapter evidence file is missing", {
+        status: 500,
+        details: { kind, label },
+      });
+    }
+    const stats = statSync(sourcePath);
+    if (!stats.isFile() || stats.size === 0) {
+      throw new ControlPlaneError("EVIDENCE_FILE_INVALID", "adapter evidence file is empty or not a file", {
+        status: 500,
+        details: { kind, label },
+      });
+    }
+    const hash = await fileHash(sourcePath);
+    const safeLabel = String(label || basename(sourcePath)).replace(/[^A-Za-z0-9._-]+/g, "_");
+    const relativePath = join("evidence", `${safeLabel}-${hash.slice(0, 12)}${basename(sourcePath).includes(".") ? `.${basename(sourcePath).split(".").pop()}` : ""}`);
+    const targetPath = join(this.runDirectory(job.runId), relativePath);
+    // REX Phase 5 §8.4 #1 深层：证据文件落盘失败，debtRecorder 注入时（nonpayment_v1）记
+    // evidence_debt + 返回 stub record，非支付 run 不因证据写失败阻断派发。source 缺失/空
+    // 仍是 adapter 契约违规（上方抛 EVIDENCE_FILE_*），不归 debt。legacy（无 recorder）抛错。
+    try {
+      writeFileSync(targetPath, readFileSync(sourcePath), { mode: 0o600 });
+      const record = this.state.recordEvidence({
+        jobId: job.jobId,
+        runId: job.runId,
+        kind,
+        path: relativePath,
+        sha256: hash,
+        bytes: stats.size,
+      });
+      this.#refreshManifest(job.runId);
+      return record;
+    } catch (error) {
+      if (this.debtRecorder) {
+        this.debtRecorder({
+          code: "EVIDENCE_WRITE_FAILED",
+          runId: job.runId,
+          eventType: "attachFile",
+          cause: error.code || String(error.message || error),
+          createdAt: new Date().toISOString(),
+        });
+        return { debt: true, evidenceId: null, sha256: null, path: null, bytes: 0 };
+      }
+      throw error;
+    }
+  }
+
+  writeJson({ job, kind, label, value }) {
+    const safeLabel = String(label).replace(/[^A-Za-z0-9._-]+/g, "_");
+    const sanitized = redactRuntimeData(value);
+    const content = `${canonicalJson(sanitized)}\n`;
+    const hash = createHash("sha256").update(content).digest("hex");
+    const relativePath = join("evidence", `${safeLabel}-${hash.slice(0, 12)}.json`);
+    const targetPath = join(this.runDirectory(job.runId), relativePath);
+    // REX Phase 5 §8.4 #1 深层：result/explicit-receipt 等证据 JSON 落盘失败，debtRecorder
+    // 注入时（nonpayment_v1）记 evidence_debt + 返回 stub record（sha256/evidenceId/path=null，
+    // debt=true），runJob 末尾 result 落盘与 explicit-receipt 路径不崩；legacy（无 recorder）抛错
+    // 保持 fail-closed。explicit-receipt 拿到 stub 时 evidenceHash=null，receipt 退化为 best-effort。
+    try {
+      writeFileSync(targetPath, content, { mode: 0o600 });
+      const record = this.state.recordEvidence({
+        jobId: job.jobId,
+        runId: job.runId,
+        kind,
+        path: relativePath,
+        sha256: hash,
+        bytes: Buffer.byteLength(content),
+      });
+      this.#refreshManifest(job.runId);
+      return record;
+    } catch (error) {
+      if (this.debtRecorder) {
+        this.debtRecorder({
+          code: "EVIDENCE_WRITE_FAILED",
+          runId: job.runId,
+          eventType: "writeJson",
+          cause: error.code || String(error.message || error),
+          createdAt: new Date().toISOString(),
+        });
+        return { debt: true, evidenceId: null, sha256: null, path: null, bytes: 0 };
+      }
+      throw error;
+    }
+  }
+
+  // Discovery has no generic Capability job: its immutable reservation is the only
+  // source-job authority. Keep its evidence in the private run tree and never return a path.
+  writeDiscoveryJson({ discoveryRunId, sourceJobId, kind, label, value }) {
+    if (typeof discoveryRunId !== "string" || typeof sourceJobId !== "string") {
+      throw new ControlPlaneError("DISCOVERY_EVIDENCE_INPUT_INVALID", "Discovery evidence requires its run and reservation", { status: 400 });
+    }
+    const safeLabel = String(label).replace(/[^A-Za-z0-9._-]+/g, "_");
+    const content = `${canonicalJson(redactRuntimeData(value))}\n`;
+    const hash = createHash("sha256").update(content).digest("hex");
+    const relativePath = join("evidence", `${safeLabel}-${hash.slice(0, 12)}.json`);
+    const directory = this.runDirectory(discoveryRunId);
+    mkdirSync(join(directory, "evidence"), { recursive: true });
+    writeFileSync(join(directory, relativePath), content, { mode: 0o600 });
+    const record = this.state.recordEvidence({
+      jobId: null,
+      runId: discoveryRunId,
+      kind,
+      path: relativePath,
+      sha256: hash,
+      bytes: Buffer.byteLength(content),
+    });
+    return this.findByIdAndHash(record.evidenceId, record.sha256);
+  }
+
+  #refreshManifest(runId) {
+    const path = join(this.runDirectory(runId), "manifest.json");
+    const manifest = JSON.parse(readFileSync(path, "utf8"));
+    manifest.evidence = this.state.listEvidence(runId);
+    atomicWriteJson(path, manifest);
+  }
+}

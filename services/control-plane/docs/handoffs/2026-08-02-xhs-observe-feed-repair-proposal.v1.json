@@ -1,0 +1,203 @@
+{
+  "schemaId": "xhs.repair-proposal.v1",
+  "schemaVersion": 1,
+  "proposalId": "repair_ff7fc51b35aec35227cf5eb6",
+  "idempotencyKey": "repair:ff7fc51b35aec35227cf5eb6a22d708566772f2dbe37241ea7f1ee5c5cffa041",
+  "createdAt": "2026-08-02T09:30:00.000Z",
+  "status": "proposed",
+  "source": {
+    "bundleId": "p78-feed-loop-20260802",
+    "manifestSha256": "14ab37290468fd6dd82ed11dd615d5dea9494b6fabea8c4166f8a814ff3fae7d",
+    "primaryRunId": "run_cb3cd098-60e5-4e27-9406-ed0403fc0eb0",
+    "runIds": [
+      "run_cb3cd098-60e5-4e27-9406-ed0403fc0eb0",
+      "run_4ea05df4-cb7e-4d71-bf23-9a244f9379af"
+    ],
+    "producerCommit": "5677e61e3363d2afc415e9add5f89f873fc7a32d",
+    "releaseId": "rel-shadow-2026-08-02-p7a-stable-locator",
+    "review": {
+      "reviewId": "review_p78_feed_20260802_mac_independent",
+      "receiptSha256": "42c6efeffb05c605417e986ce75c4f14ebd02f32c390a65668a11ad807fd6f52",
+      "reviewedAt": "2026-08-02T08:22:59Z",
+      "disposition": "repairable_debt"
+    }
+  },
+  "target": {
+    "repository": "gifted-professor/xhs-device-agent",
+    "branch": "main",
+    "baseCommit": "5677e61e3363d2afc415e9add5f89f873fc7a32d",
+    "app": "xhs",
+    "capabilityId": "xhs.observe.feed",
+    "skillBinding": {
+      "path": "skills/xhs/xhs-observe-feed/SKILL.md",
+      "version": "0.1",
+      "sourceSha256": "2baba76b8c9c877c1f63e2a824096c2065f90031db119238a6e33bf864e9720d"
+    }
+  },
+  "finding": {
+    "findingId": "finding_p78_feed_evidence_projection",
+    "code": "XHS_OBSERVE_FEED_EVIDENCE_INCOMPLETE",
+    "severity": "low",
+    "summary": "xhs.observe.feed lacks screenshot/UI dump artifacts and returns output without pageClass, cardCount or artifactRefs",
+    "repairable": true,
+    "evidenceRefs": [
+      "bundle:p78-feed-loop-20260802",
+      "manifest:14ab37290468fd6dd82ed11dd615d5dea9494b6fabea8c4166f8a814ff3fae7d",
+      "run:run_cb3cd098-60e5-4e27-9406-ed0403fc0eb0",
+      "run:run_4ea05df4-cb7e-4d71-bf23-9a244f9379af",
+      "artifact:result-19949bb2808e.json"
+    ],
+    "observed": {
+      "capabilityId": "xhs.observe.feed",
+      "resultOutput": {},
+      "missing": [
+        "screenshot artifact",
+        "UI dump artifact",
+        "output.pageClass",
+        "output.cardCount",
+        "output.artifactRefs"
+      ],
+      "externalEffect": false,
+      "paymentTransport": 0
+    },
+    "evidenceDebt": [
+      {
+        "layer": "adapter-evidence",
+        "code": "MISSING_SCREENSHOT",
+        "cause": "Both bound observe.feed runs have no screenshot artifact; business result remains succeeded"
+      },
+      {
+        "layer": "adapter-evidence",
+        "code": "MISSING_UI_DUMP",
+        "cause": "Both bound observe.feed runs have no UI hierarchy artifact; business result remains succeeded"
+      },
+      {
+        "layer": "adapter-output",
+        "code": "MISSING_REDACTED_PROJECTION",
+        "cause": "result output lacks pageClass, cardCount and artifactRefs; business result remains succeeded"
+      }
+    ]
+  },
+  "policy": {
+    "lane": "source_only",
+    "effectClass": "none",
+    "evidenceFailureMode": "debt_only",
+    "allowedChangeKinds": [
+      "evidence_exporter",
+      "screenshot_or_ui_dump_artifact",
+      "manifest_or_artifact_hash",
+      "redacted_observation_projection",
+      "logging_or_lifecycle",
+      "test_fixture",
+      "nonsemantic_recovery_or_observation"
+    ],
+    "allowedPaths": [
+      "apps/xhs/adapter.mjs",
+      "control-plane/lib/control-plane.mjs",
+      "control-plane/lib/evidence-store.mjs",
+      "control-plane/lib/evidence-exporter.mjs",
+      "control-plane/schema/explorer-run.schema.json",
+      "scripts/fast-operator.mjs",
+      "tests/control-plane-adapters.test.mjs",
+      "tests/evidence-exporter.test.mjs",
+      "tests/fixtures/**"
+    ],
+    "forbiddenPaths": [
+      "skills/SKILL.md",
+      "registry.mjs",
+      "control.db",
+      "**/control.db",
+      "**/*payment*",
+      "**/*approval*",
+      "**/*standing-grant*",
+      "**/*auth*",
+      "**/*token*",
+      "**/*secret*",
+      "install-registry-task.ps1",
+      "task-launch.json"
+    ],
+    "acceptanceConditions": [
+      "xhs.observe.feed remains read-only with externalEffect=false and paymentTransport=0",
+      "successful output includes redacted pageClass, integer cardCount and screenshot/UI dump artifactRefs",
+      "manifest and artifact refs bind bytes with SHA-256 and exportAllowed redaction metadata",
+      "evidence write failure adds evidence debt but does not change adapter call count, job business result or non-payment dispatch",
+      "full tests, scope guard and secret scan pass"
+    ],
+    "prohibitions": [
+      "Do not change selectors, taps, input, collect, publish, payment or other business semantics",
+      "Do not modify root skills/SKILL.md, governance authority, payment guard, approval, Standing Grant, credentials, control.db or deployment configuration",
+      "Do not deploy Windows, operate devices, submit job/session or self-approve a review verdict"
+    ],
+    "limits": {
+      "maxFiles": 8,
+      "maxDiffLines": 500,
+      "maxAttempts": 3
+    },
+    "heartbeat": {
+      "intervalSeconds": 60,
+      "claimTtlSeconds": 900
+    },
+    "circuitBreaker": {
+      "failureThreshold": 2,
+      "windowSeconds": 3600
+    },
+    "authorities": {
+      "windows": [
+        "claim",
+        "heartbeat",
+        "fix",
+        "source_checkpoint",
+        "completion_bundle"
+      ],
+      "mac": [
+        "source_review",
+        "review_verdict",
+        "deployable",
+        "cancel"
+      ],
+      "windowsCannot": [
+        "self_approve",
+        "write_mac",
+        "modify_review_verdict",
+        "deploy_without_authority",
+        "operate_device_without_authority"
+      ],
+      "macCannot": [
+        "operate_device",
+        "submit_job_or_session",
+        "deploy_windows"
+      ]
+    }
+  },
+  "attempt": {
+    "current": 0,
+    "max": 3
+  },
+  "claim": {
+    "holder": null,
+    "claimEventId": null,
+    "claimedAt": null,
+    "heartbeatAt": null,
+    "expiresAt": null,
+    "lockRef": null,
+    "lockSha256": null
+  },
+  "supersession": {
+    "supersedes": [],
+    "supersededBy": null
+  },
+  "circuitBreaker": {
+    "state": "closed",
+    "consecutiveFailures": 0,
+    "threshold": 2,
+    "windowSeconds": 3600,
+    "openedAt": null,
+    "reason": null
+  },
+  "transport": {
+    "discovery": "registry.knowledge",
+    "updates": "registry.knowledge+sealed_outbox",
+    "knowledgeId": "repair_ff7fc51b35aec35227cf5eb6",
+    "outboxNamespace": "repair/repair_ff7fc51b35aec35227cf5eb6"
+  }
+}

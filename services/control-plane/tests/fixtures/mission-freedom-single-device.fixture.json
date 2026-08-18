@@ -1,0 +1,30 @@
+{
+  "device": {
+    "alias": "01",
+    "physicalLabel": "acceptance-single-device",
+    "tags": ["acceptance", "single-device"]
+  },
+  "target": "target-acceptance-hash",
+  "policy": {
+    "app": "xhs",
+    "account": "offline-local-alias",
+    "parallelism": 1,
+    "scope": {
+      "actions": ["follow", "publish", "delete"],
+      "targets": { "kind": "fingerprint", "values": ["target-acceptance-hash"] },
+      "totalCount": 5,
+      "perTargetCount": 5,
+      "frequency": { "count": 5, "windowSeconds": 3600 }
+    },
+    "validity": { "expiresAt": "2099-07-29T16:00:00Z" },
+    "policy": { "publish": "allow_within_scope", "delete": "confirm" }
+  },
+  "expectedCheckpoints": {
+    "offline": "passed",
+    "r0r1Canary": "pending_live",
+    "legacyNonMissionR2ManualGate": "pending_live",
+    "scopedAutomaticR2": "blocked_by_adr_acceptance",
+    "independentReview": "pending",
+    "restorationAndLeaseCleanup": "pending_live"
+  }
+}

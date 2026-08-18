@@ -1,0 +1,203 @@
+const XIANYU_PACKAGE = "com.taobao.idlefish";
+
+function cleanLabel(value) {
+  return String(value || "")
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function validBounds(value) {
+  return Array.isArray(value)
+    && value.length === 4
+    && value.every((part) => Number.isFinite(Number(part)));
+}
+
+function normalizeEntries(elements = [], semanticNodes = []) {
+  const entries = [];
+  for (const [source, values] of [["visual", elements], ["semantic", semanticNodes]]) {
+    for (const value of values || []) {
+      const label = cleanLabel(value?.label ?? value?.text ?? value?.contentDesc);
+      if (!label) continue;
+      entries.push({
+        label,
+        bounds: validBounds(value?.bounds) ? value.bounds.map(Number) : null,
+        source,
+      });
+    }
+  }
+  return entries.filter((entry, index, all) => all.findIndex((other) => (
+    other.label === entry.label
+    && other.source === entry.source
+    && JSON.stringify(other.bounds) === JSON.stringify(entry.bounds)
+  )) === index);
+}
+
+function matching(entries, pattern, predicate = () => true) {
+  return entries.filter((entry) => pattern.test(entry.label) && predicate(entry));
+}
+
+function labelsOf(entries) {
+  return [...new Set(entries.map((entry) => entry.label))].slice(0, 24);
+}
+
+function result(pageType, confidence, matches, reasons, sourceCounts) {
+  return {
+    schemaVersion: 1,
+    pageType,
+    confidence: Number(confidence.toFixed(3)),
+    safeStateVerified: pageType === "main-safe" && confidence >= 0.9,
+    matchedLabels: labelsOf(matches),
+    reasons,
+    sources: sourceCounts,
+  };
+}
+
+export function classifyXianyuPage({
+  elements = [],
+  semanticNodes = [],
+  focus = null,
+  resolution = null,
+} = {}) {
+  const entries = normalizeEntries(elements, semanticNodes);
+  const sourceCounts = {
+    visual: entries.filter((entry) => entry.source === "visual").length,
+    semantic: entries.filter((entry) => entry.source === "semantic").length,
+  };
+  const height = Array.isArray(resolution) && Number(resolution[1]) > 0
+    ? Number(resolution[1])
+    : 2400;
+  const width = Array.isArray(resolution) && Number(resolution[0]) > 0
+    ? Number(resolution[0])
+    : 1080;
+  const inBottomBar = (entry) => entry.bounds && entry.bounds[1] >= height * 0.82;
+
+  // 对话框动作必须是独立精确标签；发布描述正文可能合法包含“不保存草稿”等说明文字。
+  const discard = matching(entries, /^(不保存|放弃修改|放弃编辑)$/);
+  const draft = matching(entries, /^(存草稿|保存草稿)$/);
+  const skuExitNotice = matching(entries, /^退出后不会保存这次设置的规格哦$/);
+  const skuExitCancel = matching(entries, /^取消(?:[,，].*)?$/);
+  const skuExitConfirm = matching(entries, /^确认退出(?:[,，].*)?$/);
+  if (skuExitNotice.length && skuExitCancel.length && skuExitConfirm.length) {
+    return result(
+      "sku-exit-dialog",
+      0.99,
+      [...skuExitNotice, ...skuExitCancel, ...skuExitConfirm],
+      ["SKU exit notice and both explicit dialog actions are visible"],
+      sourceCounts,
+    );
+  }
+  if (discard.length && draft.length) {
+    return result(
+      "discard-dialog",
+      0.99,
+      [...discard, ...draft],
+      ["discard and draft actions are visible in the same dialog"],
+      sourceCounts,
+    );
+  }
+
+  const countedNext = matching(entries, /下一步\s*[（(]\s*\d+\s*[）)]/);
+  const pickerMarker = matching(entries, /相册|最近项目|所有照片|拍照|拍视频/);
+  if (countedNext.length || (pickerMarker.length >= 2 && matching(entries, /完成|下一步/).length)) {
+    return result(
+      "image-picker",
+      countedNext.length && pickerMarker.length ? 0.98 : 0.92,
+      [...countedNext, ...pickerMarker],
+      ["image-picker navigation fingerprint is present"],
+      sourceCounts,
+    );
+  }
+
+  // 服务类 compose 滚动到中下部后会同时露出“商品规格/价格和库存”，旧规则会误判成
+  // SKU sheet。只有精确右上最终发布位 + 至少两个服务表单锚点才优先认作 compose。
+  const topRightPublish = matching(entries, /^发布(?:[,，].*)?$/, (entry) => entry.bounds
+    && entry.bounds[0] >= width * 0.72 && entry.bounds[1] < height * 0.1
+    && entry.bounds[2] > width * 0.92);
+  const scrolledComposeAnchors = [
+    matching(entries, /分类.*预计工期.*售后服务|预计工期|售后服务/),
+    matching(entries, /^商品规格(?:[,，\s]|$)/),
+    matching(entries, /^价格和库存(?:[,，\s]|$)/),
+    matching(entries, /^发货方式(?:[,，\s]|$)|^运费(?:[,，\s]|$)/),
+  ].filter((matches) => matches.length);
+  if (topRightPublish.length && scrolledComposeAnchors.length >= 2) {
+    return result(
+      "publish-compose",
+      0.98,
+      [...topRightPublish, ...scrolledComposeAnchors.flat()],
+      ["top-right final publish control and scrolled service form anchors are present"],
+      sourceCounts,
+    );
+  }
+
+  const stock = matching(entries, /(^|\s)库存($|\s)|库存数量/);
+  const price = matching(entries, /(^|\s)价格($|\s)|售价/);
+  const skuMarker = matching(entries, /设置宝贝规格|添加规格类型|批量设置|商品规格|销售属性|规格名称|规格值/);
+  const combinedPriceStock = matching(entries, /价格.{0,12}库存|库存.{0,12}价格/);
+  const batchPriceStockTitle = matching(entries, /^设置价格和库存$/);
+  const selectedSpecs = matching(entries, /^选中的规格(?:\s|$)/);
+  const batchPriceField = matching(entries, /^价格(?:[,，\s]|$)/);
+  const batchStockField = matching(entries, /^库存(?:[,，\s]|$)/);
+  if (batchPriceStockTitle.length && selectedSpecs.length
+    && batchPriceField.length && batchStockField.length) {
+    return result(
+      "sku-sheet",
+      0.98,
+      [...batchPriceStockTitle, ...selectedSpecs, ...batchPriceField, ...batchStockField],
+      ["selected SKU combinations and batch price/stock fields are present"],
+      sourceCounts,
+    );
+  }
+  if ((stock.length && price.length && skuMarker.length)
+    || (skuMarker.length && combinedPriceStock.length)) {
+    return result(
+      "sku-sheet",
+      0.97,
+      [...stock, ...price, ...skuMarker, ...combinedPriceStock],
+      ["SKU configuration and price/stock markers are present"],
+      sourceCounts,
+    );
+  }
+
+  const description = matching(entries, /宝贝描述|说说宝贝|描述一下宝贝|宝贝标题/);
+  const commerce = matching(entries, /商品规格|分类|成色|运费|发货方式|退货地址/);
+  const publish = matching(entries, /(^|\s)发布($|\s)/);
+  if (description.length && commerce.length && publish.length) {
+    return result(
+      "publish-compose",
+      0.96,
+      [...description, ...commerce, ...publish],
+      ["description, commerce field, and final publish markers are present"],
+      sourceCounts,
+    );
+  }
+
+  const bottomHome = matching(entries, /^(闲鱼|首页)$/, inBottomBar);
+  const bottomMessages = matching(entries, /^消息$/, inBottomBar);
+  const bottomMine = matching(entries, /^我的$/, inBottomBar);
+  const bottomMatches = [...bottomHome, ...bottomMessages, ...bottomMine];
+  const visualBottomLabels = new Set(bottomMatches
+    .filter((entry) => entry.source === "visual")
+    .map((entry) => entry.label));
+  const focusIsMain = focus?.package === XIANYU_PACKAGE && /MainActivity/.test(String(focus?.activity || ""));
+  const visualMainFingerprint = (visualBottomLabels.has("闲鱼") || visualBottomLabels.has("首页"))
+    && visualBottomLabels.has("消息")
+    && visualBottomLabels.has("我的");
+  if (focusIsMain && visualMainFingerprint) {
+    return result(
+      "main-safe",
+      0.98,
+      bottomMatches,
+      ["fresh MainActivity focus and complete bottom-bar fingerprint agree"],
+      sourceCounts,
+    );
+  }
+
+  const reasons = [];
+  if (!entries.length) reasons.push("no visual or semantic labels were available");
+  if (focusIsMain && !visualMainFingerprint) {
+    reasons.push("MainActivity focus lacks the complete visual bottom-bar fingerprint");
+  }
+  if (!reasons.length) reasons.push("no page fingerprint reached the fail-closed threshold");
+  return result("unknown", 0, entries.slice(0, 12), reasons, sourceCounts);
+}

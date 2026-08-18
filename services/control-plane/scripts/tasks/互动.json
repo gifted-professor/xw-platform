@@ -1,0 +1,11 @@
+{
+  "name": "互动",
+  "loops": 15,
+  "restBetweenLoops": { "minMs": 12000, "maxMs": 30000 },
+  "onError": "skip",
+  "steps": [
+    { "action": "scrollN", "n": 2 },
+    { "action": "commentOnOpenNote", "idx": 0, "skipVideo": false, "maxScrolls": 6 },
+    { "action": "commentOnOpenNote", "idx": 1, "skipVideo": false, "maxScrolls": 6 }
+  ]
+}

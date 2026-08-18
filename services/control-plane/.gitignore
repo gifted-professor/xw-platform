@@ -1,0 +1,31 @@
+.env
+config/local.psd1
+data/*
+!data/.gitkeep
+*.png
+*.jpg
+*.jpeg
+*.xml
+*.csv
+*.log
+.idea/
+.vscode/
+control-plane/runtime/
+config/control-plane.devices.json
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
+# cleanup additions (local scratch, not source)
+tmp/
+.DS_Store
+*.bak-local
+*.bak
+
+# local ad-hoc / repair runtime (not source)
+runtime/
+_phaseA_submit.mjs
+_poll_job.mjs
+_poll_job2.mjs
+_submit.cjs
+_tmp_submit.ps1
