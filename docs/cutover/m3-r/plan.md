@@ -1,8 +1,8 @@
 # M3-R：XW Platform Runtime Source Cutover
 
-> 状态：**已定义，未启动**（2026-08-19）。
-> 前置条件：PR #14 完成机器级验收并合并（`m3:accept = PASS`），`M3_SOURCE_GATE` 锁定。
-> 在此之前不实现 R1+，不开放 `LIVE_CANARY_GATE` / `RUNTIME_CUTOVER_GATE`，不操作现场。
+> 状态：**R3+R4 已执行（2026-08-19），LIVE_CANARY_GATE=PASS、RUNTIME_CUTOVER_GATE=PASS**。
+> 落地记录与 receipts：见 `production-cutover.md`、`production-cutover-receipt.v1.json`、`canary-receipt.v1.json`、`state-path-migration-receipt.v1.json`、`legacy-reference-scan.v1.json`。
+> R5（状态路径收敛）已随切换一并完成；R6（稳定观察与旧仓退役）未开始。
 
 它的目的不是马上让 DSH、Open Action、Graph、Multi-Agent 全部控制真机，而是先完成一件更基础的事：
 

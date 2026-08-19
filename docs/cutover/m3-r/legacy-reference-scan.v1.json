@@ -1,0 +1,43 @@
+{
+  "schemaId": "xw.cutover.legacy-reference-scan.v1",
+  "generatedAt": "2026-08-19T08:23:01.318Z",
+  "ok": true,
+  "processScan": {
+    "result": "无任何运行进程引用旧 checkout（xhs-registry / xhs-routing-v1-1 / xhs-device-agent）；扫描时刻仅检出扫描命令自身",
+    "method": "Win32_Process CommandLine 全量匹配"
+  },
+  "scheduledTaskReferences": [
+    {
+      "name": "XhsDeviceRegistry",
+      "references": "C:\\Users\\Public\\xhs-registry",
+      "state": "Disabled",
+      "note": "定义保留未删（回滚单元一部分）；enabled=false 不会再拉起"
+    },
+    {
+      "name": "XhsDeviceControlPlaneV1",
+      "references": "C:\\Users\\Public\\xhs-routing-v1-1",
+      "state": "Ready",
+      "note": "无触发器、Interactive 登录，保持原状未动（切换前即不在跑）"
+    },
+    {
+      "name": "XhsScoutScout",
+      "references": "C:\\Users\\Public\\xhs-routing-v1-1\\scout\\scout.mjs",
+      "state": "Ready",
+      "note": "既有 TimeTrigger 任务，非本次切换范围，留待 LEGACY_RETIREMENT 阶段"
+    },
+    {
+      "name": "XhsXwEvolveWorker",
+      "references": "C:\\Users\\Public\\xhs-registry\\ops\\xw-evolve-worker.mjs + 旧 registry.db 路径",
+      "state": "Ready",
+      "note": "既有 TimeTrigger 任务，仍指向旧 DB 路径；留待退役阶段处理，本次未动"
+    },
+    {
+      "name": "XhsFastOperator01-04Live",
+      "references": "xhs-routing-v1-1 scripts",
+      "state": "Ready",
+      "note": "无触发器，保持原状"
+    }
+  ],
+  "envVarReferences": "unknown（未做全机环境变量扫描；进程命令行与计划任务已扫）",
+  "verdict": "两个生产服务（17920/17930）已无任何旧 checkout 引用；其余既有任务对旧目录的引用如实记录，留待 M3-R6 退役阶段处理"
+}

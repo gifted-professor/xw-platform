@@ -1,11 +1,24 @@
 # 接手文档 — 2026-08-19
 
-给新开在 **本目录**（`C:\Users\Public\xw-fusion\xw-platform`）的 agent。  
-先读本文，再动手。人确认之前不要合 PR、不要部署、不要碰手机。
+## ⚡ 2026-08-19 切换后现状（最新，先读这段）
+
+**现场已切到 xw-platform（M3-R3+R4 已执行，两个 Gate 均 PASS）。**
+
+- 17920 Control Plane 与 17930 Orchestrator 现在都跑 `C:\Users\Public\xw-runtime\releases\xw-20260819-f337079`（= main `f337079`），由新计划任务 `XW Platform Control Plane` / `XW Platform Orchestrator`（BootTrigger, SYSTEM, 启用）拉起，重启可活。
+- 两个 DB 已迁到 `C:\Users\Public\xw-runtime\state\{orchestrator,control-plane}\`；control.db 已迁移到 user_version=18；evidence/logs 在 `xw-runtime\evidence|logs`。
+- 旧任务：`XhsDeviceRegistry` 已 **Disabled（未删）**；`XhsDeviceControlPlaneV1` 保持原状。旧 checkout（`xhs-registry`、`xhs-routing-v1-1`）未动，是回滚单元的一部分。
+- 回滚单元：`xw-runtime\rollback\final-20260819\snapshots`（双 DB，integrity ok）+ 旧任务定义 + 旧代码目录。回滚步骤见 `docs/cutover/m3-r/plan.md` §十二。
+-  receipts：`docs/cutover/m3-r/{production-cutover-receipt,canary-receipt,state-path-migration-receipt,legacy-reference-scan}.v1.json`。
+- 新任务对**非提权** `Get-ScheduledTask` 不可见（SYSTEM 任务），查询/操作需管理员 PowerShell。
+- 注意两个坑：① 不要用 junction 路径直接 `node xw-runtime\current\...` 启动服务（node realpath 主模块会静默退出，必须经过 `launch-*.ps1` 先解析）；② launcher ps1 必须 ASCII 或带 BOM（PS 5.1 编码坑）。
+- 支付红线未变：credential/final commit 均需 HUMAN；探针验证见 canary-receipt。
+- 未做：真实 legacy job 试跑（保守跳过）；`XhsScoutScout`/`XhsXwEvolveWorker` 等既有任务仍引用旧目录（M3-R6 退役范畴）。
 
 ---
 
-## 0. 你在哪一侧
+> 以下为切换前的历史接手文档，目录角色描述已过时（旧目录不再跑生产），保留作背景。
+
+## 0. 你在哪一侧（历史）
 
 - **本仓 = 源码 / 治理主线**。新功能只写这里。
 - **不是现场运行目录**。Windows 上真正在跑的仍是下面两个旧文件夹。

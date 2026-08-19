@@ -1,0 +1,36 @@
+{
+  "schemaId": "xw.cutover.state-path-migration.v1",
+  "generatedAt": "2026-08-19T08:23:01.318Z",
+  "ok": true,
+  "note": "情况 B：两个 DB 原本在旧目录内，已迁移到 xw-runtime\\state；不合库，仍两库两子目录",
+  "migrations": [
+    {
+      "db": "registry",
+      "from": "C:\\Users\\Public\\xhs-registry\\registry.db",
+      "to": "C:\\Users\\Public\\xw-runtime\\state\\orchestrator\\registry.db",
+      "sourceSnapshot": "cutover-20260819T071906Z/snapshots/registry.snapshot.db",
+      "hashMatchSnapshot": true,
+      "integrityCheck": "ok",
+      "userVersionBefore": 0,
+      "userVersionAfter": 0
+    },
+    {
+      "db": "control",
+      "from": "C:\\Users\\Public\\xhs-agent-control\\control.db",
+      "to": "C:\\Users\\Public\\xw-runtime\\state\\control-plane\\control.db",
+      "sourceSnapshot": "cutover-20260819T071906Z/snapshots/control.snapshot.db",
+      "hashMatchSnapshot": true,
+      "integrityCheck": "ok",
+      "userVersionBefore": 15,
+      "userVersionAfter": 18,
+      "note": "15→18 为 xw-platform 启动迁移，与 rehearsal-receipt 一致"
+    }
+  ],
+  "otherPaths": {
+    "runsRootOld": "C:\\Users\\Public\\xhs-agent-runs",
+    "runsRootNew": "C:\\Users\\Public\\xw-runtime\\evidence",
+    "logsNew": "C:\\Users\\Public\\xw-runtime\\logs",
+    "devicesConfig": "复制到 xw-runtime\\secrets\\control-plane.devices.json（含序列号，ACL 限制，不进 git）"
+  },
+  "legacyDirsUntouched": true
+}
