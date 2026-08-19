@@ -8,7 +8,9 @@
   "runtimeCutoverGate": "CLOSED",
   "services": {
     "orchestrator": {
-      "allowedBlobModified": [],
+      "allowedBlobModified": [
+        "registry.mjs"
+      ],
       "allowedModeModified": [],
       "allowedExtra": []
     },

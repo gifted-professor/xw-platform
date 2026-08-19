@@ -1,0 +1,20 @@
+{
+  "schemaId": "xw.runtime.profile.v1",
+  "schemaVersion": 1,
+  "note": "M3-R1：换运行来源，不换现场行为。runtimeCutoverAllowed 永远为 false。",
+  "profiles": {
+    "legacy_compat": {
+      "orchestratorEnabled": true,
+      "controlPlaneEnabled": true,
+      "legacyCapabilitiesEnabled": true,
+      "legacyWorkflowsEnabled": true,
+      "openActionLiveEnabled": false,
+      "agentGatewayLiveEnabled": false,
+      "dshEnabled": false,
+      "graphV2Enabled": false,
+      "multiAgentEnabled": false,
+      "paymentCredentialRequiresHuman": true,
+      "paymentFinalCommitRequiresHuman": true
+    }
+  }
+}
