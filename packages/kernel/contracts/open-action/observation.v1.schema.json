@@ -59,6 +59,8 @@
     "elements": { "type": "array", "items": { "type": "object" } },
     "pageHash": { "type": ["string", "null"] },
     "paymentSignals": { "type": "array", "items": { "type": "string" } },
+    "paymentSignalSetVersion": { "type": "integer", "minimum": 1 },
+    "paymentClassificationComplete": { "type": "boolean" },
     "evidenceRefs": { "type": "array", "items": { "type": "string" } },
     "partial": { "type": "boolean" },
     "partialReason": { "type": ["string", "null"] }

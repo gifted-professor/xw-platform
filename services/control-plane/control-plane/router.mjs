@@ -382,15 +382,21 @@ export class ControlRouter {
     }
 
     if (method === "POST" && path === "/control/v1/device-sessions") {
-      return { status: 201, body: this.control.createDeviceSession(requireBody(body)) };
+      const input = requireBody(body);
+      const { faultAfter: _ignoredFaultAfter, ...safe } = input;
+      return { status: 201, body: this.control.createDeviceSession(safe) };
     }
-    match = path.match(/^\/control\/v1\/device-sessions\/([^/]+)\/actions(?:\/.*)?$/);
-    if (match) {
-      throw new ControlPlaneError(
-        "PRIMITIVE_NOT_SUPPORTED",
-        "M3-B device-sessions do not expose /actions",
-        { status: 405, details: { sessionId: decodeURIComponent(match[1]) } },
-      );
+    match = path.match(/^\/control\/v1\/device-sessions\/([^/]+)\/actions$/);
+    if (method === "POST" && match) {
+      const input = requireBody(body);
+      return {
+        status: 200,
+        body: await this.control.executeDeviceSessionAction(
+          decodeURIComponent(match[1]),
+          deviceSessionToken(headers),
+          input,
+        ),
+      };
     }
     match = path.match(/^\/control\/v1\/device-sessions\/([^/]+)\/observe$/);
     if (method === "POST" && match) {

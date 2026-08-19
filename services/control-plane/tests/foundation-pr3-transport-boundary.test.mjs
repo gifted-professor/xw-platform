@@ -36,9 +36,9 @@ async function withStore(fn) {
   }
 }
 
-test("user_version is 16 with transport_action_authorizations", async () => {
+test("user_version is 17 with transport_action_authorizations", async () => {
   await withStore((store) => {
-    assert.equal(store.db.prepare("PRAGMA user_version").get().user_version, 16);
+    assert.equal(store.db.prepare("PRAGMA user_version").get().user_version, 17);
     const cols = store.db.prepare("PRAGMA table_info(transport_action_authorizations)").all();
     assert.ok(cols.some((c) => c.name === "nonce_hash"));
     assert.ok(cols.some((c) => c.name === "consumed_at"));

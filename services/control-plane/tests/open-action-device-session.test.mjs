@@ -402,7 +402,20 @@ test("capability and open_action lanes reject each other; device-session actions
         method: "POST",
         path: `/control/v1/device-sessions/${open.body.session.sessionId}/actions`,
         headers: auth(open.body.token),
-        body: { kind: "tap" },
+        body: { kind: "observe" },
+      }),
+      { code: "INVALID_ACTION", status: 400 },
+    );
+    await assert.rejects(
+      () => f.router.handle({
+        method: "POST",
+        path: `/control/v1/device-sessions/${open.body.session.sessionId}/actions`,
+        headers: auth(open.body.token),
+        body: {
+          schemaId: "xw.open-action.action-request.v1",
+          schemaVersion: 1,
+          action: { schemaId: "xw.open-action.primitive.v1", schemaVersion: 1, kind: "observe" },
+        },
       }),
       { code: "PRIMITIVE_NOT_SUPPORTED", status: 405 },
     );
@@ -577,7 +590,7 @@ test("fixture cannot override authoritative observation binding fields", async (
   }
 });
 
-test("fresh and v15 databases land on schema 16; newer versions fail closed", () => {
+test("fresh and v15 databases land on current schema; newer versions fail closed", () => {
   const freshRoot = mkdtempSync(join(tempBase, "oa-schema-fresh-"));
   const fresh = new StateStore({ dbPath: join(freshRoot, "control.db") });
   try {
@@ -594,7 +607,7 @@ test("fresh and v15 databases land on schema 16; newer versions fail closed", ()
   writeV15Fixture(v15Path);
   const upgraded = new StateStore({ dbPath: v15Path });
   try {
-    assert.equal(upgraded.db.prepare("PRAGMA user_version").get().user_version, 16);
+    assert.equal(upgraded.db.prepare("PRAGMA user_version").get().user_version, 17);
     assert.ok(upgraded.db.prepare("PRAGMA table_info(sessions)").all().some((column) => column.name === "session_kind"));
     assert.ok(upgraded.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='device_session_observations'").get());
     assert.equal(upgraded.db.prepare("SELECT status FROM jobs WHERE job_id='job_v15'").get().status, "succeeded");

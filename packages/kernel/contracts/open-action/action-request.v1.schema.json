@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:xw:contract:open-action-request:v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaId", "schemaVersion", "action"],
+  "properties": {
+    "schemaId": { "const": "xw.open-action.action-request.v1" },
+    "schemaVersion": { "const": 1 },
+    "action": { "type": "object" },
+    "agentClaimedCategory": { "type": ["string", "null"] }
+  }
+}

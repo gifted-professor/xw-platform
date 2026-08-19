@@ -102,10 +102,22 @@ test("mixed signals follow final_commit > credential > uncertain", () => {
   assert.ok(credOverUncertain.reasons.includes("credential_otp"));
 });
 
-test("unknown signals are ignored and classify as nonpayment", () => {
+test("unknown signals classify as payment_context_uncertain and never ALLOW_WITH_TRACE", () => {
   const assessment = classifyCase(fixtures.cases.find((item) => item.name === "unknown_signal_ignored"));
-  assert.equal(assessment.category, "nonpayment");
-  assert.deepEqual(assessment.reasons, ["no_payment_signals"]);
+  assert.equal(assessment.category, "payment_context_uncertain");
+  assert.equal(assessment.decision, "REOBSERVE_REQUIRED");
+  assert.ok(assessment.reasons.includes("unknown_payment_signal:not_a_signal"));
+  assert.ok(assessment.reasons.includes("unknown_payment_signal:garbage_pay_word"));
+});
+
+test("incomplete classification cannot return nonpayment", () => {
+  const assessment = classifyPaymentFirewall({
+    paymentSignals: [],
+    paymentClassificationComplete: false,
+  });
+  assert.equal(assessment.category, "payment_context_uncertain");
+  assert.equal(assessment.decision, "REOBSERVE_REQUIRED");
+  assert.deepEqual(assessment.reasons, ["payment_classification_incomplete"]);
 });
 
 test("observe lane replay classifies a final-commit fixture without opening actions", async () => {

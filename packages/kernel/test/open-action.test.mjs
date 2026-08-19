@@ -159,6 +159,7 @@ test("event and error catalogs contain the M3-A names", () => {
   }
   for (const code of [
     "STALE_OBSERVATION",
+    "INVALID_ACTION",
     "PAYMENT_CREDENTIAL_HOLD",
     "PAYMENT_FINAL_COMMIT_REQUIRED",
     "PAYMENT_CONTEXT_UNCERTAIN",
@@ -166,6 +167,7 @@ test("event and error catalogs contain the M3-A names", () => {
   ]) {
     assert.ok(errors.codes.includes(code), code);
   }
-  assert.equal(manifest.openAction.length, 5);
+  assert.equal(manifest.openAction.length, 6);
+  assert.ok(manifest.openAction.includes("contracts/open-action/action-request.v1.schema.json"));
   assert.equal(manifest.sharedCopies.length, 6);
 });
