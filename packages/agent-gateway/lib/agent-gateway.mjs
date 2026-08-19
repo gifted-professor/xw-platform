@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 
-import { ControlClient } from "../../../packages/control-client/lib/control-client.mjs";
+import { ControlClient } from "../../control-client/lib/control-client.mjs";
 
 // Agent Gateway. Maps a harness session onto a Control Plane device session.
 // Forbidden: opening the control database, holding leases, ADB, transport port, payment decisions.

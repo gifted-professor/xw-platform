@@ -85,7 +85,7 @@ export function checkAuthority(root) {
     }
   }
 
-  for (const rel of ["packages/control-client", "packages/cli", "services/agent-gateway"]) {
+  for (const rel of ["packages/control-client", "packages/cli", "packages/agent-gateway"]) {
     for (const file of walkFiles(join(root, rel))) {
       const text = readFileSync(file, "utf8");
       if (text.includes("control.db") || text.includes("DatabaseSync") || text.includes(":22222") || text.includes("adb ")) {

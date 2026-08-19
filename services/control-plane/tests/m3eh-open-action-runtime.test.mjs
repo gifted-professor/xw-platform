@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { main as xwMain, redact } from "../../../packages/cli/xw.mjs";
 import { ControlClient } from "../../../packages/control-client/lib/control-client.mjs";
 import { createFaultBackend, createFixtureBackend, createRecordedBackend } from "../../../packages/replay/lib/replay.mjs";
-import { AgentGateway } from "../../agent-gateway/lib/agent-gateway.mjs";
+import { AgentGateway } from "../../../packages/agent-gateway/lib/agent-gateway.mjs";
 import { CapabilityRegistry } from "../control-plane/lib/capability-registry.mjs";
 import { AdapterRegistry, ControlPlane } from "../control-plane/lib/control-plane.mjs";
 import { EvidenceStore } from "../control-plane/lib/evidence-store.mjs";

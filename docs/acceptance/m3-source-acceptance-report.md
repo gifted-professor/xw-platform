@@ -12,7 +12,7 @@ This wave is fixture/replay only. Agent Gateway and `xw phone` talk to Control P
 
 1. Durable action ledger (`user_version` 18): reserve-before-execute, single-flight, release mutex, restart → `AMBIGUOUS`.
 2. Effect events plus `packages/replay` fixture / recorded / fault backends. `transportCalled=false`.
-3. `packages/control-client` + `services/agent-gateway` Observe/Act/Verify/Trace.
+3. `packages/control-client` + `packages/agent-gateway` Observe/Act/Verify/Trace.
 4. `xw phone attach|observe|act|trace|replay|release` with `--json` / `--context-file`. Token from env or `--token-file`.
 
 ## Not in this wave
