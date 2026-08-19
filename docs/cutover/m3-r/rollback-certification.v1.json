@@ -1,0 +1,72 @@
+{
+  "schemaId": "xw.cutover.rollback-certification.v1",
+  "certifiedAt": "2026-08-19T06:34:14.248Z",
+  "workDir": "C:\\Users\\Public\\xw-cutover-rehearsal\\reh-20260819-m3r2",
+  "ports": {
+    "xw": {
+      "control": 18922,
+      "orchestrator": 18932
+    },
+    "legacy": {
+      "control": 18921,
+      "orchestrator": 18931
+    }
+  },
+  "snapshots": {
+    "registry": "C:\\Users\\Public\\xw-cutover-rehearsal\\reh-20260819-m3r2\\snapshots\\registry.snapshot.db",
+    "control": "C:\\Users\\Public\\xw-cutover-rehearsal\\reh-20260819-m3r2\\snapshots\\control.snapshot.db"
+  },
+  "rollbackUnit": "旧代码 + 旧 DB snapshot + 旧 launch 配置（计划任务 XML 见 scheduled-tasks-before.v1.json）",
+  "legacyCheckouts": {
+    "orchestrator": {
+      "checkout": "C:\\Users\\Public\\xhs-registry",
+      "headSha": "4838f3d43ba00efcf5e1933015fc10d5989920c9",
+      "dirtyFileCount": 108
+    },
+    "controlPlane": {
+      "checkout": "C:\\Users\\Public\\xhs-routing-v1-1",
+      "headSha": "43b09accba3364a23917f43224fc0772ef17a217",
+      "dirtyFileCount": 2
+    }
+  },
+  "migration": {
+    "controlUserVersionBefore": 15,
+    "controlUserVersionAfterXw": 18,
+    "controlUserVersionRestored": 15,
+    "registryUserVersionBefore": 0
+  },
+  "steps": [
+    {
+      "step": "restore-from-snapshot",
+      "ok": true,
+      "detail": "registry user_version=0, control user_version=15"
+    },
+    {
+      "step": "xw-platform-boot-and-migrate",
+      "ok": true,
+      "detail": "health ok"
+    },
+    {
+      "step": "restore-old-db-snapshot",
+      "ok": true,
+      "detail": "control user_version back to 15 (migrated was 18)"
+    },
+    {
+      "step": "legacy-code-boot",
+      "ok": true,
+      "detail": "health ok"
+    },
+    {
+      "step": "legacy-health-restored",
+      "ok": true,
+      "detail": "control-plane authority + orchestrator health ok on restored snapshot"
+    }
+  ],
+  "rollbackGate": "PASS",
+  "failedSteps": [],
+  "safetyNotes": [
+    "旧 checkout 全程只读执行；DB/runs/state 均位于 rehearsal 工作目录，旧目录零写入。",
+    "现场 17920/17930 进程与计划任务未触碰；rehearsal 使用替代端口。",
+    "未连真实设备、未取真实 lease、未提交真实 job、未碰 22222/ADB、未碰支付。"
+  ]
+}

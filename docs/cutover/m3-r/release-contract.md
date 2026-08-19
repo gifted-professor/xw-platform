@@ -70,7 +70,7 @@ xw cutover preflight [--release DIR] [--json]   # 离线预检，输出 { ok, ch
 
 preflight 检查项：node 主版本 ≥ 20；`legacy_compat` 可加载；`runtimeCutoverAllowed === false`；给了 `--release` 时追加 manifest 校验 + 两个服务入口文件存在。
 
-**明确不实现**（属于 M3-R2+）：`rehearse` / `canary` / `promote` / `rollback` / `closeout` / `deploy`。
+**明确不实现**（属于 M3-R3+）：`canary` / `promote` / `closeout` / `deploy`。R2 新增的 `collect --live` / `snapshot` / `rehearse` / `rollback` 见 `r2-rehearsal-rollback.md`。
 
 ## 5. 测试与门槛
 

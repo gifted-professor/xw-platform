@@ -117,6 +117,8 @@ test("cutover --help 声明未实现的现场子命令", () => {
       return error.stderr?.toString() ?? "";
     }
   })();
-  assert.match(stderr, /rehearse \/ canary \/ promote \/ rollback \/ closeout \/ deploy/);
+  // M3-R2 已实现 rehearse / rollback；仍未实现的只有后续阶段的现场切换命令
+  assert.match(stderr, /canary \/ promote \/ closeout \/ deploy/);
+  assert.match(stderr, /cutover rehearse/);
   assert.equal(help, "");
 });

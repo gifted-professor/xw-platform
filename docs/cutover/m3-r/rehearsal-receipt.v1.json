@@ -1,0 +1,302 @@
+{
+  "schemaId": "xw.cutover.rehearsal.v1",
+  "rehearsalId": "reh-20260819-063331",
+  "startedAt": "2026-08-19T06:33:31.872Z",
+  "sourceRoot": "C:/Users/Public/xw-fusion/xw-platform",
+  "workDir": "C:\\Users\\Public\\xw-cutover-rehearsal\\reh-20260819-m3r2",
+  "ports": {
+    "control": 18920,
+    "orchestrator": 18930
+  },
+  "release": {
+    "releaseId": "xw-20260819-59926e9",
+    "sourceCommit": "59926e94383f20ae5bf6ee01d4b66cfb94a513b1",
+    "sourceTreeSha": "7b7e6063ae7eed680ad90f92ad82d954d07fffea",
+    "runtimeProfile": "legacy_compat",
+    "runtimeCutoverAllowed": false
+  },
+  "snapshots": {
+    "registry": "C:\\Users\\Public\\xw-cutover-rehearsal\\reh-20260819-m3r2\\snapshots\\registry.snapshot.db",
+    "control": "C:\\Users\\Public\\xw-cutover-rehearsal\\reh-20260819-m3r2\\snapshots\\control.snapshot.db"
+  },
+  "safetyNotes": [
+    "两服务启动期均无 ADB/22222/lease/job 主动行为：control-plane 的 xiaowei transport 为惰性 WebSocket（仅请求驱动），device-session 执行器缺省为 fixture（serve bootstrap 不注入 observeProvider）；orchestrator 无任何启动期出站动作。",
+    "control-plane 启动恢复会把残留 running job 置 recovery_required 并清空 sessions/leases，不会派发 queued job。",
+    "orchestrator --control 指向 rehearsal 端口，不接触现场 17920/17930。",
+    "全程未调用任何 POST/审批/支付端点；仅 GET health/devices/capabilities/leases。",
+    "真实设备、真实 lease、真实 job、22222/ADB、支付链路：未触碰。"
+  ],
+  "envRecord": {
+    "controlPlane": "CONTROL_PLANE_PORT/HOST=127.0.0.1 替代端口; CONTROL_PLANE_DB/RUNS_ROOT/STATE_DIR 指向 rehearsal; XW_RELEASE_MANIFEST 指向 rehearsal release manifest",
+    "orchestrator": "--port/--control/--db/--control-db/--runs-root 全部指向 rehearsal; XW_RELEASE_MANIFEST 同上"
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "ok": true,
+      "failure": null,
+      "services": {
+        "ok": true,
+        "controlPlane": {
+          "ok": true,
+          "healthOk": true,
+          "smoke": [
+            {
+              "endpoint": "/control/v1/devices",
+              "ok": true,
+              "status": 200,
+              "itemCount": 4
+            },
+            {
+              "endpoint": "/control/v1/capabilities",
+              "ok": true,
+              "status": 200,
+              "itemCount": 28
+            },
+            {
+              "endpoint": "/control/v1/leases",
+              "ok": true,
+              "status": 200,
+              "itemCount": 0
+            }
+          ],
+          "identity": {
+            "sourceRepo": "gifted-professor/xw-platform",
+            "sourceCommit": "59926e94383f20ae5bf6ee01d4b66cfb94a513b1",
+            "releaseId": "xw-20260819-59926e9",
+            "runtimeProfile": "legacy_compat"
+          }
+        },
+        "orchestrator": {
+          "ok": true,
+          "healthOk": true,
+          "smoke": [
+            {
+              "endpoint": "/api/devices",
+              "ok": true,
+              "status": 200,
+              "itemCount": 4
+            },
+            {
+              "endpoint": "/api/capabilities",
+              "ok": true,
+              "status": 200,
+              "itemCount": 28
+            }
+          ],
+          "identity": {
+            "sourceRepo": "gifted-professor/xw-platform",
+            "sourceCommit": "59926e94383f20ae5bf6ee01d4b66cfb94a513b1",
+            "releaseId": "xw-20260819-59926e9",
+            "runtimeProfile": "legacy_compat"
+          }
+        }
+      },
+      "dbAfter": {
+        "control": {
+          "userVersion": 18,
+          "integrityCheck": "ok",
+          "schemaHash": "78278c7ccfb832d6eb6a7c874764d6299237b69eadfe743843b574bb5d88add9",
+          "tableCount": 29,
+          "coreRowCounts": {
+            "devices": 4,
+            "capabilities": 32,
+            "jobs": 14185,
+            "leases": 0,
+            "sessions": 0
+          }
+        },
+        "registry": {
+          "userVersion": 0,
+          "integrityCheck": "ok",
+          "schemaHash": "c96b64e470603a7e4d09c36d64712f612ed119cd2bbfec8a498611a142470600",
+          "tableCount": 9,
+          "coreRowCounts": {
+            "identities": 4,
+            "knowledge": 486
+          }
+        }
+      }
+    },
+    {
+      "round": 2,
+      "ok": true,
+      "failure": null,
+      "services": {
+        "ok": true,
+        "controlPlane": {
+          "ok": true,
+          "healthOk": true,
+          "smoke": [
+            {
+              "endpoint": "/control/v1/devices",
+              "ok": true,
+              "status": 200,
+              "itemCount": 4
+            },
+            {
+              "endpoint": "/control/v1/capabilities",
+              "ok": true,
+              "status": 200,
+              "itemCount": 28
+            },
+            {
+              "endpoint": "/control/v1/leases",
+              "ok": true,
+              "status": 200,
+              "itemCount": 0
+            }
+          ],
+          "identity": {
+            "sourceRepo": "gifted-professor/xw-platform",
+            "sourceCommit": "59926e94383f20ae5bf6ee01d4b66cfb94a513b1",
+            "releaseId": "xw-20260819-59926e9",
+            "runtimeProfile": "legacy_compat"
+          }
+        },
+        "orchestrator": {
+          "ok": true,
+          "healthOk": true,
+          "smoke": [
+            {
+              "endpoint": "/api/devices",
+              "ok": true,
+              "status": 200,
+              "itemCount": 4
+            },
+            {
+              "endpoint": "/api/capabilities",
+              "ok": true,
+              "status": 200,
+              "itemCount": 28
+            }
+          ],
+          "identity": {
+            "sourceRepo": "gifted-professor/xw-platform",
+            "sourceCommit": "59926e94383f20ae5bf6ee01d4b66cfb94a513b1",
+            "releaseId": "xw-20260819-59926e9",
+            "runtimeProfile": "legacy_compat"
+          }
+        }
+      },
+      "dbAfter": {
+        "control": {
+          "userVersion": 18,
+          "integrityCheck": "ok",
+          "schemaHash": "78278c7ccfb832d6eb6a7c874764d6299237b69eadfe743843b574bb5d88add9",
+          "tableCount": 29,
+          "coreRowCounts": {
+            "devices": 4,
+            "capabilities": 32,
+            "jobs": 14185,
+            "leases": 0,
+            "sessions": 0
+          }
+        },
+        "registry": {
+          "userVersion": 0,
+          "integrityCheck": "ok",
+          "schemaHash": "c96b64e470603a7e4d09c36d64712f612ed119cd2bbfec8a498611a142470600",
+          "tableCount": 9,
+          "coreRowCounts": {
+            "identities": 4,
+            "knowledge": 486
+          }
+        }
+      }
+    },
+    {
+      "round": 3,
+      "ok": true,
+      "failure": null,
+      "services": {
+        "ok": true,
+        "controlPlane": {
+          "ok": true,
+          "healthOk": true,
+          "smoke": [
+            {
+              "endpoint": "/control/v1/devices",
+              "ok": true,
+              "status": 200,
+              "itemCount": 4
+            },
+            {
+              "endpoint": "/control/v1/capabilities",
+              "ok": true,
+              "status": 200,
+              "itemCount": 28
+            },
+            {
+              "endpoint": "/control/v1/leases",
+              "ok": true,
+              "status": 200,
+              "itemCount": 0
+            }
+          ],
+          "identity": {
+            "sourceRepo": "gifted-professor/xw-platform",
+            "sourceCommit": "59926e94383f20ae5bf6ee01d4b66cfb94a513b1",
+            "releaseId": "xw-20260819-59926e9",
+            "runtimeProfile": "legacy_compat"
+          }
+        },
+        "orchestrator": {
+          "ok": true,
+          "healthOk": true,
+          "smoke": [
+            {
+              "endpoint": "/api/devices",
+              "ok": true,
+              "status": 200,
+              "itemCount": 4
+            },
+            {
+              "endpoint": "/api/capabilities",
+              "ok": true,
+              "status": 200,
+              "itemCount": 28
+            }
+          ],
+          "identity": {
+            "sourceRepo": "gifted-professor/xw-platform",
+            "sourceCommit": "59926e94383f20ae5bf6ee01d4b66cfb94a513b1",
+            "releaseId": "xw-20260819-59926e9",
+            "runtimeProfile": "legacy_compat"
+          }
+        }
+      },
+      "dbAfter": {
+        "control": {
+          "userVersion": 18,
+          "integrityCheck": "ok",
+          "schemaHash": "78278c7ccfb832d6eb6a7c874764d6299237b69eadfe743843b574bb5d88add9",
+          "tableCount": 29,
+          "coreRowCounts": {
+            "devices": 4,
+            "capabilities": 32,
+            "jobs": 14185,
+            "leases": 0,
+            "sessions": 0
+          }
+        },
+        "registry": {
+          "userVersion": 0,
+          "integrityCheck": "ok",
+          "schemaHash": "c96b64e470603a7e4d09c36d64712f612ed119cd2bbfec8a498611a142470600",
+          "tableCount": 9,
+          "coreRowCounts": {
+            "identities": 4,
+            "knowledge": 486
+          }
+        }
+      }
+    }
+  ],
+  "consistency": {
+    "gate": "PASS",
+    "consistent": true,
+    "diffs": []
+  },
+  "rehearsalGate": "PASS"
+}
