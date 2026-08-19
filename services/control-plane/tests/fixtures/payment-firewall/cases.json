@@ -1,0 +1,150 @@
+{
+  "schemaId": "xw.open-action.payment-firewall-cases.v1",
+  "schemaVersion": 1,
+  "cases": [
+    {
+      "name": "credential_pin_pad",
+      "surface": { "paymentSignals": ["credential_pin_pad"], "packageName": "fixture.app", "activityName": "PinPadActivity", "pageKey": "pay.pin" },
+      "agentClaimedCategory": null,
+      "expectedCategory": "payment_credential"
+    },
+    {
+      "name": "credential_password",
+      "surface": { "paymentSignals": ["credential_password"], "packageName": "fixture.app", "activityName": "PasswordActivity", "pageKey": "pay.password" },
+      "agentClaimedCategory": null,
+      "expectedCategory": "payment_credential"
+    },
+    {
+      "name": "credential_otp",
+      "surface": { "paymentSignals": ["credential_otp"], "packageName": "fixture.app", "activityName": "OtpActivity", "pageKey": "pay.otp" },
+      "agentClaimedCategory": null,
+      "expectedCategory": "payment_credential"
+    },
+    {
+      "name": "credential_card_number",
+      "surface": { "paymentSignals": ["credential_card_number"], "packageName": "fixture.app", "activityName": "CardNumberActivity", "pageKey": "pay.card" },
+      "agentClaimedCategory": null,
+      "expectedCategory": "payment_credential"
+    },
+    {
+      "name": "credential_cvv",
+      "surface": { "paymentSignals": ["credential_cvv"], "packageName": "fixture.app", "activityName": "CvvActivity", "pageKey": "pay.cvv" },
+      "agentClaimedCategory": null,
+      "expectedCategory": "payment_credential"
+    },
+    {
+      "name": "credential_bank_card",
+      "surface": { "paymentSignals": ["credential_bank_card"], "packageName": "fixture.app", "activityName": "BankCardActivity", "pageKey": "pay.bank" },
+      "agentClaimedCategory": null,
+      "expectedCategory": "payment_credential"
+    },
+    {
+      "name": "final_confirm_pay",
+      "surface": { "paymentSignals": ["final_confirm_pay"], "packageName": "fixture.app", "activityName": "PayConfirmActivity", "pageKey": "pay.final" },
+      "agentClaimedCategory": null,
+      "expectedCategory": "payment_final_commit"
+    },
+    {
+      "name": "final_transfer_confirm",
+      "surface": { "paymentSignals": ["final_transfer_confirm"], "packageName": "fixture.app", "activityName": "TransferConfirmActivity", "pageKey": "pay.transfer" },
+      "agentClaimedCategory": null,
+      "expectedCategory": "payment_final_commit"
+    },
+    {
+      "name": "final_one_click_pay",
+      "surface": { "paymentSignals": ["final_one_click_pay"], "packageName": "fixture.app", "activityName": "OneClickPayActivity", "pageKey": "pay.oneclick" },
+      "agentClaimedCategory": null,
+      "expectedCategory": "payment_final_commit"
+    },
+    {
+      "name": "final_subscription_confirm",
+      "surface": { "paymentSignals": ["final_subscription_confirm"], "packageName": "fixture.app", "activityName": "SubscribeConfirmActivity", "pageKey": "pay.subscribe" },
+      "agentClaimedCategory": null,
+      "expectedCategory": "payment_final_commit"
+    },
+    {
+      "name": "final_verified_control",
+      "surface": { "paymentSignals": ["final_verified_control"], "packageName": "fixture.app", "activityName": "VerifiedControlActivity", "pageKey": "pay.verified" },
+      "agentClaimedCategory": null,
+      "expectedCategory": "payment_final_commit"
+    },
+    {
+      "name": "uncertain_adjacent_label",
+      "surface": { "paymentSignals": ["pay_adjacent_label"], "packageName": "fixture.app", "activityName": "AdjacentLabelActivity", "pageKey": "pay.adjacent" },
+      "agentClaimedCategory": null,
+      "expectedCategory": "payment_context_uncertain"
+    },
+    {
+      "name": "uncertain_ambiguous_button",
+      "surface": { "paymentSignals": ["pay_ambiguous_button"], "packageName": "fixture.app", "activityName": "AmbiguousButtonActivity", "pageKey": "pay.ambiguous" },
+      "agentClaimedCategory": null,
+      "expectedCategory": "payment_context_uncertain"
+    },
+    {
+      "name": "uncertain_keyword_no_commit",
+      "surface": { "paymentSignals": ["pay_keyword_no_commit"], "packageName": "fixture.app", "activityName": "KeywordOnlyActivity", "pageKey": "pay.keyword" },
+      "agentClaimedCategory": null,
+      "expectedCategory": "payment_context_uncertain"
+    },
+    {
+      "name": "uncertain_context_incomplete",
+      "surface": { "paymentSignals": ["pay_context_incomplete"], "packageName": "fixture.app", "activityName": "IncompleteContextActivity", "pageKey": "pay.incomplete" },
+      "agentClaimedCategory": null,
+      "expectedCategory": "payment_context_uncertain"
+    },
+    {
+      "name": "nonpayment_wallet_view",
+      "surface": { "paymentSignals": [], "packageName": "fixture.app", "activityName": "WalletViewActivity", "pageKey": "wallet.view" },
+      "agentClaimedCategory": null,
+      "expectedCategory": "nonpayment"
+    },
+    {
+      "name": "nonpayment_ordinary_feed",
+      "surface": { "paymentSignals": [], "packageName": "fixture.app", "activityName": "FeedActivity", "pageKey": "feed.home" },
+      "agentClaimedCategory": null,
+      "expectedCategory": "nonpayment"
+    },
+    {
+      "name": "nonpayment_settings",
+      "surface": { "paymentSignals": [], "packageName": "fixture.app", "activityName": "SettingsActivity", "pageKey": "settings.home" },
+      "agentClaimedCategory": null,
+      "expectedCategory": "nonpayment"
+    },
+    {
+      "name": "nonpayment_empty_signals",
+      "surface": { "paymentSignals": [], "packageName": "fixture.app", "activityName": "EmptyActivity", "pageKey": "empty" },
+      "agentClaimedCategory": null,
+      "expectedCategory": "nonpayment"
+    },
+    {
+      "name": "precedence_final_over_credential",
+      "surface": { "paymentSignals": ["credential_pin_pad", "final_confirm_pay"], "packageName": "fixture.app", "activityName": "MixedFinalPinActivity", "pageKey": "pay.mixed.final" },
+      "agentClaimedCategory": null,
+      "expectedCategory": "payment_final_commit"
+    },
+    {
+      "name": "precedence_credential_over_uncertain",
+      "surface": { "paymentSignals": ["pay_ambiguous_button", "credential_otp"], "packageName": "fixture.app", "activityName": "MixedCredentialUncertainActivity", "pageKey": "pay.mixed.cred" },
+      "agentClaimedCategory": null,
+      "expectedCategory": "payment_credential"
+    },
+    {
+      "name": "agent_claims_nonpayment_on_final",
+      "surface": { "paymentSignals": ["final_confirm_pay"], "packageName": "fixture.app", "activityName": "PayConfirmActivity", "pageKey": "pay.final.agent" },
+      "agentClaimedCategory": "nonpayment",
+      "expectedCategory": "payment_final_commit"
+    },
+    {
+      "name": "agent_claims_credential_on_empty",
+      "surface": { "paymentSignals": [], "packageName": "fixture.app", "activityName": "FeedActivity", "pageKey": "feed.agent" },
+      "agentClaimedCategory": "payment_credential",
+      "expectedCategory": "nonpayment"
+    },
+    {
+      "name": "unknown_signal_ignored",
+      "surface": { "paymentSignals": ["not_a_signal", "garbage_pay_word"], "packageName": "fixture.app", "activityName": "UnknownSignalActivity", "pageKey": "pay.unknown" },
+      "agentClaimedCategory": null,
+      "expectedCategory": "nonpayment"
+    }
+  ]
+}
