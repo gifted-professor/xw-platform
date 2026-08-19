@@ -1,0 +1,56 @@
+{
+  "schemaId": "xw.cutover.retirement.v1",
+  "generatedAt": "2026-08-19T09:55:00.000Z",
+  "ok": true,
+  "gates": {
+    "m3SourceGate": "PASS",
+    "rehearsalGate": "PASS",
+    "rollbackGate": "PASS",
+    "liveCanaryGate": "PASS",
+    "runtimeCutoverGate": "PASS",
+    "legacyRetirementGate": "PASS"
+  },
+  "runtime": {
+    "sourceRepo": "gifted-professor/xw-platform",
+    "sourceCommit": "f337079d93b6e16993b93f7d28783f57da9a5184",
+    "releaseId": "xw-20260819-f337079",
+    "runtimeProfile": "legacy_compat",
+    "orchestrator": "17930 from C:\\Users\\Public\\xw-runtime\\releases\\xw-20260819-f337079 (scheduled task 'XW Platform Orchestrator', BootTrigger/SYSTEM)",
+    "controlPlane": "17920 from same release (scheduled task 'XW Platform Control Plane', BootTrigger/SYSTEM)"
+  },
+  "evidenceHashes": {
+    "productionCutoverReceiptSha256": "d3d6c9d47b0151aa14208a477b5ccfc9b47aaa6db5f4d47e0dd47fc0b09f4ae5",
+    "dbSnapshotReceiptSha256": "7239fe2af0045df8d827f38a0d2288cea563e986429b21da0866ba54faf7a2df",
+    "rollbackCertificationSha256": "5764e6f778ee6a4453da7171b125d3d7e5c66500e2ad6a89bd11beffa0ebe1ed",
+    "canaryReceiptSha256": "9c9d445a75fbca261314173497c0d5abaa2d821c58e3b7c3faaa35b1abf62d69"
+  },
+  "retirement": {
+    "referenceScan": "process=0, env=0, scheduledTasks: all 7 legacy tasks Disabled (docs/cutover/m3-r/legacy-reference-scan.v1.json)",
+    "legacyTasksDisposition": "kept Disabled as rollback artifacts (human decision 2026-08-19; delete later at leisure)",
+    "renamedCheckouts": [
+      "C:\\Users\\Public\\xhs-registry -> C:\\Users\\Public\\xhs-registry-retired-20260819",
+      "C:\\Users\\Public\\xhs-routing-v1-1 -> C:\\Users\\Public\\xhs-device-agent-retired-20260819"
+    ],
+    "renameBlockers": "3 stray processes killed to release dir handles: dsh pid 23248, node pid 1436, Snipaste pid 26292 (relaunched)",
+    "postRenameHealth": "both services health ok after rename",
+    "archivedRepos": [
+      "gifted-professor/xhs-registry (README migration notice commit f40f5d4, archived)",
+      "gifted-professor/xhs-device-agent (README migration notice commit 0a9e5bd, archived; main branch protection removed to allow the notice push; open PR #51 remains as read-only artifact)"
+    ],
+    "realJobValidation": "P1-2 PASS 2026-08-19: observation-only device session via 17920, attach/observe x2/trace/release, zero mutating calls, no lease/session leak, evidence in control.db, payment gate untouched"
+  },
+  "rollbackPackage": {
+    "location": "C:\\Users\\Public\\xw-runtime\\rollback\\",
+    "contents": [
+      "final-20260819\\ (pre-cutover live DB snapshots, integrity ok)",
+      "legacy-backup-20260819\\ (git bundles verify ok, wip patches, 110 wip files archive)",
+      "rollback-certification.v1.json (drill PASS: old code + old DB snapshot restore proven)",
+      "legacy scheduled tasks kept Disabled (definitions intact)"
+    ]
+  },
+  "verdict": "LEGACY_RETIREMENT_GATE = PASS. xw-platform is the sole source, release, and production runtime origin; both legacy repos archived read-only; both legacy checkouts renamed to retired artifacts; rollback package intact.",
+  "notes": [
+    "Stability window compressed to same-day by human decision (business was idle, active=0); daily cron inspection continues as safety net.",
+    "Auxiliary xhs-* directories (worktrees, diag, agent-runs etc.) under C:\\Users\\Public remain as-is; they are scratch/data, not runtime sources."
+  ]
+}
