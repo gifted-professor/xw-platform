@@ -1,6 +1,18 @@
 # 接手文档 — 2026-08-19
 
-## ⚡ 2026-08-19 切换后现状（最新，先读这段）
+## 🏁 2026-08-19 晚：M3-R 全案关闭（最新，先读这段）
+
+**`LEGACY_RETIREMENT_GATE = PASS`，M3-R 六个门全部关闭。**
+
+- 两个旧 GitHub 仓（`xhs-registry`、`xhs-device-agent`）已 archive 只读，README 有迁移声明。
+- 旧 checkout 已改名 `C:\Users\Public\xhs-registry-retired-20260819` / `xhs-device-agent-retired-20260819`（回滚工件，勿删：内有唯一 WIP 现场状态，备份在 `xw-runtime\rollback\legacy-backup-20260819\`）。
+- 7 个旧计划任务全部 Disabled 留档；`XW Platform Control Plane` / `XW Platform Orchestrator`（BootTrigger, SYSTEM）接管启动。
+- 引用扫描全零（进程/env/任务），见 `docs/cutover/m3-r/legacy-reference-scan.v1.json` 与 `retirement-receipt.v1.json`；打标签 `xw-m3-runtime-source-cutover`。
+- 观察窗压缩至当日（人决定），每日巡检 cron 兜底；真实观察 job 已验证（P1-2 PASS，零外发）。
+- **下一步：M4（Plugin SDK + DSH Adapter）。能力门独立：Open Action live / DSH / Multi-Agent 仍 CLOSED，支付人工硬闸不变。**
+- 下面 §3「切换后现状」与更早内容保留作历史记录。
+
+## ⚡ 2026-08-19 切换后现状（历史记录）
 
 **现场已切到 xw-platform（M3-R3+R4 已执行，两个 Gate 均 PASS）。**
 

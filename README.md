@@ -1,29 +1,30 @@
 # xw-platform
 
-统一源码项目。Physical Fusion / M1 已验收；运行时仍未切换。
+统一源码项目。2026-08-19 起也是**唯一生产运行来源**：17920/17930 由本仓 release（`xw-20260819-f337079`）驱动，两个旧仓已 archive。
 
-**新 agent 先读 [`HANDOFF.md`](HANDOFF.md)**（2026-08-19：三套目录关系、进度、PR #14 下一步）。
+**新 agent 先读 [`HANDOFF.md`](HANDOFF.md)**。
 
 ## 当前状态
 
-- XW Platform 是两旧仓（`xhs-registry`、`xhs-device-agent`）的统一源码主线。
-- Physical Fusion（源码合仓 / M1）已完成验收。**不是**运行时统一阶段。
-- Orchestrator 与 Control Plane 仍是**两个独立运行时**。
-- `RUNTIME_CUTOVER_GATE = CLOSED`：运行时切换未发生。
-- 本仓当前**没有生产部署授权**。
+- XW Platform 是两旧仓（`xhs-registry`、`xhs-device-agent`）的统一源码主线，**也是唯一发布与运行来源**。
+- 运行时仍是**两个独立进程/数据库/端口**（`legacy_compat`），业务行为与切换前一致。
+- 旧仓已归档只读；旧 checkout 已改名为 `*-retired-20260819` 回滚工件。
+- M3-R 全案关闭（证据链：`docs/cutover/m3-r/`）。
 
 ## 不要误解为
 
-- ❌ production ready
-- ❌ 统一运行时已经完成
-- ❌ Agent 已可直接控制手机
+- ❌ 双跑期还没结束（没有双跑，旧系统已退役）
+- ❌ Agent 已可直接控制手机（Open Action live / DSH / Multi-Agent 仍 CLOSED，支付仍人工硬闸）
 
 ## 治理门
 
 | 门 | 状态 |
 |---|---|
 | `SOURCE_FUSION_GATE` | OPEN |
-| `RUNTIME_CUTOVER_GATE` | CLOSED |
+| `REHEARSAL_GATE` / `ROLLBACK_GATE` | PASS |
+| `LIVE_CANARY_GATE` / `RUNTIME_CUTOVER_GATE` | PASS（2026-08-19） |
+| `LEGACY_RETIREMENT_GATE` | PASS（2026-08-19） |
+| `OPEN_ACTION_LIVE` / `DSH_LIVE` / `MULTI_AGENT_LIVE` | CLOSED（各自独立门） |
 | M0 | `M0_CANDIDATE / UNCERTIFIED`（B1–B4 DEFERRED） |
 
 ## 阶段
