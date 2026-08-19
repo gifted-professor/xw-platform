@@ -167,7 +167,11 @@ test("event and error catalogs contain the M3-A names", () => {
   ]) {
     assert.ok(errors.codes.includes(code), code);
   }
-  assert.equal(manifest.openAction.length, 6);
+  assert.equal(manifest.openAction.length, 7);
   assert.ok(manifest.openAction.includes("contracts/open-action/action-request.v1.schema.json"));
+  assert.ok(manifest.openAction.includes("contracts/open-action/action-ledger.v1.schema.json"));
+  for (const code of ["ACTION_IN_FLIGHT", "ACTION_AMBIGUOUS", "SESSION_ACTION_RUNNING"]) {
+    assert.ok(errors.codes.includes(code), code);
+  }
   assert.equal(manifest.sharedCopies.length, 6);
 });

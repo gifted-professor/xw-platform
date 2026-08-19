@@ -14,6 +14,7 @@
     "contracts/open-action/action-request.v1.schema.json",
     "contracts/open-action/primitive-action.v1.schema.json",
     "contracts/open-action/action-result.v1.schema.json",
+    "contracts/open-action/action-ledger.v1.schema.json",
     "contracts/open-action/effect-assessment.v1.schema.json",
     "contracts/open-action/device-session.v1.schema.json"
   ],

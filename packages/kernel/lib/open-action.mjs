@@ -50,6 +50,38 @@ export const EFFECT_POLICY = Object.freeze({
   payment_context_uncertain: "REOBSERVE_REQUIRED",
 });
 
+export const ACTION_STATUSES = Object.freeze([
+  "REQUESTED",
+  "ASSESSED",
+  "BLOCKED",
+  "EXECUTING",
+  "EXECUTED",
+  "VERIFIED",
+  "COMPLETED",
+  "AMBIGUOUS",
+  "RETRYABLE_FAILED",
+  "HUMAN_REQUIRED",
+  "CANCELLED",
+]);
+
+export const IN_FLIGHT_ACTION_STATUSES = Object.freeze([
+  "REQUESTED",
+  "ASSESSED",
+  "EXECUTING",
+]);
+
+export const TERMINAL_ACTION_STATUSES = Object.freeze([
+  "BLOCKED",
+  "COMPLETED",
+  "AMBIGUOUS",
+  "RETRYABLE_FAILED",
+  "HUMAN_REQUIRED",
+  "CANCELLED",
+]);
+
+export const LIVE_CANARY_GATE = "CLOSED";
+export const M3_EXECUTION_MODE = "fixture";
+
 const SELECTOR_KEYS = [
   "elementId",
   "absoluteCoordinate",
