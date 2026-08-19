@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:xw:contract:harness-session-ref:v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaId",
+    "schemaVersion",
+    "harnessSessionId",
+    "harness",
+    "harnessVersion",
+    "harnessCommit",
+    "createdAt"
+  ],
+  "properties": {
+    "schemaId": { "const": "xw.harness.session-ref.v1" },
+    "schemaVersion": { "const": 1 },
+    "harnessSessionId": { "type": "string", "minLength": 1 },
+    "harness": { "type": "string", "minLength": 1 },
+    "harnessVersion": { "type": "string", "minLength": 1 },
+    "harnessCommit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "skillRunId": { "type": ["string", "null"] },
+    "lastDurableTurn": { "type": ["integer", "null"], "minimum": 0 },
+    "lastDurableStep": { "type": ["integer", "null"], "minimum": 0 },
+    "xwCheckpointSeq": { "type": ["integer", "null"], "minimum": 0 },
+    "createdAt": { "type": "integer", "minimum": 0 }
+  }
+}

@@ -10,11 +10,13 @@ xw-platform/
 │   └── agent-gateway/      ← Harness session → device session
 ├── packages/
 │   ├── kernel/             ← 共享契约（含 Open Action 与 M4-A Skill contract）
+│   ├── harness-protocol/   ← M4-B Harness-neutral protocol
 │   ├── control-client/     ← 上层唯一 Control Plane HTTP 客户端
 │   ├── replay/             ← fixture / recorded / fault backends
 │   └── cli/                ← xw phone
 ├── plugins/                ← 后续 XW 插件
-├── integrations/           ← 后续 DSH 等 Harness Adapter
+├── integrations/
+│   └── dsh-xw/             ← DSH adapter（锁 commit，live 仍关）
 ├── docs/
 └── tools/
     └── fusion/             ← F1-E 导入验证工具

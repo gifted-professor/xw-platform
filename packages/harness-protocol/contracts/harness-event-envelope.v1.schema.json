@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:xw:contract:harness-event-envelope:v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaId", "schemaVersion", "kind", "type", "seq", "at"],
+  "properties": {
+    "schemaId": { "const": "xw.harness.event.v1" },
+    "schemaVersion": { "const": 1 },
+    "kind": { "enum": ["dsh", "xw"] },
+    "type": { "type": "string", "minLength": 1 },
+    "seq": { "type": "integer", "minimum": 1 },
+    "at": { "type": "integer", "minimum": 0 },
+    "turnId": { "type": ["string", "null"] },
+    "stepId": { "type": ["string", "null"] },
+    "toolCallId": { "type": ["string", "null"] },
+    "data": { "type": "object" },
+    "refs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "actionId": { "type": ["string", "null"] },
+        "receiptRef": { "type": ["string", "null"] },
+        "skillRunId": { "type": ["string", "null"] },
+        "harnessSessionId": { "type": ["string", "null"] }
+      }
+    }
+  }
+}

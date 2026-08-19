@@ -755,6 +755,18 @@ export class SkillRunMachine {
     return { ...row, skillVersionRef: { ...row.skillVersionRef }, ids: { ...row.ids } };
   }
 
+  markAmbiguous(reason) {
+    const run = this.#requireRun();
+    if (TERMINAL_SKILL_STATES.includes(run.state) && run.state === "AMBIGUOUS") return snapshotRun(run);
+    const snapshot = this.#move("AMBIGUOUS", {
+      exit: "REPAIR_REQUIRED",
+      reason: reason || "unproven-effect",
+      recoveryRequired: true,
+    });
+    this.#emit("xw/recovery-required", { skillRunId: run.skillRunId, reason: run.exitReason });
+    return snapshot;
+  }
+
   crash() {
     const run = this.#requireRun();
     if (TERMINAL_SKILL_STATES.includes(run.state)) return snapshotRun(run);
