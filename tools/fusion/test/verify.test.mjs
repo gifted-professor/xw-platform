@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
-import { applyPostImportAllowlist, verifyRepo } from "../verify.mjs";
+import { applyPostImportAllowlist, assertPostImportAllowlistSafe, verifyRepo } from "../verify.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "../../..");
@@ -59,7 +59,7 @@ test("cli verify emits PASS JSON and exit 0", () => {
   assert.equal(json.cliVersion, "xhs.fusion.cli.v1");
 });
 
-test("applyPostImportAllowlist subtracts exact extra and blob paths only", () => {
+test("allowlisted blob is not an allowlisted mode; missing and unknown extra stay BLOCK", () => {
   const gated = applyPostImportAllowlist({
     blobMismatchCount: 1,
     modeMismatchCount: 1,
@@ -75,16 +75,21 @@ test("applyPostImportAllowlist subtracts exact extra and blob paths only", () =>
       { path: "other.mjs", kind: "extra" },
     ],
   }, {
-    allowedModified: ["keep.mjs"],
+    allowedBlobModified: ["keep.mjs"],
+    allowedModeModified: [],
     allowedExtra: ["new.mjs"],
   });
   assert.equal(gated.blobMismatchCount, 0);
-  assert.equal(gated.modeMismatchCount, 0);
+  assert.equal(gated.modeMismatchCount, 1, "blob allowlist must not swallow mode mismatch");
   assert.equal(gated.missingFileCount, 1);
   assert.equal(gated.extraFileCount, 1);
-  assert.equal(gated.rawExtraFileCount, 2);
   assert.deepEqual(gated.details.map((d) => `${d.kind}:${d.path}`).sort(), [
     "extra:other.mjs",
     "missing:gone.mjs",
+    "mode:keep.mjs",
   ]);
+  assert.throws(
+    () => assertPostImportAllowlistSafe({ runtimeCutoverAllowed: true }),
+    /runtimeCutoverAllowed must be false/,
+  );
 });

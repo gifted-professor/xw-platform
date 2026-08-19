@@ -15,23 +15,30 @@ function loadJson(path) {
   return JSON.parse(readFileSync(path, "utf8"));
 }
 
-export function loadPostImportAllowlist(root) {
-  const path = join(root, "docs/fusion/post-import-allowlist.v1.json");
-  if (!existsSync(path)) return { services: {} };
-  const allowlist = loadJson(path);
-  if (allowlist.runtimeCutoverAllowed !== false) {
+export function assertPostImportAllowlistSafe(allowlist) {
+  if (!allowlist || allowlist.runtimeCutoverAllowed !== false) {
     throw new Error("post-import-allowlist.runtimeCutoverAllowed must be false");
   }
+}
+
+export function loadPostImportAllowlist(root) {
+  const path = join(root, "docs/fusion/post-import-allowlist.v1.json");
+  if (!existsSync(path)) return { services: {}, runtimeCutoverAllowed: false };
+  const allowlist = loadJson(path);
+  assertPostImportAllowlistSafe(allowlist);
   return allowlist;
 }
 
 export function applyPostImportAllowlist(cmp, serviceAllowlist = {}) {
-  const allowedModified = new Set(serviceAllowlist.allowedModified || []);
+  const allowedBlob = new Set(serviceAllowlist.allowedBlobModified || []);
+  const allowedMode = new Set(serviceAllowlist.allowedModeModified || []);
   const allowedExtra = new Set(serviceAllowlist.allowedExtra || []);
   const allowlisted = [];
   const remaining = [];
   for (const detail of cmp.details || []) {
-    if ((detail.kind === "blob" || detail.kind === "mode") && allowedModified.has(detail.path)) {
+    if (detail.kind === "blob" && allowedBlob.has(detail.path)) {
+      allowlisted.push(detail);
+    } else if (detail.kind === "mode" && allowedMode.has(detail.path)) {
       allowlisted.push(detail);
     } else if (detail.kind === "extra" && allowedExtra.has(detail.path)) {
       allowlisted.push(detail);

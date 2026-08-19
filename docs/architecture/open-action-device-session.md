@@ -16,8 +16,11 @@ One device still has one lease. An open_action session and a capability session 
 Cross-lane calls return `SESSION_KIND_MISMATCH`:
 
 - capability session → `POST /control/v1/device-sessions/:id/observe`
-- open_action session → `POST /control/v1/sessions/:id/actions`
-- any method on `/control/v1/device-sessions/:id/actions` (path is not enabled)
+- open_action or discovery session → `POST /control/v1/sessions/:id/heartbeat|release|actions`
+
+`/control/v1/device-sessions/:id/actions` is not enabled in M3-B. That route returns `PRIMITIVE_NOT_SUPPORTED`, not a fake kind mismatch.
+
+Device-session tokens travel only as `X-Control-Token`. Query-string `?token=` is rejected.
 
 ## Observe
 

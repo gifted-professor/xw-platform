@@ -2,21 +2,27 @@
   "schemaId": "xw.platform.fusion.post-import-allowlist.v1",
   "schemaVersion": 1,
   "title": "First post-import path allowlist — M3-B",
-  "description": "fusion:verify subtracts only these exact paths from extra/blob/mode mismatches. Missing imported files are never allowed. This is not a whole-tree relax and does not open runtime cutover.",
+  "description": "fusion:verify subtracts only these exact paths. Blob and mode mismatches are separate. Missing imported files are never allowed. This is not a whole-tree relax and does not open runtime cutover.",
   "runtimeCutoverAllowed": false,
   "sourceFusionGate": "OPEN",
   "runtimeCutoverGate": "CLOSED",
   "services": {
     "orchestrator": {
-      "allowedModified": [],
+      "allowedBlobModified": [],
+      "allowedModeModified": [],
       "allowedExtra": []
     },
     "control-plane": {
-      "allowedModified": [
+      "allowedBlobModified": [
         "control-plane/lib/state-store.mjs",
         "control-plane/lib/control-plane.mjs",
-        "control-plane/router.mjs"
+        "control-plane/router.mjs",
+        "tests/control-plane-placement.test.mjs",
+        "tests/discovery-session-state.test.mjs",
+        "tests/foundation-pr3-transport-boundary.test.mjs",
+        "tests/discovery-session.test.mjs"
       ],
+      "allowedModeModified": [],
       "allowedExtra": [
         "control-plane/lib/open-action-session.mjs",
         "tests/open-action-device-session.test.mjs"

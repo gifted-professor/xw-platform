@@ -15,6 +15,8 @@ import {
   consumeTransportActionAuthorization as consumeTransportAuthKernel,
 } from "./transport-action-authorization.mjs";
 
+export const CURRENT_CONTROL_SCHEMA_VERSION = 16;
+
 const ACTIVE_JOB_STATES = new Set(["running", "verifying", "restoring"]);
 const TERMINAL_JOB_STATES = new Set(["succeeded", "failed", "ambiguous", "recovery_required", "cancelled"]);
 const TRANSITIONS = {
@@ -138,13 +140,58 @@ export class StateStore {
     this.now = now;
     if (dbPath !== ":memory:") mkdirSync(dirname(dbPath), { recursive: true });
     this.db = new DatabaseSync(dbPath);
-    this.db.exec("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
-    if (dbPath !== ":memory:") this.db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;");
-    this.#migrate();
-    this.recoverInterruptedWork();
+    try {
+      this.db.exec("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
+      if (dbPath !== ":memory:") this.db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;");
+      this.#migrate();
+      this.recoverInterruptedWork();
+    } catch (error) {
+      try { this.db.close(); } catch {}
+      throw error;
+    }
+  }
+
+  #readUserVersion() {
+    return Number(this.db.prepare("PRAGMA user_version").get().user_version);
+  }
+
+  #setUserVersion(version) {
+    this.db.exec(`PRAGMA user_version = ${Number(version)}`);
+  }
+
+  #migrateV15ToV16() {
+    this.#ensureColumn("sessions", "session_kind", "TEXT NOT NULL DEFAULT 'capability'");
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS device_session_observations (
+        observation_id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        captured_at INTEGER NOT NULL,
+        observation_json TEXT NOT NULL,
+        mutating_calls INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE INDEX IF NOT EXISTS device_session_observations_session_idx
+        ON device_session_observations(session_id, captured_at);
+      CREATE TABLE IF NOT EXISTS device_session_events (
+        event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        type TEXT NOT NULL,
+        payload_json TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS device_session_events_session_idx
+        ON device_session_events(session_id, event_id);
+    `);
   }
 
   #migrate() {
+    const current = this.#readUserVersion();
+    if (current > CURRENT_CONTROL_SCHEMA_VERSION) {
+      throw new ControlPlaneError(
+        "SCHEMA_VERSION_TOO_NEW",
+        `control.db user_version ${current} is newer than this binary (${CURRENT_CONTROL_SCHEMA_VERSION})`,
+        { status: 500, details: { userVersion: current, supported: CURRENT_CONTROL_SCHEMA_VERSION } },
+      );
+    }
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS nodes (
         node_id TEXT PRIMARY KEY,
@@ -222,6 +269,7 @@ export class StateStore {
         canary INTEGER NOT NULL,
         scope_capability_id TEXT,
         placement_decision_json TEXT,
+        session_kind TEXT NOT NULL DEFAULT 'capability',
         created_at INTEGER NOT NULL,
         expires_at INTEGER NOT NULL
       );
@@ -492,7 +540,6 @@ export class StateStore {
     this.#ensureColumn("jobs", "placement_request_json", "TEXT NOT NULL DEFAULT '{}'");
     this.#ensureColumn("jobs", "placement_decision_json", "TEXT");
     this.#ensureColumn("sessions", "scope_capability_id", "TEXT");
-    this.#ensureColumn("sessions", "session_kind", "TEXT NOT NULL DEFAULT 'capability'");
     this.#ensureColumn("discovery_observation_lineage", "source_hash", "TEXT");
     this.#ensureColumn("discovery_observation_lineage", "content_hash", "TEXT");
     this.#ensureColumn("discovery_observation_lineage", "anchor_json", "TEXT");
@@ -518,26 +565,6 @@ export class StateStore {
     this.#ensureColumn("protected_commits", "expires_at", "INTEGER");
     this.db.exec("CREATE INDEX IF NOT EXISTS protected_commits_action_idx ON protected_commits(action, status)");
     this.db.exec("CREATE INDEX IF NOT EXISTS missions_parent_grant_idx ON missions(parent_grant_id, status)");
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS device_session_observations (
-        observation_id TEXT PRIMARY KEY,
-        session_id TEXT NOT NULL,
-        captured_at INTEGER NOT NULL,
-        observation_json TEXT NOT NULL,
-        mutating_calls INTEGER NOT NULL DEFAULT 0
-      );
-      CREATE INDEX IF NOT EXISTS device_session_observations_session_idx
-        ON device_session_observations(session_id, captured_at);
-      CREATE TABLE IF NOT EXISTS device_session_events (
-        event_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        session_id TEXT NOT NULL,
-        created_at INTEGER NOT NULL,
-        type TEXT NOT NULL,
-        payload_json TEXT NOT NULL
-      );
-      CREATE INDEX IF NOT EXISTS device_session_events_session_idx
-        ON device_session_events(session_id, event_id);
-    `);
     // REX Phase 5 §8.1 item 3：legacy pending migration。superseded_by 记录旧 waiting_approval
     // job 被 fresh queued job 取代的链路（旧行→queued_migrated，superseded_by→新 job_id）。
     this.#ensureColumn("jobs", "superseded_by", "TEXT");
@@ -580,7 +607,12 @@ export class StateStore {
     `);
     this.db.exec("CREATE INDEX IF NOT EXISTS transport_auth_job_idx ON transport_action_authorizations(job_id, purpose, consumed_at)");
     this.db.exec("CREATE INDEX IF NOT EXISTS transport_auth_lease_idx ON transport_action_authorizations(lease_id, consumed_at)");
-    this.db.exec("PRAGMA user_version = 15;");
+    if (current < CURRENT_CONTROL_SCHEMA_VERSION) {
+      this.transaction(() => {
+        this.#migrateV15ToV16();
+        this.#setUserVersion(CURRENT_CONTROL_SCHEMA_VERSION);
+      });
+    }
   }
 
   #ensureColumn(table, column, definition) {
@@ -1474,6 +1506,8 @@ export class StateStore {
     canary = false,
     ttlMs = 60000,
     sessionKind = "capability",
+    recordCreatedEvent = false,
+    faultAfter = null,
   }) {
     if (typeof actorId !== "string" || actorId.trim() === "") {
       throw new ControlPlaneError("ACTOR_REQUIRED", "actorId is required");
@@ -1583,6 +1617,30 @@ export class StateStore {
         now + ttlMs,
         kind,
       );
+      if (faultAfter === "afterSession") {
+        throw new ControlPlaneError("DEVICE_SESSION_OPEN_FAULT", "injected device-session open fault", { status: 500 });
+      }
+      if (recordCreatedEvent || kind === "open_action") {
+        if (faultAfter === "createdEvent") {
+          throw new ControlPlaneError("DEVICE_SESSION_OPEN_FAULT", "injected device-session created event fault", { status: 500 });
+        }
+        this.#insertDeviceSessionEvent({
+          sessionId,
+          type: "device_session.created",
+          payload: {
+            schemaId: "xw.open-action.device-session.v1",
+            schemaVersion: 1,
+            sessionId,
+            sessionKind: kind,
+            deviceId: routeDecision.selectedDeviceId,
+            leaseId,
+            actor: actorId,
+            createdAt: iso(now),
+            capabilityId: capability?.id || null,
+          },
+          createdAt: now,
+        });
+      }
       return routeDecision;
     });
     return {
@@ -1629,11 +1687,36 @@ export class StateStore {
     return { ...session, expiresAt: lease.expiresAt };
   }
 
-  releaseSession(sessionId, token) {
+  releaseSession(sessionId, token, { recordReleasedEvent = false, faultAfter = null } = {}) {
     const session = this.validateSession(sessionId, token);
-    this.db.prepare("DELETE FROM sessions WHERE session_id=?").run(sessionId);
-    this.releaseLease(session.leaseId, token);
-    return { released: true, sessionId };
+    return this.transaction(() => {
+      if (recordReleasedEvent || session.sessionKind === "open_action") {
+        this.#insertDeviceSessionEvent({
+          sessionId,
+          type: "device_session.released",
+          payload: { sessionId, leaseId: session.leaseId },
+        });
+      }
+      if (faultAfter === "afterReleasedEvent") {
+        throw new ControlPlaneError("DEVICE_SESSION_RELEASE_FAULT", "injected device-session release fault", { status: 500 });
+      }
+      this.db.prepare("DELETE FROM sessions WHERE session_id=?").run(sessionId);
+      this.releaseLease(session.leaseId, token);
+      return { released: true, sessionId };
+    });
+  }
+
+  #insertDeviceSessionEvent({ sessionId, type, payload = {}, createdAt = this.now() }) {
+    const result = this.db.prepare(
+      "INSERT INTO device_session_events (session_id, created_at, type, payload_json) VALUES (?, ?, ?, ?)",
+    ).run(sessionId, createdAt, type, canonicalJson(payload));
+    return {
+      eventId: Number(result.lastInsertRowid),
+      sessionId,
+      createdAt: iso(createdAt),
+      type,
+      payload,
+    };
   }
 
   recordDeviceSessionObservation({ sessionId, observation, mutatingCalls = 0 }) {
@@ -1646,6 +1729,25 @@ export class StateStore {
     return observation;
   }
 
+  recordObservationCapture({ sessionId, observation, mutatingCalls = 0, faultAfter = null }) {
+    return this.transaction(() => {
+      this.recordDeviceSessionObservation({ sessionId, observation, mutatingCalls });
+      if (faultAfter === "afterObservation") {
+        throw new ControlPlaneError("DEVICE_SESSION_OBSERVE_FAULT", "injected observation persist fault", { status: 500 });
+      }
+      this.#insertDeviceSessionEvent({
+        sessionId,
+        type: "observation.captured",
+        payload: {
+          observationId: observation.observationId,
+          evidenceRefs: observation.evidenceRefs,
+          mutatingCalls,
+        },
+      });
+      return observation;
+    });
+  }
+
   listDeviceSessionObservations(sessionId) {
     return this.db.prepare(
       "SELECT observation_json FROM device_session_observations WHERE session_id=? ORDER BY captured_at",
@@ -1653,17 +1755,7 @@ export class StateStore {
   }
 
   recordDeviceSessionEvent({ sessionId, type, payload = {} }) {
-    const createdAt = this.now();
-    const result = this.db.prepare(
-      "INSERT INTO device_session_events (session_id, created_at, type, payload_json) VALUES (?, ?, ?, ?)",
-    ).run(sessionId, createdAt, type, canonicalJson(payload));
-    return {
-      eventId: Number(result.lastInsertRowid),
-      sessionId,
-      createdAt: iso(createdAt),
-      type,
-      payload,
-    };
+    return this.#insertDeviceSessionEvent({ sessionId, type, payload });
   }
 
   listDeviceSessionEvents(sessionId, after = 0) {
@@ -2911,8 +3003,8 @@ export class StateStore {
       `).run(leaseId, selected.deviceId, controllerAgent, sha256(token), now, now, now + ttlMs, discoveryRunId);
       if (faultAfter === "afterLease") throw new ControlPlaneError("DISCOVERY_OPEN_FAULT", "injected DiscoveryRun open fault", { status: 500 });
       this.db.prepare(`
-        INSERT INTO sessions (session_id, lease_id, actor_id, device_id, token_hash, canary, scope_capability_id, placement_decision_json, created_at, expires_at)
-        VALUES (?, ?, ?, ?, ?, 0, NULL, ?, ?, ?)
+        INSERT INTO sessions (session_id, lease_id, actor_id, device_id, token_hash, canary, scope_capability_id, placement_decision_json, created_at, expires_at, session_kind)
+        VALUES (?, ?, ?, ?, ?, 0, NULL, ?, ?, ?, 'discovery')
       `).run(sessionId, leaseId, controllerAgent, selected.deviceId, sha256(token), canonicalJson({ mode: placementRequest.mode, decision: "dispatchable", selectedDeviceId: selected.deviceId, source: "discovery" }), now, now + ttlMs);
       if (faultAfter === "afterSession") throw new ControlPlaneError("DISCOVERY_OPEN_FAULT", "injected DiscoveryRun open fault", { status: 500 });
       this.db.prepare(`
@@ -3373,8 +3465,8 @@ export class StateStore {
       this.db.prepare(`
         INSERT INTO sessions (
           session_id, lease_id, actor_id, device_id, token_hash, canary,
-          scope_capability_id, placement_decision_json, created_at, expires_at
-        ) VALUES (?, ?, ?, ?, ?, 0, NULL, ?, ?, ?)
+          scope_capability_id, placement_decision_json, created_at, expires_at, session_kind
+        ) VALUES (?, ?, ?, ?, ?, 0, NULL, ?, ?, ?, 'capability')
       `).run(sessionId, leaseId, controllerAgent, selected.deviceId, tokenHash, canonicalJson(routeDecision), now, now + ttlMs);
       this.db.prepare(`
         INSERT INTO device_runs (

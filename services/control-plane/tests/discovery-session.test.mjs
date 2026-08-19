@@ -219,7 +219,7 @@ test("Discovery-owned sessions reject the generic job path and failed authority 
     const run = f.control.openDiscoveryRun({ grantId: f.grant.grantId, controllerAgent: "agent:runner" });
     await assert.rejects(
       () => f.control.executeSessionAction(run.sessionId, run.token, { idempotencyKey: "forbidden-generic", capabilityId: "missing", params: {} }),
-      { code: "DISCOVERY_SESSION_EXCLUSIVE" },
+      { code: "SESSION_KIND_MISMATCH" },
     );
     f.control.standingGrantEnabled = false;
     assert.throws(() => f.control.executeDiscoveryPrimitive({ discoveryRunId: run.discoveryRunId, tuple: run.tuple, token: run.token, primitive: "screenshot", idempotencyKey: "closed-gate", envelope: { snapshot: { surface: "observation", createdAt: new Date().toISOString(), observedAt: new Date().toISOString() } } }), { code: "DISCOVERY_GATE_CLOSED" });

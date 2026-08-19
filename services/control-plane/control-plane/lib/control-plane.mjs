@@ -2014,7 +2014,7 @@ export class ControlPlane {
     });
   }
 
-  createDeviceSession({ actorId, deviceId = null, canary = false, capabilityId = null }) {
+  createDeviceSession({ actorId, deviceId = null, canary = false, capabilityId = null, faultAfter = null }) {
     requireOpenActionContract({ sessionKind: "open_action", capabilityId: capabilityId ?? null });
     const session = this.state.createSession({
       actorId,
@@ -2024,14 +2024,16 @@ export class ControlPlane {
       canary,
       ttlMs: this.leaseTtlMs,
       sessionKind: "open_action",
+      recordCreatedEvent: true,
+      faultAfter,
     });
-    const view = toDeviceSessionView(session, { actorId: session.actorId, createdAt: session.createdAt, capabilityId: null });
-    this.state.recordDeviceSessionEvent({
-      sessionId: session.sessionId,
-      type: "device_session.created",
-      payload: view,
-    });
-    return { session: view, token: session.token, expiresAt: session.expiresAt, canary: session.canary, leaseId: session.leaseId };
+    return {
+      session: toDeviceSessionView(session, { actorId: session.actorId, createdAt: session.createdAt, capabilityId: null }),
+      token: session.token,
+      expiresAt: session.expiresAt,
+      canary: session.canary,
+      leaseId: session.leaseId,
+    };
   }
 
   getDeviceSession(sessionId, token) {
@@ -2055,7 +2057,7 @@ export class ControlPlane {
     };
   }
 
-  releaseDeviceSession(sessionId, token) {
+  releaseDeviceSession(sessionId, token, { faultAfter = null } = {}) {
     const session = assertSessionKind(this.state.validateSession(sessionId, token), "open_action");
     if (this.activeJobs.has(session.deviceId)) {
       throw new ControlPlaneError(
@@ -2064,12 +2066,7 @@ export class ControlPlane {
         { status: 423, details: { sessionId } },
       );
     }
-    this.state.recordDeviceSessionEvent({
-      sessionId,
-      type: "device_session.released",
-      payload: { sessionId, leaseId: session.leaseId },
-    });
-    return this.state.releaseSession(sessionId, token);
+    return this.state.releaseSession(sessionId, token, { recordReleasedEvent: true, faultAfter });
   }
 
   listDeviceSessionEvents(sessionId, token, after = 0) {
@@ -2077,14 +2074,15 @@ export class ControlPlane {
     return this.state.listDeviceSessionEvents(sessionId, after);
   }
 
-  async observeDeviceSession(sessionId, token, input = {}) {
+  async observeDeviceSession(sessionId, token, input = {}, { faultAfter = null } = {}) {
     rejectMutatingObserveInput(input);
     const session = assertSessionKind(this.state.validateSession(sessionId, token), "open_action");
     const device = this.state.getDevice(session.deviceId);
-    const observation = requireObservationContract(await this.observeProvider.observe({
+    const raw = await this.observeProvider.observe({
       ...session,
       deviceAlias: device?.alias || "unknown",
-    }));
+    });
+    const observation = requireObservationContract(raw, session);
     const mutatingCalls = Number(this.observeProvider.mutatingCalls) || 0;
     if (mutatingCalls !== 0) {
       throw new ControlPlaneError(
@@ -2093,16 +2091,7 @@ export class ControlPlane {
         { status: 409, details: { mutatingCalls } },
       );
     }
-    this.state.recordDeviceSessionObservation({ sessionId, observation, mutatingCalls });
-    this.state.recordDeviceSessionEvent({
-      sessionId,
-      type: "observation.captured",
-      payload: {
-        observationId: observation.observationId,
-        evidenceRefs: observation.evidenceRefs,
-        mutatingCalls,
-      },
-    });
+    this.state.recordObservationCapture({ sessionId, observation, mutatingCalls, faultAfter });
     return { observation, mutatingCalls };
   }
 

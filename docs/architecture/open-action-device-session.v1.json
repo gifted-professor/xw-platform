@@ -23,5 +23,9 @@
   "forbiddenRoutes": [
     "POST /control/v1/device-sessions/:id/actions"
   ],
-  "crossLaneError": "SESSION_KIND_MISMATCH"
+  "crossLaneError": "SESSION_KIND_MISMATCH",
+  "actionsDisabledError": "PRIMITIVE_NOT_SUPPORTED",
+  "tokenTransport": "X-Control-Token",
+  "queryToken": false,
+  "controlSchemaVersion": 16
 }
