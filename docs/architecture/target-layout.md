@@ -6,9 +6,13 @@
 xw-platform/
 ├── services/
 │   ├── orchestrator/       ← xhs-registry 全历史（F1-C）
-│   └── control-plane/      ← xhs-device-agent 全历史（F1-D）
+│   ├── control-plane/      ← xhs-device-agent 全历史（F1-D）
+│   └── agent-gateway/      ← Harness session → device session
 ├── packages/
-│   └── kernel/             ← M2-B 共享契约（先复制，不删服务原件）
+│   ├── kernel/             ← 共享契约
+│   ├── control-client/     ← 上层唯一 Control Plane HTTP 客户端
+│   ├── replay/             ← fixture / recorded / fault backends
+│   └── cli/                ← xw phone
 ├── plugins/                ← 后续 XW 插件
 ├── integrations/           ← 后续 DSH 等 Harness Adapter
 ├── docs/
