@@ -1779,6 +1779,13 @@ export class StateStore {
     return row ? parseJson(row.observation_json) : null;
   }
 
+  getLatestDeviceSessionObservation(sessionId) {
+    const row = this.db.prepare(
+      "SELECT observation_json FROM device_session_observations WHERE session_id=? ORDER BY captured_at DESC, observation_id DESC LIMIT 1",
+    ).get(sessionId);
+    return row ? parseJson(row.observation_json) : null;
+  }
+
   countDeviceSessionMutations(sessionId) {
     const row = this.db.prepare(
       "SELECT COUNT(*) AS n FROM device_session_actions WHERE session_id=? AND executed=1",

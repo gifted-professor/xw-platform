@@ -404,6 +404,19 @@ test("capability and open_action lanes reject each other; device-session actions
         headers: auth(open.body.token),
         body: { kind: "observe" },
       }),
+      { code: "INVALID_ACTION", status: 400 },
+    );
+    await assert.rejects(
+      () => f.router.handle({
+        method: "POST",
+        path: `/control/v1/device-sessions/${open.body.session.sessionId}/actions`,
+        headers: auth(open.body.token),
+        body: {
+          schemaId: "xw.open-action.action-request.v1",
+          schemaVersion: 1,
+          action: { schemaId: "xw.open-action.primitive.v1", schemaVersion: 1, kind: "observe" },
+        },
+      }),
       { code: "PRIMITIVE_NOT_SUPPORTED", status: 405 },
     );
     await assert.rejects(

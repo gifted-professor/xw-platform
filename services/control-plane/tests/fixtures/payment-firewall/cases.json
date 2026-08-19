@@ -144,7 +144,7 @@
       "name": "unknown_signal_ignored",
       "surface": { "paymentSignals": ["not_a_signal", "garbage_pay_word"], "packageName": "fixture.app", "activityName": "UnknownSignalActivity", "pageKey": "pay.unknown" },
       "agentClaimedCategory": null,
-      "expectedCategory": "nonpayment"
+      "expectedCategory": "payment_context_uncertain"
     }
   ]
 }

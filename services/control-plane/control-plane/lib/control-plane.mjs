@@ -41,7 +41,8 @@ import {
   fixtureExecuteResult,
   isMutatingPrimitive,
   paymentHoldResult,
-  requirePrimitiveAction,
+  requireActionRequest,
+  requireActionResult,
 } from "./open-action-executor.mjs";
 
 const moduleDir = dirname(fileURLToPath(import.meta.url));
@@ -2105,25 +2106,8 @@ export class ControlPlane {
 
   async executeDeviceSessionAction(sessionId, token, input = {}) {
     const session = assertSessionKind(this.state.validateSession(sessionId, token), "open_action");
-    const action = requirePrimitiveAction(input);
+    const { action, agentClaimedCategory } = requireActionRequest(input);
     const mutating = isMutatingPrimitive(action.kind);
-    let observation = null;
-    if (mutating || action.basedOnObservationId) {
-      if (!action.basedOnObservationId) {
-        throw new ControlPlaneError("STALE_OBSERVATION", "mutating action requires basedOnObservationId", { status: 409 });
-      }
-      observation = this.state.getDeviceSessionObservation(sessionId, action.basedOnObservationId);
-      if (!observation) {
-        throw new ControlPlaneError(
-          "STALE_OBSERVATION",
-          "basedOnObservationId is not a live observation on this session",
-          { status: 409, details: { basedOnObservationId: action.basedOnObservationId } },
-        );
-      }
-    }
-    const assessment = observation
-      ? assessObservation(observation, { agentClaimedCategory: input.agentClaimedCategory ?? null })
-      : assessObservation({ paymentSignals: [] });
     const actionPrint = actionFingerprint(action);
     if (action.idempotencyKey) {
       const existing = this.state.findDeviceSessionAction(sessionId, action.idempotencyKey);
@@ -2143,8 +2127,39 @@ export class ControlPlane {
       }
     }
 
+    let observation = null;
+    if (mutating || action.basedOnObservationId) {
+      if (!action.basedOnObservationId) {
+        throw new ControlPlaneError("STALE_OBSERVATION", "mutating action requires basedOnObservationId", {
+          status: 409,
+          details: { nextAction: "REOBSERVE" },
+        });
+      }
+      observation = this.state.getDeviceSessionObservation(sessionId, action.basedOnObservationId);
+      const latest = this.state.getLatestDeviceSessionObservation(sessionId);
+      if (!observation || !latest || latest.observationId !== action.basedOnObservationId) {
+        throw new ControlPlaneError(
+          "STALE_OBSERVATION",
+          observation
+            ? "basedOnObservationId is not the latest observation on this session"
+            : "basedOnObservationId is not a live observation on this session",
+          {
+            status: 409,
+            details: {
+              basedOnObservationId: action.basedOnObservationId,
+              latestObservationId: latest?.observationId ?? null,
+              nextAction: "REOBSERVE",
+            },
+          },
+        );
+      }
+    }
+    const assessment = observation
+      ? assessObservation(observation, { agentClaimedCategory })
+      : assessObservation({ paymentSignals: [], paymentClassificationComplete: true });
+
     if (assessment.decision !== "ALLOW_WITH_TRACE") {
-      const result = paymentHoldResult({ action, observation, assessment });
+      const result = requireActionResult(paymentHoldResult({ action, observation, assessment }));
       if (action.idempotencyKey) {
         const stored = this.state.recordDeviceSessionAction({
           sessionId,
@@ -2175,7 +2190,7 @@ export class ControlPlane {
         mutatingCalls: this.state.countDeviceSessionMutations(sessionId) + 1,
       });
     }
-    const result = fixtureExecuteResult({ action, observation, afterObservation, assessment });
+    const result = requireActionResult(fixtureExecuteResult({ action, observation, afterObservation, assessment }));
     if (action.idempotencyKey) {
       const stored = this.state.recordDeviceSessionAction({
         sessionId,

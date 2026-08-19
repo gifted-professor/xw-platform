@@ -39,6 +39,8 @@ const FIXTURE_SURFACE_KEYS = Object.freeze([
   "keyboardVisible",
   "elements",
   "paymentSignals",
+  "paymentSignalSetVersion",
+  "paymentClassificationComplete",
   "pageKey",
 ]);
 
@@ -199,6 +201,8 @@ export function createFakeObserveProvider({ fixture = {}, now = Date.now } = {})
         elements: surface.elements ?? [],
         pageHash: fixturePageHash(pageKey),
         paymentSignals: surface.paymentSignals ?? [],
+        paymentSignalSetVersion: surface.paymentSignalSetVersion ?? 1,
+        paymentClassificationComplete: surface.paymentClassificationComplete ?? true,
         evidenceRefs: [],
         partial: true,
         partialReason: FIXTURE_NO_ARTIFACT_REASON,

@@ -94,6 +94,9 @@ export function validatePrimitiveAction(action) {
     if (!action.idempotencyKey) fail(errors, "INVALID_ACTION", "mutating action requires idempotencyKey");
     if (!action.basedOnObservationId) fail(errors, "STALE_OBSERVATION", "mutating action requires basedOnObservationId");
   }
+  if (action.kind === "tap" && action.target == null) {
+    fail(errors, "INVALID_ACTION", "tap requires target");
+  }
   if (action.target != null) {
     const modes = selectorModes(action.target);
     if (modes.length > 1) fail(errors, "INVALID_ACTION", `target selectors are exclusive: ${modes.join(",")}`);
