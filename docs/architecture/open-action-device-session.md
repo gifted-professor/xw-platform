@@ -30,6 +30,21 @@ M3-B uses a **fake/fixture** provider. Evidence is refs only (`screenshotRef` / 
 
 Mutating primitive kinds (`tap`, `type_text`, …) are `PRIMITIVE_NOT_SUPPORTED` on this path.
 
-## Not in this PR
+## Payment Firewall Fixtures — M3-C
 
-Payment firewall fixtures (M3-C), primitive executor (M3-D), kernel reader wiring (M3-E), agent-gateway (M3-F).
+Classifier: `services/control-plane/control-plane/lib/payment-firewall.mjs`.
+
+It maps `observation.paymentSignals` onto the frozen kernel `EFFECT_POLICY` table. It does not copy the table. `paymentSignals` is a fixture slot; live `effect.assessed` / `payment.hold_created` emission waits for M3-E.
+
+| category | decision | signals |
+| --- | --- | --- |
+| `payment_final_commit` | `HUMAN_REQUIRED` | `final_confirm_pay`, `final_transfer_confirm`, `final_one_click_pay`, `final_subscription_confirm`, `final_verified_control` |
+| `payment_credential` | `HUMAN_REQUIRED` | `credential_pin_pad`, `credential_password`, `credential_otp`, `credential_card_number`, `credential_cvv`, `credential_bank_card`, `credential_expiry` |
+| `payment_context_uncertain` | `REOBSERVE_REQUIRED` | `pay_adjacent_label`, `pay_ambiguous_button`, `pay_keyword_no_commit`, `pay_context_incomplete` |
+| `nonpayment` | `ALLOW_WITH_TRACE` | no known payment signal |
+
+Priority: `final_commit > credential > uncertain > nonpayment`. Agent-claimed category is echoed and never authoritative. `/device-sessions/:id/actions` stays disabled.
+
+## Not in this wave
+
+Primitive executor (M3-D), kernel reader wiring (M3-E), agent-gateway (M3-F).
