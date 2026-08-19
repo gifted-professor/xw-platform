@@ -3,6 +3,8 @@
 M3-A 只定义 **Open Action + Payment-only Autonomy** 协议。  
 不改 Control Plane，不执行动作，不接手机，不接 DSH。
 
+M3-B 在同一 Control Plane 上增加 observation-only `device-sessions`（见 `open-action-device-session.md`）。仍不执行写动作。
+
 `runtimeCutoverAllowed` 仍为 `false`。`LIVE_CANARY_GATE` 仍为 CLOSED。
 
 ## 两条通道

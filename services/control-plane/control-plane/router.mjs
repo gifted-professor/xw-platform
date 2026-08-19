@@ -369,6 +369,69 @@ export class ControlRouter {
       };
     }
 
+    if (method === "POST" && path === "/control/v1/device-sessions") {
+      return { status: 201, body: this.control.createDeviceSession(requireBody(body)) };
+    }
+    match = path.match(/^\/control\/v1\/device-sessions\/([^/]+)\/actions(?:\/.*)?$/);
+    if (match) {
+      throw new ControlPlaneError(
+        "SESSION_KIND_MISMATCH",
+        "M3-B device-sessions are observation-only; mutating /actions is not enabled",
+        { status: 405, details: { sessionId: decodeURIComponent(match[1]) } },
+      );
+    }
+    match = path.match(/^\/control\/v1\/device-sessions\/([^/]+)\/observe$/);
+    if (method === "POST" && match) {
+      const input = requireBody(body);
+      return {
+        status: 200,
+        body: await this.control.observeDeviceSession(
+          decodeURIComponent(match[1]),
+          tokenOf(input, headers),
+          input,
+        ),
+      };
+    }
+    match = path.match(/^\/control\/v1\/device-sessions\/([^/]+)\/heartbeat$/);
+    if (method === "POST" && match) {
+      const input = requireBody(body);
+      return {
+        status: 200,
+        body: this.control.heartbeatDeviceSession(decodeURIComponent(match[1]), tokenOf(input, headers)),
+      };
+    }
+    match = path.match(/^\/control\/v1\/device-sessions\/([^/]+)\/release$/);
+    if (method === "POST" && match) {
+      const input = requireBody(body);
+      return {
+        status: 200,
+        body: this.control.releaseDeviceSession(decodeURIComponent(match[1]), tokenOf(input, headers)),
+      };
+    }
+    match = path.match(/^\/control\/v1\/device-sessions\/([^/]+)\/events$/);
+    if (method === "GET" && match) {
+      const token = tokenOf({ token: query.get("token") }, headers);
+      const after = Number(query.get("after") || 0);
+      return {
+        status: 200,
+        body: {
+          events: this.control.listDeviceSessionEvents(
+            decodeURIComponent(match[1]),
+            token,
+            Number.isFinite(after) ? after : 0,
+          ),
+        },
+      };
+    }
+    match = path.match(/^\/control\/v1\/device-sessions\/([^/]+)$/);
+    if (method === "GET" && match) {
+      const token = tokenOf({ token: query.get("token") }, headers);
+      return {
+        status: 200,
+        body: this.control.getDeviceSession(decodeURIComponent(match[1]), token),
+      };
+    }
+
     if (method === "POST" && path === "/control/v1/missions/primitives") {
       const input = requireBody(body);
       const result = await this.control.executeMissionPrimitive(input.tuple, {

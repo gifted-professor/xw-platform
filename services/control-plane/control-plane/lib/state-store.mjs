@@ -492,6 +492,7 @@ export class StateStore {
     this.#ensureColumn("jobs", "placement_request_json", "TEXT NOT NULL DEFAULT '{}'");
     this.#ensureColumn("jobs", "placement_decision_json", "TEXT");
     this.#ensureColumn("sessions", "scope_capability_id", "TEXT");
+    this.#ensureColumn("sessions", "session_kind", "TEXT NOT NULL DEFAULT 'capability'");
     this.#ensureColumn("discovery_observation_lineage", "source_hash", "TEXT");
     this.#ensureColumn("discovery_observation_lineage", "content_hash", "TEXT");
     this.#ensureColumn("discovery_observation_lineage", "anchor_json", "TEXT");
@@ -517,6 +518,26 @@ export class StateStore {
     this.#ensureColumn("protected_commits", "expires_at", "INTEGER");
     this.db.exec("CREATE INDEX IF NOT EXISTS protected_commits_action_idx ON protected_commits(action, status)");
     this.db.exec("CREATE INDEX IF NOT EXISTS missions_parent_grant_idx ON missions(parent_grant_id, status)");
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS device_session_observations (
+        observation_id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        captured_at INTEGER NOT NULL,
+        observation_json TEXT NOT NULL,
+        mutating_calls INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE INDEX IF NOT EXISTS device_session_observations_session_idx
+        ON device_session_observations(session_id, captured_at);
+      CREATE TABLE IF NOT EXISTS device_session_events (
+        event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        type TEXT NOT NULL,
+        payload_json TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS device_session_events_session_idx
+        ON device_session_events(session_id, event_id);
+    `);
     // REX Phase 5 §8.1 item 3：legacy pending migration。superseded_by 记录旧 waiting_approval
     // job 被 fresh queued job 取代的链路（旧行→queued_migrated，superseded_by→新 job_id）。
     this.#ensureColumn("jobs", "superseded_by", "TEXT");
@@ -1452,14 +1473,37 @@ export class StateStore {
     capability = null,
     canary = false,
     ttlMs = 60000,
+    sessionKind = "capability",
   }) {
     if (typeof actorId !== "string" || actorId.trim() === "") {
       throw new ControlPlaneError("ACTOR_REQUIRED", "actorId is required");
     }
-    if (!capability && !deviceId) {
+    const kind = sessionKind || "capability";
+    if (!["capability", "open_action"].includes(kind)) {
+      throw new ControlPlaneError(
+        "SESSION_KIND_MISMATCH",
+        `unknown sessionKind: ${kind}`,
+        { status: 409, details: { sessionKind: kind } },
+      );
+    }
+    if (kind === "open_action" && capability) {
+      throw new ControlPlaneError(
+        "SESSION_KIND_MISMATCH",
+        "open_action session must not require capabilityId",
+        { status: 409 },
+      );
+    }
+    if (kind === "capability" && !capability && !deviceId) {
       throw new ControlPlaneError(
         "PLACEMENT_CONFLICT",
         "automatic sessions require capabilityId",
+        { status: 409 },
+      );
+    }
+    if (kind === "open_action" && !deviceId) {
+      throw new ControlPlaneError(
+        "PLACEMENT_CONFLICT",
+        "open_action sessions require deviceId",
         { status: 409 },
       );
     }
@@ -1524,8 +1568,8 @@ export class StateStore {
       this.db.prepare(`
         INSERT INTO sessions (
           session_id, lease_id, actor_id, device_id, token_hash, canary,
-          scope_capability_id, placement_decision_json, created_at, expires_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          scope_capability_id, placement_decision_json, created_at, expires_at, session_kind
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         sessionId,
         leaseId,
@@ -1537,6 +1581,7 @@ export class StateStore {
         canonicalJson(routeDecision),
         now,
         now + ttlMs,
+        kind,
       );
       return routeDecision;
     });
@@ -1547,8 +1592,10 @@ export class StateStore {
       actorId,
       deviceId: result.selectedDeviceId,
       canary,
+      sessionKind: kind,
       scopeCapabilityId: capability?.id || null,
       routeDecision: result,
+      createdAt: iso(now),
       expiresAt: iso(now + ttlMs),
     };
   }
@@ -1567,8 +1614,10 @@ export class StateStore {
       actorId: row.actor_id,
       deviceId: row.device_id,
       canary: Boolean(row.canary),
+      sessionKind: row.session_kind || "capability",
       scopeCapabilityId: row.scope_capability_id,
       routeDecision: parseJson(row.placement_decision_json),
+      createdAt: iso(row.created_at),
       expiresAt: iso(row.expires_at),
     };
   }
@@ -1585,6 +1634,48 @@ export class StateStore {
     this.db.prepare("DELETE FROM sessions WHERE session_id=?").run(sessionId);
     this.releaseLease(session.leaseId, token);
     return { released: true, sessionId };
+  }
+
+  recordDeviceSessionObservation({ sessionId, observation, mutatingCalls = 0 }) {
+    const now = this.now();
+    this.db.prepare(`
+      INSERT INTO device_session_observations (
+        observation_id, session_id, captured_at, observation_json, mutating_calls
+      ) VALUES (?, ?, ?, ?, ?)
+    `).run(observation.observationId, sessionId, now, canonicalJson(observation), mutatingCalls);
+    return observation;
+  }
+
+  listDeviceSessionObservations(sessionId) {
+    return this.db.prepare(
+      "SELECT observation_json FROM device_session_observations WHERE session_id=? ORDER BY captured_at",
+    ).all(sessionId).map((row) => parseJson(row.observation_json));
+  }
+
+  recordDeviceSessionEvent({ sessionId, type, payload = {} }) {
+    const createdAt = this.now();
+    const result = this.db.prepare(
+      "INSERT INTO device_session_events (session_id, created_at, type, payload_json) VALUES (?, ?, ?, ?)",
+    ).run(sessionId, createdAt, type, canonicalJson(payload));
+    return {
+      eventId: Number(result.lastInsertRowid),
+      sessionId,
+      createdAt: iso(createdAt),
+      type,
+      payload,
+    };
+  }
+
+  listDeviceSessionEvents(sessionId, after = 0) {
+    return this.db.prepare(
+      "SELECT * FROM device_session_events WHERE session_id=? AND event_id>? ORDER BY event_id",
+    ).all(sessionId, after).map((row) => ({
+      eventId: row.event_id,
+      sessionId: row.session_id,
+      createdAt: iso(row.created_at),
+      type: row.type,
+      payload: parseJson(row.payload_json, {}),
+    }));
   }
 
   listLeases() {

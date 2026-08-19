@@ -18,5 +18,5 @@
   ],
   "events": ["event-protocol/events.v1.json"],
   "errorCodes": ["error-codes/error-codes.v1.json"],
-  "note": "sharedCopies must remain LF-normalized identical in both services. openAction contracts are kernel-only until M3-B+."
+  "note": "sharedCopies must remain LF-normalized identical in both services. openAction contracts stay kernel-only; M3-B control-plane imports validators, it does not copy schemas."
 }

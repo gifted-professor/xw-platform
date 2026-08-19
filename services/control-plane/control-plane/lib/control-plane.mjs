@@ -27,6 +27,14 @@ import { createAuthorizedTypedTransport } from "./typed-transport.mjs";
 import { computeCapabilityContractHash } from "./capability-effect.mjs";
 import { buildStallVerdictFromEvidenceDir } from "../../scripts/lib/stall-verdict.mjs";
 import { returnDeviceHome, shouldReturnHomeAfterJob } from "./return-home.mjs";
+import {
+  assertSessionKind,
+  createFakeObserveProvider,
+  rejectMutatingObserveInput,
+  requireObservationContract,
+  requireOpenActionContract,
+  toDeviceSessionView,
+} from "./open-action-session.mjs";
 
 const moduleDir = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(moduleDir, "..", "..");
@@ -204,6 +212,7 @@ export class ControlPlane {
     paymentApprovalVerifier = null,
     policyMode = null,
     now = Date.now,
+    observeProvider = null,
   }) {
     this.state = state;
     this.capabilities = capabilities;
@@ -290,6 +299,9 @@ export class ControlPlane {
     this.paymentApprovalVerifier = paymentApprovalVerifier;
     this.paymentCommitOwners = new Map();
     this.now = now;
+    this.observeProvider = observeProvider && typeof observeProvider.observe === "function"
+      ? observeProvider
+      : createFakeObserveProvider({ now: this.now });
     this.receiptAuthorityAllowlist = new Set((Array.isArray(receiptAuthorityAllowlist) ? receiptAuthorityAllowlist : [])
       .filter((item) => item && typeof item.capabilityId === "string" && typeof item.adapterId === "string")
       .map((item) => `${item.capabilityId}:${item.adapterId}`));
@@ -1998,15 +2010,111 @@ export class ControlPlane {
       capability,
       canary,
       ttlMs: this.leaseTtlMs,
+      sessionKind: "capability",
     });
   }
 
+  createDeviceSession({ actorId, deviceId = null, canary = false, capabilityId = null }) {
+    requireOpenActionContract({ sessionKind: "open_action", capabilityId: capabilityId ?? null });
+    const session = this.state.createSession({
+      actorId,
+      authorityNodeId: this.authorityNodeId,
+      deviceId,
+      capability: null,
+      canary,
+      ttlMs: this.leaseTtlMs,
+      sessionKind: "open_action",
+    });
+    const view = toDeviceSessionView(session, { actorId: session.actorId, createdAt: session.createdAt, capabilityId: null });
+    this.state.recordDeviceSessionEvent({
+      sessionId: session.sessionId,
+      type: "device_session.created",
+      payload: view,
+    });
+    return { session: view, token: session.token, expiresAt: session.expiresAt, canary: session.canary, leaseId: session.leaseId };
+  }
+
+  getDeviceSession(sessionId, token) {
+    const session = assertSessionKind(this.state.validateSession(sessionId, token), "open_action");
+    return {
+      session: toDeviceSessionView(session),
+      expiresAt: session.expiresAt,
+      canary: session.canary,
+      leaseId: session.leaseId,
+    };
+  }
+
+  heartbeatDeviceSession(sessionId, token) {
+    const session = assertSessionKind(this.state.validateSession(sessionId, token), "open_action");
+    const next = this.state.heartbeatSession(session.sessionId, token, this.leaseTtlMs);
+    return {
+      session: toDeviceSessionView(next),
+      expiresAt: next.expiresAt,
+      canary: next.canary,
+      leaseId: next.leaseId,
+    };
+  }
+
+  releaseDeviceSession(sessionId, token) {
+    const session = assertSessionKind(this.state.validateSession(sessionId, token), "open_action");
+    if (this.activeJobs.has(session.deviceId)) {
+      throw new ControlPlaneError(
+        "SESSION_ACTION_RUNNING",
+        "cannot release a session while its action is running",
+        { status: 423, details: { sessionId } },
+      );
+    }
+    this.state.recordDeviceSessionEvent({
+      sessionId,
+      type: "device_session.released",
+      payload: { sessionId, leaseId: session.leaseId },
+    });
+    return this.state.releaseSession(sessionId, token);
+  }
+
+  listDeviceSessionEvents(sessionId, token, after = 0) {
+    assertSessionKind(this.state.validateSession(sessionId, token), "open_action");
+    return this.state.listDeviceSessionEvents(sessionId, after);
+  }
+
+  async observeDeviceSession(sessionId, token, input = {}) {
+    rejectMutatingObserveInput(input);
+    const session = assertSessionKind(this.state.validateSession(sessionId, token), "open_action");
+    const device = this.state.getDevice(session.deviceId);
+    const observation = requireObservationContract(await this.observeProvider.observe({
+      ...session,
+      deviceAlias: device?.alias || "unknown",
+    }));
+    const mutatingCalls = Number(this.observeProvider.mutatingCalls) || 0;
+    if (mutatingCalls !== 0) {
+      throw new ControlPlaneError(
+        "PRIMITIVE_NOT_SUPPORTED",
+        "M3-B observe provider must not mutate the device",
+        { status: 409, details: { mutatingCalls } },
+      );
+    }
+    this.state.recordDeviceSessionObservation({ sessionId, observation, mutatingCalls });
+    this.state.recordDeviceSessionEvent({
+      sessionId,
+      type: "observation.captured",
+      payload: {
+        observationId: observation.observationId,
+        evidenceRefs: observation.evidenceRefs,
+        mutatingCalls,
+      },
+    });
+    return { observation, mutatingCalls };
+  }
+
   heartbeatSession(sessionId, token) {
+    const session = this.state.validateSession(sessionId, token);
+    assertSessionKind(session, "capability");
     return this.state.heartbeatSession(sessionId, token, this.leaseTtlMs);
   }
 
   releaseSession(sessionId, token) {
     const session = this.state.validateSession(sessionId, token);
+    assertSessionKind(session, "capability");
     if (this.activeJobs.has(session.deviceId)) {
       throw new ControlPlaneError(
         "SESSION_ACTION_RUNNING",
@@ -2023,6 +2131,7 @@ export class ControlPlane {
     params = {},
   }) {
     const session = this.state.validateSession(sessionId, token);
+    assertSessionKind(session, "capability");
     if (this.state.getDiscoveryRunForSession(sessionId)) {
       throw new ControlPlaneError("DISCOVERY_SESSION_EXCLUSIVE", "Discovery-owned sessions only accept the fenced Discovery primitive path", { status: 403 });
     }
