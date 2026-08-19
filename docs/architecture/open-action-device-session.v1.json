@@ -1,0 +1,31 @@
+{
+  "schemaId": "xw.platform.open-action-device-session.v1",
+  "schemaVersion": 1,
+  "title": "Open Action observation-only device session — M3-B",
+  "phase": "M3-B",
+  "sourceFusionGate": "OPEN",
+  "runtimeCutoverGate": "CLOSED",
+  "runtimeCutoverAllowed": false,
+  "liveCanaryGate": "CLOSED",
+  "sessionKind": "open_action",
+  "observationOnly": true,
+  "actionsEnabled": false,
+  "observeProvider": "fake_fixture",
+  "shareLease": true,
+  "routes": [
+    "POST /control/v1/device-sessions",
+    "GET /control/v1/device-sessions/:id",
+    "POST /control/v1/device-sessions/:id/heartbeat",
+    "POST /control/v1/device-sessions/:id/observe",
+    "GET /control/v1/device-sessions/:id/events",
+    "POST /control/v1/device-sessions/:id/release"
+  ],
+  "forbiddenRoutes": [
+    "POST /control/v1/device-sessions/:id/actions"
+  ],
+  "crossLaneError": "SESSION_KIND_MISMATCH",
+  "actionsDisabledError": "PRIMITIVE_NOT_SUPPORTED",
+  "tokenTransport": "X-Control-Token",
+  "queryToken": false,
+  "controlSchemaVersion": 16
+}

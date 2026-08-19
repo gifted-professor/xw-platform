@@ -16,7 +16,9 @@
     "receipt mismatch counts are all 0",
     "receipt.advanceCommitCount == 0",
     "receipt.runtimeCutoverAllowed == false",
-    "current HEAD:services/<dir> listing matches receipt.originalTreeListing (path/mode/type/oid)",
+    "current HEAD:services/<dir> listing matches receipt.originalTreeListing (path/mode/type/oid) after subtracting docs/fusion/post-import-allowlist.v1.json exact paths",
+    "post-import allowlist never permits missing imported files or runtimeCutoverAllowed=true",
+    "allowedBlobModified does not swallow mode mismatches",
     "fusionMergeCommit is a 2-parent ancestor of HEAD",
     "rewrittenTipCommit is parent 2 of fusionMergeCommit and an ancestor of HEAD",
     "history probes remain reachable via git log --follow"

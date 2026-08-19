@@ -162,6 +162,7 @@ test("event and error catalogs contain the M3-A names", () => {
     "PAYMENT_CREDENTIAL_HOLD",
     "PAYMENT_FINAL_COMMIT_REQUIRED",
     "PAYMENT_CONTEXT_UNCERTAIN",
+    "OBSERVATION_BINDING_MISMATCH",
   ]) {
     assert.ok(errors.codes.includes(code), code);
   }

@@ -13,6 +13,18 @@ function tokenOf(body, headers = {}) {
   return headers["x-control-token"] || headers["X-Control-Token"] || body?.token;
 }
 
+function deviceSessionToken(headers = {}) {
+  const token = headers["x-control-token"] || headers["X-Control-Token"];
+  if (typeof token !== "string" || token.trim() === "") {
+    throw new ControlPlaneError(
+      "SESSION_TOKEN_INVALID",
+      "device-sessions require X-Control-Token",
+      { status: 403 },
+    );
+  }
+  return token;
+}
+
 function publicJob(job) {
   if (!job) return job;
   const { params, capability, ...safe } = job;
@@ -366,6 +378,65 @@ export class ControlRouter {
       return {
         status: 200,
         body: { job: publicJob(await this.control.executeSessionAction(decodeURIComponent(match[1]), tokenOf(input, headers), action)) },
+      };
+    }
+
+    if (method === "POST" && path === "/control/v1/device-sessions") {
+      return { status: 201, body: this.control.createDeviceSession(requireBody(body)) };
+    }
+    match = path.match(/^\/control\/v1\/device-sessions\/([^/]+)\/actions(?:\/.*)?$/);
+    if (match) {
+      throw new ControlPlaneError(
+        "PRIMITIVE_NOT_SUPPORTED",
+        "M3-B device-sessions do not expose /actions",
+        { status: 405, details: { sessionId: decodeURIComponent(match[1]) } },
+      );
+    }
+    match = path.match(/^\/control\/v1\/device-sessions\/([^/]+)\/observe$/);
+    if (method === "POST" && match) {
+      const input = body && typeof body === "object" ? body : {};
+      return {
+        status: 200,
+        body: await this.control.observeDeviceSession(
+          decodeURIComponent(match[1]),
+          deviceSessionToken(headers),
+          input,
+        ),
+      };
+    }
+    match = path.match(/^\/control\/v1\/device-sessions\/([^/]+)\/heartbeat$/);
+    if (method === "POST" && match) {
+      return {
+        status: 200,
+        body: this.control.heartbeatDeviceSession(decodeURIComponent(match[1]), deviceSessionToken(headers)),
+      };
+    }
+    match = path.match(/^\/control\/v1\/device-sessions\/([^/]+)\/release$/);
+    if (method === "POST" && match) {
+      return {
+        status: 200,
+        body: this.control.releaseDeviceSession(decodeURIComponent(match[1]), deviceSessionToken(headers)),
+      };
+    }
+    match = path.match(/^\/control\/v1\/device-sessions\/([^/]+)\/events$/);
+    if (method === "GET" && match) {
+      const after = Number(query.get("after") || 0);
+      return {
+        status: 200,
+        body: {
+          events: this.control.listDeviceSessionEvents(
+            decodeURIComponent(match[1]),
+            deviceSessionToken(headers),
+            Number.isFinite(after) ? after : 0,
+          ),
+        },
+      };
+    }
+    match = path.match(/^\/control\/v1\/device-sessions\/([^/]+)$/);
+    if (method === "GET" && match) {
+      return {
+        status: 200,
+        body: this.control.getDeviceSession(decodeURIComponent(match[1]), deviceSessionToken(headers)),
       };
     }
 

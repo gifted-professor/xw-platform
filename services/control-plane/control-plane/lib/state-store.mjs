@@ -15,6 +15,8 @@ import {
   consumeTransportActionAuthorization as consumeTransportAuthKernel,
 } from "./transport-action-authorization.mjs";
 
+export const CURRENT_CONTROL_SCHEMA_VERSION = 16;
+
 const ACTIVE_JOB_STATES = new Set(["running", "verifying", "restoring"]);
 const TERMINAL_JOB_STATES = new Set(["succeeded", "failed", "ambiguous", "recovery_required", "cancelled"]);
 const TRANSITIONS = {
@@ -138,13 +140,58 @@ export class StateStore {
     this.now = now;
     if (dbPath !== ":memory:") mkdirSync(dirname(dbPath), { recursive: true });
     this.db = new DatabaseSync(dbPath);
-    this.db.exec("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
-    if (dbPath !== ":memory:") this.db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;");
-    this.#migrate();
-    this.recoverInterruptedWork();
+    try {
+      this.db.exec("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
+      if (dbPath !== ":memory:") this.db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;");
+      this.#migrate();
+      this.recoverInterruptedWork();
+    } catch (error) {
+      try { this.db.close(); } catch {}
+      throw error;
+    }
+  }
+
+  #readUserVersion() {
+    return Number(this.db.prepare("PRAGMA user_version").get().user_version);
+  }
+
+  #setUserVersion(version) {
+    this.db.exec(`PRAGMA user_version = ${Number(version)}`);
+  }
+
+  #migrateV15ToV16() {
+    this.#ensureColumn("sessions", "session_kind", "TEXT NOT NULL DEFAULT 'capability'");
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS device_session_observations (
+        observation_id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        captured_at INTEGER NOT NULL,
+        observation_json TEXT NOT NULL,
+        mutating_calls INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE INDEX IF NOT EXISTS device_session_observations_session_idx
+        ON device_session_observations(session_id, captured_at);
+      CREATE TABLE IF NOT EXISTS device_session_events (
+        event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        type TEXT NOT NULL,
+        payload_json TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS device_session_events_session_idx
+        ON device_session_events(session_id, event_id);
+    `);
   }
 
   #migrate() {
+    const current = this.#readUserVersion();
+    if (current > CURRENT_CONTROL_SCHEMA_VERSION) {
+      throw new ControlPlaneError(
+        "SCHEMA_VERSION_TOO_NEW",
+        `control.db user_version ${current} is newer than this binary (${CURRENT_CONTROL_SCHEMA_VERSION})`,
+        { status: 500, details: { userVersion: current, supported: CURRENT_CONTROL_SCHEMA_VERSION } },
+      );
+    }
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS nodes (
         node_id TEXT PRIMARY KEY,
@@ -222,6 +269,7 @@ export class StateStore {
         canary INTEGER NOT NULL,
         scope_capability_id TEXT,
         placement_decision_json TEXT,
+        session_kind TEXT NOT NULL DEFAULT 'capability',
         created_at INTEGER NOT NULL,
         expires_at INTEGER NOT NULL
       );
@@ -559,7 +607,12 @@ export class StateStore {
     `);
     this.db.exec("CREATE INDEX IF NOT EXISTS transport_auth_job_idx ON transport_action_authorizations(job_id, purpose, consumed_at)");
     this.db.exec("CREATE INDEX IF NOT EXISTS transport_auth_lease_idx ON transport_action_authorizations(lease_id, consumed_at)");
-    this.db.exec("PRAGMA user_version = 15;");
+    if (current < CURRENT_CONTROL_SCHEMA_VERSION) {
+      this.transaction(() => {
+        this.#migrateV15ToV16();
+        this.#setUserVersion(CURRENT_CONTROL_SCHEMA_VERSION);
+      });
+    }
   }
 
   #ensureColumn(table, column, definition) {
@@ -1452,14 +1505,39 @@ export class StateStore {
     capability = null,
     canary = false,
     ttlMs = 60000,
+    sessionKind = "capability",
+    recordCreatedEvent = false,
+    faultAfter = null,
   }) {
     if (typeof actorId !== "string" || actorId.trim() === "") {
       throw new ControlPlaneError("ACTOR_REQUIRED", "actorId is required");
     }
-    if (!capability && !deviceId) {
+    const kind = sessionKind || "capability";
+    if (!["capability", "open_action"].includes(kind)) {
+      throw new ControlPlaneError(
+        "SESSION_KIND_MISMATCH",
+        `unknown sessionKind: ${kind}`,
+        { status: 409, details: { sessionKind: kind } },
+      );
+    }
+    if (kind === "open_action" && capability) {
+      throw new ControlPlaneError(
+        "SESSION_KIND_MISMATCH",
+        "open_action session must not require capabilityId",
+        { status: 409 },
+      );
+    }
+    if (kind === "capability" && !capability && !deviceId) {
       throw new ControlPlaneError(
         "PLACEMENT_CONFLICT",
         "automatic sessions require capabilityId",
+        { status: 409 },
+      );
+    }
+    if (kind === "open_action" && !deviceId) {
+      throw new ControlPlaneError(
+        "PLACEMENT_CONFLICT",
+        "open_action sessions require deviceId",
         { status: 409 },
       );
     }
@@ -1524,8 +1602,8 @@ export class StateStore {
       this.db.prepare(`
         INSERT INTO sessions (
           session_id, lease_id, actor_id, device_id, token_hash, canary,
-          scope_capability_id, placement_decision_json, created_at, expires_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          scope_capability_id, placement_decision_json, created_at, expires_at, session_kind
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         sessionId,
         leaseId,
@@ -1537,7 +1615,32 @@ export class StateStore {
         canonicalJson(routeDecision),
         now,
         now + ttlMs,
+        kind,
       );
+      if (faultAfter === "afterSession") {
+        throw new ControlPlaneError("DEVICE_SESSION_OPEN_FAULT", "injected device-session open fault", { status: 500 });
+      }
+      if (recordCreatedEvent || kind === "open_action") {
+        if (faultAfter === "createdEvent") {
+          throw new ControlPlaneError("DEVICE_SESSION_OPEN_FAULT", "injected device-session created event fault", { status: 500 });
+        }
+        this.#insertDeviceSessionEvent({
+          sessionId,
+          type: "device_session.created",
+          payload: {
+            schemaId: "xw.open-action.device-session.v1",
+            schemaVersion: 1,
+            sessionId,
+            sessionKind: kind,
+            deviceId: routeDecision.selectedDeviceId,
+            leaseId,
+            actor: actorId,
+            createdAt: iso(now),
+            capabilityId: capability?.id || null,
+          },
+          createdAt: now,
+        });
+      }
       return routeDecision;
     });
     return {
@@ -1547,8 +1650,10 @@ export class StateStore {
       actorId,
       deviceId: result.selectedDeviceId,
       canary,
+      sessionKind: kind,
       scopeCapabilityId: capability?.id || null,
       routeDecision: result,
+      createdAt: iso(now),
       expiresAt: iso(now + ttlMs),
     };
   }
@@ -1567,8 +1672,10 @@ export class StateStore {
       actorId: row.actor_id,
       deviceId: row.device_id,
       canary: Boolean(row.canary),
+      sessionKind: row.session_kind || "capability",
       scopeCapabilityId: row.scope_capability_id,
       routeDecision: parseJson(row.placement_decision_json),
+      createdAt: iso(row.created_at),
       expiresAt: iso(row.expires_at),
     };
   }
@@ -1580,11 +1687,87 @@ export class StateStore {
     return { ...session, expiresAt: lease.expiresAt };
   }
 
-  releaseSession(sessionId, token) {
+  releaseSession(sessionId, token, { recordReleasedEvent = false, faultAfter = null } = {}) {
     const session = this.validateSession(sessionId, token);
-    this.db.prepare("DELETE FROM sessions WHERE session_id=?").run(sessionId);
-    this.releaseLease(session.leaseId, token);
-    return { released: true, sessionId };
+    return this.transaction(() => {
+      if (recordReleasedEvent || session.sessionKind === "open_action") {
+        this.#insertDeviceSessionEvent({
+          sessionId,
+          type: "device_session.released",
+          payload: { sessionId, leaseId: session.leaseId },
+        });
+      }
+      if (faultAfter === "afterReleasedEvent") {
+        throw new ControlPlaneError("DEVICE_SESSION_RELEASE_FAULT", "injected device-session release fault", { status: 500 });
+      }
+      this.db.prepare("DELETE FROM sessions WHERE session_id=?").run(sessionId);
+      this.releaseLease(session.leaseId, token);
+      return { released: true, sessionId };
+    });
+  }
+
+  #insertDeviceSessionEvent({ sessionId, type, payload = {}, createdAt = this.now() }) {
+    const result = this.db.prepare(
+      "INSERT INTO device_session_events (session_id, created_at, type, payload_json) VALUES (?, ?, ?, ?)",
+    ).run(sessionId, createdAt, type, canonicalJson(payload));
+    return {
+      eventId: Number(result.lastInsertRowid),
+      sessionId,
+      createdAt: iso(createdAt),
+      type,
+      payload,
+    };
+  }
+
+  recordDeviceSessionObservation({ sessionId, observation, mutatingCalls = 0 }) {
+    const now = this.now();
+    this.db.prepare(`
+      INSERT INTO device_session_observations (
+        observation_id, session_id, captured_at, observation_json, mutating_calls
+      ) VALUES (?, ?, ?, ?, ?)
+    `).run(observation.observationId, sessionId, now, canonicalJson(observation), mutatingCalls);
+    return observation;
+  }
+
+  recordObservationCapture({ sessionId, observation, mutatingCalls = 0, faultAfter = null }) {
+    return this.transaction(() => {
+      this.recordDeviceSessionObservation({ sessionId, observation, mutatingCalls });
+      if (faultAfter === "afterObservation") {
+        throw new ControlPlaneError("DEVICE_SESSION_OBSERVE_FAULT", "injected observation persist fault", { status: 500 });
+      }
+      this.#insertDeviceSessionEvent({
+        sessionId,
+        type: "observation.captured",
+        payload: {
+          observationId: observation.observationId,
+          evidenceRefs: observation.evidenceRefs,
+          mutatingCalls,
+        },
+      });
+      return observation;
+    });
+  }
+
+  listDeviceSessionObservations(sessionId) {
+    return this.db.prepare(
+      "SELECT observation_json FROM device_session_observations WHERE session_id=? ORDER BY captured_at",
+    ).all(sessionId).map((row) => parseJson(row.observation_json));
+  }
+
+  recordDeviceSessionEvent({ sessionId, type, payload = {} }) {
+    return this.#insertDeviceSessionEvent({ sessionId, type, payload });
+  }
+
+  listDeviceSessionEvents(sessionId, after = 0) {
+    return this.db.prepare(
+      "SELECT * FROM device_session_events WHERE session_id=? AND event_id>? ORDER BY event_id",
+    ).all(sessionId, after).map((row) => ({
+      eventId: row.event_id,
+      sessionId: row.session_id,
+      createdAt: iso(row.created_at),
+      type: row.type,
+      payload: parseJson(row.payload_json, {}),
+    }));
   }
 
   listLeases() {
@@ -2820,8 +3003,8 @@ export class StateStore {
       `).run(leaseId, selected.deviceId, controllerAgent, sha256(token), now, now, now + ttlMs, discoveryRunId);
       if (faultAfter === "afterLease") throw new ControlPlaneError("DISCOVERY_OPEN_FAULT", "injected DiscoveryRun open fault", { status: 500 });
       this.db.prepare(`
-        INSERT INTO sessions (session_id, lease_id, actor_id, device_id, token_hash, canary, scope_capability_id, placement_decision_json, created_at, expires_at)
-        VALUES (?, ?, ?, ?, ?, 0, NULL, ?, ?, ?)
+        INSERT INTO sessions (session_id, lease_id, actor_id, device_id, token_hash, canary, scope_capability_id, placement_decision_json, created_at, expires_at, session_kind)
+        VALUES (?, ?, ?, ?, ?, 0, NULL, ?, ?, ?, 'discovery')
       `).run(sessionId, leaseId, controllerAgent, selected.deviceId, sha256(token), canonicalJson({ mode: placementRequest.mode, decision: "dispatchable", selectedDeviceId: selected.deviceId, source: "discovery" }), now, now + ttlMs);
       if (faultAfter === "afterSession") throw new ControlPlaneError("DISCOVERY_OPEN_FAULT", "injected DiscoveryRun open fault", { status: 500 });
       this.db.prepare(`
@@ -3282,8 +3465,8 @@ export class StateStore {
       this.db.prepare(`
         INSERT INTO sessions (
           session_id, lease_id, actor_id, device_id, token_hash, canary,
-          scope_capability_id, placement_decision_json, created_at, expires_at
-        ) VALUES (?, ?, ?, ?, ?, 0, NULL, ?, ?, ?)
+          scope_capability_id, placement_decision_json, created_at, expires_at, session_kind
+        ) VALUES (?, ?, ?, ?, ?, 0, NULL, ?, ?, ?, 'capability')
       `).run(sessionId, leaseId, controllerAgent, selected.deviceId, tokenHash, canonicalJson(routeDecision), now, now + ttlMs);
       this.db.prepare(`
         INSERT INTO device_runs (

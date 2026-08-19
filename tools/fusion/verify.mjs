@@ -15,6 +15,54 @@ function loadJson(path) {
   return JSON.parse(readFileSync(path, "utf8"));
 }
 
+export function assertPostImportAllowlistSafe(allowlist) {
+  if (!allowlist || allowlist.runtimeCutoverAllowed !== false) {
+    throw new Error("post-import-allowlist.runtimeCutoverAllowed must be false");
+  }
+}
+
+export function loadPostImportAllowlist(root) {
+  const path = join(root, "docs/fusion/post-import-allowlist.v1.json");
+  if (!existsSync(path)) return { services: {}, runtimeCutoverAllowed: false };
+  const allowlist = loadJson(path);
+  assertPostImportAllowlistSafe(allowlist);
+  return allowlist;
+}
+
+export function applyPostImportAllowlist(cmp, serviceAllowlist = {}) {
+  const allowedBlob = new Set(serviceAllowlist.allowedBlobModified || []);
+  const allowedMode = new Set(serviceAllowlist.allowedModeModified || []);
+  const allowedExtra = new Set(serviceAllowlist.allowedExtra || []);
+  const allowlisted = [];
+  const remaining = [];
+  for (const detail of cmp.details || []) {
+    if (detail.kind === "blob" && allowedBlob.has(detail.path)) {
+      allowlisted.push(detail);
+    } else if (detail.kind === "mode" && allowedMode.has(detail.path)) {
+      allowlisted.push(detail);
+    } else if (detail.kind === "extra" && allowedExtra.has(detail.path)) {
+      allowlisted.push(detail);
+    } else {
+      remaining.push(detail);
+    }
+  }
+  const count = (kind) => remaining.filter((detail) => detail.kind === kind).length;
+  return {
+    blobMismatchCount: count("blob"),
+    modeMismatchCount: count("mode"),
+    missingFileCount: count("missing"),
+    extraFileCount: count("extra"),
+    expectedCount: cmp.expectedCount,
+    actualCount: cmp.actualCount,
+    details: remaining,
+    allowlisted,
+    rawBlobMismatchCount: cmp.blobMismatchCount,
+    rawModeMismatchCount: cmp.modeMismatchCount,
+    rawMissingFileCount: cmp.missingFileCount,
+    rawExtraFileCount: cmp.extraFileCount,
+  };
+}
+
 function isAncestor(root, ancestor, descendant) {
   const r = git(root, ["merge-base", "--is-ancestor", ancestor, descendant], { allowFail: true });
   return r.status === 0;
@@ -31,7 +79,7 @@ function historyReachable(root, path) {
   return r.stdout.split(/\r?\n/).some((line) => line.trim().length > 0);
 }
 
-function verifyReceipt(root, receipt, lock, lockRepo) {
+function verifyReceipt(root, receipt, lock, lockRepo, allowlist = { services: {} }) {
   const blockers = [];
   const importDir = receipt.importDirectory;
   if (receipt.originalCommit !== lock[lockRepo].importCommit) {
@@ -78,7 +126,9 @@ function verifyReceipt(root, receipt, lock, lockRepo) {
     return { service: lockRepo, importDir, blockers, listing: null, probes: [] };
   }
   const listing = parseLsTree(git(root, ["ls-tree", "-r", "--full-tree", treeSpec]).stdout);
-  const cmp = compareListings(receipt.originalTreeListing, listing);
+  const raw = compareListings(receipt.originalTreeListing, listing);
+  const serviceKey = String(importDir || "").split("/").pop();
+  const cmp = applyPostImportAllowlist(raw, allowlist.services?.[serviceKey]);
   if (cmp.blobMismatchCount) blockers.push(`${lockRepo} blobMismatchCount=${cmp.blobMismatchCount}`);
   if (cmp.modeMismatchCount) blockers.push(`${lockRepo} modeMismatchCount=${cmp.modeMismatchCount}`);
   if (cmp.missingFileCount) blockers.push(`${lockRepo} missingFileCount=${cmp.missingFileCount}`);
@@ -98,6 +148,8 @@ function verifyReceipt(root, receipt, lock, lockRepo) {
     rewrittenTipCommit: rewritten,
     fusionMergeCommit: fusion,
     trackedFileCount: cmp.actualCount,
+    expectedCount: cmp.expectedCount,
+    allowlistedCount: cmp.allowlisted.length,
     ...cmp,
     probes,
     blockers,
@@ -120,10 +172,16 @@ export function verifyRepo(root) {
   const registry = loadJson(registryPath);
   const deviceAgent = loadJson(devicePath);
   if (lock.runtimeCutoverAllowed !== false) blockers.push("source-lock.runtimeCutoverAllowed must be false");
+  let allowlist = { services: {} };
+  try {
+    allowlist = loadPostImportAllowlist(root);
+  } catch (error) {
+    blockers.push(error instanceof Error ? error.message : String(error));
+  }
 
   const services = [
-    verifyReceipt(root, registry, lock, "registry"),
-    verifyReceipt(root, deviceAgent, lock, "deviceAgent"),
+    verifyReceipt(root, registry, lock, "registry", allowlist),
+    verifyReceipt(root, deviceAgent, lock, "deviceAgent", allowlist),
   ];
   for (const service of services) blockers.push(...service.blockers);
 
