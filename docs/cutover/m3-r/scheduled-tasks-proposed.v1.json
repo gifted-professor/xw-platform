@@ -1,0 +1,164 @@
+{
+  "schemaId": "xw.cutover.scheduled-tasks-proposed.v1",
+  "generatedAt": "2026-08-19T06:56:48.759Z",
+  "note": "仅生成定义（schtasks 可导入 XML + 本 receipt），未注册。注册属 R4 执行窗口（先禁旧任务、后启用新任务，Control Plane 先于 Orchestrator）。",
+  "registration": "NOT_REGISTERED",
+  "runtimeRoot": "C:\\Users\\Public\\xw-runtime",
+  "tasks": [
+    {
+      "name": "XW Platform Control Plane",
+      "description": "XW Platform Control Plane (legacy_compat). Mirrors XhsDeviceControlPlaneV1; points at xw-runtime/current release.",
+      "state": "Disabled",
+      "logonType": "S4U",
+      "runLevel": "LeastPrivilege",
+      "triggers": [
+        "BootTrigger"
+      ],
+      "command": "node.exe",
+      "arguments": "\"C:\\Users\\Public\\xw-runtime\\current\\services\\control-plane\\control-plane\\server.mjs\" serve",
+      "workingDirectory": "C:\\Users\\Public\\xw-runtime\\current",
+      "entry": {
+        "path": "C:\\Users\\Public\\xw-runtime\\current\\services\\control-plane\\control-plane\\server.mjs",
+        "exists": false
+      },
+      "environment": {
+        "CONTROL_PLANE_HOST": "127.0.0.1",
+        "CONTROL_PLANE_PORT": "17920",
+        "CONTROL_PLANE_DB": "C:\\Users\\Public\\xw-runtime\\state\\control-plane\\control.db",
+        "CONTROL_PLANE_RUNS_ROOT": "C:\\Users\\Public\\xw-runtime\\state\\runs",
+        "CONTROL_PLANE_STATE_DIR": "C:\\Users\\Public\\xw-runtime\\state\\control-plane",
+        "XW_RELEASE_MANIFEST": "C:\\Users\\Public\\xw-runtime\\current\\release-manifest.v1.json"
+      },
+      "pending": [
+        "入口不存在（按 R1 release 布局推导）：C:\\Users\\Public\\xw-runtime\\current\\services\\control-plane\\control-plane\\server.mjs",
+        "schtasks XML 不支持内联 env：注册窗口需用包装脚本或机器级 env 注入以上 environment",
+        "启动顺序约束：必须先于 XW Platform Orchestrator 启动（R4 runbook 负责）"
+      ],
+      "xmlFile": "proposed-tasks/XW Platform Control Plane.xml"
+    },
+    {
+      "name": "XW Platform Orchestrator",
+      "description": "XW Platform Orchestrator (legacy_compat). Mirrors XhsDeviceRegistry; points at xw-runtime/current release.",
+      "state": "Disabled",
+      "logonType": "S4U",
+      "runLevel": "LeastPrivilege",
+      "triggers": [
+        "BootTrigger"
+      ],
+      "command": "node.exe",
+      "arguments": "\"C:\\Users\\Public\\xw-runtime\\current\\services\\orchestrator\\registry.mjs\" --port 17930 --host 0.0.0.0 --control http://127.0.0.1:17920 --db \"C:\\Users\\Public\\xw-runtime\\state\\orchestrator\\registry.db\" --control-db \"C:\\Users\\Public\\xw-runtime\\state\\control-plane\\control.db\" --runs-root \"C:\\Users\\Public\\xw-runtime\\state\\runs\"",
+      "workingDirectory": "C:\\Users\\Public\\xw-runtime\\current",
+      "entry": {
+        "path": "C:\\Users\\Public\\xw-runtime\\current\\services\\orchestrator\\registry.mjs",
+        "exists": false
+      },
+      "environment": {
+        "CONTROL_PLANE_RUNS_ROOT": "C:\\Users\\Public\\xw-runtime\\state\\runs",
+        "CONTROL_PLANE_STATE_DIR": "C:\\Users\\Public\\xw-runtime\\state\\control-plane",
+        "XW_RELEASE_MANIFEST": "C:\\Users\\Public\\xw-runtime\\current\\release-manifest.v1.json"
+      },
+      "pending": [
+        "入口不存在（按 R1 release 布局推导）：C:\\Users\\Public\\xw-runtime\\current\\services\\orchestrator\\registry.mjs",
+        "--agent-token / --human-token / --observer-token 值不生成（secret 不进 git）；注册窗口由人工从旧任务 XML/密钥来源注入"
+      ],
+      "xmlFile": "proposed-tasks/XW Platform Orchestrator.xml"
+    }
+  ],
+  "diff": {
+    "newTasks": [
+      {
+        "name": "XW Platform Control Plane",
+        "status": "new",
+        "legacyCounterpart": "XhsDeviceControlPlaneV1",
+        "state": "Disabled",
+        "legacyStateUnchanged": true
+      },
+      {
+        "name": "XW Platform Orchestrator",
+        "status": "new",
+        "legacyCounterpart": "XhsDeviceRegistry",
+        "state": "Disabled",
+        "legacyStateUnchanged": true
+      }
+    ],
+    "legacyTasks": [
+      {
+        "name": "XhsDeviceControlPlaneV1",
+        "state": "Ready",
+        "action": "unchanged"
+      },
+      {
+        "name": "XhsDeviceRegistry",
+        "state": "Running",
+        "action": "unchanged"
+      },
+      {
+        "name": "XhsFastOperator01Live",
+        "state": "Ready",
+        "action": "unchanged"
+      },
+      {
+        "name": "XhsFastOperator02Live",
+        "state": "Ready",
+        "action": "unchanged"
+      },
+      {
+        "name": "XhsFastOperator03Live",
+        "state": "Ready",
+        "action": "unchanged"
+      },
+      {
+        "name": "XhsFastOperator04Live",
+        "state": "Ready",
+        "action": "unchanged"
+      },
+      {
+        "name": "XhsScoutScout",
+        "state": "Ready",
+        "action": "unchanged"
+      },
+      {
+        "name": "XhsXwEvolveWorker",
+        "state": "Ready",
+        "action": "unchanged"
+      },
+      {
+        "name": "UninstallDeviceTask",
+        "state": "Ready",
+        "action": "unchanged"
+      },
+      {
+        "name": "Device",
+        "state": "Ready",
+        "action": "unchanged"
+      },
+      {
+        "name": "Device User",
+        "state": "Ready",
+        "action": "unchanged"
+      },
+      {
+        "name": "Device Install Group Policy",
+        "state": "Ready",
+        "action": "unchanged"
+      },
+      {
+        "name": "Device Install Reboot Required",
+        "state": "Ready",
+        "action": "unchanged"
+      },
+      {
+        "name": "Automatic-Device-Join",
+        "state": "Disabled",
+        "action": "unchanged"
+      },
+      {
+        "name": "Device-Sync",
+        "state": "Disabled",
+        "action": "unchanged"
+      }
+    ],
+    "collisions": []
+  },
+  "ok": true
+}
