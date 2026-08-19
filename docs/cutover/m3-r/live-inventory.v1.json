@@ -1,0 +1,877 @@
+{
+  "schemaId": "xw.cutover.live-inventory.v1",
+  "collectedAt": "2026-08-19T06:32:59.541Z",
+  "host": {
+    "hostname": "DESKTOP-3I1EVHE",
+    "platform": "win32",
+    "arch": "x64",
+    "nodeVersion": "24.11.1"
+  },
+  "checkouts": {
+    "orchestrator": {
+      "path": "C:\\Users\\Public\\xhs-registry",
+      "headSha": "4838f3d43ba00efcf5e1933015fc10d5989920c9",
+      "dirtyFileCount": 108,
+      "remote": "https://github.com/gifted-professor/xhs-registry.git"
+    },
+    "controlPlane": {
+      "path": "C:\\Users\\Public\\xhs-routing-v1-1",
+      "headSha": "43b09accba3364a23917f43224fc0772ef17a217",
+      "dirtyFileCount": 2,
+      "remote": "https://github.com/gifted-professor/xhs-device-agent.git"
+    }
+  },
+  "ports": {
+    "orchestrator": {
+      "port": 17930,
+      "listening": true,
+      "pid": 20680,
+      "process": {
+        "pid": 20680,
+        "processName": "node.exe",
+        "commandLine": null
+      }
+    },
+    "controlPlane": {
+      "port": 17920,
+      "listening": false,
+      "pid": null,
+      "process": null
+    }
+  },
+  "scheduledTasks": {
+    "tasks": [
+      {
+        "name": "XhsDeviceControlPlaneV1",
+        "state": "Ready",
+        "author": null,
+        "runLevel": null,
+        "logonType": "InteractiveToken",
+        "enabled": null,
+        "triggers": [],
+        "actions": [
+          {
+            "command": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+            "arguments": "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"C:\\Users\\Public\\xhs-routing-v1-1\\scripts\\control-plane-worker.ps1\" -LaunchConfig \"C:\\Users\\Public\\xhs-agent-control\\task-launch.json\""
+          }
+        ]
+      },
+      {
+        "name": "XhsDeviceRegistry",
+        "state": "Running",
+        "author": null,
+        "runLevel": null,
+        "logonType": "S4U",
+        "enabled": null,
+        "triggers": [
+          "BootTrigger"
+        ],
+        "actions": [
+          {
+            "command": "node.exe",
+            "arguments": "\"C:\\Users\\Public\\xhs-registry\\registry.mjs\" --port 17930 --host 0.0.0.0 --control http://127.0.0.1:17920 --db \"C:\\Users\\Public\\xhs-registry\\registry.db\" --agent-token [redacted] --human-token [redacted] --human-actor console --observer-token [redacted] --runs-root \"C:\\Users\\Public\\xhs-agent-runs\""
+          }
+        ]
+      },
+      {
+        "name": "XhsFastOperator01Live",
+        "state": "Ready",
+        "author": null,
+        "runLevel": null,
+        "logonType": "InteractiveToken",
+        "enabled": null,
+        "triggers": [],
+        "actions": [
+          {
+            "command": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+            "arguments": "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"C:\\Users\\Public\\xhs-routing-v1-1\\scripts\\fast-operator-serve-worker.ps1\" -LaunchConfig \"C:\\Users\\Public\\xhs-agent-control\\fast-operator\\serve-launch-01.json\""
+          }
+        ]
+      },
+      {
+        "name": "XhsFastOperator02Live",
+        "state": "Ready",
+        "author": null,
+        "runLevel": null,
+        "logonType": "InteractiveToken",
+        "enabled": null,
+        "triggers": [],
+        "actions": [
+          {
+            "command": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+            "arguments": "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"C:\\Users\\Public\\xhs-routing-v1-1\\scripts\\fast-operator-serve-worker.ps1\" -LaunchConfig \"C:\\Users\\Public\\xhs-agent-control\\fast-operator\\serve-launch-02.json\""
+          }
+        ]
+      },
+      {
+        "name": "XhsFastOperator03Live",
+        "state": "Ready",
+        "author": null,
+        "runLevel": null,
+        "logonType": "InteractiveToken",
+        "enabled": null,
+        "triggers": [],
+        "actions": [
+          {
+            "command": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+            "arguments": "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"C:\\Users\\Public\\xhs-routing-v1-1\\scripts\\fast-operator-serve-worker.ps1\" -LaunchConfig \"C:\\Users\\Public\\xhs-agent-control\\fast-operator\\serve-launch-03.json\""
+          }
+        ]
+      },
+      {
+        "name": "XhsFastOperator04Live",
+        "state": "Ready",
+        "author": null,
+        "runLevel": null,
+        "logonType": "InteractiveToken",
+        "enabled": null,
+        "triggers": [],
+        "actions": [
+          {
+            "command": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+            "arguments": "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"C:\\Users\\Public\\xhs-routing-v1-1\\scripts\\fast-operator-serve-worker.ps1\" -LaunchConfig \"C:\\Users\\Public\\xhs-agent-control\\fast-operator\\serve-launch-04.json\""
+          }
+        ]
+      },
+      {
+        "name": "XhsScoutScout",
+        "state": "Ready",
+        "author": null,
+        "runLevel": null,
+        "logonType": "InteractiveToken",
+        "enabled": null,
+        "triggers": [
+          "TimeTrigger"
+        ],
+        "actions": [
+          {
+            "command": "D:\\Program Files\\Node\\node.exe",
+            "arguments": "\"C:\\Users\\Public\\xhs-routing-v1-1\\scout\\scout.mjs\" --constraint-only 3"
+          }
+        ]
+      },
+      {
+        "name": "XhsXwEvolveWorker",
+        "state": "Ready",
+        "author": null,
+        "runLevel": null,
+        "logonType": "InteractiveToken",
+        "enabled": null,
+        "triggers": [
+          "TimeTrigger"
+        ],
+        "actions": [
+          {
+            "command": "node.exe",
+            "arguments": "\"C:\\Users\\Public\\xhs-registry\\ops\\xw-evolve-worker.mjs\" --db \"C:\\Users\\Public\\xhs-registry\\registry.db\""
+          }
+        ]
+      },
+      {
+        "name": "UninstallDeviceTask",
+        "state": "Ready",
+        "xmlError": "Command failed: schtasks /query /tn UninstallDeviceTask /xml\n����: ϵͳ�Ҳ���ָ�����ļ���\r\r\n"
+      },
+      {
+        "name": "Device",
+        "state": "Ready",
+        "xmlError": "Command failed: schtasks /query /tn Device /xml\n����: ϵͳ�Ҳ���ָ�����ļ���\r\r\n"
+      },
+      {
+        "name": "Device User",
+        "state": "Ready",
+        "xmlError": "Command failed: schtasks /query /tn Device User /xml\n����: ϵͳ�Ҳ���ָ�����ļ���\r\r\n"
+      },
+      {
+        "name": "Device Install Group Policy",
+        "state": "Ready",
+        "xmlError": "Command failed: schtasks /query /tn Device Install Group Policy /xml\n����: ϵͳ�Ҳ���ָ�����ļ���\r\r\n"
+      },
+      {
+        "name": "Device Install Reboot Required",
+        "state": "Ready",
+        "xmlError": "Command failed: schtasks /query /tn Device Install Reboot Required /xml\n����: ϵͳ�Ҳ���ָ�����ļ���\r\r\n"
+      },
+      {
+        "name": "Automatic-Device-Join",
+        "state": "Disabled",
+        "xmlError": "Command failed: schtasks /query /tn Automatic-Device-Join /xml\n����: ϵͳ�Ҳ���ָ�����ļ���\r\r\n"
+      },
+      {
+        "name": "Device-Sync",
+        "state": "Disabled",
+        "xmlError": "Command failed: schtasks /query /tn Device-Sync /xml\n����: ϵͳ�Ҳ���ָ�����ļ���\r\r\n"
+      }
+    ],
+    "discoveryError": null
+  },
+  "databases": {
+    "registry": {
+      "discoveredVia": "scheduled-task:XhsDeviceRegistry --db",
+      "path": "C:\\Users\\Public\\xhs-registry\\registry.db",
+      "exists": true,
+      "sizeBytes": 696320,
+      "mtime": "2026-08-19T06:32:57.207Z",
+      "userVersion": 0,
+      "wal": {
+        "present": false,
+        "sizeBytes": null
+      },
+      "shm": {
+        "present": false,
+        "sizeBytes": null
+      }
+    },
+    "control": {
+      "discoveredVia": "code-default (bootstrap.mjs defaultRuntimePaths win32)",
+      "path": "C:\\Users\\Public\\xhs-agent-control\\control.db",
+      "exists": true,
+      "sizeBytes": 103432192,
+      "mtime": "2026-08-15T03:49:18.847Z",
+      "userVersion": 15,
+      "wal": {
+        "present": true,
+        "sizeBytes": 6077032
+      },
+      "shm": {
+        "present": true,
+        "sizeBytes": 32768
+      }
+    }
+  },
+  "services": {
+    "orchestratorApi": {
+      "reachable": true,
+      "health": {
+        "ok": true,
+        "port": 17930,
+        "identities": 4,
+        "lastIdentitySync": "2026-08-19T06:32:57.191Z"
+      },
+      "deviceCount": 4,
+      "controlPlaneView": {
+        "reachable": false
+      },
+      "agentEntrySchema": "xhs.agent-entry.v2",
+      "jobs": {
+        "ok": true,
+        "active": [],
+        "recent": [
+          {
+            "jobId": "job_1c458547-5ac9-469c-8fb9-8f52363165ed",
+            "runId": "run_fa48e370-083b-4b8d-853f-10315eacdf5d",
+            "actorId": "claude-pilot-20260809",
+            "deviceId": "dev_d801a54b-0216-479b-a127-374c813ef709",
+            "alias": "02",
+            "serial": "[redacted]",
+            "capabilityId": "xiaowei.explorer.primitive",
+            "status": "succeeded",
+            "errorCode": null,
+            "createdAt": "2026-08-16T05:03:35.752Z",
+            "updatedAt": "2026-08-16T05:03:37.031Z",
+            "startedAt": "2026-08-16T05:03:35.766Z",
+            "finishedAt": "2026-08-16T05:03:37.031Z"
+          },
+          {
+            "jobId": "job_60b2d202-d92b-4bb6-ab08-f235bd2623a1",
+            "runId": "run_69785e56-307c-46f0-ab08-7684a837d253",
+            "actorId": "claude-pilot-20260809",
+            "deviceId": "dev_d801a54b-0216-479b-a127-374c813ef709",
+            "alias": "02",
+            "serial": "[redacted]",
+            "capabilityId": "xiaowei.explorer.primitive",
+            "status": "succeeded",
+            "errorCode": null,
+            "createdAt": "2026-08-16T05:03:26.529Z",
+            "updatedAt": "2026-08-16T05:03:29.512Z",
+            "startedAt": "2026-08-16T05:03:26.541Z",
+            "finishedAt": "2026-08-16T05:03:29.512Z"
+          },
+          {
+            "jobId": "job_1d4b1dc7-74a7-41b4-a6f7-dd45af2dd7e7",
+            "runId": "run_2b7177c5-1254-4ac5-8f78-7e0f646ada4b",
+            "actorId": "claude-pilot-20260809",
+            "deviceId": "dev_d801a54b-0216-479b-a127-374c813ef709",
+            "alias": "02",
+            "serial": "[redacted]",
+            "capabilityId": "xiaowei.explorer.primitive",
+            "status": "succeeded",
+            "errorCode": null,
+            "createdAt": "2026-08-16T05:01:16.820Z",
+            "updatedAt": "2026-08-16T05:01:18.330Z",
+            "startedAt": "2026-08-16T05:01:16.832Z",
+            "finishedAt": "2026-08-16T05:01:18.330Z"
+          },
+          {
+            "jobId": "job_7d21a8dd-7833-4973-9c85-a3385c7fe04e",
+            "runId": "run_beb8cd02-4d09-4b49-9cd1-29f7e69ea08f",
+            "actorId": "claude-pilot-20260809",
+            "deviceId": "dev_d801a54b-0216-479b-a127-374c813ef709",
+            "alias": "02",
+            "serial": "[redacted]",
+            "capabilityId": "xiaowei.explorer.primitive",
+            "status": "succeeded",
+            "errorCode": null,
+            "createdAt": "2026-08-16T05:01:06.439Z",
+            "updatedAt": "2026-08-16T05:01:09.214Z",
+            "startedAt": "2026-08-16T05:01:06.450Z",
+            "finishedAt": "2026-08-16T05:01:09.214Z"
+          },
+          {
+            "jobId": "job_82718089-16b4-46cb-b6b6-09649fa28b1d",
+            "runId": "run_c2aa5508-1f67-442b-b7a9-17abfd313814",
+            "actorId": "claude-pilot-20260809",
+            "deviceId": "dev_d801a54b-0216-479b-a127-374c813ef709",
+            "alias": "02",
+            "serial": "[redacted]",
+            "capabilityId": "xiaowei.device.list",
+            "status": "succeeded",
+            "errorCode": null,
+            "createdAt": "2026-08-16T05:00:47.544Z",
+            "updatedAt": "2026-08-16T05:00:49.676Z",
+            "startedAt": "2026-08-16T05:00:47.602Z",
+            "finishedAt": "2026-08-16T05:00:49.676Z"
+          },
+          {
+            "jobId": "job_badafb1f-f886-4930-8a9f-3f6458d979dd",
+            "runId": "run_ac7ca400-92bf-4575-8820-ca6ed50e4885",
+            "actorId": "claude-pilot-20260809",
+            "deviceId": "dev_6214d94d-cecf-4bd5-8688-f038bcf600eb",
+            "alias": "01",
+            "serial": "[redacted]",
+            "capabilityId": "xiaowei.explorer.primitive",
+            "status": "succeeded",
+            "errorCode": null,
+            "createdAt": "2026-08-15T03:49:24.750Z",
+            "updatedAt": "2026-08-15T03:49:29.591Z",
+            "startedAt": "2026-08-15T03:49:24.758Z",
+            "finishedAt": "2026-08-15T03:49:29.591Z"
+          },
+          {
+            "jobId": "job_7c7c09f3-b8d7-440a-9279-e8b99bb7c69a",
+            "runId": "run_d81e549b-4374-4e4a-a1d1-088b06b1045f",
+            "actorId": "claude-pilot-20260809",
+            "deviceId": "dev_d801a54b-0216-479b-a127-374c813ef709",
+            "alias": "02",
+            "serial": "[redacted]",
+            "capabilityId": "xiaowei.explorer.primitive",
+            "status": "succeeded",
+            "errorCode": null,
+            "createdAt": "2026-08-15T03:49:21.123Z",
+            "updatedAt": "2026-08-15T03:49:29.502Z",
+            "startedAt": "2026-08-15T03:49:21.132Z",
+            "finishedAt": "2026-08-15T03:49:29.502Z"
+          },
+          {
+            "jobId": "job_64093cfd-8a75-43e8-85c5-40790a3f4e91",
+            "runId": "run_c2b2c10f-6b04-451b-9161-4d49cf4ef5cc",
+            "actorId": "claude-pilot-20260809",
+            "deviceId": "dev_8a943f25-b54e-409f-9712-333f9ae74a7f",
+            "alias": "04",
+            "serial": "[redacted]",
+            "capabilityId": "xiaowei.explorer.primitive",
+            "status": "succeeded",
+            "errorCode": null,
+            "createdAt": "2026-08-15T03:49:20.462Z",
+            "updatedAt": "2026-08-15T03:49:29.356Z",
+            "startedAt": "2026-08-15T03:49:20.471Z",
+            "finishedAt": "2026-08-15T03:49:29.356Z"
+          },
+          {
+            "jobId": "job_f749c66f-afde-46cb-b921-99ec82077431",
+            "runId": "run_6598c01d-6be2-49d0-ba8c-1bf6919754d8",
+            "actorId": "claude-pilot-20260809",
+            "deviceId": "dev_6214d94d-cecf-4bd5-8688-f038bcf600eb",
+            "alias": "01",
+            "serial": "[redacted]",
+            "capabilityId": "xiaowei.explorer.primitive",
+            "status": "succeeded",
+            "errorCode": null,
+            "createdAt": "2026-08-15T03:49:20.970Z",
+            "updatedAt": "2026-08-15T03:49:24.308Z",
+            "startedAt": "2026-08-15T03:49:20.980Z",
+            "finishedAt": "2026-08-15T03:49:24.308Z"
+          },
+          {
+            "jobId": "job_5ae90153-581c-4552-a656-57f4808d562a",
+            "runId": "run_35637663-18da-48c8-b940-f2334982bd34",
+            "actorId": "claude-pilot-20260809",
+            "deviceId": "dev_d801a54b-0216-479b-a127-374c813ef709",
+            "alias": "02",
+            "serial": "[redacted]",
+            "capabilityId": "xiaowei.explorer.primitive",
+            "status": "succeeded",
+            "errorCode": null,
+            "createdAt": "2026-08-15T03:49:20.302Z",
+            "updatedAt": "2026-08-15T03:49:20.504Z",
+            "startedAt": "2026-08-15T03:49:20.327Z",
+            "finishedAt": "2026-08-15T03:49:20.504Z"
+          },
+          {
+            "jobId": "job_c80d1f4a-7eca-41eb-8e08-a15f4c3cd32b",
+            "runId": "run_aed43a11-51a9-4885-91fb-97ff4811b70c",
+            "actorId": "claude-pilot-20260809",
+            "deviceId": "dev_8a943f25-b54e-409f-9712-333f9ae74a7f",
+            "alias": "04",
+            "serial": "[redacted]",
+            "capabilityId": "xiaowei.explorer.primitive",
+            "status": "succeeded",
+            "errorCode": null,
+            "createdAt": "2026-08-15T03:49:19.632Z",
+            "updatedAt": "2026-08-15T03:49:19.802Z",
+            "startedAt": "2026-08-15T03:49:19.640Z",
+            "finishedAt": "2026-08-15T03:49:19.802Z"
+          },
+          {
+            "jobId": "job_0837b4c4-2fd1-4c7f-82a0-b3229caaf388",
+            "runId": "run_4fd7b217-4653-49b6-ba2e-6329246b324e",
+            "actorId": "claude-pilot-20260809",
+            "deviceId": "dev_6214d94d-cecf-4bd5-8688-f038bcf600eb",
+            "alias": "01",
+            "serial": "[redacted]",
+            "capabilityId": "xiaowei.explorer.primitive",
+            "status": "succeeded",
+            "errorCode": null,
+            "createdAt": "2026-08-15T03:49:17.834Z",
+            "updatedAt": "2026-08-15T03:49:18.885Z",
+            "startedAt": "2026-08-15T03:49:17.843Z",
+            "finishedAt": "2026-08-15T03:49:18.885Z"
+          },
+          {
+            "jobId": "job_48bf00da-6b96-44ad-9712-ad9df0a0664b",
+            "runId": "run_406d8ea5-8948-43ba-9376-83beff4227d5",
+            "actorId": "claude-pilot-20260809",
+            "deviceId": "dev_d801a54b-0216-479b-a127-374c813ef709",
+            "alias": "02",
+            "serial": "[redacted]",
+            "capabilityId": "xiaowei.explorer.primitive",
+            "status": "succeeded",
+            "errorCode": null,
+            "createdAt": "2026-08-15T03:49:17.679Z",
+            "updatedAt": "2026-08-15T03:49:18.419Z",
+            "startedAt": "2026-08-15T03:49:17.688Z",
+            "finishedAt": "2026-08-15T03:49:18.419Z"
+          },
+          {
+            "jobId": "job_b6119978-3477-4dd6-8f4d-caa2235d3971",
+            "runId": "run_9211b56a-89f2-4173-b4b8-1d5c167d6c3e",
+            "actorId": "claude-pilot-20260809",
+            "deviceId": "dev_8a943f25-b54e-409f-9712-333f9ae74a7f",
+            "alias": "04",
+            "serial": "[redacted]",
+            "capabilityId": "xiaowei.explorer.primitive",
+            "status": "succeeded",
+            "errorCode": null,
+            "createdAt": "2026-08-15T03:49:17.365Z",
+            "updatedAt": "2026-08-15T03:49:17.953Z",
+            "startedAt": "2026-08-15T03:49:17.374Z",
+            "finishedAt": "2026-08-15T03:49:17.953Z"
+          },
+          {
+            "jobId": "job_4693f50c-5f9d-4135-a502-222c8162244e",
+            "runId": "run_caed9104-61ec-4a94-9ca7-030f9dcbb382",
+            "actorId": "claude-pilot-20260809",
+            "deviceId": "dev_6214d94d-cecf-4bd5-8688-f038bcf600eb",
+            "alias": "01",
+            "serial": "[redacted]",
+            "capabilityId": "xiaowei.explorer.primitive",
+            "status": "succeeded",
+            "errorCode": null,
+            "createdAt": "2026-08-15T03:49:12.156Z",
+            "updatedAt": "2026-08-15T03:49:16.951Z",
+            "startedAt": "2026-08-15T03:49:12.166Z",
+            "finishedAt": "2026-08-15T03:49:16.951Z"
+          },
+          {
+            "jobId": "job_a9bf6ffe-64d3-4e2c-a661-dfc384f0d8d0",
+            "runId": "run_b8c5d436-b414-4c38-8036-d92607c20145",
+            "actorId": "claude-pilot-20260809",
+            "deviceId": "dev_d801a54b-0216-479b-a127-374c813ef709",
+            "alias": "02",
+            "serial": "[redacted]",
+            "capabilityId": "xiaowei.explorer.primitive",
+            "status": "succeeded",
+            "errorCode": null,
+            "createdAt": "2026-08-15T03:49:09.525Z",
+            "updatedAt": "2026-08-15T03:49:16.869Z",
+            "startedAt": "2026-08-15T03:49:09.533Z",
+            "finishedAt": "2026-08-15T03:49:16.869Z"
+          },
+          {
+            "jobId": "job_397b2027-daa6-4499-89a2-6860c7a8ab3b",
+            "runId": "run_ff2d98c6-a3a3-464d-92e5-e3db8bade0dd",
+            "actorId": "claude-pilot-20260809",
+            "deviceId": "dev_8a943f25-b54e-409f-9712-333f9ae74a7f",
+            "alias": "04",
+            "serial": "[redacted]",
+            "capabilityId": "xiaowei.explorer.primitive",
+            "status": "succeeded",
+            "errorCode": null,
+            "createdAt": "2026-08-15T03:49:08.838Z",
+            "updatedAt": "2026-08-15T03:49:16.703Z",
+            "startedAt": "2026-08-15T03:49:08.850Z",
+            "finishedAt": "2026-08-15T03:49:16.703Z"
+          },
+          {
+            "jobId": "job_8b78aad6-366f-434e-b426-59510ea0c1ba",
+            "runId": "run_638fae49-8de7-4e3a-a205-e0d7037154e6",
+            "actorId": "claude-pilot-20260809",
+            "deviceId": "dev_6214d94d-cecf-4bd5-8688-f038bcf600eb",
+            "alias": "01",
+            "serial": "[redacted]",
+            "capabilityId": "xiaowei.explorer.primitive",
+            "status": "succeeded",
+            "errorCode": null,
+            "createdAt": "2026-08-15T03:49:09.373Z",
+            "updatedAt": "2026-08-15T03:49:11.686Z",
+            "startedAt": "2026-08-15T03:49:09.382Z",
+            "finishedAt": "2026-08-15T03:49:11.686Z"
+          },
+          {
+            "jobId": "job_defd6891-4600-4ea5-a17b-349361fd6bcf",
+            "runId": "run_cb9456e9-a2b1-481c-b819-9efd44bc72b9",
+            "actorId": "claude-pilot-20260809",
+            "deviceId": "dev_d801a54b-0216-479b-a127-374c813ef709",
+            "alias": "02",
+            "serial": "[redacted]",
+            "capabilityId": "xiaowei.explorer.primitive",
+            "status": "succeeded",
+            "errorCode": null,
+            "createdAt": "2026-08-15T03:49:08.671Z",
+            "updatedAt": "2026-08-15T03:49:08.831Z",
+            "startedAt": "2026-08-15T03:49:08.679Z",
+            "finishedAt": "2026-08-15T03:49:08.831Z"
+          },
+          {
+            "jobId": "job_0e3dd46b-64c5-47fb-83fd-e5414fe0419a",
+            "runId": "run_3db71ec0-db61-4bcd-862a-d6a136bdd2af",
+            "actorId": "claude-pilot-20260809",
+            "deviceId": "dev_8a943f25-b54e-409f-9712-333f9ae74a7f",
+            "alias": "04",
+            "serial": "[redacted]",
+            "capabilityId": "xiaowei.explorer.primitive",
+            "status": "succeeded",
+            "errorCode": null,
+            "createdAt": "2026-08-15T03:49:07.943Z",
+            "updatedAt": "2026-08-15T03:49:08.115Z",
+            "startedAt": "2026-08-15T03:49:07.951Z",
+            "finishedAt": "2026-08-15T03:49:08.115Z"
+          }
+        ],
+        "failures": [
+          {
+            "jobId": "job_9590e877-0891-48b8-ba7d-1e591603a291",
+            "runId": "run_a1d28cad-df41-46aa-af86-d79f37a0c32a",
+            "actorId": "claude-pilot-20260809",
+            "deviceId": "dev_8a943f25-b54e-409f-9712-333f9ae74a7f",
+            "alias": "04",
+            "serial": "[redacted]",
+            "capabilityId": "xiaowei.explorer.primitive",
+            "status": "failed",
+            "errorCode": "EXPLORER_DUMP_INVALID",
+            "createdAt": "2026-08-13T08:34:17.571Z",
+            "updatedAt": "2026-08-13T08:34:18.410Z",
+            "startedAt": "2026-08-13T08:34:17.578Z",
+            "finishedAt": "2026-08-13T08:34:18.410Z"
+          },
+          {
+            "jobId": "job_52adad59-c58f-4049-8453-600b3c17d8b8",
+            "runId": "run_c3138648-0e32-47bb-8110-7f9bfb6f232e",
+            "actorId": "claude-pilot-20260809",
+            "deviceId": "dev_8a943f25-b54e-409f-9712-333f9ae74a7f",
+            "alias": "04",
+            "serial": "[redacted]",
+            "capabilityId": "xiaowei.explorer.primitive",
+            "status": "failed",
+            "errorCode": "EXPLORER_DUMP_INVALID",
+            "createdAt": "2026-08-13T08:33:58.868Z",
+            "updatedAt": "2026-08-13T08:34:05.916Z",
+            "startedAt": "2026-08-13T08:33:58.874Z",
+            "finishedAt": "2026-08-13T08:34:05.916Z"
+          },
+          {
+            "jobId": "job_6be3960c-52b4-439b-97c7-a478182b7291",
+            "runId": "run_37d0fc31-961a-4417-ab7b-8d74ff8eac08",
+            "actorId": "claude-pilot-20260809",
+            "deviceId": "dev_d801a54b-0216-479b-a127-374c813ef709",
+            "alias": "02",
+            "serial": "[redacted]",
+            "capabilityId": "xianyu.publish.full_dry_run",
+            "status": "failed",
+            "errorCode": "VERIFICATION_FAILED",
+            "createdAt": "2026-08-13T06:01:07.422Z",
+            "updatedAt": "2026-08-13T06:07:39.433Z",
+            "startedAt": "2026-08-13T06:01:07.449Z",
+            "finishedAt": "2026-08-13T06:07:39.433Z"
+          },
+          {
+            "jobId": "job_282420de-3288-4299-a9c4-088af5a02193",
+            "runId": "run_d3fe7113-9fa3-45b3-ade7-32d164862f43",
+            "actorId": "claude-pilot-20260809",
+            "deviceId": "dev_6214d94d-cecf-4bd5-8688-f038bcf600eb",
+            "alias": "01",
+            "serial": "[redacted]",
+            "capabilityId": "xianyu.publish.full_dry_run",
+            "status": "failed",
+            "errorCode": "VERIFICATION_FAILED",
+            "createdAt": "2026-08-13T06:01:05.256Z",
+            "updatedAt": "2026-08-13T06:07:02.137Z",
+            "startedAt": "2026-08-13T06:01:05.266Z",
+            "finishedAt": "2026-08-13T06:07:02.137Z"
+          },
+          {
+            "jobId": "job_8f63cb50-5170-4ce7-87ca-2b87486c92fd",
+            "runId": "run_67a8e115-c7b6-45ef-a484-575286a377e3",
+            "actorId": "claude-pilot-20260809",
+            "deviceId": "dev_8a943f25-b54e-409f-9712-333f9ae74a7f",
+            "alias": "04",
+            "serial": "[redacted]",
+            "capabilityId": "xianyu.publish.full_dry_run",
+            "status": "failed",
+            "errorCode": "VERIFICATION_FAILED",
+            "createdAt": "2026-08-13T05:56:22.540Z",
+            "updatedAt": "2026-08-13T05:57:51.287Z",
+            "startedAt": "2026-08-13T05:56:22.559Z",
+            "finishedAt": "2026-08-13T05:57:51.287Z"
+          },
+          {
+            "jobId": "job_be1063e4-8e8f-41fd-8505-a14dde78a223",
+            "runId": "run_ef883d60-b255-4ccf-8fa0-f52d7578b35d",
+            "actorId": "claude-pilot-20260809",
+            "deviceId": "dev_04499fef-9154-4b75-ac12-fe41c4ed46fd",
+            "alias": "03",
+            "serial": "[redacted]",
+            "capabilityId": "xianyu.publish.full_dry_run",
+            "status": "failed",
+            "errorCode": "VERIFICATION_FAILED",
+            "createdAt": "2026-08-13T05:56:20.414Z",
+            "updatedAt": "2026-08-13T05:57:48.968Z",
+            "startedAt": "2026-08-13T05:56:20.425Z",
+            "finishedAt": "2026-08-13T05:57:48.968Z"
+          },
+          {
+            "jobId": "job_f6525fc6-399c-4051-8605-21fad31e3850",
+            "runId": "run_11cc29ed-1c5a-44cf-8103-2b50aa6a1bec",
+            "actorId": "claude-pilot-20260809",
+            "deviceId": "dev_8a943f25-b54e-409f-9712-333f9ae74a7f",
+            "alias": "04",
+            "serial": "[redacted]",
+            "capabilityId": "xianyu.publish.full_dry_run",
+            "status": "failed",
+            "errorCode": "VERIFICATION_FAILED",
+            "createdAt": "2026-08-13T05:48:59.655Z",
+            "updatedAt": "2026-08-13T05:50:32.764Z",
+            "startedAt": "2026-08-13T05:48:59.666Z",
+            "finishedAt": "2026-08-13T05:50:32.764Z"
+          },
+          {
+            "jobId": "job_2024107c-62c6-4635-a2ed-bc7ea46fa41e",
+            "runId": "run_b55b80a9-be36-49a5-a91a-2fc67b8e9cf6",
+            "actorId": "claude-pilot-20260809",
+            "deviceId": "dev_04499fef-9154-4b75-ac12-fe41c4ed46fd",
+            "alias": "03",
+            "serial": "[redacted]",
+            "capabilityId": "xianyu.publish.full_dry_run",
+            "status": "failed",
+            "errorCode": "VERIFICATION_FAILED",
+            "createdAt": "2026-08-13T05:48:57.507Z",
+            "updatedAt": "2026-08-13T05:50:25.614Z",
+            "startedAt": "2026-08-13T05:48:57.518Z",
+            "finishedAt": "2026-08-13T05:50:25.614Z"
+          },
+          {
+            "jobId": "job_8b75c1b7-7d57-4de5-a272-61f10a150536",
+            "runId": "run_bc51e2ec-78cb-4ecb-8332-02b070abd0b2",
+            "actorId": "claude-pilot-20260809",
+            "deviceId": "dev_6214d94d-cecf-4bd5-8688-f038bcf600eb",
+            "alias": "01",
+            "serial": "[redacted]",
+            "capabilityId": "xianyu.publish.full_dry_run",
+            "status": "failed",
+            "errorCode": "VERIFICATION_FAILED",
+            "createdAt": "2026-08-13T01:24:51.977Z",
+            "updatedAt": "2026-08-13T01:28:29.172Z",
+            "startedAt": "2026-08-13T01:24:51.990Z",
+            "finishedAt": "2026-08-13T01:28:29.172Z"
+          },
+          {
+            "jobId": "job_b3d8e614-d71e-443f-b45c-02b24c751b19",
+            "runId": "run_367c7eca-7be7-45d5-82d2-3d0c5234781d",
+            "actorId": "claude-pilot-20260809",
+            "deviceId": "dev_d801a54b-0216-479b-a127-374c813ef709",
+            "alias": "02",
+            "serial": "[redacted]",
+            "capabilityId": "xianyu.publish.full_dry_run",
+            "status": "failed",
+            "errorCode": "VERIFICATION_FAILED",
+            "createdAt": "2026-08-13T01:24:54.136Z",
+            "updatedAt": "2026-08-13T01:28:25.269Z",
+            "startedAt": "2026-08-13T01:24:54.149Z",
+            "finishedAt": "2026-08-13T01:28:25.269Z"
+          },
+          {
+            "jobId": "job_4f04ac7b-a45d-4444-b1da-a36ab4288076",
+            "runId": "run_06b5ecfc-2430-4b7c-bccb-c1174acd5eeb",
+            "actorId": "claude-pilot-20260809",
+            "deviceId": "dev_8a943f25-b54e-409f-9712-333f9ae74a7f",
+            "alias": "04",
+            "serial": "[redacted]",
+            "capabilityId": "xianyu.publish.full_dry_run",
+            "status": "failed",
+            "errorCode": "VERIFICATION_FAILED",
+            "createdAt": "2026-08-12T13:11:54.285Z",
+            "updatedAt": "2026-08-12T13:17:46.840Z",
+            "startedAt": "2026-08-12T13:11:54.303Z",
+            "finishedAt": "2026-08-12T13:17:46.840Z"
+          },
+          {
+            "jobId": "job_197d0a6e-e51f-45b7-83b3-ecb6de4f40ff",
+            "runId": "run_e482d26e-6962-45b2-a92a-7f8c329bb02b",
+            "actorId": "claude-pilot-20260809",
+            "deviceId": "dev_6214d94d-cecf-4bd5-8688-f038bcf600eb",
+            "alias": "01",
+            "serial": "[redacted]",
+            "capabilityId": "xianyu.publish.full_dry_run",
+            "status": "failed",
+            "errorCode": "VERIFICATION_FAILED",
+            "createdAt": "2026-08-12T13:11:29.687Z",
+            "updatedAt": "2026-08-12T13:17:40.388Z",
+            "startedAt": "2026-08-12T13:11:29.702Z",
+            "finishedAt": "2026-08-12T13:17:40.388Z"
+          },
+          {
+            "jobId": "job_800a89c5-852c-4dfe-91bc-8b69655da1cb",
+            "runId": "run_619da604-cf9d-4776-9d80-8bea1d01eb6a",
+            "actorId": "claude-pilot-20260809",
+            "deviceId": "dev_d801a54b-0216-479b-a127-374c813ef709",
+            "alias": "02",
+            "serial": "[redacted]",
+            "capabilityId": "xianyu.publish.full_dry_run",
+            "status": "failed",
+            "errorCode": "VERIFICATION_FAILED",
+            "createdAt": "2026-08-12T13:11:37.885Z",
+            "updatedAt": "2026-08-12T13:17:33.874Z",
+            "startedAt": "2026-08-12T13:11:37.908Z",
+            "finishedAt": "2026-08-12T13:17:33.874Z"
+          },
+          {
+            "jobId": "job_fcec274c-2301-4687-93a6-19cd2fb83076",
+            "runId": "run_42c324f0-2928-49e3-a9e2-d2f294400104",
+            "actorId": "claude-pilot-20260809",
+            "deviceId": "dev_8a943f25-b54e-409f-9712-333f9ae74a7f",
+            "alias": "04",
+            "serial": "[redacted]",
+            "capabilityId": "xianyu.publish.full_dry_run",
+            "status": "failed",
+            "errorCode": "VERIFICATION_FAILED",
+            "createdAt": "2026-08-12T12:53:43.564Z",
+            "updatedAt": "2026-08-12T12:59:23.499Z",
+            "startedAt": "2026-08-12T12:53:43.578Z",
+            "finishedAt": "2026-08-12T12:59:23.499Z"
+          },
+          {
+            "jobId": "job_6645bbad-1ee8-49a9-bfc1-d741022d0930",
+            "runId": "run_fb5c018f-014d-41dc-a54a-c6467d4c931c",
+            "actorId": "claude-pilot-20260809",
+            "deviceId": "dev_d801a54b-0216-479b-a127-374c813ef709",
+            "alias": "02",
+            "serial": "[redacted]",
+            "capabilityId": "xianyu.publish.full_dry_run",
+            "status": "failed",
+            "errorCode": "VERIFICATION_FAILED",
+            "createdAt": "2026-08-12T12:53:27.276Z",
+            "updatedAt": "2026-08-12T12:59:22.877Z",
+            "startedAt": "2026-08-12T12:53:27.289Z",
+            "finishedAt": "2026-08-12T12:59:22.877Z"
+          },
+          {
+            "jobId": "job_5993d03a-aa82-4097-b0c4-b755fdf4016e",
+            "runId": "run_b5c6e3c1-568a-4e0b-97ac-4d91aa5777c7",
+            "actorId": "claude-pilot-20260809",
+            "deviceId": "dev_04499fef-9154-4b75-ac12-fe41c4ed46fd",
+            "alias": "03",
+            "serial": "[redacted]",
+            "capabilityId": "xianyu.publish.full_dry_run",
+            "status": "failed",
+            "errorCode": "VERIFICATION_FAILED",
+            "createdAt": "2026-08-12T12:53:35.416Z",
+            "updatedAt": "2026-08-12T12:59:17.439Z",
+            "startedAt": "2026-08-12T12:53:35.428Z",
+            "finishedAt": "2026-08-12T12:59:17.439Z"
+          },
+          {
+            "jobId": "job_12cd1967-5ba8-485b-ae49-7afc44a7322b",
+            "runId": "run_d5bc20b2-60db-4e69-a89c-8416dfbf3f0a",
+            "actorId": "claude-pilot-20260809",
+            "deviceId": "dev_d801a54b-0216-479b-a127-374c813ef709",
+            "alias": "02",
+            "serial": "[redacted]",
+            "capabilityId": "xianyu.publish.full_dry_run",
+            "status": "failed",
+            "errorCode": "VERIFICATION_FAILED",
+            "createdAt": "2026-08-12T10:52:20.648Z",
+            "updatedAt": "2026-08-12T10:55:23.034Z",
+            "startedAt": "2026-08-12T10:52:20.701Z",
+            "finishedAt": "2026-08-12T10:55:23.034Z"
+          },
+          {
+            "jobId": "job_878b37b6-70cb-4cfa-8211-3ba5c4274136",
+            "runId": "run_b4d98e32-b9bd-4035-b06e-ecc2861171cf",
+            "actorId": "claude-pilot-20260809",
+            "deviceId": "dev_6214d94d-cecf-4bd5-8688-f038bcf600eb",
+            "alias": "01",
+            "serial": "[redacted]",
+            "capabilityId": "xhs.explore.open_feed_note",
+            "status": "failed",
+            "errorCode": "ADAPTER_ACTION_REJECTED",
+            "createdAt": "2026-08-12T09:53:08.777Z",
+            "updatedAt": "2026-08-12T09:53:21.973Z",
+            "startedAt": "2026-08-12T09:53:08.792Z",
+            "finishedAt": "2026-08-12T09:53:21.973Z"
+          },
+          {
+            "jobId": "job_de643214-d78c-4bb5-94fe-eca85dd5dca1",
+            "runId": "run_b7095e58-74be-4816-84dc-81ed7e06a8c8",
+            "actorId": "claude-pilot-20260809",
+            "deviceId": "dev_6214d94d-cecf-4bd5-8688-f038bcf600eb",
+            "alias": "01",
+            "serial": "[redacted]",
+            "capabilityId": "xhs.explore.open_feed_note",
+            "status": "failed",
+            "errorCode": "ADAPTER_ACTION_REJECTED",
+            "createdAt": "2026-08-12T09:51:47.226Z",
+            "updatedAt": "2026-08-12T09:52:02.649Z",
+            "startedAt": "2026-08-12T09:51:47.240Z",
+            "finishedAt": "2026-08-12T09:52:02.649Z"
+          },
+          {
+            "jobId": "job_1fb6e07d-fc99-4252-9fb7-7ce0b1000f36",
+            "runId": "run_6f7ff6f1-a111-4221-b3bb-6388d8052ff7",
+            "actorId": "claude-pilot-20260809",
+            "deviceId": "dev_6214d94d-cecf-4bd5-8688-f038bcf600eb",
+            "alias": "01",
+            "serial": "[redacted]",
+            "capabilityId": "xhs.explore.open_feed_note",
+            "status": "failed",
+            "errorCode": "ADAPTER_ACTION_REJECTED",
+            "createdAt": "2026-08-12T09:35:59.053Z",
+            "updatedAt": "2026-08-12T09:36:04.598Z",
+            "startedAt": "2026-08-12T09:35:59.073Z",
+            "finishedAt": "2026-08-12T09:36:04.598Z"
+          }
+        ]
+      }
+    },
+    "controlPlaneApi": {
+      "reachable": false,
+      "error": "fetch failed"
+    }
+  },
+  "redaction": {
+    "rules": [
+      "keys matching /token|secret|authorization|password|credential|serial/i → [redacted]",
+      "--*token/--*secret/--*key CLI 参数值 → [redacted]",
+      "C:\\Users\\<name>\\ 用户名路径段（Public 除外）→ <user>"
+    ]
+  }
+}

@@ -1,0 +1,169 @@
+{
+  "schemaId": "xw.cutover.scheduled-tasks-before.v1",
+  "exportedAt": "2026-08-19T06:33:00.072Z",
+  "note": "只读导出（Get-ScheduledTask + schtasks /query /xml）；未创建/修改/删除任何计划任务。",
+  "tasks": [
+    {
+      "name": "XhsDeviceControlPlaneV1",
+      "state": "Ready",
+      "author": null,
+      "runLevel": null,
+      "logonType": "InteractiveToken",
+      "enabled": null,
+      "triggers": [],
+      "actions": [
+        {
+          "command": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+          "arguments": "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"C:\\Users\\Public\\xhs-routing-v1-1\\scripts\\control-plane-worker.ps1\" -LaunchConfig \"C:\\Users\\Public\\xhs-agent-control\\task-launch.json\""
+        }
+      ]
+    },
+    {
+      "name": "XhsDeviceRegistry",
+      "state": "Running",
+      "author": null,
+      "runLevel": null,
+      "logonType": "S4U",
+      "enabled": null,
+      "triggers": [
+        "BootTrigger"
+      ],
+      "actions": [
+        {
+          "command": "node.exe",
+          "arguments": "\"C:\\Users\\Public\\xhs-registry\\registry.mjs\" --port 17930 --host 0.0.0.0 --control http://127.0.0.1:17920 --db \"C:\\Users\\Public\\xhs-registry\\registry.db\" --agent-token [redacted] --human-token [redacted] --human-actor console --observer-token [redacted] --runs-root \"C:\\Users\\Public\\xhs-agent-runs\""
+        }
+      ]
+    },
+    {
+      "name": "XhsFastOperator01Live",
+      "state": "Ready",
+      "author": null,
+      "runLevel": null,
+      "logonType": "InteractiveToken",
+      "enabled": null,
+      "triggers": [],
+      "actions": [
+        {
+          "command": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+          "arguments": "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"C:\\Users\\Public\\xhs-routing-v1-1\\scripts\\fast-operator-serve-worker.ps1\" -LaunchConfig \"C:\\Users\\Public\\xhs-agent-control\\fast-operator\\serve-launch-01.json\""
+        }
+      ]
+    },
+    {
+      "name": "XhsFastOperator02Live",
+      "state": "Ready",
+      "author": null,
+      "runLevel": null,
+      "logonType": "InteractiveToken",
+      "enabled": null,
+      "triggers": [],
+      "actions": [
+        {
+          "command": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+          "arguments": "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"C:\\Users\\Public\\xhs-routing-v1-1\\scripts\\fast-operator-serve-worker.ps1\" -LaunchConfig \"C:\\Users\\Public\\xhs-agent-control\\fast-operator\\serve-launch-02.json\""
+        }
+      ]
+    },
+    {
+      "name": "XhsFastOperator03Live",
+      "state": "Ready",
+      "author": null,
+      "runLevel": null,
+      "logonType": "InteractiveToken",
+      "enabled": null,
+      "triggers": [],
+      "actions": [
+        {
+          "command": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+          "arguments": "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"C:\\Users\\Public\\xhs-routing-v1-1\\scripts\\fast-operator-serve-worker.ps1\" -LaunchConfig \"C:\\Users\\Public\\xhs-agent-control\\fast-operator\\serve-launch-03.json\""
+        }
+      ]
+    },
+    {
+      "name": "XhsFastOperator04Live",
+      "state": "Ready",
+      "author": null,
+      "runLevel": null,
+      "logonType": "InteractiveToken",
+      "enabled": null,
+      "triggers": [],
+      "actions": [
+        {
+          "command": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+          "arguments": "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"C:\\Users\\Public\\xhs-routing-v1-1\\scripts\\fast-operator-serve-worker.ps1\" -LaunchConfig \"C:\\Users\\Public\\xhs-agent-control\\fast-operator\\serve-launch-04.json\""
+        }
+      ]
+    },
+    {
+      "name": "XhsScoutScout",
+      "state": "Ready",
+      "author": null,
+      "runLevel": null,
+      "logonType": "InteractiveToken",
+      "enabled": null,
+      "triggers": [
+        "TimeTrigger"
+      ],
+      "actions": [
+        {
+          "command": "D:\\Program Files\\Node\\node.exe",
+          "arguments": "\"C:\\Users\\Public\\xhs-routing-v1-1\\scout\\scout.mjs\" --constraint-only 3"
+        }
+      ]
+    },
+    {
+      "name": "XhsXwEvolveWorker",
+      "state": "Ready",
+      "author": null,
+      "runLevel": null,
+      "logonType": "InteractiveToken",
+      "enabled": null,
+      "triggers": [
+        "TimeTrigger"
+      ],
+      "actions": [
+        {
+          "command": "node.exe",
+          "arguments": "\"C:\\Users\\Public\\xhs-registry\\ops\\xw-evolve-worker.mjs\" --db \"C:\\Users\\Public\\xhs-registry\\registry.db\""
+        }
+      ]
+    },
+    {
+      "name": "UninstallDeviceTask",
+      "state": "Ready",
+      "xmlError": "Command failed: schtasks /query /tn UninstallDeviceTask /xml\n����: ϵͳ�Ҳ���ָ�����ļ���\r\r\n"
+    },
+    {
+      "name": "Device",
+      "state": "Ready",
+      "xmlError": "Command failed: schtasks /query /tn Device /xml\n����: ϵͳ�Ҳ���ָ�����ļ���\r\r\n"
+    },
+    {
+      "name": "Device User",
+      "state": "Ready",
+      "xmlError": "Command failed: schtasks /query /tn Device User /xml\n����: ϵͳ�Ҳ���ָ�����ļ���\r\r\n"
+    },
+    {
+      "name": "Device Install Group Policy",
+      "state": "Ready",
+      "xmlError": "Command failed: schtasks /query /tn Device Install Group Policy /xml\n����: ϵͳ�Ҳ���ָ�����ļ���\r\r\n"
+    },
+    {
+      "name": "Device Install Reboot Required",
+      "state": "Ready",
+      "xmlError": "Command failed: schtasks /query /tn Device Install Reboot Required /xml\n����: ϵͳ�Ҳ���ָ�����ļ���\r\r\n"
+    },
+    {
+      "name": "Automatic-Device-Join",
+      "state": "Disabled",
+      "xmlError": "Command failed: schtasks /query /tn Automatic-Device-Join /xml\n����: ϵͳ�Ҳ���ָ�����ļ���\r\r\n"
+    },
+    {
+      "name": "Device-Sync",
+      "state": "Disabled",
+      "xmlError": "Command failed: schtasks /query /tn Device-Sync /xml\n����: ϵͳ�Ҳ���ָ�����ļ���\r\r\n"
+    }
+  ],
+  "discoveryError": null
+}

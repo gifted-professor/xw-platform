@@ -1,0 +1,156 @@
+{
+  "schemaId": "xw.cutover.db-snapshot.v1",
+  "generatedAt": "2026-08-19T06:33:03.550Z",
+  "note": "snapshot 本体不进 git（体积与数据），位于 rehearsal 工作目录；receipt 是事实源。源 DB 只读访问，旧目录零写入。",
+  "sources": {
+    "registry": {
+      "path": "C:\\Users\\Public\\xhs-registry\\registry.db",
+      "discoveredVia": "scheduled-task:XhsDeviceRegistry --db"
+    },
+    "control": {
+      "path": "C:\\Users\\Public\\xhs-agent-control\\control.db",
+      "discoveredVia": "code-default (bootstrap.mjs defaultRuntimePaths win32)"
+    }
+  },
+  "databases": {
+    "registry": {
+      "label": "registry",
+      "ok": true,
+      "method": "vacuum-into-readonly",
+      "source": {
+        "path": "C:\\Users\\Public\\xhs-registry\\registry.db",
+        "exists": true,
+        "sizeBytes": 696320,
+        "mtime": "2026-08-19T06:32:57.207Z",
+        "sha256": "0da0b5d3a73095be6804facf1a4d27d9c5f3bf1fd583cf241306d4b6f8c63012",
+        "wal": {
+          "present": false,
+          "sizeBytes": null
+        },
+        "shm": {
+          "present": false,
+          "sizeBytes": null
+        }
+      },
+      "snapshot": {
+        "path": "C:\\Users\\Public\\xw-cutover-rehearsal\\reh-20260819-m3r2\\snapshots\\registry.snapshot.db",
+        "sizeBytes": 684032,
+        "sha256": "bce51e30c3df448c911e3397351f8f86ee91f70a0991cc61e0deb115dc656501"
+      },
+      "userVersion": 0,
+      "integrityCheck": "ok",
+      "schemaHash": "c96b64e470603a7e4d09c36d64712f612ed119cd2bbfec8a498611a142470600",
+      "tableCount": 9,
+      "tables": [
+        "approval_audit",
+        "evolve_queue",
+        "identities",
+        "knowledge",
+        "recipe_attempts",
+        "recipe_transitions",
+        "recipe_versions",
+        "stall_queue",
+        "sync_meta"
+      ],
+      "rowCounts": {
+        "approval_audit": 2,
+        "evolve_queue": 3,
+        "identities": 4,
+        "knowledge": 486,
+        "recipe_attempts": 17,
+        "recipe_transitions": 17,
+        "recipe_versions": 4,
+        "stall_queue": 0,
+        "sync_meta": 1
+      },
+      "snapshottedAt": "2026-08-19T06:33:03.570Z"
+    },
+    "control": {
+      "label": "control",
+      "ok": true,
+      "method": "vacuum-into-readonly",
+      "source": {
+        "path": "C:\\Users\\Public\\xhs-agent-control\\control.db",
+        "exists": true,
+        "sizeBytes": 103432192,
+        "mtime": "2026-08-15T03:49:18.847Z",
+        "sha256": "92278132331262d555313b66a2bec3493b3b59c7a078f2b9bcc2e481a8f9fdf5",
+        "wal": {
+          "present": true,
+          "sizeBytes": 6077032
+        },
+        "shm": {
+          "present": true,
+          "sizeBytes": 32768
+        }
+      },
+      "snapshot": {
+        "path": "C:\\Users\\Public\\xw-cutover-rehearsal\\reh-20260819-m3r2\\snapshots\\control.snapshot.db",
+        "sizeBytes": 101281792,
+        "sha256": "99aa3742413206a6402d77c5f09c763fc0f4a390d95665066f7535a6e6acf417"
+      },
+      "userVersion": 15,
+      "integrityCheck": "ok",
+      "schemaHash": "f73648fa5dcce0192defbf23dcb5cf790e857d803f4edd3c99df16925e5c6da8",
+      "tableCount": 26,
+      "tables": [
+        "approvals",
+        "authoritative_observations",
+        "capabilities",
+        "delegation_grant_events",
+        "delegation_grants",
+        "device_runs",
+        "devices",
+        "discovery_events",
+        "discovery_observation_lineage",
+        "discovery_producer_receipts",
+        "discovery_reservations",
+        "discovery_runs",
+        "events",
+        "evidence",
+        "explicit_observation_receipts",
+        "jobs",
+        "leases",
+        "mission_effects",
+        "mission_events",
+        "missions",
+        "nodes",
+        "operations",
+        "protected_commits",
+        "sessions",
+        "standing_grant_canaries",
+        "transport_action_authorizations"
+      ],
+      "rowCounts": {
+        "approvals": 12,
+        "authoritative_observations": 0,
+        "capabilities": 32,
+        "delegation_grant_events": 0,
+        "delegation_grants": 0,
+        "device_runs": 0,
+        "devices": 4,
+        "discovery_events": 0,
+        "discovery_observation_lineage": 0,
+        "discovery_producer_receipts": 0,
+        "discovery_reservations": 0,
+        "discovery_runs": 0,
+        "events": 86786,
+        "evidence": 16213,
+        "explicit_observation_receipts": 0,
+        "jobs": 14185,
+        "leases": 0,
+        "mission_effects": 0,
+        "mission_events": 0,
+        "missions": 0,
+        "nodes": 1,
+        "operations": 3488,
+        "protected_commits": 0,
+        "sessions": 0,
+        "standing_grant_canaries": 0,
+        "transport_action_authorizations": 10656
+      },
+      "snapshottedAt": "2026-08-19T06:33:04.377Z"
+    }
+  },
+  "ok": true
+}

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -13,6 +13,10 @@ import {
   verifyReleaseManifest,
   writeRelease,
 } from "../release/lib/release-manifest.mjs";
+import { discoverDbPaths, collectLiveInventory, collectScheduledTasks, scheduledTasksReceipt } from "../cutover/lib/live-collect.mjs";
+import { snapshotDatabase } from "../cutover/lib/db.mjs";
+import { runRehearsal, REHEARSAL_ROOT } from "../cutover/lib/rehearse.mjs";
+import { runRollbackDrill } from "../cutover/lib/rollback.mjs";
 
 const cliRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -23,14 +27,21 @@ xw cutover collect|package|verify|preflight — offline release tools, see: xw c
 }
 
 function cutoverUsage() {
-  return `xw cutover — M3-R1 离线 release 工具（不 deploy / 不 restart / 不改计划任务 / 不做 DB migration / 不碰设备）
+  return `xw cutover — M3-R 离线 release / 现场只读采集 / DB rehearsal 工具（不 deploy / 不 restart / 不改计划任务 / 不碰设备）
 
   xw cutover collect [--json]                       收集本机离线事实（版本 / 平台 / repo HEAD / 工作树是否脏）
+  xw cutover collect --live [--out FILE]            现场只读采集 → live-inventory.v1.json（旁出 scheduled-tasks-before.v1.json）
   xw cutover package --out DIR [--release-id ID]    在 DIR/releases/<releaseId>/ 物化不可变 release
   xw cutover verify --release DIR [--json]          重算并比对 release 目录全部 hash
   xw cutover preflight [--release DIR] [--json]     离线预检，任一失败 exit 1
+  xw cutover snapshot --work-dir DIR [--receipt FILE] [--registry-db P] [--control-db P]
+                                                    两个现场 DB 只读 snapshot 到 DIR/snapshots/ + db-snapshot-receipt
+  xw cutover rehearse --work-dir DIR [--rounds 3] [--registry-snapshot P] [--control-snapshot P] [--receipt FILE]
+                                                    在 DB 副本上跑 N 轮 xw-platform rehearsal（替代端口，不碰现场）
+  xw cutover rollback --work-dir DIR [--registry-snapshot P] [--control-snapshot P] [--receipt FILE]
+                                                    回滚演练：xw migration → 恢复 snapshot → 旧代码启动 → health 恢复
 
-不实现（属于后续阶段）：rehearse / canary / promote / rollback / closeout / deploy。`;
+不实现（属于后续阶段）：canary / promote / closeout / deploy。`;
 }
 
 function argOf(argv, name, fallback = null) {
@@ -91,8 +102,9 @@ function findRepoRoot() {
   }
 }
 
-// cutover 全程离线：只读本机 git/版本信息，只写 --out 指定目录，不访问网络与现场服务。
-function cutoverMain(argv) {
+// cutover 离线命令只读本机 git/版本信息；--live / snapshot / rehearse / rollback 为 M3-R2：
+// 现场一律只读，所有写入都落在 --work-dir / --out 指定目录。
+async function cutoverMain(argv) {
   const command = argv[0];
   if (!command || has(argv, "--help")) {
     process.stderr.write(`${cutoverUsage()}\n`);
@@ -100,6 +112,15 @@ function cutoverMain(argv) {
   }
 
   if (command === "collect") {
+    if (has(argv, "--live")) {
+      const inventory = await collectLiveInventory();
+      const out = resolve(argOf(argv, "--out", join(cliRoot, "docs/cutover/m3-r/live-inventory.v1.json")));
+      writeFileSync(out, `${JSON.stringify(inventory, null, 2)}\n`);
+      const tasksOut = join(dirname(out), "scheduled-tasks-before.v1.json");
+      writeFileSync(tasksOut, `${JSON.stringify(scheduledTasksReceipt(inventory), null, 2)}\n`);
+      emit(argv, { ok: true, inventory: out, scheduledTasks: tasksOut, schemaId: inventory.schemaId });
+      return 0;
+    }
     const root = findRepoRoot();
     let sourceCommit = null;
     let sourceTreeSha = null;
@@ -215,6 +236,80 @@ function cutoverMain(argv) {
     const ok = checks.every((check) => check.ok);
     emit(argv, { ok, checks });
     return ok ? 0 : 1;
+  }
+
+  if (command === "snapshot") {
+    const workDir = argOf(argv, "--work-dir");
+    if (!workDir) {
+      process.stderr.write("missing --work-dir DIR\n");
+      return 2;
+    }
+    const discovered = discoverDbPaths({ scheduledTasks: collectScheduledTasks() });
+    const registryDb = argOf(argv, "--registry-db") || discovered.registry.path;
+    const controlDb = argOf(argv, "--control-db") || discovered.control.path;
+    const destDir = join(resolve(workDir), "snapshots");
+    const receipt = {
+      schemaId: "xw.cutover.db-snapshot.v1",
+      generatedAt: new Date().toISOString(),
+      note: "snapshot 本体不进 git（体积与数据），位于 rehearsal 工作目录；receipt 是事实源。源 DB 只读访问，旧目录零写入。",
+      sources: { registry: discovered.registry, control: discovered.control },
+      databases: {
+        registry: registryDb === "unknown"
+          ? { label: "registry", ok: false, error: "SOURCE_DB_UNKNOWN" }
+          : snapshotDatabase({ sourcePath: registryDb, destDir, label: "registry" }),
+        control: controlDb === "unknown"
+          ? { label: "control", ok: false, error: "SOURCE_DB_UNKNOWN" }
+          : snapshotDatabase({ sourcePath: controlDb, destDir, label: "control" }),
+      },
+    };
+    receipt.ok = receipt.databases.registry.ok === true && receipt.databases.control.ok === true;
+    const receiptOut = resolve(argOf(argv, "--receipt", join(cliRoot, "docs/cutover/m3-r/db-snapshot-receipt.v1.json")));
+    writeFileSync(receiptOut, `${JSON.stringify(receipt, null, 2)}\n`);
+    emit(argv, { ok: receipt.ok, receipt: receiptOut, snapshots: destDir });
+    return receipt.ok ? 0 : 1;
+  }
+
+  if (command === "rehearse" || command === "rollback") {
+    const workDir = argOf(argv, "--work-dir");
+    if (!workDir) {
+      process.stderr.write("missing --work-dir DIR\n");
+      return 2;
+    }
+    const snapshotsDir = join(resolve(workDir), "snapshots");
+    const snapshots = {
+      registry: argOf(argv, "--registry-snapshot") || join(snapshotsDir, "registry.snapshot.db"),
+      control: argOf(argv, "--control-snapshot") || join(snapshotsDir, "control.snapshot.db"),
+    };
+    if (command === "rehearse") {
+      const receipt = await runRehearsal({
+        sourceRoot: findRepoRoot(),
+        snapshots,
+        workDir: resolve(workDir),
+        rounds: Number(argOf(argv, "--rounds", "3")),
+      });
+      const receiptOut = resolve(argOf(argv, "--receipt", join(cliRoot, "docs/cutover/m3-r/rehearsal-receipt.v1.json")));
+      writeFileSync(receiptOut, `${JSON.stringify(receipt, null, 2)}\n`);
+      emit(argv, { ok: receipt.rehearsalGate === "PASS", rehearsalGate: receipt.rehearsalGate, receipt: receiptOut, diffs: receipt.consistency.diffs });
+      return receipt.rehearsalGate === "PASS" ? 0 : 1;
+    }
+    const releasesDir = join(resolve(workDir), "release", "releases");
+    const releaseIds = existsSync(releasesDir) ? readdirSync(releasesDir) : [];
+    if (releaseIds.length !== 1) {
+      process.stderr.write(`expected exactly 1 materialized release under ${releasesDir}, got ${releaseIds.length}\n`);
+      return 2;
+    }
+    const releaseDir = join(releasesDir, releaseIds[0]);
+    const manifest = JSON.parse(readFileSync(join(releaseDir, RELEASE_MANIFEST_FILENAME), "utf8"));
+    const receipt = await runRollbackDrill({
+      releaseDir,
+      manifest,
+      snapshots,
+      workDir: resolve(workDir),
+    });
+    const receiptOut = resolve(argOf(argv, "--receipt", join(cliRoot, "docs/cutover/m3-r/rollback-certification.v1.json")));
+    writeFileSync(receiptOut, `${JSON.stringify(receipt, null, 2)}\n`);
+    emit(argv, { ok: receipt.rollbackGate === "PASS", rollbackGate: receipt.rollbackGate, receipt: receiptOut, failedSteps: receipt.failedSteps });
+    return receipt.rollbackGate === "PASS" ? 0 : 1;
   }
 
   process.stderr.write(`${cutoverUsage()}\n`);
