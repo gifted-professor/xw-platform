@@ -43,6 +43,7 @@
 - `docs/architecture/target-layout.md` — 目标目录结构。
 - `docs/architecture/runtime-boundaries.md` — 运行时边界与不变量。
 - `docs/fusion/` — 合仓合同、source lock、导入收据、Physical Fusion 验收。
+- `docs/cutover/m3-r/plan.md` — M3-R Runtime Source Cutover 定义（已定义、未启动；前置：PR #14 合并 + M3 Source Gate 锁定）。
 - `tools/fusion/` — 离线导入验证与 test-gate。
 - 根命令：`npm run check` / `fusion:verify` / `authority` / `kernel:check` / `test:m0` / `test:gate`（无 workspaces）。
 - 权威边界：`docs/architecture/authority-boundary.md`（M2-A，source-only）。
