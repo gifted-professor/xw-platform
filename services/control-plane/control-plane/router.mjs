@@ -1,6 +1,24 @@
+import { dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { ControlPlaneError } from "./lib/errors.mjs";
 import { RUNTIME_POLICY_VERSION } from "./lib/nonpayment-autonomy-policy.mjs";
 import { LIVE_PROGRESS_CACHE_MS, readLiveProgressTail } from "../scripts/lib/stall-progress.mjs";
+import { loadReleaseIdentity } from "../../../packages/release/lib/release-identity.mjs";
+
+// M3-R1：health 统一暴露 sourceRepo/sourceCommit/releaseId/runtimeProfile。
+// 优先级见 packages/release/lib/release-identity.mjs；加载失败不阻塞 health。
+let cachedIdentity;
+function releaseIdentity() {
+  if (cachedIdentity === undefined) {
+    try {
+      cachedIdentity = loadReleaseIdentity({ startDir: dirname(fileURLToPath(import.meta.url)) });
+    } catch {
+      cachedIdentity = { sourceRepo: null, sourceCommit: null, releaseId: null, runtimeProfile: null };
+    }
+  }
+  return cachedIdentity;
+}
 
 function requireBody(body) {
   if (!body || typeof body !== "object" || Array.isArray(body)) {
@@ -193,7 +211,11 @@ export class ControlRouter {
           // Phase 6 B: 有策略模式时同时暴露运行时策略 schema 版本（legacy 不声称非支付策略）。
           policyMode: this.control?.policyMode ?? null,
           ...(this.control?.policyMode ? { runtimePolicyVersion: RUNTIME_POLICY_VERSION } : {}),
-          ...(process.env.CONTROL_PLANE_RELEASE_ID ? { releaseId: process.env.CONTROL_PLANE_RELEASE_ID } : {}),
+          // M3-R1：统一 release identity（可为 null）；releaseId 保持旧 env 向后兼容。
+          sourceRepo: releaseIdentity().sourceRepo,
+          sourceCommit: releaseIdentity().sourceCommit,
+          runtimeProfile: releaseIdentity().runtimeProfile,
+          releaseId: releaseIdentity().releaseId ?? process.env.CONTROL_PLANE_RELEASE_ID ?? null,
         },
       };
     }

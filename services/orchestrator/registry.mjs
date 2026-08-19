@@ -38,6 +38,21 @@ import {
   listRecipes,
   getRecipe,
 } from "./scripts/lib/recipe-catalog.mjs";
+import { loadReleaseIdentity } from "../../packages/release/lib/release-identity.mjs";
+
+// M3-R1：/api/health 统一暴露 sourceRepo/sourceCommit/releaseId/runtimeProfile。
+// 优先级见 packages/release/lib/release-identity.mjs；加载失败不阻塞 health。
+let cachedReleaseIdentity;
+function releaseIdentity() {
+  if (cachedReleaseIdentity === undefined) {
+    try {
+      cachedReleaseIdentity = loadReleaseIdentity({ startDir: path.dirname(fileURLToPath(import.meta.url)) });
+    } catch {
+      cachedReleaseIdentity = { sourceRepo: null, sourceCommit: null, releaseId: null, runtimeProfile: null };
+    }
+  }
+  return cachedReleaseIdentity;
+}
 import {
   buildAttemptReceiptFromJob,
   fetchControlJob,
@@ -1925,8 +1940,14 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === "GET" && url.pathname === "/api/health") {
       // 浅健康保持向后兼容（监控脚本在用）；?deep=1 给分层视图
+      const identity = releaseIdentity();
       if (url.searchParams.get("deep") !== "1") {
-        return sendJson(res, 200, { ok: true, port: PORT, identities: listIdentities().length, lastIdentitySync: metaGet("last_identity_sync") });
+        return sendJson(res, 200, {
+          ok: true, port: PORT, identities: listIdentities().length, lastIdentitySync: metaGet("last_identity_sync"),
+          // M3-R1：统一 release identity（可为 null，保持向后兼容只加字段）。
+          sourceRepo: identity.sourceRepo, sourceCommit: identity.sourceCommit,
+          releaseId: identity.releaseId, runtimeProfile: identity.runtimeProfile,
+        });
       }
       const entry = await buildAgentEntry();
       const degraded = [];
@@ -1939,6 +1960,8 @@ const server = http.createServer(async (req, res) => {
       if (catalog.lintWarnings.length) degraded.push(`能力策略不变量告警 ${catalog.lintWarnings.length} 条（见 /api/capabilities）`);
       return sendJson(res, 200, {
         ok: true,
+        sourceRepo: identity.sourceRepo, sourceCommit: identity.sourceCommit,
+        releaseId: identity.releaseId, runtimeProfile: identity.runtimeProfile,
         liveness: { ok: true, port: PORT, uptimeSeconds: Math.round(process.uptime()) },
         readiness: {
           ok: entry.sources.controlPlane.reachable && entry.sources.controlDb.reachable && !entry.sources.identityCache.stale,
