@@ -2,6 +2,8 @@
 
 统一源码项目。Physical Fusion / M1 已验收；运行时仍未切换。
 
+**新 agent 先读 [`HANDOFF.md`](HANDOFF.md)**（2026-08-19：三套目录关系、进度、PR #14 下一步）。
+
 ## 当前状态
 
 - XW Platform 是两旧仓（`xhs-registry`、`xhs-device-agent`）的统一源码主线。
