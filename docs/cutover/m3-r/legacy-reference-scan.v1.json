@@ -36,8 +36,18 @@
       "references": "xhs-routing-v1-1 scripts",
       "state": "Disabled",
       "note": "2026-08-19 R6 清理：4 个全部已禁用（提权执行，r6-disable-tasks.log）；退役阶段删除"
+    },
+    {
+      "name": "CursorRenewalMonitor",
+      "references": "C:\\Users\\Public\\xhs-registry\\ops\\cursor-renewal-monitor.mjs（--once，约 5 分钟 TimeTrigger）",
+      "state": "Disabled",
+      "note": "2026-08-19 外部 review 发现的漏网项：此前按任务名 'Xhs*' 扫描未覆盖它。旧目录改名后它有一次失败运行（LastTaskResult=1，17:49），随即于 17:50 禁用；随后改用【任务动作内容】全量重扫，确认它是最后一个 Enabled 引用者"
     }
   ],
+  "scanMethodology": {
+    "deviation": "2026-08-19 早先扫描按计划任务名模式（Xhs*）过滤，漏掉 CursorRenewalMonitor；已改为遍历全部计划任务的动作命令行匹配旧路径（进程与 env 扫描本就是内容匹配，无此盲区）",
+    "finalSweep": "2026-08-19 内容级全量重扫：全部计划任务动作中引用旧路径者共 8 个，状态全部 Disabled"
+  },
   "envVarReferences": "0（2026-08-19 全扫：User/Machine/进程三层 env 均无 xhs-registry / xhs-routing-v1-1 / xhs-device-agent 引用）",
   "legacyWipBackup": {
     "location": "C:\\Users\\Public\\xw-runtime\\rollback\\legacy-backup-20260819\\",
@@ -52,5 +62,5 @@
     ],
     "note": "自此 108 个未提交 WIP 文件不依赖旧目录存续；旧目录可随时改名归档"
   },
-  "verdict": "两个生产服务（17920/17930）无任何旧 checkout 引用；全部 6 个残留旧任务已 Disabled；旧 WIP 已独立备份；旧目录可进入改名归档步骤（LEGACY_RETIREMENT_GATE 待稳定期后关闭）"
+  "verdict": "两个生产服务（17920/17930）无任何旧 checkout 引用；引用旧路径的计划任务共 8 个（含 review 补获的 CursorRenewalMonitor）全部 Disabled；env=0、进程=0；旧 WIP 已独立备份；旧 checkout 已改名 retired 工件"
 }

@@ -22,7 +22,7 @@
 ## Phase 1 — 观察窗口（8-20 ～ 8-22）
 
 - [ ] **P1-1 每日只读巡检**（cron 每天一次）：`XW Platform *` LastTaskResult=0 / 无重启；两服务 health identity 不漂移；`xw-runtime\logs\` 无新增 ERROR；两 DB integrity_check ok；lease/session 无残留增长
-- [x] **P1-2 真实观察类 job 试跑**（人在场监督，约 30 分钟）：evidence 落盘、job 闭环、无 lease 泄漏、支付硬闸无触发 — 2026-08-19 PASS：新系统（release xw-20260819-f337079）上 device 01 完成 attach→observe×2→trace→release 全链，观察证据落 control.db（device_session_observations 2 条 + 事件链 created/captured×2/released 完整），release 后 sessions/leases 均 0 无泄漏，两服务 health ok、日志零 ERROR、支付硬闸（nonpayment_v1）无触发
+- [x] **P1-2 真实观察类 job 试跑**（人在场监督，约 30 分钟）— 2026-08-19 **控制通道 PASS（有限定词，如实记录）**：新系统（release xw-20260819-f337079）上 device 01 完成 attach→observe×2→trace→release 全链，lease 正常签发/释放无泄漏，观察证据落 control.db（observations 2 条 + 事件链完整），日志零 ERROR、支付硬闸无触发、**零外发动作**。限定：observe 走 fixture provider，返回 `partial:true`（`fixture_provider_no_device_artifact`）——**验证了控制通道与账本闭环，未验证真机屏幕画面读取**；真机外发动作验证留给有真实业务的第一单（live 验证，不属于退役门）
 - [ ] **P1-3 窗口末日统计**：job 成功率 vs 旧基线、无新增关键失败指纹
 
 **出口**：连续 3 天全绿 + P1-2 通过 → Phase 2；异常 → 顺延或回滚评估。
