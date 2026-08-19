@@ -1,6 +1,6 @@
 {
   "schemaId": "xw.cutover.legacy-reference-scan.v1",
-  "generatedAt": "2026-08-19T08:23:01.318Z",
+  "generatedAt": "2026-08-19T08:44:38.000Z",
   "ok": true,
   "processScan": {
     "result": "无任何运行进程引用旧 checkout（xhs-registry / xhs-routing-v1-1 / xhs-device-agent）；扫描时刻仅检出扫描命令自身",
@@ -17,27 +17,40 @@
       "name": "XhsDeviceControlPlaneV1",
       "references": "C:\\Users\\Public\\xhs-routing-v1-1",
       "state": "Ready",
-      "note": "无触发器、Interactive 登录，保持原状未动（切换前即不在跑）"
+      "note": "无触发器、Interactive 登录，保持原状未动（切换前即不在跑）；退役阶段删除"
     },
     {
       "name": "XhsScoutScout",
       "references": "C:\\Users\\Public\\xhs-routing-v1-1\\scout\\scout.mjs",
-      "state": "Ready",
-      "note": "既有 TimeTrigger 任务，非本次切换范围，留待 LEGACY_RETIREMENT 阶段"
+      "state": "Disabled",
+      "note": "2026-08-19 R6 清理：已禁用（提权执行，r6-disable-tasks.log）；退役阶段删除"
     },
     {
       "name": "XhsXwEvolveWorker",
       "references": "C:\\Users\\Public\\xhs-registry\\ops\\xw-evolve-worker.mjs + 旧 registry.db 路径",
-      "state": "Ready",
-      "note": "既有 TimeTrigger 任务，仍指向旧 DB 路径；留待退役阶段处理，本次未动"
+      "state": "Disabled",
+      "note": "2026-08-19 R6 清理：已禁用；退役阶段删除"
     },
     {
       "name": "XhsFastOperator01-04Live",
       "references": "xhs-routing-v1-1 scripts",
-      "state": "Ready",
-      "note": "无触发器，保持原状"
+      "state": "Disabled",
+      "note": "2026-08-19 R6 清理：4 个全部已禁用（提权执行，r6-disable-tasks.log）；退役阶段删除"
     }
   ],
   "envVarReferences": "unknown（未做全机环境变量扫描；进程命令行与计划任务已扫）",
-  "verdict": "两个生产服务（17920/17930）已无任何旧 checkout 引用；其余既有任务对旧目录的引用如实记录，留待 M3-R6 退役阶段处理"
+  "legacyWipBackup": {
+    "location": "C:\\Users\\Public\\xw-runtime\\rollback\\legacy-backup-20260819\\",
+    "createdAt": "2026-08-19",
+    "contents": [
+      "xhs-registry.bundle（全历史，bundle verify ok）",
+      "xhs-device-agent.bundle（全历史，bundle verify ok）",
+      "xhs-registry-wip.patch（35 个已修改跟踪文件 diff）",
+      "xhs-device-agent-wip.patch（2 个已修改跟踪文件 diff）",
+      "xhs-registry-wip-files.tar.gz（110 个工作副本，含 73 个未跟踪文件）",
+      "xhs-device-agent-wip-files.tar.gz"
+    ],
+    "note": "自此 108 个未提交 WIP 文件不依赖旧目录存续；旧目录可随时改名归档"
+  },
+  "verdict": "两个生产服务（17920/17930）无任何旧 checkout 引用；全部 6 个残留旧任务已 Disabled；旧 WIP 已独立备份；旧目录可进入改名归档步骤（LEGACY_RETIREMENT_GATE 待稳定期后关闭）"
 }
