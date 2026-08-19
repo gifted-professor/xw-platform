@@ -9,12 +9,14 @@
     "skillRunId",
     "skillId",
     "skillVersion",
+    "skillVersionRef",
     "state",
     "attempt",
     "ids",
     "createdAt",
     "updatedAt",
-    "checkpointSeq"
+    "checkpointSeq",
+    "recoveryRequired"
   ],
   "properties": {
     "schemaId": { "const": "xw.skill.run.v1" },
@@ -22,6 +24,7 @@
     "skillRunId": { "type": "string", "minLength": 1 },
     "skillId": { "type": "string", "minLength": 1 },
     "skillVersion": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+    "skillVersionRef": { "$ref": "urn:xw:contract:skill-version-ref:v1" },
     "implementationMode": { "enum": ["agentic", "scripted", "hybrid", "subgraph"] },
     "state": {
       "enum": [
@@ -59,6 +62,12 @@
     "updatedAt": { "type": "integer", "minimum": 0 },
     "checkpointSeq": { "type": "integer", "minimum": 0 },
     "lastDurableStep": { "type": ["integer", "null"], "minimum": 0 },
-    "lastExit": { "type": ["object", "null"] }
+    "lastExit": { "type": ["object", "null"] },
+    "recoveryRequired": { "type": "boolean" },
+    "actionLedgerRevision": { "type": ["integer", "null"], "minimum": 0 },
+    "lastActionId": { "type": ["string", "null"] },
+    "lastEffectId": { "type": ["string", "null"] },
+    "lastVerifiedReceiptRef": { "type": ["string", "null"] },
+    "harnessEventSeq": { "type": ["integer", "null"], "minimum": 0 }
   }
 }

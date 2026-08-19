@@ -43,6 +43,9 @@ jobs:
       - name: Kernel protocol tests
         run: npm run test:kernel
 
+      - name: M4-A skill contract acceptance
+        run: npm run m4a:accept
+
       - name: M0 tool tests
         run: npm run test:m0
 

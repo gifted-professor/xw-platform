@@ -1,6 +1,6 @@
 {
   "schemaId": "xw.m4a.skill-contract.v1",
-  "generatedAt": "2026-08-19T18:50:00.000Z",
+  "generatedAt": "2026-08-19T19:30:00.000Z",
   "m4aSourceGate": "PASS",
   "dshLiveGate": "CLOSED",
   "openActionLiveGate": "CLOSED",
@@ -13,7 +13,11 @@
     { "id": 5, "text": "Bound skillVersion is immutable", "status": "PASS" },
     { "id": 6, "text": "Reference harness is DSH-independent", "status": "PASS" },
     { "id": 7, "text": "Harness cannot expose db/ADB/22222/lease/payment override", "status": "PASS" },
-    { "id": 8, "text": "First fixture wraps existing xhs.collect, not a new skill name", "status": "PASS" }
+    { "id": 8, "text": "First fixture wraps existing xhs.collect, not a new skill name", "status": "PASS" },
+    { "id": 9, "text": "Fresh-process restore from serialized JSON", "status": "PASS" },
+    { "id": 10, "text": "Checkpoint/run/spec binding and SkillSpec digest", "status": "PASS" },
+    { "id": 11, "text": "Action Ledger reconciliation gate", "status": "PASS" },
+    { "id": 12, "text": "candidateIntents use intent: namespace", "status": "PASS" }
   ],
   "notInThisWave": [
     "DSH plugin adapter",

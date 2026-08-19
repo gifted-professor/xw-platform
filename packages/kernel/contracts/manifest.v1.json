@@ -23,6 +23,7 @@
   "errorCodes": ["error-codes/error-codes.v1.json"],
   "skillContracts": [
     "contracts/skill/correlation-ids.v1.schema.json",
+    "contracts/skill/skill-version-ref.v1.schema.json",
     "contracts/skill/skill-spec.v1.schema.json",
     "contracts/skill/skill-exit.v1.schema.json",
     "contracts/skill/skill-run.v1.schema.json",

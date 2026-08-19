@@ -19,6 +19,8 @@
     "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
     "implementationMode": { "enum": ["agentic", "scripted", "hybrid", "subgraph"] },
     "sourcePath": { "type": ["string", "null"] },
+    "sourceCommit": { "type": ["string", "null"], "pattern": "^[0-9a-f]{40}$" },
+    "sourceBlobSha": { "type": ["string", "null"], "pattern": "^[0-9a-f]{40}$" },
     "inputSchema": { "type": ["object", "null"] },
     "outputSchema": { "type": ["object", "null"] },
     "preconditions": { "type": "array", "items": { "type": "string" } },

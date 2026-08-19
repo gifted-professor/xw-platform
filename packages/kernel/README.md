@@ -26,5 +26,6 @@ Check:
 
 ```bash
 node tools/fusion/cli.mjs kernel
-node --test packages/kernel/test
+node --test packages/kernel/test/open-action.test.mjs packages/kernel/test/skill-runtime.test.mjs
+npm run m4a:accept
 ```

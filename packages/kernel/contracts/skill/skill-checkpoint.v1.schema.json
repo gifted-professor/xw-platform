@@ -10,6 +10,7 @@
     "skillRunId",
     "skillId",
     "skillVersion",
+    "skillVersionRef",
     "state",
     "seq",
     "createdAt",
@@ -22,12 +23,45 @@
     "skillRunId": { "type": "string", "minLength": 1 },
     "skillId": { "type": "string", "minLength": 1 },
     "skillVersion": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
-    "state": { "type": "string", "minLength": 1 },
+    "skillVersionRef": { "$ref": "urn:xw:contract:skill-version-ref:v1" },
+    "state": {
+      "enum": [
+        "READY",
+        "RUNNING",
+        "WAITING_INPUT",
+        "WAITING_EXTERNAL",
+        "VERIFYING",
+        "BLOCKED",
+        "SUCCEEDED",
+        "FAILED",
+        "AMBIGUOUS",
+        "CANCELLED"
+      ]
+    },
     "seq": { "type": "integer", "minimum": 1 },
     "createdAt": { "type": "integer", "minimum": 0 },
     "lastDurableStep": { "type": ["integer", "null"], "minimum": 0 },
-    "exit": { "type": ["string", "null"] },
+    "exit": {
+      "type": ["string", "null"],
+      "enum": [
+        "COMPLETED",
+        "CONTINUE",
+        "REROUTE",
+        "WAIT_HUMAN",
+        "WAIT_EXTERNAL",
+        "RETRY",
+        "FALLBACK",
+        "REPAIR_REQUIRED",
+        "ABORTED",
+        null
+      ]
+    },
     "ids": { "$ref": "urn:xw:contract:skill-correlation-ids:v1" },
-    "payload": { "type": ["object", "null"] }
+    "payload": { "type": ["object", "null"] },
+    "actionLedgerRevision": { "type": ["integer", "null"], "minimum": 0 },
+    "lastActionId": { "type": ["string", "null"] },
+    "lastEffectId": { "type": ["string", "null"] },
+    "lastVerifiedReceiptRef": { "type": ["string", "null"] },
+    "harnessEventSeq": { "type": ["integer", "null"], "minimum": 0 }
   }
 }

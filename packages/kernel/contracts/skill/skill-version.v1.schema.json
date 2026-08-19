@@ -3,12 +3,13 @@
   "$id": "urn:xw:contract:skill-version:v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaId", "schemaVersion", "skillId", "skillVersion", "lifecycle"],
+  "required": ["schemaId", "schemaVersion", "skillId", "skillVersion", "lifecycle", "skillVersionRef"],
   "properties": {
     "schemaId": { "const": "xw.skill.version.v1" },
     "schemaVersion": { "const": 1 },
     "skillId": { "type": "string", "minLength": 1 },
     "skillVersion": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+    "skillVersionRef": { "$ref": "urn:xw:contract:skill-version-ref:v1" },
     "lifecycle": {
       "enum": [
         "DRAFT",

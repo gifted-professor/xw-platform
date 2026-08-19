@@ -5,8 +5,9 @@
 分支：`feat/m4a-skill-contract`。**源码 only**：不改 17920/17930，不改 `runtimeProfile`，`dshEnabled` 仍 false。
 
 - 合同：`packages/kernel/contracts/skill/`
-- 状态机 + checkpoint + Reference Harness：`packages/kernel/lib/skill-runtime.mjs`
-- 样板包装现有 `xhs.collect`，不发明新 skill 名
+- 状态机 + 跨进程 `serialize`/`restore` + SkillVersionRef + Action Ledger 对账门
+- 样板包装现有 `xhs.collect`；`candidateIntents` 必须是 `intent:…`
+- 机器门：`npm run m4a:accept`
 - 下一波才是 M4-B（`integrations/dsh-xw`）。Graph / Experience Compiler / 真机 canary 不在本波
 
 ## 🏁 2026-08-19 晚：M3-R 全案关闭

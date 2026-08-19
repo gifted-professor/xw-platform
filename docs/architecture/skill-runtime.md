@@ -10,17 +10,34 @@ M4-A 只定义 **Stateful Skill Contract**：Skill 是版本化、带状态、�
 | 层 | 谁拥有 | 本波做什么 |
 | --- | --- | --- |
 | Mission / Graph | Orchestrator（`missionRunId` 不是控制面 `MissionRuntime`） | 只预留关联 ID，不实现 Graph |
-| SkillRun | Orchestrator / Skill Runtime | 状态机 + checkpoint |
+| SkillRun | Orchestrator / Skill Runtime | 状态机 + 跨进程 checkpoint/restore |
 | Harness session | 外部 Harness（DSH 只是其中一种） | Reference Harness 对照；禁止焊死 DSH |
-| Action / Effect | Control Plane Action Ledger | 只引用 `actionId` / `evidenceRef`，不复制证据 |
+| Action / Effect | Control Plane Action Ledger | restore 前必须对账；本波用 fixture verdict |
 
-叶子 Skill 只报告语义出口，不写死下一站。中央 Router 是后续波次；本波只禁止 `nextSkill`。
+叶子 Skill 只报告语义出口，不写死下一站。中央 Router 是后续波次。
 
-## Skill 出口
+## 不可变 SkillVersionRef
+
+运行中绑定的不只是 SemVer，而是内容摘要：
+
+```json
+{
+  "skillId": "xhs.collect",
+  "skillVersion": "1.1.0",
+  "skillSpecSha256": "<canonical SkillSpec SHA-256>",
+  "sourceCommit": "<40-hex>",
+  "sourcePath": "services/orchestrator/skills/xhs/xhs-collect/SKILL.md",
+  "sourceBlobSha": "<40-hex>"
+}
+```
+
+恢复时：当前 spec digest == `SkillRun.skillVersionRef.skillSpecSha256` == `Checkpoint.skillVersionRef.skillSpecSha256`，否则 `SKILL_SPEC_DIGEST_MISMATCH`。
+
+## 出口与 intent
 
 `COMPLETED CONTINUE REROUTE WAIT_HUMAN WAIT_EXTERNAL RETRY FALLBACK REPAIR_REQUIRED ABORTED`
 
-合法例子：
+`candidateIntents` 必须是 `intent:…`，禁止 `xhs.publish` / `skill:` / 任意 skillId。
 
 ```json
 {
@@ -28,20 +45,33 @@ M4-A 只定义 **Stateful Skill Contract**：Skill 是版本化、带状态、�
   "schemaVersion": 1,
   "exit": "REROUTE",
   "reason": "target-page-not-found",
-  "factsProduced": [],
-  "openQuestions": [],
-  "candidateIntents": ["repair-navigation", "reobserve-app-state"]
+  "candidateIntents": ["intent:repair-navigation", "intent:reobserve-app-state"]
 }
 ```
 
-禁止：`nextSkill = xhs.publish`。
+## 跨进程恢复
 
-## 崩溃恢复
+```text
+Machine A start → checkpoint → serialize() → JSON
+丢弃 A
+Machine B = SkillRunMachine.restore({ spec, run, checkpoint, reconciliation })
+```
 
-- 有 checkpoint：恢复到 checkpoint 状态，**不**重放手机动作。先查 XW Action Ledger，再恢复 Harness session。
-- 无 checkpoint 且当时 RUNNING/VERIFYING：`AMBIGUOUS`，禁止自动 resume。
+`resume()` 不能只靠同对象内存。checkpoint 必须绑定 `skillRunId / skillId / skillVersion / traceId / missionRunId / skillVersionRef / seq`。
 
-运行中的 SkillRun 绑定 `skillId + skillVersion`，中途不可换版。
+无 checkpoint 崩溃：`state=AMBIGUOUS`，`exit=null`，`recoveryRequired=true`，发 `xw/recovery-required`。这不是操作员 `ABORTED`。
+
+## Action Ledger 对账
+
+`restore()` 必带 `reconciliation.status`：
+
+| status | 行为 |
+| --- | --- |
+| `NO_UNRESOLVED_EFFECTS` | 允许继续（且 run 上不能有未验证 action） |
+| `ALREADY_VERIFIED` | 允许继续 |
+| `AMBIGUOUS_EFFECT` | 拒绝，`AMBIGUOUS` + `REPAIR_REQUIRED` |
+
+checkpoint 后已请求 phone action、尚无 verified receipt：自动 restore 必须被拒绝。`phoneActsEmitted = 0` 不是安全证明。
 
 ## Harness 工具面
 
@@ -49,16 +79,15 @@ M4-A 只定义 **Stateful Skill Contract**：Skill 是版本化、带状态、�
 
 禁止：`control.db`、`registry.db`、`ADB`、`22222`、lease mutation、payment/policy override。
 
-`packages/kernel/lib/skill-runtime.mjs` 里的 `ReferenceHarness` 证明这条协议不依赖 DSH。DSH adapter 是后续 M4-B，且只能进 `integrations/dsh-xw`。
-
 ## 样板
 
-第一份 fixture spec 包装现有 `xhs.collect`（`services/orchestrator/skills/xhs/xhs-collect/`），不发明新的 `xhs.open-collection`。
+fixture spec 包装现有 `xhs.collect`，不发明 `xhs.open-collection`。
+
+机器门：`npm run m4a:accept`。
 
 ## 文件
 
 - `packages/kernel/contracts/skill/`
-- `packages/kernel/event-protocol/skill-events.v1.json`
-- `packages/kernel/error-codes/skill-error-codes.v1.json`
 - `packages/kernel/lib/skill-runtime.mjs`
+- `packages/kernel/lib/m4a-accept.mjs`
 - `packages/kernel/test/skill-runtime.test.mjs`
