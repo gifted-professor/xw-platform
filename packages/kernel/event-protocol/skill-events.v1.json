@@ -1,0 +1,15 @@
+{
+  "schemaId": "xw.skill.events.v1",
+  "schemaVersion": 1,
+  "events": [
+    "xw/mission-bound",
+    "xw/skill-started",
+    "xw/skill-state-changed",
+    "xw/skill-checkpoint",
+    "xw/skill-exited",
+    "xw/action-requested",
+    "xw/action-receipt",
+    "xw/recovery-required"
+  ],
+  "note": "Harness adapters may persist these event types as references only. Full evidence stays in the XW Action Ledger."
+}

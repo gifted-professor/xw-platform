@@ -1,6 +1,15 @@
 # 接手文档 — 2026-08-19
 
-## 🏁 2026-08-19 晚：M3-R 全案关闭（最新，先读这段）
+## 🔧 2026-08-19：M4-A Skill Contract（当前工作）
+
+分支：`feat/m4a-skill-contract`。**源码 only**：不改 17920/17930，不改 `runtimeProfile`，`dshEnabled` 仍 false。
+
+- 合同：`packages/kernel/contracts/skill/`
+- 状态机 + checkpoint + Reference Harness：`packages/kernel/lib/skill-runtime.mjs`
+- 样板包装现有 `xhs.collect`，不发明新 skill 名
+- 下一波才是 M4-B（`integrations/dsh-xw`）。Graph / Experience Compiler / 真机 canary 不在本波
+
+## 🏁 2026-08-19 晚：M3-R 全案关闭
 
 **`LEGACY_RETIREMENT_GATE = PASS`，M3-R 六个门全部关闭。**
 

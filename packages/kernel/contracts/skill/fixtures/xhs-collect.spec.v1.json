@@ -1,0 +1,39 @@
+{
+  "schemaId": "xw.skill.spec.v1",
+  "schemaVersion": 1,
+  "skillId": "xhs.collect",
+  "version": "1.1.0",
+  "implementationMode": "scripted",
+  "sourcePath": "services/orchestrator/skills/xhs/xhs-collect/SKILL.md",
+  "preconditions": ["explorer-lease-held", "xhs-foreground"],
+  "requiredCapabilities": ["xiaowei.explorer.primitive"],
+  "states": [
+    "READY",
+    "RUNNING",
+    "VERIFYING",
+    "SUCCEEDED",
+    "FAILED",
+    "AMBIGUOUS",
+    "CANCELLED"
+  ],
+  "exits": [
+    "COMPLETED",
+    "REROUTE",
+    "RETRY",
+    "WAIT_HUMAN",
+    "REPAIR_REQUIRED",
+    "ABORTED"
+  ],
+  "verifiers": [
+    {
+      "id": "collect-count-plus-one",
+      "note": "count before/after; 1200ms re-dump if a11y label lags"
+    }
+  ],
+  "fixtures": [
+    {
+      "id": "xhs-collect-count-compare",
+      "executionMode": "fixture"
+    }
+  ]
+}

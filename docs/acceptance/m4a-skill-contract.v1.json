@@ -1,0 +1,25 @@
+{
+  "schemaId": "xw.m4a.skill-contract.v1",
+  "generatedAt": "2026-08-19T18:50:00.000Z",
+  "m4aSourceGate": "PASS",
+  "dshLiveGate": "CLOSED",
+  "openActionLiveGate": "CLOSED",
+  "graphV2Enabled": false,
+  "checks": [
+    { "id": 1, "text": "Skill has explicit states", "status": "PASS" },
+    { "id": 2, "text": "Skill has typed exits without hardcoded nextSkill", "status": "PASS" },
+    { "id": 3, "text": "Crash with checkpoint is resumable without phone acts", "status": "PASS" },
+    { "id": 4, "text": "Crash without checkpoint is AMBIGUOUS", "status": "PASS" },
+    { "id": 5, "text": "Bound skillVersion is immutable", "status": "PASS" },
+    { "id": 6, "text": "Reference harness is DSH-independent", "status": "PASS" },
+    { "id": 7, "text": "Harness cannot expose db/ADB/22222/lease/payment override", "status": "PASS" },
+    { "id": 8, "text": "First fixture wraps existing xhs.collect, not a new skill name", "status": "PASS" }
+  ],
+  "notInThisWave": [
+    "DSH plugin adapter",
+    "Graph / NodeRun runtime",
+    "Experience Compiler promotion",
+    "Moving services/orchestrator/skills to repo-root skills/",
+    "Live phone canary"
+  ]
+}

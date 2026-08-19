@@ -9,7 +9,7 @@ xw-platform/
 │   ├── control-plane/      ← xhs-device-agent 全历史（F1-D）
 │   └── agent-gateway/      ← Harness session → device session
 ├── packages/
-│   ├── kernel/             ← 共享契约
+│   ├── kernel/             ← 共享契约（含 Open Action 与 M4-A Skill contract）
 │   ├── control-client/     ← 上层唯一 Control Plane HTTP 客户端
 │   ├── replay/             ← fixture / recorded / fault backends
 │   └── cli/                ← xw phone

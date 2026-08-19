@@ -37,10 +37,12 @@
 | F1-E | 增加导入验证工具 | 完成 |
 | F1-F | 增加根命令和离线 CI | 完成 |
 | F1-G | 完成 Physical Fusion 验收 | 完成 |
-| M3-EH | Open Action Runtime v1（fixture/replay） | 源码完成；live/cutover 仍关 |
+| M3-EH | Open Action Runtime v1（fixture/replay） | 源码完成；live 仍关 |
+| M4-A | Skill Contract + fixture SkillRun | 进行中（`feat/m4a-skill-contract`）；DSH live 仍关 |
 
 ## 更多
 
+- `docs/architecture/skill-runtime.md` — M4-A Skill 合同（源码 only，不接 DSH/真机）。
 - `docs/architecture/target-layout.md` — 目标目录结构。
 - `docs/architecture/runtime-boundaries.md` — 运行时边界与不变量。
 - `docs/fusion/` — 合仓合同、source lock、导入收据、Physical Fusion 验收。
