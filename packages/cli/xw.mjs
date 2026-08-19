@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -17,6 +17,9 @@ import { discoverDbPaths, collectLiveInventory, collectScheduledTasks, scheduled
 import { snapshotDatabase } from "../cutover/lib/db.mjs";
 import { runRehearsal, REHEARSAL_ROOT } from "../cutover/lib/rehearse.mjs";
 import { runRollbackDrill } from "../cutover/lib/rollback.mjs";
+import { baselineFromRehearsalReceipt, deviceCountFromInventory, runShadow } from "../cutover/lib/shadow.mjs";
+import { buildTasksProposedReceipt, buildProposedTasks, RUNTIME_ROOT_DEFAULT } from "../cutover/lib/tasks.mjs";
+import { buildCanaryProfile, runCanaryDryRun } from "../cutover/lib/canary.mjs";
 
 const cliRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -40,8 +43,15 @@ function cutoverUsage() {
                                                     在 DB 副本上跑 N 轮 xw-platform rehearsal（替代端口，不碰现场）
   xw cutover rollback --work-dir DIR [--registry-snapshot P] [--control-snapshot P] [--receipt FILE]
                                                     回滚演练：xw migration → 恢复 snapshot → 旧代码启动 → health 恢复
+  xw cutover shadow --work-dir DIR [--registry-snapshot P] [--control-snapshot P] [--receipt FILE]
+                    [--baseline-rehearsal FILE] [--baseline-inventory FILE]
+                                                    M3-R3 shadow：DB 副本 + 替代端口启动，只读比较（17930 仅 GET），旧系统仍是唯一权威
+  xw cutover tasks [--receipt FILE] [--xml-dir DIR] [--runtime-root P]
+                                                    生成两个新计划任务的定义（Disabled，schtasks 可导入 XML），绝不注册
+  xw cutover canary --dry-run --device ID --actor ID [--out FILE]
+                                                    输出 canary 步骤序列 + 前置/后置检查 + 回滚触发器清单；不执行任何一步
 
-不实现（属于后续阶段）：canary / promote / closeout / deploy。`;
+不实现（属于后续阶段）：canary 真实执行 / promote / closeout / deploy。`;
 }
 
 function argOf(argv, name, fallback = null) {
@@ -310,6 +320,71 @@ async function cutoverMain(argv) {
     writeFileSync(receiptOut, `${JSON.stringify(receipt, null, 2)}\n`);
     emit(argv, { ok: receipt.rollbackGate === "PASS", rollbackGate: receipt.rollbackGate, receipt: receiptOut, failedSteps: receipt.failedSteps });
     return receipt.rollbackGate === "PASS" ? 0 : 1;
+  }
+
+  if (command === "shadow") {
+    const workDir = argOf(argv, "--work-dir");
+    if (!workDir) {
+      process.stderr.write("missing --work-dir DIR\n");
+      return 2;
+    }
+    const snapshotsDir = join(resolve(workDir), "snapshots");
+    const snapshots = {
+      registry: argOf(argv, "--registry-snapshot") || join(snapshotsDir, "registry.snapshot.db"),
+      control: argOf(argv, "--control-snapshot") || join(snapshotsDir, "control.snapshot.db"),
+    };
+    const readJson = (path) => JSON.parse(readFileSync(resolve(path), "utf8"));
+    const rehearsalBaseline = readJson(argOf(argv, "--baseline-rehearsal", join(cliRoot, "docs/cutover/m3-r/rehearsal-receipt.v1.json")));
+    const inventoryBaseline = readJson(argOf(argv, "--baseline-inventory", join(cliRoot, "docs/cutover/m3-r/live-inventory.v1.json")));
+    const baseline = {
+      ...baselineFromRehearsalReceipt(rehearsalBaseline),
+      deviceCount: deviceCountFromInventory(inventoryBaseline),
+    };
+    const receipt = await runShadow({
+      sourceRoot: findRepoRoot(),
+      snapshots,
+      workDir: resolve(workDir),
+      baseline,
+    });
+    const receiptOut = resolve(argOf(argv, "--receipt", join(cliRoot, "docs/cutover/m3-r/shadow-comparison.v1.json")));
+    writeFileSync(receiptOut, `${JSON.stringify(receipt, null, 2)}\n`);
+    emit(argv, { ok: receipt.verdict === "PASS", verdict: receipt.verdict, mismatches: receipt.mismatches, unknowns: receipt.unknowns, receipt: receiptOut });
+    return receipt.verdict === "PASS" ? 0 : 1;
+  }
+
+  if (command === "tasks") {
+    const runtimeRoot = argOf(argv, "--runtime-root", RUNTIME_ROOT_DEFAULT);
+    const beforePath = join(cliRoot, "docs/cutover/m3-r/scheduled-tasks-before.v1.json");
+    const beforeTasks = existsSync(beforePath) ? JSON.parse(readFileSync(beforePath, "utf8")).tasks ?? [] : [];
+    const receipt = buildTasksProposedReceipt({ runtimeRoot, beforeTasks });
+    const receiptOut = resolve(argOf(argv, "--receipt", join(cliRoot, "docs/cutover/m3-r/scheduled-tasks-proposed.v1.json")));
+    const xmlDir = resolve(argOf(argv, "--xml-dir", join(dirname(receiptOut), "proposed-tasks")));
+    mkdirSync(xmlDir, { recursive: true });
+    for (const task of buildProposedTasks({ runtimeRoot })) {
+      // UTF-16 LE（带 BOM）是 schtasks /create /xml 的推荐编码
+      writeFileSync(join(xmlDir, `${task.name}.xml`), task.xml, "utf16le");
+    }
+    writeFileSync(receiptOut, `${JSON.stringify(receipt, null, 2)}\n`);
+    emit(argv, { ok: receipt.ok, registration: receipt.registration, receipt: receiptOut, xmlDir });
+    return receipt.ok ? 0 : 1;
+  }
+
+  if (command === "canary") {
+    if (!has(argv, "--dry-run")) {
+      process.stderr.write("canary 只支持 --dry-run（LIVE_CANARY_GATE=CLOSED）；真实执行属后续门\n");
+      return 2;
+    }
+    const deviceId = argOf(argv, "--device");
+    const actorId = argOf(argv, "--actor");
+    if (!deviceId || !actorId) {
+      process.stderr.write("missing --device ID / --actor ID\n");
+      return 2;
+    }
+    const plan = runCanaryDryRun({ profile: buildCanaryProfile({ deviceId, actorId }) });
+    const out = resolve(argOf(argv, "--out", join(cliRoot, "docs/cutover/m3-r/canary-plan.v1.json")));
+    writeFileSync(out, `${JSON.stringify(plan, null, 2)}\n`);
+    emit(argv, { ok: plan.ok, executed: plan.executed, liveCanaryGate: plan.liveCanaryGate, out, profileProblems: plan.profileValidation.problems });
+    return plan.ok ? 0 : 1;
   }
 
   process.stderr.write(`${cutoverUsage()}\n`);

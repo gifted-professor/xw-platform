@@ -1,0 +1,304 @@
+{
+  "schemaId": "xw.cutover.canary-plan.v1",
+  "generatedAt": "2026-08-19T06:56:48.981Z",
+  "dryRun": true,
+  "executed": false,
+  "liveCanaryGate": "CLOSED",
+  "note": "dry-run 计划产物：未执行任何一步。真实执行需 LIVE_CANARY_GATE=OPEN 且人工在维护窗口启动；届时才生成 canary-receipt.v1.json。",
+  "profile": {
+    "schemaId": "xw.cutover.canary-profile.v1",
+    "runtimeProfile": "legacy_compat",
+    "allowedDeviceIds": [
+      "01"
+    ],
+    "quarantineOtherDevices": true,
+    "allowedActorIds": [
+      "agent:canary-operator"
+    ],
+    "capabilities": "legacy-only",
+    "openActionLiveEnabled": false,
+    "agentGatewayLiveEnabled": false,
+    "dshEnabled": false,
+    "graphV2Enabled": false,
+    "multiAgentEnabled": false,
+    "paymentCredentialRequiresHuman": true,
+    "paymentFinalCommitRequiresHuman": true
+  },
+  "profileValidation": {
+    "ok": true,
+    "problems": []
+  },
+  "steps": [
+    {
+      "id": "pause-new-job-submission",
+      "kind": "freeze",
+      "pre": [
+        "control-plane reachable"
+      ],
+      "post": [
+        "job submission paused"
+      ]
+    },
+    {
+      "id": "drain-active-jobs",
+      "kind": "freeze",
+      "pre": [
+        "job submission paused"
+      ],
+      "post": [
+        "runningJobs == 0"
+      ]
+    },
+    {
+      "id": "converge-leases-sessions",
+      "kind": "freeze",
+      "pre": [
+        "runningJobs == 0"
+      ],
+      "post": [
+        "activeLeases == 0",
+        "activeSessions == 0"
+      ]
+    },
+    {
+      "id": "snapshot-both-dbs",
+      "kind": "freeze",
+      "pre": [
+        "leases/sessions converged"
+      ],
+      "post": [
+        "db-snapshot receipt ok (both DBs, integrity_check ok)"
+      ]
+    },
+    {
+      "id": "stop-legacy-orchestrator",
+      "kind": "cutover",
+      "pre": [
+        "snapshots ok"
+      ],
+      "post": [
+        "legacy orchestrator process gone"
+      ]
+    },
+    {
+      "id": "stop-legacy-control-plane",
+      "kind": "cutover",
+      "pre": [
+        "legacy orchestrator stopped"
+      ],
+      "post": [
+        "legacy control-plane process gone"
+      ]
+    },
+    {
+      "id": "verify-ports-released",
+      "kind": "cutover",
+      "pre": [
+        "both legacy processes stopped"
+      ],
+      "post": [
+        "no listener on 17920",
+        "no listener on 17930"
+      ]
+    },
+    {
+      "id": "start-xw-control-plane",
+      "kind": "cutover",
+      "pre": [
+        "ports released"
+      ],
+      "post": [
+        "health ok",
+        "authority == true",
+        "release identity == locked",
+        "runtimeProfile == legacy_compat",
+        "DB user_version == expected"
+      ]
+    },
+    {
+      "id": "start-xw-orchestrator",
+      "kind": "cutover",
+      "pre": [
+        "xw control-plane healthy"
+      ],
+      "post": [
+        "health ok",
+        "release identity == control-plane",
+        "control API reachable",
+        "no direct control.db writes"
+      ]
+    },
+    {
+      "id": "health",
+      "kind": "canary-test",
+      "pre": [
+        "xw stack up"
+      ],
+      "post": [
+        "both health ok"
+      ]
+    },
+    {
+      "id": "inventory",
+      "kind": "canary-test",
+      "pre": [
+        "health ok"
+      ],
+      "post": [
+        "canary device visible",
+        "other devices quarantined"
+      ]
+    },
+    {
+      "id": "observe",
+      "kind": "canary-test",
+      "pre": [
+        "inventory ok",
+        "device session (observation-only) attached by allowed actor"
+      ],
+      "post": [
+        "observation recorded"
+      ]
+    },
+    {
+      "id": "existing-capability",
+      "kind": "canary-test",
+      "pre": [
+        "observe ok"
+      ],
+      "post": [
+        "legacy capability executes on canary device only"
+      ]
+    },
+    {
+      "id": "existing-session",
+      "kind": "canary-test",
+      "pre": [
+        "capability ok"
+      ],
+      "post": [
+        "session state consistent"
+      ]
+    },
+    {
+      "id": "existing-job",
+      "kind": "canary-test",
+      "pre": [
+        "session ok"
+      ],
+      "post": [
+        "single legacy job completes",
+        "no new critical failure"
+      ]
+    },
+    {
+      "id": "evidence",
+      "kind": "canary-test",
+      "pre": [
+        "job done"
+      ],
+      "post": [
+        "evidence persisted"
+      ]
+    },
+    {
+      "id": "recovery",
+      "kind": "canary-test",
+      "pre": [
+        "evidence ok"
+      ],
+      "post": [
+        "recovery path verified"
+      ]
+    },
+    {
+      "id": "release",
+      "kind": "canary-test",
+      "pre": [
+        "recovery ok"
+      ],
+      "post": [
+        "session released",
+        "lease freed"
+      ]
+    },
+    {
+      "id": "payment-credential-requires-human",
+      "kind": "payment-redline",
+      "pre": [
+        "canary stack up"
+      ],
+      "post": [
+        "payment credential attempt => HUMAN_REQUIRED"
+      ]
+    },
+    {
+      "id": "payment-final-commit-requires-human",
+      "kind": "payment-redline",
+      "pre": [
+        "credential gate verified"
+      ],
+      "post": [
+        "payment final commit attempt => HUMAN_REQUIRED"
+      ]
+    },
+    {
+      "id": "unknown-payment-env-not-executed",
+      "kind": "payment-redline",
+      "pre": [
+        "payment env classification"
+      ],
+      "post": [
+        "unclassifiable payment env => not executed (fail-closed)"
+      ]
+    }
+  ],
+  "rollbackTriggers": [
+    {
+      "id": "source-sha-mismatch",
+      "description": "运行 SHA 与锁定 SHA 不一致"
+    },
+    {
+      "id": "release-id-drift",
+      "description": "releaseId 漂移"
+    },
+    {
+      "id": "db-integrity-failure",
+      "description": "DB integrity_check 失败"
+    },
+    {
+      "id": "schema-version-anomaly",
+      "description": "schema 版本异常"
+    },
+    {
+      "id": "device-count-mismatch",
+      "description": "设备数量不一致"
+    },
+    {
+      "id": "lease-session-authority-mismatch",
+      "description": "lease/session 权威不一致"
+    },
+    {
+      "id": "new-critical-workflow-failure",
+      "description": "已有 workflow 新关键失败"
+    },
+    {
+      "id": "evidence-write-failure",
+      "description": "evidence 无法落盘"
+    },
+    {
+      "id": "payment-gate-failure",
+      "description": "支付硬闸失败"
+    },
+    {
+      "id": "port-ownership-wrong",
+      "description": "端口被错误进程占用"
+    },
+    {
+      "id": "unknown-process-legacy-checkout",
+      "description": "未知进程仍引用旧 checkout"
+    }
+  ],
+  "rollbackPolicy": "任一触发器命中（含检查值 unknown）立即执行 rollback：旧代码 + 旧 DB snapshot + 旧 launch 配置（rollback-certification.v1 已证明可恢复）。",
+  "ok": true
+}

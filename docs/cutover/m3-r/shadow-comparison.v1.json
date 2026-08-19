@@ -1,0 +1,243 @@
+{
+  "schemaId": "xw.cutover.shadow-comparison.v1",
+  "executedAt": "2026-08-19T06:59:37.647Z",
+  "shadow": true,
+  "workDir": "C:\\Users\\Public\\xw-cutover-rehearsal\\shadow-20260819-m3r3",
+  "ports": {
+    "control": 18922,
+    "orchestrator": 18932
+  },
+  "release": {
+    "releaseId": "xw-20260819-c97892b",
+    "sourceCommit": "c97892b8d5954fb4657427060ecb5a45f66b385e",
+    "runtimeProfile": "legacy_compat",
+    "runtimeCutoverAllowed": false
+  },
+  "snapshots": {
+    "registry": "C:\\Users\\Public\\xw-cutover-rehearsal\\reh-20260819-m3r2\\snapshots\\registry.snapshot.db",
+    "control": "C:\\Users\\Public\\xw-cutover-rehearsal\\reh-20260819-m3r2\\snapshots\\control.snapshot.db"
+  },
+  "baselineSource": "docs/cutover/m3-r/rehearsal-receipt.v1.json + live-inventory.v1.json（17920 不可达，control 面以 R2 采集为基准）",
+  "disabledMechanisms": {
+    "deviceExecution": "fixture 执行器 + 惰性 transport（启动期零设备行为）",
+    "leaseAcquisition": "启动恢复仅置 recovery_required，不取新 lease；shadow 无 POST",
+    "jobSubmission": "不派发 queued job；shadow 全程无 POST",
+    "legacyPorts": "shadow 只听 127.0.0.1 替代端口；现场仅 17930 GET 只读 API"
+  },
+  "safetyNotes": [
+    "shadow 只写 workDir 内部：release 物化目录、DB 副本、日志；现场 xhs-registry / xhs-routing-v1-1 / xhs-agent-control 零写入。",
+    "设备执行关闭：control-plane xiaowei transport 为惰性 WebSocket（仅请求驱动），device-session 执行器缺省 fixture（serve bootstrap 不注入 observeProvider），orchestrator 无启动期出站动作。",
+    "lease 获取关闭 / job 提交关闭：启动恢复只把残留 running job 置 recovery_required 并清空 sessions/leases，不派发 queued job；shadow 全程无 POST。",
+    "不碰现场端口：shadow 两服务只听替代端口；对现场唯一网络动作是 17930 的 GET /api/health 与 GET /api/devices（只读 API）。17920 不做任何请求。",
+    "真实设备、真实 lease、真实 job、22222/ADB、支付链路：未触碰。"
+  ],
+  "legacyOrchestrator": {
+    "reachable": true,
+    "healthOk": true,
+    "deviceCount": 4
+  },
+  "services": {
+    "ok": true,
+    "controlPlane": {
+      "ok": true,
+      "healthOk": true,
+      "smoke": [
+        {
+          "endpoint": "/control/v1/devices",
+          "ok": true,
+          "status": 200,
+          "itemCount": 4
+        },
+        {
+          "endpoint": "/control/v1/capabilities",
+          "ok": true,
+          "status": 200,
+          "itemCount": 28
+        },
+        {
+          "endpoint": "/control/v1/leases",
+          "ok": true,
+          "status": 200,
+          "itemCount": 0
+        }
+      ],
+      "identity": {
+        "sourceRepo": "gifted-professor/xw-platform",
+        "sourceCommit": "c97892b8d5954fb4657427060ecb5a45f66b385e",
+        "releaseId": "xw-20260819-c97892b",
+        "runtimeProfile": "legacy_compat"
+      }
+    },
+    "orchestrator": {
+      "ok": true,
+      "healthOk": true,
+      "smoke": [
+        {
+          "endpoint": "/api/devices",
+          "ok": true,
+          "status": 200,
+          "itemCount": 4
+        },
+        {
+          "endpoint": "/api/capabilities",
+          "ok": true,
+          "status": 200,
+          "itemCount": 28
+        }
+      ],
+      "identity": {
+        "sourceRepo": "gifted-professor/xw-platform",
+        "sourceCommit": "c97892b8d5954fb4657427060ecb5a45f66b385e",
+        "releaseId": "xw-20260819-c97892b",
+        "runtimeProfile": "legacy_compat"
+      }
+    }
+  },
+  "comparisons": [
+    {
+      "item": "health.control-plane",
+      "legacy": "unknown",
+      "shadow": true,
+      "match": "unknown",
+      "note": "17920 不可达；control 面基准 = R2 采集快照/rehearsal receipt（db-snapshot + rehearsal-receipt.v1.json round-1）"
+    },
+    {
+      "item": "health.orchestrator",
+      "legacy": true,
+      "shadow": true,
+      "match": true,
+      "note": "legacy = 现场 17930 GET /api/health"
+    },
+    {
+      "item": "devices.inventory.count",
+      "legacy": 4,
+      "shadow": 4,
+      "match": true,
+      "note": "legacy = 17930 GET /api/devices 台数；shadow = control.db 副本投影"
+    },
+    {
+      "item": "devices.projection.orchestrator",
+      "legacy": 4,
+      "shadow": 4,
+      "match": true,
+      "note": "shadow orchestrator --control 指向 shadow control-plane；设备面投影应一致"
+    },
+    {
+      "item": "capability-registry.api.count",
+      "legacy": 28,
+      "shadow": 28,
+      "match": true,
+      "note": "17920 不可达；control 面基准 = R2 采集快照/rehearsal receipt（db-snapshot + rehearsal-receipt.v1.json round-1）；API 是投影面（R2 实测 28 ≠ 表行数 32），与 DB 行数分开比较"
+    },
+    {
+      "item": "capability-registry.db.rows",
+      "legacy": 32,
+      "shadow": 32,
+      "match": true,
+      "note": "17920 不可达；control 面基准 = R2 采集快照/rehearsal receipt（db-snapshot + rehearsal-receipt.v1.json round-1）"
+    },
+    {
+      "item": "leases.read.count",
+      "legacy": 0,
+      "shadow": 0,
+      "match": true,
+      "note": "17920 不可达；control 面基准 = R2 采集快照/rehearsal receipt（db-snapshot + rehearsal-receipt.v1.json round-1）；启动恢复会清空 leases，预期 0"
+    },
+    {
+      "item": "sessions.read.count",
+      "legacy": 0,
+      "shadow": 0,
+      "match": true,
+      "note": "17920 不可达；control 面基准 = R2 采集快照/rehearsal receipt（db-snapshot + rehearsal-receipt.v1.json round-1）；启动恢复会清空 sessions，预期 0"
+    },
+    {
+      "item": "jobs.read.count",
+      "legacy": 14185,
+      "shadow": 14185,
+      "match": true,
+      "note": "17920 不可达；control 面基准 = R2 采集快照/rehearsal receipt（db-snapshot + rehearsal-receipt.v1.json round-1）；只读比较行数，不提交任何 job"
+    },
+    {
+      "item": "release-identity.sourceRepo",
+      "legacy": null,
+      "shadow": "gifted-professor/xw-platform",
+      "match": true,
+      "note": "旧代码 health 无 release identity 字段（预期差异，如实记录）；比较基准 = shadow 两进程 identity 与 release manifest 四字段全等"
+    },
+    {
+      "item": "release-identity.sourceCommit",
+      "legacy": null,
+      "shadow": "c97892b8d5954fb4657427060ecb5a45f66b385e",
+      "match": true,
+      "note": "旧代码 health 无 release identity 字段（预期差异，如实记录）；比较基准 = shadow 两进程 identity 与 release manifest 四字段全等"
+    },
+    {
+      "item": "release-identity.releaseId",
+      "legacy": null,
+      "shadow": "xw-20260819-c97892b",
+      "match": true,
+      "note": "旧代码 health 无 release identity 字段（预期差异，如实记录）；比较基准 = shadow 两进程 identity 与 release manifest 四字段全等"
+    },
+    {
+      "item": "release-identity.runtimeProfile",
+      "legacy": null,
+      "shadow": "legacy_compat",
+      "match": true,
+      "note": "旧代码 health 无 release identity 字段（预期差异，如实记录）；比较基准 = shadow 两进程 identity 与 release manifest 四字段全等"
+    },
+    {
+      "item": "schema.control.user_version",
+      "legacy": 18,
+      "shadow": 18,
+      "match": true,
+      "note": "17920 不可达；control 面基准 = R2 采集快照/rehearsal receipt（db-snapshot + rehearsal-receipt.v1.json round-1）"
+    },
+    {
+      "item": "schema.control.schema_hash",
+      "legacy": "78278c7ccfb832d6eb6a7c874764d6299237b69eadfe743843b574bb5d88add9",
+      "shadow": "78278c7ccfb832d6eb6a7c874764d6299237b69eadfe743843b574bb5d88add9",
+      "match": true,
+      "note": "17920 不可达；control 面基准 = R2 采集快照/rehearsal receipt（db-snapshot + rehearsal-receipt.v1.json round-1）"
+    },
+    {
+      "item": "schema.registry.user_version",
+      "legacy": 0,
+      "shadow": 0,
+      "match": true,
+      "note": "registry.db 无 user_version 机制（幂等建表），预期保持 0"
+    },
+    {
+      "item": "schema.registry.schema_hash",
+      "legacy": "c96b64e470603a7e4d09c36d64712f612ed119cd2bbfec8a498611a142470600",
+      "shadow": "c96b64e470603a7e4d09c36d64712f612ed119cd2bbfec8a498611a142470600",
+      "match": true,
+      "note": "17920 不可达；control 面基准 = R2 采集快照/rehearsal receipt（db-snapshot + rehearsal-receipt.v1.json round-1）"
+    },
+    {
+      "item": "config.runtime-profile",
+      "legacy": "legacy_compat",
+      "shadow": {
+        "orchestratorEnabled": true,
+        "controlPlaneEnabled": true,
+        "legacyCapabilitiesEnabled": true,
+        "legacyWorkflowsEnabled": true,
+        "openActionLiveEnabled": false,
+        "agentGatewayLiveEnabled": false,
+        "dshEnabled": false,
+        "graphV2Enabled": false,
+        "multiAgentEnabled": false,
+        "paymentCredentialRequiresHuman": true,
+        "paymentFinalCommitRequiresHuman": true
+      },
+      "match": true,
+      "note": "配置解析：shadow 以 legacy_compat 启动；openActionLive/agentGatewayLive 必须关闭，支付硬闸必须开"
+    }
+  ],
+  "verdict": "PASS",
+  "mismatches": [],
+  "unknowns": [
+    "health.control-plane"
+  ],
+  "liveCanaryGate": "CLOSED",
+  "runtimeCutoverGate": "CLOSED"
+}
