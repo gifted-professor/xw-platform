@@ -1,0 +1,27 @@
+{
+  "schemaId": "xw.platform.m3-source-acceptance.v1",
+  "schemaVersion": 1,
+  "title": "M3 Open Action Runtime v1 source acceptance",
+  "status": "PASS",
+  "M3_SOURCE_GATE": "PASS",
+  "LIVE_CANARY_GATE": "CLOSED",
+  "RUNTIME_CUTOVER_GATE": "CLOSED",
+  "runtimeCutoverAllowed": false,
+  "transportCalled": false,
+  "adbCalls": 0,
+  "port22222Calls": 0,
+  "criteria": [
+    { "id": 1, "text": "Agent can ObserveActVerify on fixture/replay without an app capability", "status": "PASS" },
+    { "id": 2, "text": "Requests and results satisfy Canonical Schema", "status": "PASS" },
+    { "id": 3, "text": "Unknown payment signals never ALLOW_WITH_TRACE", "status": "PASS" },
+    { "id": 4, "text": "Durable idempotency reservation happens before side effects", "status": "PASS" },
+    { "id": 5, "text": "Concurrent requests do not double-execute", "status": "PASS" },
+    { "id": 6, "text": "Stale observations do not execute", "status": "PASS" },
+    { "id": 7, "text": "Ambiguous actions are not blindly retried", "status": "PASS" },
+    { "id": 8, "text": "Control Plane restart recovers executing actions to AMBIGUOUS", "status": "PASS" },
+    { "id": 9, "text": "Agent Gateway does not bypass Control Plane", "status": "PASS" },
+    { "id": 10, "text": "CLI is non-interactive for DSH/Codex harnesses", "status": "PASS" },
+    { "id": 11, "text": "Legacy capability lane has no new intended failures", "status": "PASS" },
+    { "id": 12, "text": "Real device, ADB, and 22222 call counts remain 0", "status": "PASS" }
+  ]
+}

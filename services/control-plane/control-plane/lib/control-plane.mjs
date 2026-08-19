@@ -45,6 +45,28 @@ import {
   requireActionResult,
 } from "./open-action-executor.mjs";
 
+function ledgerView(row) {
+  if (!row) return null;
+  return {
+    schemaId: "xw.open-action.ledger.v1",
+    schemaVersion: 1,
+    actionId: row.actionId,
+    idempotencyKey: row.idempotencyKey,
+    fingerprint: row.fingerprint,
+    status: row.status,
+    executionMode: row.executionMode,
+    transportCalled: Boolean(row.transportCalled),
+    executorId: row.executorId,
+    effectAssessment: row.effectAssessment,
+    beforeObservationId: row.beforeObservationId,
+    preflightObservationId: row.preflightObservationId,
+    afterObservationId: row.afterObservationId,
+    errorCode: row.errorCode,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
 const moduleDir = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(moduleDir, "..", "..");
 const EFFECT_INTENT_SCHEMA_PATH = join(moduleDir, "..", "schema", "effect-intent.schema.json");
@@ -2075,6 +2097,14 @@ export class ControlPlane {
         { status: 423, details: { sessionId } },
       );
     }
+    const inflight = this.state.listInFlightDeviceSessionActions(sessionId);
+    if (inflight.length) {
+      throw new ControlPlaneError(
+        "SESSION_ACTION_RUNNING",
+        "cannot release a session while an open action is in flight",
+        { status: 423, details: { sessionId, actionId: inflight[0].actionId } },
+      );
+    }
     return this.state.releaseSession(sessionId, token, { recordReleasedEvent: true, faultAfter });
   }
 
@@ -2109,22 +2139,39 @@ export class ControlPlane {
     const { action, agentClaimedCategory } = requireActionRequest(input);
     const mutating = isMutatingPrimitive(action.kind);
     const actionPrint = actionFingerprint(action);
-    if (action.idempotencyKey) {
-      const existing = this.state.findDeviceSessionAction(sessionId, action.idempotencyKey);
-      if (existing) {
-        if (existing.fingerprintJson !== canonicalJson(actionPrint)) {
-          throw new ControlPlaneError(
-            "PRIMITIVE_IDEMPOTENCY_CONFLICT",
-            "idempotency key belongs to a different action",
-            { status: 409, details: { sessionId, idempotencyKey: action.idempotencyKey } },
-          );
-        }
-        return {
-          result: existing.result,
-          reused: true,
-          mutatingCalls: this.state.countDeviceSessionMutations(sessionId),
-        };
+    if (mutating && !action.idempotencyKey) {
+      throw new ControlPlaneError("INVALID_ACTION", "mutating action requires idempotencyKey", { status: 400 });
+    }
+
+    const existing = this.state.getDeviceSessionAction(sessionId, action.idempotencyKey);
+    if (existing) {
+      if (existing.fingerprintJson !== canonicalJson(actionPrint)) {
+        throw new ControlPlaneError(
+          "PRIMITIVE_IDEMPOTENCY_CONFLICT",
+          "idempotency key belongs to a different action",
+          { status: 409, details: { sessionId, idempotencyKey: action.idempotencyKey } },
+        );
       }
+      if (["REQUESTED", "ASSESSED", "EXECUTING"].includes(existing.status)) {
+        throw new ControlPlaneError(
+          "ACTION_IN_FLIGHT",
+          "this idempotency key is already executing",
+          { status: 423, details: { sessionId, idempotencyKey: action.idempotencyKey, status: existing.status } },
+        );
+      }
+      if (existing.status === "AMBIGUOUS") {
+        throw new ControlPlaneError(
+          "ACTION_AMBIGUOUS",
+          "previous execution is ambiguous and must not be retried blindly",
+          { status: 409, details: { sessionId, idempotencyKey: action.idempotencyKey, nextAction: "STOP" } },
+        );
+      }
+      return {
+        result: existing.result,
+        reused: true,
+        mutatingCalls: this.state.countDeviceSessionMutations(sessionId),
+        ledger: ledgerView(existing),
+      };
     }
 
     let observation = null;
@@ -2154,29 +2201,74 @@ export class ControlPlane {
         );
       }
     }
+
+    const reservation = this.state.reserveDeviceSessionAction({
+      sessionId,
+      action,
+      fingerprint: actionPrint,
+      executionMode: this.observeProvider?.executionMode || "fixture",
+      executorId: this.observeProvider?.executorId || "open-action-fixture",
+    });
+    if (reservation.reused) {
+      return {
+        result: reservation.row.result,
+        reused: true,
+        mutatingCalls: this.state.countDeviceSessionMutations(sessionId),
+        ledger: ledgerView(reservation.row),
+      };
+    }
+    this.state.recordDeviceSessionEvent({
+      sessionId,
+      type: "primitive.requested",
+      payload: { actionId: action.actionId, kind: action.kind, idempotencyKey: action.idempotencyKey },
+    });
+
     const assessment = observation
       ? assessObservation(observation, { agentClaimedCategory })
       : assessObservation({ paymentSignals: [], paymentClassificationComplete: true });
+    this.state.updateDeviceSessionAction(sessionId, action.idempotencyKey, {
+      status: "ASSESSED",
+      effectAssessment: assessment,
+      beforeObservationId: observation?.observationId ?? null,
+      preflightObservationId: observation?.observationId ?? null,
+    });
+    this.state.recordDeviceSessionEvent({
+      sessionId,
+      type: "effect.assessed",
+      payload: { actionId: action.actionId, category: assessment.category, decision: assessment.decision },
+    });
 
     if (assessment.decision !== "ALLOW_WITH_TRACE") {
+      const holdStatus = assessment.category === "payment_context_uncertain" ? "BLOCKED" : "HUMAN_REQUIRED";
       const result = requireActionResult(paymentHoldResult({ action, observation, assessment }));
-      if (action.idempotencyKey) {
-        const stored = this.state.recordDeviceSessionAction({
+      if (assessment.category === "payment_credential" || assessment.category === "payment_final_commit") {
+        this.state.recordDeviceSessionEvent({
           sessionId,
-          action,
-          fingerprint: actionPrint,
-          result,
-          executed: false,
+          type: "payment.hold_created",
+          payload: { actionId: action.actionId, category: assessment.category },
         });
-        return { result: stored.result, reused: stored.reused, mutatingCalls: this.state.countDeviceSessionMutations(sessionId) };
       }
-      return { result, reused: false, mutatingCalls: this.state.countDeviceSessionMutations(sessionId) };
+      this.state.recordDeviceSessionEvent({
+        sessionId,
+        type: "primitive.rejected",
+        payload: { actionId: action.actionId, errorCode: result.errorCode },
+      });
+      const row = this.state.updateDeviceSessionAction(sessionId, action.idempotencyKey, {
+        status: holdStatus,
+        result,
+        executed: false,
+        errorCode: result.errorCode,
+        transportCalled: false,
+      });
+      return {
+        result,
+        reused: false,
+        mutatingCalls: this.state.countDeviceSessionMutations(sessionId),
+        ledger: ledgerView(row),
+      };
     }
 
-    if (mutating && !action.idempotencyKey) {
-      throw new ControlPlaneError("INVALID_ACTION", "mutating action requires idempotencyKey", { status: 400 });
-    }
-
+    this.state.updateDeviceSessionAction(sessionId, action.idempotencyKey, { status: "EXECUTING", transportCalled: false });
     const afterObservation = mutating
       ? requireObservationContract(await this.observeProvider.observe({
         ...session,
@@ -2189,23 +2281,45 @@ export class ControlPlane {
         observation: afterObservation,
         mutatingCalls: this.state.countDeviceSessionMutations(sessionId) + 1,
       });
+      this.state.recordDeviceSessionEvent({
+        sessionId,
+        type: "observation.after_captured",
+        payload: { actionId: action.actionId, observationId: afterObservation.observationId },
+      });
     }
     const result = requireActionResult(fixtureExecuteResult({ action, observation, afterObservation, assessment }));
-    if (action.idempotencyKey) {
-      const stored = this.state.recordDeviceSessionAction({
-        sessionId,
-        action,
-        fingerprint: actionPrint,
-        result,
-        executed: mutating,
-      });
-      return {
-        result: stored.result,
-        reused: stored.reused,
-        mutatingCalls: this.state.countDeviceSessionMutations(sessionId),
-      };
-    }
-    return { result, reused: false, mutatingCalls: this.state.countDeviceSessionMutations(sessionId) };
+    this.state.updateDeviceSessionAction(sessionId, action.idempotencyKey, {
+      status: "EXECUTED",
+      result,
+      afterObservationId: afterObservation?.observationId ?? null,
+      transportCalled: false,
+    });
+    this.state.recordDeviceSessionEvent({
+      sessionId,
+      type: "primitive.executed",
+      payload: { actionId: action.actionId, transportCalled: false },
+    });
+    this.state.updateDeviceSessionAction(sessionId, action.idempotencyKey, { status: "VERIFIED" });
+    this.state.recordDeviceSessionEvent({
+      sessionId,
+      type: "primitive.verified",
+      payload: {
+        actionId: action.actionId,
+        pageUnchanged: Boolean(observation && afterObservation && observation.pageHash === afterObservation.pageHash),
+      },
+    });
+    const row = this.state.updateDeviceSessionAction(sessionId, action.idempotencyKey, {
+      status: "COMPLETED",
+      result,
+      executed: mutating,
+      transportCalled: false,
+    });
+    return {
+      result,
+      reused: false,
+      mutatingCalls: this.state.countDeviceSessionMutations(sessionId),
+      ledger: ledgerView(row),
+    };
   }
 
   heartbeatSession(sessionId, token) {

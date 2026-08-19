@@ -68,4 +68,4 @@ Order for a new action:
 
 ## Not in this wave
 
-Kernel reader wiring (M3-E), agent-gateway (M3-F), `xw phone` CLI (M3-G), replay gates (M3-H).
+M3-EH source runtime is in this tree: durable ledger, events, `packages/replay`, Agent Gateway, and `xw phone`. Live canary and runtime cutover stay closed.

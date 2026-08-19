@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:xw:contract:open-action-ledger:v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaId",
+    "schemaVersion",
+    "actionId",
+    "idempotencyKey",
+    "fingerprint",
+    "status",
+    "executionMode",
+    "transportCalled",
+    "executorId",
+    "createdAt",
+    "updatedAt"
+  ],
+  "properties": {
+    "schemaId": { "const": "xw.open-action.ledger.v1" },
+    "schemaVersion": { "const": 1 },
+    "actionId": { "type": "string", "minLength": 1 },
+    "idempotencyKey": { "type": "string", "minLength": 1 },
+    "fingerprint": { "type": "object" },
+    "status": {
+      "enum": [
+        "REQUESTED",
+        "ASSESSED",
+        "BLOCKED",
+        "EXECUTING",
+        "EXECUTED",
+        "VERIFIED",
+        "COMPLETED",
+        "AMBIGUOUS",
+        "RETRYABLE_FAILED",
+        "HUMAN_REQUIRED",
+        "CANCELLED"
+      ]
+    },
+    "executionMode": { "enum": ["fixture", "recorded_replay", "fault_injection"] },
+    "transportCalled": { "type": "boolean" },
+    "executorId": { "type": ["string", "null"] },
+    "effectAssessment": { "type": ["object", "null"] },
+    "beforeObservationId": { "type": ["string", "null"] },
+    "preflightObservationId": { "type": ["string", "null"] },
+    "afterObservationId": { "type": ["string", "null"] },
+    "result": { "type": ["object", "null"] },
+    "errorCode": { "type": ["string", "null"] },
+    "createdAt": { "type": "integer" },
+    "updatedAt": { "type": "integer" }
+  }
+}

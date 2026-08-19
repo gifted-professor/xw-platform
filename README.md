@@ -2,6 +2,8 @@
 
 统一源码项目。Physical Fusion / M1 已验收；运行时仍未切换。
 
+**新 agent 先读 [`HANDOFF.md`](HANDOFF.md)**（2026-08-19：三套目录关系、进度、PR #14 下一步）。
+
 ## 当前状态
 
 - XW Platform 是两旧仓（`xhs-registry`、`xhs-device-agent`）的统一源码主线。
@@ -34,6 +36,7 @@
 | F1-E | 增加导入验证工具 | 完成 |
 | F1-F | 增加根命令和离线 CI | 完成 |
 | F1-G | 完成 Physical Fusion 验收 | 完成 |
+| M3-EH | Open Action Runtime v1（fixture/replay） | 源码完成；live/cutover 仍关 |
 
 ## 更多
 
@@ -45,3 +48,4 @@
 - 权威边界：`docs/architecture/authority-boundary.md`（M2-A，source-only）。
 - 共享内核：`packages/kernel/`（M2-B，先复制 repair 契约，不删服务原件）。
 - 离线 CI：`.github/workflows/source-fusion.yml`（`ubuntu-latest` + `windows-latest`，源文件仍在 `docs/fusion/source-fusion.workflow.yml`）。
+- Open Action Runtime：`docs/acceptance/m3-source-acceptance.v1.json`；CLI `node packages/cli/xw.mjs phone …`。

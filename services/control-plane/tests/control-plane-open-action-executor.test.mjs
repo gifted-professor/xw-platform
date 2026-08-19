@@ -95,7 +95,7 @@ async function postAction(f, created, body) {
   });
 }
 
-test("fresh databases land on schema 17 with action table", () => {
+test("fresh databases land on schema 18 with action ledger", () => {
   const f = runtime();
   try {
     assert.equal(f.state.db.prepare("PRAGMA user_version").get().user_version, CURRENT_CONTROL_SCHEMA_VERSION);
@@ -333,6 +333,78 @@ test("new actions require the latest observation; identical replay still reuses"
       })),
       { code: "PRIMITIVE_IDEMPOTENCY_CONFLICT" },
     );
+  } finally {
+    f.state.close();
+    rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
+test("durable reserve records ledger status and refuses a second in-flight action", async () => {
+  const f = runtime();
+  try {
+    const { created, observed } = await openObserved(f);
+    const acted = await postAction(f, created, actionRequest({
+      basedOnObservationId: observed.observation.observationId,
+    }));
+    assert.equal(acted.body.ledger.status, "COMPLETED");
+    assert.equal(acted.body.ledger.transportCalled, false);
+    assert.equal(acted.body.ledger.executionMode, "fixture");
+    const reserved = f.state.getDeviceSessionAction(created.session.sessionId, "tap-1");
+    assert.equal(reserved.status, "COMPLETED");
+    f.state.updateDeviceSessionAction(created.session.sessionId, "tap-1", { status: "EXECUTING" });
+    await assert.rejects(
+      () => postAction(f, created, actionRequest({
+        actionId: "a2",
+        idempotencyKey: "other-tap",
+        basedOnObservationId: acted.body.result.afterObservationId,
+      })),
+      { code: "ACTION_IN_FLIGHT" },
+    );
+    assert.throws(
+      () => f.control.releaseDeviceSession(created.session.sessionId, created.token),
+      { code: "SESSION_ACTION_RUNNING" },
+    );
+  } finally {
+    f.state.close();
+    rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
+test("control-plane restart marks executing actions ambiguous and refuses blind retry", async () => {
+  const first = runtime();
+  const dbPath = join(first.root, "control.db");
+  try {
+    const { created, observed } = await openObserved(first);
+    await postAction(first, created, actionRequest({
+      basedOnObservationId: observed.observation.observationId,
+      idempotencyKey: "restart-tap",
+    }));
+    first.state.updateDeviceSessionAction(created.session.sessionId, "restart-tap", { status: "EXECUTING" });
+    first.state.close();
+    const restarted = new StateStore({ dbPath });
+    try {
+      const row = restarted.getDeviceSessionAction(created.session.sessionId, "restart-tap");
+      assert.equal(row.status, "AMBIGUOUS");
+      assert.equal(row.errorCode, "CONTROL_PLANE_RESTART");
+    } finally {
+      restarted.close();
+    }
+  } finally {
+    rmSync(first.root, { recursive: true, force: true });
+  }
+});
+
+test("successful fixture tap emits requested assessed executed verified events", async () => {
+  const f = runtime();
+  try {
+    const { created, observed } = await openObserved(f);
+    await postAction(f, created, actionRequest({
+      basedOnObservationId: observed.observation.observationId,
+    }));
+    const types = f.state.listDeviceSessionEvents(created.session.sessionId).map((event) => event.type);
+    for (const name of ["primitive.requested", "effect.assessed", "primitive.executed", "observation.after_captured", "primitive.verified"]) {
+      assert.ok(types.includes(name), name);
+    }
   } finally {
     f.state.close();
     rmSync(f.root, { recursive: true, force: true });

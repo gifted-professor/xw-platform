@@ -15,7 +15,7 @@ import {
   consumeTransportActionAuthorization as consumeTransportAuthKernel,
 } from "./transport-action-authorization.mjs";
 
-export const CURRENT_CONTROL_SCHEMA_VERSION = 17;
+export const CURRENT_CONTROL_SCHEMA_VERSION = 18;
 
 const ACTIVE_JOB_STATES = new Set(["running", "verifying", "restoring"]);
 const TERMINAL_JOB_STATES = new Set(["succeeded", "failed", "ambiguous", "recovery_required", "cancelled"]);
@@ -174,6 +174,35 @@ export class StateStore {
       CREATE INDEX IF NOT EXISTS device_session_actions_session_idx
         ON device_session_actions(session_id, created_at);
     `);
+  }
+
+  #migrateV17ToV18() {
+    this.#ensureColumn("device_session_actions", "status", "TEXT NOT NULL DEFAULT 'COMPLETED'");
+    this.#ensureColumn("device_session_actions", "execution_mode", "TEXT NOT NULL DEFAULT 'fixture'");
+    this.#ensureColumn("device_session_actions", "transport_called", "INTEGER NOT NULL DEFAULT 0");
+    this.#ensureColumn("device_session_actions", "executor_id", "TEXT");
+    this.#ensureColumn("device_session_actions", "effect_assessment_json", "TEXT");
+    this.#ensureColumn("device_session_actions", "before_observation_id", "TEXT");
+    this.#ensureColumn("device_session_actions", "preflight_observation_id", "TEXT");
+    this.#ensureColumn("device_session_actions", "after_observation_id", "TEXT");
+    this.#ensureColumn("device_session_actions", "error_code", "TEXT");
+    this.#ensureColumn("device_session_actions", "updated_at", "INTEGER NOT NULL DEFAULT 0");
+    this.db.exec(`
+      UPDATE device_session_actions
+      SET status = CASE WHEN executed = 1 THEN 'COMPLETED' ELSE status END,
+          updated_at = CASE WHEN updated_at = 0 THEN created_at ELSE updated_at END
+      WHERE updated_at = 0 OR (executed = 1 AND status = 'COMPLETED');
+    `);
+    this.#recoverInFlightActions();
+  }
+
+  #recoverInFlightActions() {
+    const now = this.now();
+    this.db.prepare(`
+      UPDATE device_session_actions
+      SET status='AMBIGUOUS', error_code=COALESCE(error_code, 'CONTROL_PLANE_RESTART'), updated_at=?
+      WHERE status IN ('REQUESTED', 'ASSESSED', 'EXECUTING')
+    `).run(now);
   }
 
   #migrateV15ToV16() {
@@ -628,6 +657,7 @@ export class StateStore {
       this.transaction(() => {
         if (current < 16) this.#migrateV15ToV16();
         if (current < 17) this.#migrateV16ToV17();
+        if (current < 18) this.#migrateV17ToV18();
         this.#setUserVersion(CURRENT_CONTROL_SCHEMA_VERSION);
       });
     }
@@ -666,6 +696,7 @@ export class StateStore {
       this.#recoverInterruptedDiscoveryRuns(now);
       this.#recoverInterruptedEffects(now);
       this.#recoverInterruptedProtectedCommits(now);
+      this.#recoverInFlightActions();
       this.db.exec("DELETE FROM sessions; DELETE FROM leases;");
       return [];
     }
@@ -692,6 +723,7 @@ export class StateStore {
       this.#recoverInterruptedDiscoveryRuns(now);
       this.#recoverInterruptedEffects(now);
       this.#recoverInterruptedProtectedCommits(now);
+      this.#recoverInFlightActions();
       this.db.exec("DELETE FROM sessions; DELETE FROM leases;");
     });
     return interrupted.map((row) => row.job_id);
@@ -1788,54 +1820,168 @@ export class StateStore {
 
   countDeviceSessionMutations(sessionId) {
     const row = this.db.prepare(
-      "SELECT COUNT(*) AS n FROM device_session_actions WHERE session_id=? AND executed=1",
+      `SELECT COUNT(*) AS n FROM device_session_actions
+       WHERE session_id=? AND (executed=1 OR status IN ('EXECUTED','VERIFIED','COMPLETED'))`,
     ).get(sessionId);
     return Number(row?.n) || 0;
   }
 
-  findDeviceSessionAction(sessionId, idempotencyKey) {
-    if (typeof idempotencyKey !== "string" || idempotencyKey.trim() === "") return null;
-    const row = this.db.prepare(
-      "SELECT fingerprint_json, result_json FROM device_session_actions WHERE session_id=? AND idempotency_key=?",
-    ).get(sessionId, idempotencyKey);
+  #mapActionRow(row) {
     if (!row) return null;
-    return { fingerprintJson: row.fingerprint_json, result: parseJson(row.result_json) };
+    return {
+      sessionId: row.session_id,
+      actionId: row.action_id,
+      idempotencyKey: row.idempotency_key,
+      fingerprintJson: row.fingerprint_json,
+      fingerprint: parseJson(row.fingerprint_json),
+      result: parseJson(row.result_json),
+      executed: Boolean(row.executed),
+      status: row.status || (row.executed ? "COMPLETED" : "REQUESTED"),
+      executionMode: row.execution_mode || "fixture",
+      transportCalled: Boolean(row.transport_called),
+      executorId: row.executor_id || null,
+      effectAssessment: parseJson(row.effect_assessment_json),
+      beforeObservationId: row.before_observation_id || null,
+      preflightObservationId: row.preflight_observation_id || null,
+      afterObservationId: row.after_observation_id || null,
+      errorCode: row.error_code || null,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
   }
 
-  recordDeviceSessionAction({ sessionId, action, fingerprint, result, executed }) {
+  getDeviceSessionAction(sessionId, idempotencyKey) {
+    if (typeof idempotencyKey !== "string" || idempotencyKey.trim() === "") return null;
+    const row = this.db.prepare(
+      "SELECT * FROM device_session_actions WHERE session_id=? AND idempotency_key=?",
+    ).get(sessionId, idempotencyKey);
+    return this.#mapActionRow(row);
+  }
+
+  findDeviceSessionAction(sessionId, idempotencyKey) {
+    const row = this.getDeviceSessionAction(sessionId, idempotencyKey);
+    if (!row) return null;
+    return { fingerprintJson: row.fingerprintJson, result: row.result, status: row.status };
+  }
+
+  listInFlightDeviceSessionActions(sessionId) {
+    return this.db.prepare(
+      `SELECT * FROM device_session_actions
+       WHERE session_id=? AND status IN ('REQUESTED','ASSESSED','EXECUTING')
+       ORDER BY created_at`,
+    ).all(sessionId).map((row) => this.#mapActionRow(row));
+  }
+
+  reserveDeviceSessionAction({
+    sessionId,
+    action,
+    fingerprint,
+    executionMode = "fixture",
+    executorId = "open-action-fixture",
+  }) {
     const key = action.idempotencyKey;
     if (typeof key !== "string" || key.trim() === "") {
       throw new ControlPlaneError("INVALID_ACTION", "mutating action requires idempotencyKey", { status: 400 });
     }
+    const print = canonicalJson(fingerprint);
+    const now = this.now();
     return this.transaction(() => {
-      const existing = this.db.prepare(
-        "SELECT fingerprint_json, result_json FROM device_session_actions WHERE session_id=? AND idempotency_key=?",
-      ).get(sessionId, key);
-      if (existing) {
-        if (existing.fingerprint_json !== canonicalJson(fingerprint)) {
+      const inflight = this.listInFlightDeviceSessionActions(sessionId);
+      const sameKey = inflight.find((row) => row.idempotencyKey === key);
+      if (inflight.length && !sameKey) {
+        throw new ControlPlaneError(
+          "ACTION_IN_FLIGHT",
+          "this session already has an in-flight open action",
+          { status: 423, details: { sessionId, actionId: inflight[0].actionId } },
+        );
+      }
+      try {
+        this.db.prepare(`
+          INSERT INTO device_session_actions (
+            session_id, idempotency_key, action_id, fingerprint_json, result_json, executed, created_at,
+            status, execution_mode, transport_called, executor_id, effect_assessment_json,
+            before_observation_id, preflight_observation_id, after_observation_id, error_code, updated_at
+          ) VALUES (?, ?, ?, ?, ?, 0, ?, 'REQUESTED', ?, 0, ?, NULL, NULL, NULL, NULL, NULL, ?)
+        `).run(sessionId, key, action.actionId, print, "{}", now, executionMode, executorId, now);
+        return { reserved: true, reused: false, row: this.getDeviceSessionAction(sessionId, key) };
+      } catch (error) {
+        const unique = /UNIQUE|PRIMARY KEY/i.test(String(error?.message || error));
+        if (!unique) throw error;
+        const existing = this.getDeviceSessionAction(sessionId, key);
+        if (!existing) throw error;
+        if (existing.fingerprintJson !== print) {
           throw new ControlPlaneError(
             "PRIMITIVE_IDEMPOTENCY_CONFLICT",
             "idempotency key belongs to a different action",
             { status: 409, details: { sessionId, idempotencyKey: key } },
           );
         }
-        return { reused: true, result: parseJson(existing.result_json) };
+        if (["REQUESTED", "ASSESSED", "EXECUTING"].includes(existing.status)) {
+          throw new ControlPlaneError(
+            "ACTION_IN_FLIGHT",
+            "this idempotency key is already executing",
+            { status: 423, details: { sessionId, idempotencyKey: key, status: existing.status } },
+          );
+        }
+        if (existing.status === "AMBIGUOUS") {
+          throw new ControlPlaneError(
+            "ACTION_AMBIGUOUS",
+            "previous execution is ambiguous and must not be retried blindly",
+            { status: 409, details: { sessionId, idempotencyKey: key, nextAction: "STOP" } },
+          );
+        }
+        return { reserved: false, reused: true, row: existing };
       }
-      this.db.prepare(`
-        INSERT INTO device_session_actions (
-          session_id, idempotency_key, action_id, fingerprint_json, result_json, executed, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        sessionId,
-        key,
-        action.actionId || null,
-        canonicalJson(fingerprint),
-        canonicalJson(result),
-        executed ? 1 : 0,
-        this.now(),
-      );
-      return { reused: false, result };
     });
+  }
+
+  updateDeviceSessionAction(sessionId, idempotencyKey, patch = {}) {
+    const current = this.getDeviceSessionAction(sessionId, idempotencyKey);
+    if (!current) {
+      throw new ControlPlaneError("INVALID_ACTION", "action reservation missing", { status: 500 });
+    }
+    const next = {
+      status: patch.status ?? current.status,
+      result: patch.result === undefined ? current.result : patch.result,
+      executed: patch.executed === undefined ? current.executed : patch.executed,
+      transportCalled: patch.transportCalled === undefined ? current.transportCalled : patch.transportCalled,
+      effectAssessment: patch.effectAssessment === undefined ? current.effectAssessment : patch.effectAssessment,
+      beforeObservationId: patch.beforeObservationId === undefined ? current.beforeObservationId : patch.beforeObservationId,
+      preflightObservationId: patch.preflightObservationId === undefined ? current.preflightObservationId : patch.preflightObservationId,
+      afterObservationId: patch.afterObservationId === undefined ? current.afterObservationId : patch.afterObservationId,
+      errorCode: patch.errorCode === undefined ? current.errorCode : patch.errorCode,
+    };
+    this.db.prepare(`
+      UPDATE device_session_actions SET
+        status=?, result_json=?, executed=?, transport_called=?, effect_assessment_json=?,
+        before_observation_id=?, preflight_observation_id=?, after_observation_id=?, error_code=?, updated_at=?
+      WHERE session_id=? AND idempotency_key=?
+    `).run(
+      next.status,
+      canonicalJson(next.result ?? {}),
+      next.executed ? 1 : 0,
+      next.transportCalled ? 1 : 0,
+      next.effectAssessment == null ? null : canonicalJson(next.effectAssessment),
+      next.beforeObservationId,
+      next.preflightObservationId,
+      next.afterObservationId,
+      next.errorCode,
+      this.now(),
+      sessionId,
+      idempotencyKey,
+    );
+    return this.getDeviceSessionAction(sessionId, idempotencyKey);
+  }
+
+  recordDeviceSessionAction({ sessionId, action, fingerprint, result, executed }) {
+    const reserved = this.reserveDeviceSessionAction({ sessionId, action, fingerprint });
+    if (reserved.reused) return { reused: true, result: reserved.row.result };
+    const row = this.updateDeviceSessionAction(sessionId, action.idempotencyKey, {
+      status: executed ? "COMPLETED" : "BLOCKED",
+      result,
+      executed,
+    });
+    return { reused: false, result: row.result };
   }
 
   recordDeviceSessionEvent({ sessionId, type, payload = {} }) {
