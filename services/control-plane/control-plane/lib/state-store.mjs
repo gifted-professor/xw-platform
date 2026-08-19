@@ -15,7 +15,7 @@ import {
   consumeTransportActionAuthorization as consumeTransportAuthKernel,
 } from "./transport-action-authorization.mjs";
 
-export const CURRENT_CONTROL_SCHEMA_VERSION = 16;
+export const CURRENT_CONTROL_SCHEMA_VERSION = 17;
 
 const ACTIVE_JOB_STATES = new Set(["running", "verifying", "restoring"]);
 const TERMINAL_JOB_STATES = new Set(["succeeded", "failed", "ambiguous", "recovery_required", "cancelled"]);
@@ -157,6 +157,23 @@ export class StateStore {
 
   #setUserVersion(version) {
     this.db.exec(`PRAGMA user_version = ${Number(version)}`);
+  }
+
+  #migrateV16ToV17() {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS device_session_actions (
+        session_id TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL,
+        action_id TEXT,
+        fingerprint_json TEXT NOT NULL,
+        result_json TEXT NOT NULL,
+        executed INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (session_id, idempotency_key)
+      );
+      CREATE INDEX IF NOT EXISTS device_session_actions_session_idx
+        ON device_session_actions(session_id, created_at);
+    `);
   }
 
   #migrateV15ToV16() {
@@ -609,7 +626,8 @@ export class StateStore {
     this.db.exec("CREATE INDEX IF NOT EXISTS transport_auth_lease_idx ON transport_action_authorizations(lease_id, consumed_at)");
     if (current < CURRENT_CONTROL_SCHEMA_VERSION) {
       this.transaction(() => {
-        this.#migrateV15ToV16();
+        if (current < 16) this.#migrateV15ToV16();
+        if (current < 17) this.#migrateV16ToV17();
         this.#setUserVersion(CURRENT_CONTROL_SCHEMA_VERSION);
       });
     }
@@ -1752,6 +1770,65 @@ export class StateStore {
     return this.db.prepare(
       "SELECT observation_json FROM device_session_observations WHERE session_id=? ORDER BY captured_at",
     ).all(sessionId).map((row) => parseJson(row.observation_json));
+  }
+
+  getDeviceSessionObservation(sessionId, observationId) {
+    const row = this.db.prepare(
+      "SELECT observation_json FROM device_session_observations WHERE session_id=? AND observation_id=?",
+    ).get(sessionId, observationId);
+    return row ? parseJson(row.observation_json) : null;
+  }
+
+  countDeviceSessionMutations(sessionId) {
+    const row = this.db.prepare(
+      "SELECT COUNT(*) AS n FROM device_session_actions WHERE session_id=? AND executed=1",
+    ).get(sessionId);
+    return Number(row?.n) || 0;
+  }
+
+  findDeviceSessionAction(sessionId, idempotencyKey) {
+    if (typeof idempotencyKey !== "string" || idempotencyKey.trim() === "") return null;
+    const row = this.db.prepare(
+      "SELECT fingerprint_json, result_json FROM device_session_actions WHERE session_id=? AND idempotency_key=?",
+    ).get(sessionId, idempotencyKey);
+    if (!row) return null;
+    return { fingerprintJson: row.fingerprint_json, result: parseJson(row.result_json) };
+  }
+
+  recordDeviceSessionAction({ sessionId, action, fingerprint, result, executed }) {
+    const key = action.idempotencyKey;
+    if (typeof key !== "string" || key.trim() === "") {
+      throw new ControlPlaneError("INVALID_ACTION", "mutating action requires idempotencyKey", { status: 400 });
+    }
+    return this.transaction(() => {
+      const existing = this.db.prepare(
+        "SELECT fingerprint_json, result_json FROM device_session_actions WHERE session_id=? AND idempotency_key=?",
+      ).get(sessionId, key);
+      if (existing) {
+        if (existing.fingerprint_json !== canonicalJson(fingerprint)) {
+          throw new ControlPlaneError(
+            "PRIMITIVE_IDEMPOTENCY_CONFLICT",
+            "idempotency key belongs to a different action",
+            { status: 409, details: { sessionId, idempotencyKey: key } },
+          );
+        }
+        return { reused: true, result: parseJson(existing.result_json) };
+      }
+      this.db.prepare(`
+        INSERT INTO device_session_actions (
+          session_id, idempotency_key, action_id, fingerprint_json, result_json, executed, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        sessionId,
+        key,
+        action.actionId || null,
+        canonicalJson(fingerprint),
+        canonicalJson(result),
+        executed ? 1 : 0,
+        this.now(),
+      );
+      return { reused: false, result };
+    });
   }
 
   recordDeviceSessionEvent({ sessionId, type, payload = {} }) {

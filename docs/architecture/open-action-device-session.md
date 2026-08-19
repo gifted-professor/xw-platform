@@ -18,7 +18,7 @@ Cross-lane calls return `SESSION_KIND_MISMATCH`:
 - capability session → `POST /control/v1/device-sessions/:id/observe`
 - open_action or discovery session → `POST /control/v1/sessions/:id/heartbeat|release|actions`
 
-`/control/v1/device-sessions/:id/actions` is not enabled in M3-B. That route returns `PRIMITIVE_NOT_SUPPORTED`, not a fake kind mismatch.
+`POST /control/v1/device-sessions/:id/actions` is the M3-D fixture executor. It does not touch a real screen. Payment classes are refused before execute.
 
 Device-session tokens travel only as `X-Control-Token`. Query-string `?token=` is rejected.
 
@@ -43,8 +43,19 @@ It maps `observation.paymentSignals` onto the frozen kernel `EFFECT_POLICY` tabl
 | `payment_context_uncertain` | `REOBSERVE_REQUIRED` | `pay_adjacent_label`, `pay_ambiguous_button`, `pay_keyword_no_commit`, `pay_context_incomplete` |
 | `nonpayment` | `ALLOW_WITH_TRACE` | no known payment signal |
 
-Priority: `final_commit > credential > uncertain > nonpayment`. Agent-claimed category is echoed and never authoritative. `/device-sessions/:id/actions` stays disabled.
+Priority: `final_commit > credential > uncertain > nonpayment`. Agent-claimed category is echoed and never authoritative.
+
+## Primitive executor — M3-D
+
+`POST /control/v1/device-sessions/:id/actions` runs one fixture primitive after `classifyPaymentFirewall` on the bound observation.
+
+- `nonpayment` → record a fixture execution (no real tap)
+- `payment_credential` / `payment_final_commit` → no execute, `nextAction=HUMAN`
+- `payment_context_uncertain` → no execute, `nextAction=REOBSERVE`
+- unknown `basedOnObservationId` → `STALE_OBSERVATION`
+- `observe` still uses `/observe`, not `/actions`
+- live `effect.assessed` / `payment.hold_created` wait for M3-E
 
 ## Not in this wave
 
-Primitive executor (M3-D), kernel reader wiring (M3-E), agent-gateway (M3-F).
+Kernel reader wiring (M3-E), agent-gateway (M3-F), `xw phone` CLI (M3-G), replay gates (M3-H).

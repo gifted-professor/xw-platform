@@ -9,7 +9,8 @@
   "liveCanaryGate": "CLOSED",
   "sessionKind": "open_action",
   "observationOnly": true,
-  "actionsEnabled": false,
+  "actionsEnabled": true,
+  "actionsMode": "fixture_replay",
   "observeProvider": "fake_fixture",
   "shareLease": true,
   "routes": [

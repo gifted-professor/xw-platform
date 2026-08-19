@@ -3,7 +3,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { ControlPlaneError, asControlError } from "./errors.mjs";
-import { fingerprint } from "./canonical.mjs";
+import { canonicalJson, fingerprint } from "./canonical.mjs";
 import { validateJsonSchema } from "./json-schema-validator.mjs";
 import { DiscoverySessionRuntime } from "./discovery-session.mjs";
 import { evaluateCapabilityPolicy, assertAuthorizationAllow } from "./policy.mjs";
@@ -35,6 +35,14 @@ import {
   requireOpenActionContract,
   toDeviceSessionView,
 } from "./open-action-session.mjs";
+import {
+  actionFingerprint,
+  assessObservation,
+  fixtureExecuteResult,
+  isMutatingPrimitive,
+  paymentHoldResult,
+  requirePrimitiveAction,
+} from "./open-action-executor.mjs";
 
 const moduleDir = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(moduleDir, "..", "..");
@@ -2093,6 +2101,96 @@ export class ControlPlane {
     }
     this.state.recordObservationCapture({ sessionId, observation, mutatingCalls, faultAfter });
     return { observation, mutatingCalls };
+  }
+
+  async executeDeviceSessionAction(sessionId, token, input = {}) {
+    const session = assertSessionKind(this.state.validateSession(sessionId, token), "open_action");
+    const action = requirePrimitiveAction(input);
+    const mutating = isMutatingPrimitive(action.kind);
+    let observation = null;
+    if (mutating || action.basedOnObservationId) {
+      if (!action.basedOnObservationId) {
+        throw new ControlPlaneError("STALE_OBSERVATION", "mutating action requires basedOnObservationId", { status: 409 });
+      }
+      observation = this.state.getDeviceSessionObservation(sessionId, action.basedOnObservationId);
+      if (!observation) {
+        throw new ControlPlaneError(
+          "STALE_OBSERVATION",
+          "basedOnObservationId is not a live observation on this session",
+          { status: 409, details: { basedOnObservationId: action.basedOnObservationId } },
+        );
+      }
+    }
+    const assessment = observation
+      ? assessObservation(observation, { agentClaimedCategory: input.agentClaimedCategory ?? null })
+      : assessObservation({ paymentSignals: [] });
+    const actionPrint = actionFingerprint(action);
+    if (action.idempotencyKey) {
+      const existing = this.state.findDeviceSessionAction(sessionId, action.idempotencyKey);
+      if (existing) {
+        if (existing.fingerprintJson !== canonicalJson(actionPrint)) {
+          throw new ControlPlaneError(
+            "PRIMITIVE_IDEMPOTENCY_CONFLICT",
+            "idempotency key belongs to a different action",
+            { status: 409, details: { sessionId, idempotencyKey: action.idempotencyKey } },
+          );
+        }
+        return {
+          result: existing.result,
+          reused: true,
+          mutatingCalls: this.state.countDeviceSessionMutations(sessionId),
+        };
+      }
+    }
+
+    if (assessment.decision !== "ALLOW_WITH_TRACE") {
+      const result = paymentHoldResult({ action, observation, assessment });
+      if (action.idempotencyKey) {
+        const stored = this.state.recordDeviceSessionAction({
+          sessionId,
+          action,
+          fingerprint: actionPrint,
+          result,
+          executed: false,
+        });
+        return { result: stored.result, reused: stored.reused, mutatingCalls: this.state.countDeviceSessionMutations(sessionId) };
+      }
+      return { result, reused: false, mutatingCalls: this.state.countDeviceSessionMutations(sessionId) };
+    }
+
+    if (mutating && !action.idempotencyKey) {
+      throw new ControlPlaneError("INVALID_ACTION", "mutating action requires idempotencyKey", { status: 400 });
+    }
+
+    const afterObservation = mutating
+      ? requireObservationContract(await this.observeProvider.observe({
+        ...session,
+        deviceAlias: this.state.getDevice(session.deviceId)?.alias || "unknown",
+      }), session)
+      : null;
+    if (afterObservation) {
+      this.state.recordObservationCapture({
+        sessionId,
+        observation: afterObservation,
+        mutatingCalls: this.state.countDeviceSessionMutations(sessionId) + 1,
+      });
+    }
+    const result = fixtureExecuteResult({ action, observation, afterObservation, assessment });
+    if (action.idempotencyKey) {
+      const stored = this.state.recordDeviceSessionAction({
+        sessionId,
+        action,
+        fingerprint: actionPrint,
+        result,
+        executed: mutating,
+      });
+      return {
+        result: stored.result,
+        reused: stored.reused,
+        mutatingCalls: this.state.countDeviceSessionMutations(sessionId),
+      };
+    }
+    return { result, reused: false, mutatingCalls: this.state.countDeviceSessionMutations(sessionId) };
   }
 
   heartbeatSession(sessionId, token) {

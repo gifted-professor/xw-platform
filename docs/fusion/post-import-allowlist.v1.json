@@ -1,7 +1,7 @@
 {
   "schemaId": "xw.platform.fusion.post-import-allowlist.v1",
   "schemaVersion": 1,
-  "title": "Post-import path allowlist — M3-B + M3-C",
+  "title": "Post-import path allowlist — M3-B + M3-C + M3-D",
   "description": "fusion:verify subtracts only these exact paths. Blob and mode mismatches are separate. Missing imported files are never allowed. This is not a whole-tree relax and does not open runtime cutover.",
   "runtimeCutoverAllowed": false,
   "sourceFusionGate": "OPEN",
@@ -26,8 +26,10 @@
       "allowedExtra": [
         "control-plane/lib/open-action-session.mjs",
         "control-plane/lib/payment-firewall.mjs",
+        "control-plane/lib/open-action-executor.mjs",
         "tests/open-action-device-session.test.mjs",
         "tests/control-plane-payment-firewall.test.mjs",
+        "tests/control-plane-open-action-executor.test.mjs",
         "tests/fixtures/payment-firewall/cases.json"
       ]
     }
