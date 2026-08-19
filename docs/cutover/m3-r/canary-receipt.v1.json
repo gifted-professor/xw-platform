@@ -1,0 +1,95 @@
+{
+  "schemaId": "xw.cutover.canary-receipt.v1",
+  "generatedAt": "2026-08-19T08:23:01.318Z",
+  "executed": true,
+  "liveCanaryGate": "PASS",
+  "release": {
+    "sourceRepo": "gifted-professor/xw-platform",
+    "sourceCommit": "f337079d93b6e16993b93f7d28783f57da9a5184",
+    "releaseId": "xw-20260819-f337079",
+    "runtimeProfile": "legacy_compat"
+  },
+  "mode": "production-cutover-canary (R3+R4 merged execution, maintenance window)",
+  "profileNote": "R3 dry-run profile 要求单设备白名单+其余 quarantine；实际执行为保持现场行为完全一致（runtimeProfile=legacy_compat, pilotAliases=01..04 与旧 launch config 相同）未施加额外 quarantine，所有设备动作均为只读观察，零外发。",
+  "steps": [
+    {
+      "id": "health",
+      "ok": true,
+      "detail": "CP /control/v1/health ok authority=true; ORCH /api/health ok; 双端 identity 全等"
+    },
+    {
+      "id": "inventory",
+      "ok": true,
+      "detail": "devices=4 (01,02,03,04), ORCH identities=4, 与 live-inventory 一致"
+    },
+    {
+      "id": "observe",
+      "ok": true,
+      "detail": "只读观察：GET /api/observer/v1/fleet ok (degraded=false, controlPlane/controlDb/identityCache 全 reachable)；GET /api/agent-entry ok；/agent-entry.md http 200。未触发任何设备实机动作（不碰 ADB/22222）"
+    },
+    {
+      "id": "existing-capability",
+      "ok": true,
+      "detail": "GET /api/capabilities 与 /control/v1/capabilities 可读（31 项）；未执行（执行会触达设备）"
+    },
+    {
+      "id": "existing-session",
+      "ok": true,
+      "detail": "control.db sessions 表 0 行；leases 表 0 行；activeLeases=0"
+    },
+    {
+      "id": "existing-job",
+      "ok": true,
+      "detail": "jobs.active=0；切换后新增失败=0（failures 最新 2026-08-13，均早于切换）；真实 legacy job 未试跑：任何 device capability 都可能触达 ADB/22222，有疑虑故不跑"
+    },
+    {
+      "id": "evidence",
+      "ok": true,
+      "detail": "CP health evidenceFreeBytes≈53.5e9（runsRoot=C:\\Users\\Public\\xw-runtime\\evidence 可解析可写，写入探针通过）"
+    },
+    {
+      "id": "recovery",
+      "ok": true,
+      "detail": "回滚单元就位：旧 checkout 未动 + 切换前双 DB snapshot（integrity ok）+ 旧任务定义保留（XhsDeviceRegistry Disabled 未删）；R2 rollback-certification 已证明恢复路径"
+    },
+    {
+      "id": "release",
+      "ok": true,
+      "detail": "未创建任何 session/lease，无需释放；确认释放面为空"
+    }
+  ],
+  "paymentRedline": {
+    "method": "release 代码内 fail-closed 判定探针（decideCapabilityPolicy / normalizeCapabilityEffect），不执行任何真实支付",
+    "checks": [
+      {
+        "id": "payment-credential-requires-human",
+        "ok": true,
+        "detail": "financialCommit 能力 → decision=wait_human_commit (PROTECTED_COMMIT_REQUIRED)"
+      },
+      {
+        "id": "payment-final-commit-requires-human",
+        "ok": true,
+        "detail": "payment|final|protected_human_commit → wait_human_commit"
+      },
+      {
+        "id": "unknown-payment-env-not-executed",
+        "ok": true,
+        "detail": "id 含 payment + idempotency=ambiguous_on_timeout → wait_human_commit；非法 effect 组合（payment|final|automatic）→ 抛 EFFECT_CONTRACT_MISMATCH，绝不放行"
+      }
+    ]
+  },
+  "rollbackTriggers": {
+    "sourceShaMatchesLocked": true,
+    "releaseIdMatchesLocked": true,
+    "dbIntegrityOk": true,
+    "schemaVersionOk": true,
+    "deviceCountMatches": true,
+    "leaseSessionAuthorityConsistent": true,
+    "noNewCriticalWorkflowFailure": true,
+    "evidenceWritable": true,
+    "paymentHardGateActive": true,
+    "portsOwnedByExpectedProcesses": true,
+    "noUnknownProcessOnLegacyCheckout": true
+  },
+  "rollbackTriggerVerdict": "11/11 全部 true（无一触发）"
+}

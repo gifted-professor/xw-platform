@@ -1,0 +1,79 @@
+{
+  "schemaId": "xw.cutover.production-cutover.v1",
+  "generatedAt": "2026-08-19T08:23:01.318Z",
+  "runtimeCutoverGate": "PASS",
+  "release": {
+    "sourceRepo": "gifted-professor/xw-platform",
+    "sourceCommit": "f337079d93b6e16993b93f7d28783f57da9a5184",
+    "releaseId": "xw-20260819-f337079",
+    "runtimeProfile": "legacy_compat"
+  },
+  "releaseDir": "C:\\Users\\Public\\xw-runtime\\releases\\xw-20260819-f337079",
+  "currentJunction": "C:\\Users\\Public\\xw-runtime\\current",
+  "timeline": [
+    {
+      "phase": "0 预检",
+      "ok": true,
+      "detail": "activeJobs=0 activeLeases=0 sessions=0；17920 空闲、17930 仅 pid 20680；双 live DB snapshot integrity ok（registry uv=0 / control uv=15）；release 物化 748 文件 + manifest verify + preflight 全过"
+    },
+    {
+      "phase": "1 布防",
+      "ok": true,
+      "detail": "xw-runtime 目录建立；snapshot 恢复为 state\\orchestrator\\registry.db 与 state\\control-plane\\control.db（sha256 与 snapshot 全等，integrity ok）；junction current → release"
+    },
+    {
+      "phase": "2 停旧",
+      "ok": true,
+      "detail": "最终快照（rollback\\final-20260819，integrity ok）；Disable-ScheduledTask XhsDeviceRegistry（未删）；pid 20680 停止；17930 释放；XhsDeviceControlPlaneV1 保持原状"
+    },
+    {
+      "phase": "3 起新",
+      "ok": true,
+      "detail": "CP 17920 先起：health ok authority=true user_version 15→18 devices=4 支付硬闸在；ORCH 17930 后起：health ok identity 全等 control API 可达 /agent-entry.md 200"
+    },
+    {
+      "phase": "4 canary",
+      "ok": true,
+      "detail": "见 canary-receipt.v1.json；LIVE_CANARY_GATE=PASS"
+    },
+    {
+      "phase": "5 固化",
+      "ok": true,
+      "detail": "注册 XW Platform Control Plane / XW Platform Orchestrator（BootTrigger, SYSTEM, 启用）；手动进程切换为计划任务拉起后复验 health 一致"
+    }
+  ],
+  "processes": {
+    "controlPlane": {
+      "port": 17920,
+      "pidAtCutover": 8148,
+      "proof": "node.exe C:\\Users\\Public\\xw-runtime\\releases\\xw-20260819-f337079\\services\\control-plane\\control-plane\\server.mjs serve（父进程 launch-control-plane.ps1，计划任务以 SYSTEM 拉起）"
+    },
+    "orchestrator": {
+      "port": 17930,
+      "pidAtCutover": 20340,
+      "proof": "node.exe ...\\releases\\xw-20260819-f337079\\services\\orchestrator\\registry.mjs（父进程 secrets\\launch-orchestrator.ps1，计划任务以 SYSTEM 拉起）"
+    }
+  },
+  "scheduledTasks": {
+    "created": [
+      "XW Platform Control Plane (Running, BootTrigger)",
+      "XW Platform Orchestrator (Running, BootTrigger)"
+    ],
+    "legacyKept": [
+      "XhsDeviceRegistry (Disabled, 未删, 定义保留)",
+      "XhsDeviceControlPlaneV1 (Ready, 未动)"
+    ]
+  },
+  "deviations": [
+    "R3 proposed-tasks XML 直接指向 xw-runtime\\current junction：node 对主模块取 realpath，junction 路径下 import.meta.url≠argv[1] 会静默退出，故实际注册改用 launcher ps1（先解析 junction 真实路径再启动）；XML 仅作设计记录未直接注册",
+    "launcher ps1 必须 ASCII/带 BOM：PS 5.1 把无 BOM UTF-8 当 ANSI 读，中文注释会破坏解析（已踩并修复）",
+    "秘密注入方式：orchestrator token 由提权脚本从旧任务定义实时抽取写入 xw-runtime\\secrets\\launch-orchestrator.ps1（ACL 限 SYSTEM+Administrators），未进 git/日志",
+    "真实 legacy job 未试跑（见 canary-receipt existing-job），属保守决策而非失败",
+    "新注册任务对非提权查询不可见（Get-ScheduledTask 非管理员查不到 SYSTEM 任务）；提权查询与 schtasks 导出均确认定义存在且 Running"
+  ],
+  "rollbackUnit": {
+    "code": "旧 checkout 原样（C:\\Users\\Public\\xhs-registry 与 xhs-routing-v1-1 零写入）",
+    "db": "C:\\Users\\Public\\xw-runtime\\rollback\\final-20260819\\snapshots（integrity ok）+ xw-cutover-rehearsal\\cutover-20260819T071906Z\\snapshots",
+    "launchConfig": "旧任务定义保留（见 legacy-reference-scan.v1.json）"
+  }
+}
