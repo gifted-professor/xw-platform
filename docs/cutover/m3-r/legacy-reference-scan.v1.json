@@ -1,9 +1,9 @@
 {
   "schemaId": "xw.cutover.legacy-reference-scan.v1",
-  "generatedAt": "2026-08-19T08:44:38.000Z",
+  "generatedAt": "2026-08-19T09:05:00.000Z",
   "ok": true,
   "processScan": {
-    "result": "无任何运行进程引用旧 checkout（xhs-registry / xhs-routing-v1-1 / xhs-device-agent）；扫描时刻仅检出扫描命令自身",
+    "result": "无任何运行进程引用旧 checkout（2026-08-19 复扫确认 = 0）",
     "method": "Win32_Process CommandLine 全量匹配"
   },
   "scheduledTaskReferences": [
@@ -16,8 +16,8 @@
     {
       "name": "XhsDeviceControlPlaneV1",
       "references": "C:\\Users\\Public\\xhs-routing-v1-1",
-      "state": "Ready",
-      "note": "无触发器、Interactive 登录，保持原状未动（切换前即不在跑）；退役阶段删除"
+      "state": "Disabled",
+      "note": "2026-08-19 R6 清理：已禁用（提权执行，r6-disable-tasks.log）；退役阶段删除"
     },
     {
       "name": "XhsScoutScout",
@@ -38,7 +38,7 @@
       "note": "2026-08-19 R6 清理：4 个全部已禁用（提权执行，r6-disable-tasks.log）；退役阶段删除"
     }
   ],
-  "envVarReferences": "unknown（未做全机环境变量扫描；进程命令行与计划任务已扫）",
+  "envVarReferences": "0（2026-08-19 全扫：User/Machine/进程三层 env 均无 xhs-registry / xhs-routing-v1-1 / xhs-device-agent 引用）",
   "legacyWipBackup": {
     "location": "C:\\Users\\Public\\xw-runtime\\rollback\\legacy-backup-20260819\\",
     "createdAt": "2026-08-19",
