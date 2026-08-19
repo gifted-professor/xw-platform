@@ -37,7 +37,8 @@
       "gifted-professor/xhs-registry (README migration notice commit f40f5d4, archived)",
       "gifted-professor/xhs-device-agent (README migration notice commit 0a9e5bd, archived; main branch protection removed to allow the notice push; open PR #51 remains as read-only artifact)"
     ],
-    "realJobValidation": "P1-2 PASS 2026-08-19: observation-only device session via 17920, attach/observe x2/trace/release, zero mutating calls, no lease/session leak, evidence in control.db, payment gate untouched"
+    "realJobValidation": "P1-2 控制通道 PASS（限定词如实记录）：observation-only device session via 17920, attach/observe x2/trace/release, zero mutating calls, no lease/session leak, evidence in control.db, payment gate untouched；observe 走 fixture provider（partial:true, fixture_provider_no_device_artifact），未验证真机屏幕画面；真机外发验证留待真实业务首单（live 验证，非退役门）",
+    "postRetirementFix": "2026-08-19 外部 review 补获 CursorRenewalMonitor（任务名扫描盲区）：改名后一次失败运行（result=1）随即禁用；改用动作内容全量重扫确认 8 个引用任务全 Disabled"
   },
   "rollbackPackage": {
     "location": "C:\\Users\\Public\\xw-runtime\\rollback\\",
