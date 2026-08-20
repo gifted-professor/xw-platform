@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:xw:contract:harness-adapter:v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaId", "schemaVersion", "methods"],
+  "properties": {
+    "schemaId": { "const": "xw.harness.adapter.v1" },
+    "schemaVersion": { "const": 1 },
+    "methods": {
+      "type": "array",
+      "minItems": 8,
+      "items": {
+        "enum": [
+          "createSession",
+          "restoreSession",
+          "submitGoal",
+          "continueSkill",
+          "checkpoint",
+          "queryTrace",
+          "interrupt",
+          "close"
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:xw:contract:harness-checkpoint:v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaId", "schemaVersion", "harnessSessionId", "xw", "harness", "createdAt"],
+  "properties": {
+    "schemaId": { "const": "xw.harness.checkpoint.v1" },
+    "schemaVersion": { "const": 1 },
+    "harnessSessionId": { "type": "string", "minLength": 1 },
+    "createdAt": { "type": "integer", "minimum": 0 },
+    "xw": { "type": "object" },
+    "harness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "commit", "seq", "flushed"],
+      "properties": {
+        "name": { "type": "string" },
+        "version": { "type": "string" },
+        "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "seq": { "type": "integer", "minimum": 0 },
+        "turn": { "type": ["integer", "null"] },
+        "step": { "type": ["integer", "null"] },
+        "flushed": { "type": "boolean" }
+      }
+    }
+  }
+}

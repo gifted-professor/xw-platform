@@ -1,8 +1,16 @@
 # 接手文档 — 2026-08-19
 
-## 🔧 2026-08-19：M4-A Skill Contract（当前工作）
+## 🔧 2026-08-20：M4-B Harness Protocol（当前工作）
 
-分支：`feat/m4a-skill-contract`。**源码 only**：不改 17920/17930，不改 `runtimeProfile`，`dshEnabled` 仍 false。
+分支：`feat/m4b-harness-protocol`（叠在 PR #24 上）。**源码 only**：DSH 锁 `0.1.0-rc.7` / `99f6f02f…`，`dshEnabled` 仍 false，不控制真机。
+
+- 协议：`packages/harness-protocol/`
+- 适配：`integrations/dsh-xw/`
+- 机器门：`npm run test:m4b`
+
+## 🔧 2026-08-19：M4-A Skill Contract
+
+分支：`feat/m4a-skill-contract`（PR #24）。**源码 only**：不改 17920/17930，不改 `runtimeProfile`，`dshEnabled` 仍 false。
 
 - 合同：`packages/kernel/contracts/skill/`
 - 状态机 + 跨进程 `serialize`/`restore` + SkillVersionRef + Action Ledger 对账门

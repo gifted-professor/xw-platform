@@ -46,6 +46,9 @@ jobs:
       - name: M4-A skill contract acceptance
         run: npm run m4a:accept
 
+      - name: M4-B harness protocol tests
+        run: npm run test:m4b
+
       - name: M0 tool tests
         run: npm run test:m0
 
