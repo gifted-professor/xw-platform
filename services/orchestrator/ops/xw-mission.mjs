@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { createTaskPlanV2, validateTaskPlanV2 } from "../scripts/lib/task-plan-v2.mjs";
 import { bindTaskPlanToLiveCapabilities } from "../scripts/lib/task-plan-capability-binding.mjs";
 import { OrchestrationStore } from "../scripts/lib/orchestration-store.mjs";
@@ -66,9 +67,12 @@ export async function loadLiveFleet({ registryUrl = "http://127.0.0.1:17930/", t
   const devices = parseAgentEntry(await entryResponse.text());
   const safeCapabilities = new Set((catalog.capabilities || [])
     .filter((capability) => capability.policy?.availability === "implemented")
-    .filter((capability) => capability.policy?.runnableAsJob === true)
-    .filter((capability) => capability.policy?.externalEffect === false)
-    .filter((capability) => capability.policy?.approvalRequired === false)
+    // Foundation authorization fields are intentionally null. Static job support
+    // proves only that the capability has an implementation; Control Plane still
+    // owns route/authorization at submit time. Keep the legacy field additive.
+    .filter((capability) => capability.policy?.implementationSupport?.job === true
+      || capability.policy?.runnableAsJob === true)
+    .filter((capability) => capability.normalizedEffect?.class === "none")
     .filter((capability) => ["read_only", "replay_safe"].includes(capability.idempotency))
     .map((capability) => capability.id));
   for (const device of devices) {
@@ -294,7 +298,9 @@ async function main(argv = process.argv.slice(2)) {
   throw new Error(`unknown command ${command}`);
 }
 
-main().catch((error) => {
-  console.error(JSON.stringify({ ok: false, error: { code: error?.code || "XW_MISSION_FAILED", message: error?.message || String(error) } }, null, 2));
-  process.exit(1);
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((error) => {
+    console.error(JSON.stringify({ ok: false, error: { code: error?.code || "XW_MISSION_FAILED", message: error?.message || String(error) } }, null, 2));
+    process.exit(1);
+  });
+}

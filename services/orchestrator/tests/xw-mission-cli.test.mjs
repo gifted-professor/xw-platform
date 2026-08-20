@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
+import { loadLiveFleet } from "../ops/xw-mission.mjs";
 
 const ROOT = resolve(import.meta.dirname, "..");
 const CLI = join(ROOT, "ops", "xw-mission.mjs");
@@ -94,5 +95,40 @@ test("xw-mission status resolves orchestration state from XW_RUNTIME_ROOT", () =
     assert.equal(payload.state.source, "env-root");
   } finally {
     rmSync(runtimeRoot, { recursive: true, force: true });
+  }
+});
+
+test("live fleet uses current implementationSupport while keeping authorization in Control Plane", async () => {
+  const server = (await import("node:http")).createServer((request, response) => {
+    response.setHeader("content-type", request.url === "/agent-entry.md" ? "text/markdown" : "application/json");
+    if (request.url === "/agent-entry.md") {
+      response.end("- 01 | online=yes | ready=yes | lease=free | quarantined=no | unresolvedFailure=none\n");
+      return;
+    }
+    response.end(JSON.stringify({
+      capabilities: [
+        {
+          id: "xhs.observe.feed",
+          idempotency: "read_only",
+          normalizedEffect: { class: "none" },
+          policy: { availability: "implemented", runnableAsJob: null, approvalRequired: null, implementationSupport: { job: true } },
+        },
+        {
+          id: "xhs.comment.send",
+          idempotency: "replay_safe",
+          normalizedEffect: { class: "social" },
+          policy: { availability: "implemented", implementationSupport: { job: true } },
+        },
+      ],
+      routingByAlias: { "01": { capabilityIds: ["xhs.observe.feed", "xhs.comment.send"] } },
+    }));
+  });
+  await new Promise((resolveServer) => server.listen(0, "127.0.0.1", resolveServer));
+  try {
+    const address = server.address();
+    const fleet = await loadLiveFleet({ registryUrl: `http://127.0.0.1:${address.port}/` });
+    assert.deepEqual(fleet[0].capabilityIds, ["xhs.observe.feed", "xiaowei.explorer.primitive"]);
+  } finally {
+    await new Promise((resolveServer, rejectServer) => server.close((error) => error ? rejectServer(error) : resolveServer()));
   }
 });
