@@ -112,6 +112,25 @@ async function loadCapabilityCatalog(registryUrl) {
   return result.capabilities || [];
 }
 
+export function reconcileLiveCapabilityCatalog(registryCatalog, controlCatalog) {
+  if (!Array.isArray(registryCatalog) || !Array.isArray(controlCatalog)) {
+    throw new Error("registry and Control Plane capability catalogs are required");
+  }
+  const controlById = new Map(controlCatalog.map((capability) => [capability?.id, capability]));
+  return registryCatalog.map((registryCapability) => {
+    const controlCapability = controlById.get(registryCapability?.id);
+    if (!controlCapability) throw new Error(`Control Plane is missing registry capability ${registryCapability?.id || "unknown"}`);
+    const registryHash = registryCapability.capabilityContractHash || null;
+    const controlHash = controlCapability.capabilityContractHash || null;
+    if (registryHash && controlHash && registryHash !== controlHash) {
+      throw Object.assign(new Error(`live capability contract drift for ${registryCapability.id}`), {
+        code: "IMPLEMENTATION_CONTRACT_CHANGED",
+      });
+    }
+    return controlCapability;
+  });
+}
+
 async function loadAndBindPlan({ planPath, inputPath, registryUrl, requireBind = true }) {
   if (!planPath && !inputPath) throw new Error("--plan or --input is required");
   if (planPath && inputPath) throw new Error("use only one of --plan or --input");
@@ -258,7 +277,14 @@ async function main(argv = process.argv.slice(2)) {
     if (goal) {
       const traceId = required(argv, "--trace-id");
       const aliases = String(option(argv, "--aliases", "")).split(/[,:\s]+/).filter(Boolean);
-      const liveCatalog = await loadCapabilityCatalog(registryUrl);
+      const [registryCatalog, controlCatalogResponse] = await Promise.all([
+        loadCapabilityCatalog(registryUrl),
+        client.getCapabilities(),
+      ]);
+      const liveCatalog = reconcileLiveCapabilityCatalog(
+        registryCatalog,
+        controlCatalogResponse?.capabilities || controlCatalogResponse?.data?.capabilities || [],
+      );
       const result = await executeM5Goal({
         goal,
         aliases,

@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
-import { loadLiveFleet } from "../ops/xw-mission.mjs";
+import { loadLiveFleet, reconcileLiveCapabilityCatalog } from "../ops/xw-mission.mjs";
 
 const ROOT = resolve(import.meta.dirname, "..");
 const CLI = join(ROOT, "ops", "xw-mission.mjs");
@@ -131,4 +131,19 @@ test("live fleet uses current implementationSupport while keeping authorization 
   } finally {
     await new Promise((resolveServer, rejectServer) => server.close((error) => error ? rejectServer(error) : resolveServer()));
   }
+});
+
+test("M5 live binding takes integrity metadata from Control Plane and rejects registry drift", () => {
+  const registry = [{ id: "xhs.observe.feed", capabilityContractHash: "a".repeat(64) }];
+  const control = [{
+    id: "xhs.observe.feed",
+    capabilityContractHash: "a".repeat(64),
+    capabilityContractHashAlgorithm: "xhs.capability-contract.sha256-canonical-json.v2",
+  }];
+  const reconciled = reconcileLiveCapabilityCatalog(registry, control);
+  assert.equal(reconciled[0].capabilityContractHashAlgorithm, "xhs.capability-contract.sha256-canonical-json.v2");
+  assert.throws(
+    () => reconcileLiveCapabilityCatalog(registry, [{ ...control[0], capabilityContractHash: "b".repeat(64) }]),
+    (error) => error.code === "IMPLEMENTATION_CONTRACT_CHANGED",
+  );
 });
