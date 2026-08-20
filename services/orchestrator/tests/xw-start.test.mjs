@@ -20,8 +20,10 @@ import {
   convergeXwStart,
   ensureAdbRepair,
   ensureServes,
+  evaluateReleaseIdentity,
   parseXwStartArgs,
   reconcileStoppedServe,
+  releaseGate,
   requireRunsEvidencePath,
 } from "../ops/xw-start.mjs";
 
@@ -598,4 +600,66 @@ test("partial task rebind fails closed when exact binding cannot be proven", asy
     start: async () => { started = true; },
   }), /install failed/);
   assert.equal(started, false);
+});
+
+test("release identity gate requires health, manifest and launch configs to agree", () => {
+  const base = {
+    health: { releaseId: "rel-1", sourceCommit: SHA, runtimeProfile: "legacy_compat" },
+    manifest: { releaseId: "rel-1", sourceCommit: SHA, runtimeProfile: "legacy_compat" },
+    launchConfigs: Object.fromEntries(["01", "02", "03", "04"].map((alias) => [alias, { releaseId: "rel-1", sourceCommit: SHA }])),
+  };
+  const open = evaluateReleaseIdentity(base);
+  assert.equal(open.ok, true);
+  assert.equal(open.head, SHA);
+  assert.equal(open.releaseId, "rel-1");
+
+  const staleLaunch = structuredClone(base);
+  staleLaunch.launchConfigs["03"].sourceCommit = "b".repeat(40);
+  const closed = evaluateReleaseIdentity(staleLaunch);
+  assert.equal(closed.ok, false);
+  assert.equal(closed.reason, "release_identity_mismatch");
+  assert.ok(closed.mismatches.includes("serve_launch_03"));
+
+  const wrongProfile = structuredClone(base);
+  wrongProfile.manifest.runtimeProfile = "strict";
+  assert.equal(evaluateReleaseIdentity(wrongProfile).ok, false);
+
+  const healthDrift = structuredClone(base);
+  healthDrift.health.releaseId = "rel-2";
+  assert.equal(evaluateReleaseIdentity(healthDrift).ok, false);
+
+  const incomplete = structuredClone(base);
+  incomplete.manifest.sourceCommit = null;
+  assert.equal(evaluateReleaseIdentity(incomplete).ok, false);
+});
+
+test("releaseGate fails closed on read errors, drift and unsafe flags", async () => {
+  const failed = await releaseGate({ fetchHealth: async () => { throw new Error("control plane down"); } });
+  assert.equal(failed.ok, false);
+  assert.equal(failed.reason, "release_gate_failed");
+
+  const drifted = await releaseGate({
+    fetchHealth: async () => ({ releaseId: "rel-1", sourceCommit: SHA, runtimeProfile: "legacy_compat" }),
+    readManifest: async () => ({ releaseId: "rel-1", sourceCommit: "b".repeat(40), runtimeProfile: "legacy_compat" }),
+    readLaunchConfig: async () => ({ releaseId: "rel-1", sourceCommit: SHA }),
+  });
+  assert.equal(drifted.ok, false);
+  assert.equal(drifted.reason, "release_identity_mismatch");
+
+  const open = await releaseGate({
+    fetchHealth: async () => ({ releaseId: "rel-1", sourceCommit: SHA, runtimeProfile: "legacy_compat" }),
+    readManifest: async () => ({ releaseId: "rel-1", sourceCommit: SHA, runtimeProfile: "legacy_compat" }),
+    readLaunchConfig: async () => ({ releaseId: "rel-1", sourceCommit: SHA }),
+  });
+  assert.equal(open.ok, true);
+  assert.equal(open.head, SHA);
+
+  process.env.MISSION_AUTO_APPROVAL_ENABLED = "1";
+  try {
+    const flagged = await releaseGate({ fetchHealth: async () => ({}) });
+    assert.equal(flagged.ok, false);
+    assert.equal(flagged.reason, "unsafe_feature_flag_enabled");
+  } finally {
+    delete process.env.MISSION_AUTO_APPROVAL_ENABLED;
+  }
 });
