@@ -52,6 +52,9 @@ jobs:
       - name: M4-C skill router and experience ledger
         run: npm run test:m4c
 
+      - name: M4-D parallelism plan compiler
+        run: npm run test:m4d
+
       - name: M0 tool tests
         run: npm run test:m0
 
