@@ -174,4 +174,9 @@ test("event and error catalogs contain the M3-A names", () => {
     assert.ok(errors.codes.includes(code), code);
   }
   assert.equal(manifest.sharedCopies.length, 6);
+  assert.deepEqual(manifest.orchestrationContracts, [
+    "contracts/orchestration/skill-catalog.v1.schema.json",
+    "contracts/orchestration/task-classification.v1.schema.json",
+    "contracts/orchestration/dag.v1.schema.json",
+  ]);
 });

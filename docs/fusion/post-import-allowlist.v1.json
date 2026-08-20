@@ -41,7 +41,14 @@
       ],
       "allowedModeModified": [],
       "allowedExtra": [
+        "contracts/m5-skill-catalog.v1.json",
         "ops/xw-repair.mjs",
+        "scripts/lib/dag-compiler.mjs",
+        "scripts/lib/skill-catalog.mjs",
+        "scripts/lib/task-router.mjs",
+        "tests/dag-compiler.test.mjs",
+        "tests/skill-catalog.test.mjs",
+        "tests/task-router.test.mjs",
         "tests/xw-closeout-defaults.test.mjs"
       ]
     },

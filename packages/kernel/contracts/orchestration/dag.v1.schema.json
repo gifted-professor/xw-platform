@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:xw:contract:orchestration-dag:v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaId",
+    "schemaVersion",
+    "dagId",
+    "taskType",
+    "traceId",
+    "catalogHash",
+    "nodes",
+    "executionReady",
+    "humanGate",
+    "planHash"
+  ],
+  "properties": {
+    "schemaId": { "const": "xw.orchestration.dag.v1" },
+    "schemaVersion": { "const": 1 },
+    "dagId": { "type": "string", "pattern": "^dag_[0-9a-f]{16}$" },
+    "taskType": { "enum": ["search", "collection", "validation"] },
+    "traceId": { "type": "string", "minLength": 1 },
+    "catalogHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "nodes": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/node" }
+    },
+    "executionReady": { "type": "boolean" },
+    "humanGate": { "enum": ["WAIT_HUMAN", null] },
+    "planHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+  },
+  "$defs": {
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "nodeId",
+        "skillId",
+        "skillVersionRef",
+        "inputs",
+        "dependsOn",
+        "targetAliases",
+        "expectedEffectClass",
+        "requiresHuman",
+        "localValidator"
+      ],
+      "properties": {
+        "nodeId": { "type": "string", "pattern": "^n[0-9]+$" },
+        "skillId": { "type": "string", "pattern": "^[a-z0-9]+(\\.[a-z0-9-]+)+$" },
+        "skillVersionRef": { "$ref": "urn:xw:contract:skill-version-ref:v1" },
+        "inputs": { "type": "object" },
+        "dependsOn": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^n[0-9]+$" }
+        },
+        "targetAliases": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^0[1-4]$" }
+        },
+        "expectedEffectClass": { "enum": ["none", "reversible", "social", "publish", "payment", "delete"] },
+        "requiresHuman": { "type": "boolean" },
+        "localValidator": { "type": "boolean" },
+        "parallelism": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": ["mode", "completionPolicy"],
+          "properties": {
+            "mode": { "enum": ["single", "replicated", "device_affine", "quorum_verify"] },
+            "maxWorkers": { "type": "integer", "minimum": 1, "maximum": 4 },
+            "completionPolicy": { "enum": ["all_success", "minimum_success", "quorum", "first_success"] }
+          }
+        }
+      }
+    }
+  }
+}

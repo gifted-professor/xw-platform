@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:xw:contract:task-classification:v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaId",
+    "schemaVersion",
+    "taskType",
+    "parallel",
+    "workers",
+    "strategy",
+    "validatorRequired",
+    "sourceSkills"
+  ],
+  "properties": {
+    "schemaId": { "const": "xw.orchestration.task-classification.v1" },
+    "schemaVersion": { "const": 1 },
+    "taskType": { "enum": ["search", "collection", "validation", "needs_human"] },
+    "parallel": { "type": "boolean" },
+    "workers": { "type": "integer", "minimum": 1, "maximum": 4 },
+    "strategy": {
+      "enum": ["fan_out_reduce", "fan_out_collect", "alias_fan_out_reduce", "sequential_validate", "none"]
+    },
+    "validatorRequired": { "type": "boolean" },
+    "sourceSkills": {
+      "type": "array",
+      "minItems": 0,
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z0-9]+(\\.[a-z0-9-]+)+$"
+      }
+    },
+    "needsHumanReason": { "type": ["string", "null"] }
+  }
+}
