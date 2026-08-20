@@ -52,6 +52,7 @@ import {
   recoverDiscardDryRun,
   recoverySemanticHints,
   resolveOperatorCommand,
+  setSettleImpl,
   saveLayoutProfile,
   semanticSnapshot,
   summarizeImageMediaNodes,
@@ -67,6 +68,13 @@ import {
   skuDimensionValuesComplete,
   waitForSkuPricePage,
 } from "../scripts/xianyu-operator.mjs";
+
+test.before(() => {
+  setSettleImpl(async () => {});
+});
+test.after(() => {
+  setSettleImpl(null);
+});
 
 test("operator CLI recognizes the dedicated Flutter tap probe command", () => {
   assert.equal(resolveOperatorCommand(["node", "script", "flutter-pointer-tap-probe"]), "flutter-pointer-tap-probe");
