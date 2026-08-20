@@ -11,6 +11,8 @@ xw-platform/
 ├── packages/
 │   ├── kernel/             ← 共享契约（含 Open Action 与 M4-A Skill contract）
 │   ├── harness-protocol/   ← M4-B Harness-neutral protocol
+│   ├── experience-ledger/  ← M4-C facts/patterns/snapshots/questions
+│   ├── skill-router/       ← M4-C central router + compiler stub
 │   ├── control-client/     ← 上层唯一 Control Plane HTTP 客户端
 │   ├── replay/             ← fixture / recorded / fault backends
 │   └── cli/                ← xw phone

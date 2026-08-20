@@ -39,12 +39,14 @@
 | F1-G | 完成 Physical Fusion 验收 | 完成 |
 | M3-EH | Open Action Runtime v1（fixture/replay） | 源码完成；live 仍关 |
 | M4-A | Skill Contract + fixture SkillRun | PR #24；DSH live 仍关 |
-| M4-B | Harness Protocol + DSH State Bridge | 进行中（`feat/m4b-harness-protocol`）；真机仍关 |
+| M4-B | Harness Protocol + DSH State Bridge | PR #25；真机仍关 |
+| M4-C/D | Skill Router + Experience Ledger + xhs.collect hybrid pack | 进行中；Compiler 不自动晋升 |
 
 ## 更多
 
 - `docs/architecture/skill-runtime.md` — M4-A Skill 合同（源码 only，不接 DSH/真机）。
 - `docs/architecture/harness-protocol.md` — M4-B Harness Protocol（DSH 锁 commit，live 仍关）。
+- `docs/architecture/skill-router.md` — M4-C Router + Experience Ledger。
 - `docs/architecture/target-layout.md` — 目标目录结构。
 - `docs/architecture/runtime-boundaries.md` — 运行时边界与不变量。
 - `docs/fusion/` — 合仓合同、source lock、导入收据、Physical Fusion 验收。

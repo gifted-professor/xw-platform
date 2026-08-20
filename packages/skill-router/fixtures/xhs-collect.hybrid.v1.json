@@ -1,0 +1,13 @@
+{
+  "schemaId": "xw.skill.pack.v1",
+  "skillId": "xhs.collect",
+  "version": "1.1.0",
+  "sourcePath": "services/orchestrator/skills/xhs/xhs-collect/SKILL.md",
+  "implementations": {
+    "agentic": { "mode": "observe-decide-act-verify", "via": "open-action-fixture" },
+    "scripted": { "runner": "ops/xhs-collect-one.mjs", "verifier": "collect-count-plus-one" },
+    "hybrid": { "happyPath": "scripted", "onDrift": "agentic-repair" },
+    "recovery": { "intent": "intent:repair-navigation" }
+  },
+  "live": false
+}
