@@ -1,6 +1,10 @@
 # 接手文档 — 2026-08-19
 
-## 🔧 2026-08-20：M4-B Harness Protocol（当前工作）
+## 🔧 2026-08-20：M4-C/D Skill Router + Hybrid pack（当前工作）
+
+分支：`feat/m4c-skill-router`。Experience Ledger 四层 + 中央 Router + `xhs.collect` Hybrid 候选。Compiler **不能**自动晋升 STABLE。live 仍关。PR #24/#25 已合进 main。
+
+## 🔧 2026-08-20：M4-B Harness Protocol
 
 分支：`feat/m4b-harness-protocol`（叠在 PR #24 上）。**源码 only**：DSH 锁 `0.1.0-rc.7` / `99f6f02f…`，`dshEnabled` 仍 false，不控制真机。
 

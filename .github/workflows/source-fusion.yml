@@ -49,6 +49,9 @@ jobs:
       - name: M4-B harness protocol tests
         run: npm run test:m4b
 
+      - name: M4-C skill router and experience ledger
+        run: npm run test:m4c
+
       - name: M0 tool tests
         run: npm run test:m0
 
