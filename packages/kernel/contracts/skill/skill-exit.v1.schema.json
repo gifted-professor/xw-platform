@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:xw:contract:skill-exit:v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaId", "schemaVersion", "exit", "reason"],
+  "properties": {
+    "schemaId": { "const": "xw.skill.exit.v1" },
+    "schemaVersion": { "const": 1 },
+    "exit": {
+      "enum": [
+        "COMPLETED",
+        "CONTINUE",
+        "REROUTE",
+        "WAIT_HUMAN",
+        "WAIT_EXTERNAL",
+        "RETRY",
+        "FALLBACK",
+        "REPAIR_REQUIRED",
+        "ABORTED"
+      ]
+    },
+    "reason": { "type": "string", "minLength": 1 },
+    "factsProduced": { "type": "array", "items": { "type": "object" } },
+    "openQuestions": { "type": "array", "items": { "type": "string" } },
+    "candidateIntents": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^intent:[a-z0-9][a-z0-9._-]*$" }
+    }
+  }
+}

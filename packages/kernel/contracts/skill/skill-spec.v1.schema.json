@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:xw:contract:skill-spec:v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaId",
+    "schemaVersion",
+    "skillId",
+    "version",
+    "implementationMode",
+    "states",
+    "exits"
+  ],
+  "properties": {
+    "schemaId": { "const": "xw.skill.spec.v1" },
+    "schemaVersion": { "const": 1 },
+    "skillId": { "type": "string", "pattern": "^[a-z0-9]+(\\.[a-z0-9-]+)+$" },
+    "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+    "implementationMode": { "enum": ["agentic", "scripted", "hybrid", "subgraph"] },
+    "sourcePath": { "type": ["string", "null"] },
+    "sourceCommit": { "type": ["string", "null"], "pattern": "^[0-9a-f]{40}$" },
+    "sourceBlobSha": { "type": ["string", "null"], "pattern": "^[0-9a-f]{40}$" },
+    "inputSchema": { "type": ["object", "null"] },
+    "outputSchema": { "type": ["object", "null"] },
+    "preconditions": { "type": "array", "items": { "type": "string" } },
+    "budgets": { "type": ["object", "null"] },
+    "requiredCapabilities": { "type": "array", "items": { "type": "string" } },
+    "states": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "enum": [
+          "READY",
+          "RUNNING",
+          "WAITING_INPUT",
+          "WAITING_EXTERNAL",
+          "VERIFYING",
+          "BLOCKED",
+          "SUCCEEDED",
+          "FAILED",
+          "AMBIGUOUS",
+          "CANCELLED"
+        ]
+      }
+    },
+    "exits": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "enum": [
+          "COMPLETED",
+          "CONTINUE",
+          "REROUTE",
+          "WAIT_HUMAN",
+          "WAIT_EXTERNAL",
+          "RETRY",
+          "FALLBACK",
+          "REPAIR_REQUIRED",
+          "ABORTED"
+        ]
+      }
+    },
+    "verifiers": { "type": "array", "items": { "type": "object" } },
+    "recoveryStrategies": { "type": "array", "items": { "type": "object" } },
+    "fixtures": { "type": "array", "items": { "type": "object" } }
+  }
+}

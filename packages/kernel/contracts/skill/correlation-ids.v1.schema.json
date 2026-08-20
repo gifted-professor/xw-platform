@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:xw:contract:skill-correlation-ids:v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["traceId"],
+  "properties": {
+    "traceId": { "type": "string", "minLength": 1 },
+    "missionRunId": { "type": ["string", "null"] },
+    "nodeRunId": { "type": ["string", "null"] },
+    "skillRunId": { "type": ["string", "null"] },
+    "harnessSessionId": { "type": ["string", "null"] },
+    "turnId": { "type": ["string", "null"] },
+    "stepId": { "type": ["string", "null"] },
+    "toolCallId": { "type": ["string", "null"] },
+    "actionId": { "type": ["string", "null"] },
+    "effectId": { "type": ["string", "null"] },
+    "evidenceRef": { "type": ["string", "null"] }
+  }
+}

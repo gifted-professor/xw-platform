@@ -21,5 +21,16 @@
   "runtimeProfiles": ["contracts/runtime-profile.v1.json"],
   "events": ["event-protocol/events.v1.json"],
   "errorCodes": ["error-codes/error-codes.v1.json"],
-  "note": "sharedCopies must remain LF-normalized identical in both services. openAction contracts stay kernel-only; M3-B control-plane imports validators, it does not copy schemas."
+  "skillContracts": [
+    "contracts/skill/correlation-ids.v1.schema.json",
+    "contracts/skill/skill-version-ref.v1.schema.json",
+    "contracts/skill/skill-spec.v1.schema.json",
+    "contracts/skill/skill-exit.v1.schema.json",
+    "contracts/skill/skill-run.v1.schema.json",
+    "contracts/skill/skill-version.v1.schema.json",
+    "contracts/skill/skill-checkpoint.v1.schema.json"
+  ],
+  "skillEvents": ["event-protocol/skill-events.v1.json"],
+  "skillErrorCodes": ["error-codes/skill-error-codes.v1.json"],
+  "note": "sharedCopies must remain LF-normalized identical in both services. openAction and skill contracts stay kernel-only; services import validators, they do not copy these schemas. M4-A does not enable dshEnabled."
 }

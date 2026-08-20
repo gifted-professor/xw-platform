@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:xw:contract:skill-version-ref:v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "skillId",
+    "skillVersion",
+    "skillSpecSha256",
+    "sourceCommit",
+    "sourcePath",
+    "sourceBlobSha"
+  ],
+  "properties": {
+    "skillId": { "type": "string", "pattern": "^[a-z0-9]+(\\.[a-z0-9-]+)+$" },
+    "skillVersion": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+    "skillSpecSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "sourceCommit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "sourcePath": { "type": "string", "minLength": 1 },
+    "sourceBlobSha": { "type": "string", "pattern": "^[0-9a-f]{40}$" }
+  }
+}

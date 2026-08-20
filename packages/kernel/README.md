@@ -15,9 +15,17 @@ M3-A adds **kernel-only** Open Action protocol (not copied into services):
 - `error-codes/`
 - `lib/open-action.mjs`
 
+M4-A adds **kernel-only** Skill Runtime contract (still not copied into services; `dshEnabled` stays false):
+
+- `contracts/skill/`
+- `event-protocol/skill-events.v1.json`
+- `error-codes/skill-error-codes.v1.json`
+- `lib/skill-runtime.mjs`
+
 Check:
 
 ```bash
 node tools/fusion/cli.mjs kernel
-node --test packages/kernel/test
+node --test packages/kernel/test/open-action.test.mjs packages/kernel/test/skill-runtime.test.mjs
+npm run m4a:accept
 ```

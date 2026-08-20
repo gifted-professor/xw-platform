@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:xw:contract:skill-version:v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaId", "schemaVersion", "skillId", "skillVersion", "lifecycle", "skillVersionRef"],
+  "properties": {
+    "schemaId": { "const": "xw.skill.version.v1" },
+    "schemaVersion": { "const": 1 },
+    "skillId": { "type": "string", "minLength": 1 },
+    "skillVersion": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+    "skillVersionRef": { "$ref": "urn:xw:contract:skill-version-ref:v1" },
+    "lifecycle": {
+      "enum": [
+        "DRAFT",
+        "CANDIDATE",
+        "REPLAY_VERIFIED",
+        "CANARY",
+        "STABLE",
+        "DEGRADED",
+        "DEPRECATED",
+        "RETIRED"
+      ]
+    },
+    "sourceCommit": { "type": ["string", "null"] },
+    "sourcePath": { "type": ["string", "null"] },
+    "compatibleAppVersions": { "type": "array", "items": { "type": "string" } },
+    "compatibleDeviceProfiles": { "type": "array", "items": { "type": "string" } },
+    "harnessCompatibility": { "type": ["object", "null"] },
+    "evaluationReceipt": { "type": ["string", "null"] },
+    "canaryReceipt": { "type": ["string", "null"] },
+    "promotionReceipt": { "type": ["string", "null"] },
+    "rollbackTarget": { "type": ["string", "null"] }
+  }
+}
