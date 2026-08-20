@@ -197,6 +197,84 @@
         ]
       },
       "lifecycle": "draft"
+    },
+    {
+      "schemaVersion": 1,
+      "id": "wechat.observe.balance",
+      "appId": "wechat",
+      "packageName": "com.tencent.mm",
+      "versionRange": "observed:8.0.64",
+      "maturity": "E1",
+      "risk": "R0",
+      "resources": [
+        "device",
+        "transport:xiaowei:22222"
+      ],
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "balanceText": {
+            "type": "string",
+            "minLength": 1
+          },
+          "currency": {
+            "type": "string",
+            "const": "CNY"
+          }
+        },
+        "required": [
+          "balanceText",
+          "currency"
+        ],
+        "additionalProperties": false
+      },
+      "preconditions": [
+        "WeChat is installed and logged in",
+        "WeChat returns an empty uiautomator tree on every page (verified 2026-08-20): dump-based navigation is unavailable; this capability relies on screenshots + visual localization only"
+      ],
+      "verification": {
+        "mode": "state",
+        "description": "In the Services page screenshot, the amount below the 钱包 (Wallet) entry is readable"
+      },
+      "restoration": {
+        "required": true,
+        "description": "return to the WeChat main page"
+      },
+      "timeoutMs": 90000,
+      "idempotency": "read_only",
+      "automationPolicy": {
+        "mode": "automatic"
+      },
+      "implementation": {
+        "adapter": "wechat",
+        "action": "balanceProbe",
+        "description": "NOT IMPLEMENTED (2026-08-20): navigation probe only, no executor landed. Evidence: xw-runtime outbox balance/run_e2d1b570-caaf-4aa5-a629-20af333fa6e4/shot-01-2.png .. shot-04-0.png (closeout bundle harvest/run_e2d1b570-caaf-4aa5-a629-20af333fa6e4)."
+      },
+      "evidence": [
+        "xw-runtime state/orchestrator/outbox/balance/run_e2d1b570-caaf-4aa5-a629-20af333fa6e4/shot-01-2.png",
+        "xw-runtime state/orchestrator/outbox/balance/run_e2d1b570-caaf-4aa5-a629-20af333fa6e4/shot-02-0.png",
+        "xw-runtime state/orchestrator/outbox/balance/run_e2d1b570-caaf-4aa5-a629-20af333fa6e4/shot-03-0.png",
+        "xw-runtime state/orchestrator/outbox/balance/run_e2d1b570-caaf-4aa5-a629-20af333fa6e4/shot-04-0.png"
+      ],
+      "availability": "dependency_pending",
+      "effect": {
+        "class": "none",
+        "phase": "na",
+        "commitBoundary": "automatic"
+      },
+      "exposure": "public",
+      "invocationPolicy": {
+        "allowedModes": [
+          "job",
+          "session"
+        ]
+      },
+      "lifecycle": "draft"
     }
   ]
 }

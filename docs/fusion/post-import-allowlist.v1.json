@@ -12,12 +12,14 @@
         ".env.example",
         "contracts/foundation-capabilities.v1.json",
         "ops/xw-closeout.mjs",
+        "ops/xw-mission.mjs",
         "ops/xw-ops-health.mjs",
         "ops/xw-start.mjs",
         "ops/xw-task.mjs",
         "package.json",
         "query-routing.mjs",
         "registry.mjs",
+        "scripts/lib/orchestration-store.mjs",
         "scripts/lib/task-template.mjs",
         "scripts/lib/xw-start.mjs",
         "serve-restart-01.ps1",
@@ -32,12 +34,14 @@
       ],
       "allowedModeModified": [],
       "allowedExtra": [
-        "ops/xw-repair.mjs"
+        "ops/xw-repair.mjs",
+        "tests/xw-closeout-defaults.test.mjs"
       ]
     },
     "control-plane": {
       "allowedBlobModified": [
         ".env.example",
+        "apps/wechat/capabilities.json",
         "control-plane/lib/state-store.mjs",
         "control-plane/lib/control-plane.mjs",
         "control-plane/router.mjs",

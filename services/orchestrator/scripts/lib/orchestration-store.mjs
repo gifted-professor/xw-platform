@@ -107,7 +107,7 @@ export function isBusinessEffectPlan(plan, executionPlan = null) {
 }
 
 export class OrchestrationStore {
-  constructor({ taskRunId, workRoot = "C:\\Users\\Public\\xhs-registry\\outbox\\work" } = {}) {
+  constructor({ taskRunId, workRoot = "C:\\Users\\Public\\xw-runtime\\state\\orchestrator\\outbox\\work" } = {}) {
     this.taskRunId = safeSegment(taskRunId, "taskRunId");
     this.root = resolve(workRoot, this.taskRunId, "orchestration");
     this.planPath = join(this.root, "plan.v2.json");
