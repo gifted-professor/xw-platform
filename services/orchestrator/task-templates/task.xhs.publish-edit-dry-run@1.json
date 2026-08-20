@@ -94,9 +94,10 @@
   "status": "implemented",
   "steps": [
     {
+      "capabilityId": "xhs.publish.edit_dry_run",
       "id": "enter_publish_fill",
       "intent": "每台提交 xhs.publish.edit_dry_run title={{title}} body={{body}} tags={{tags}} stayForAccept={{stayForAccept}}；正式 job，无 Explorer session",
-      "kind": "run"
+      "kind": "capability"
     },
     {
       "dependsOn": [
@@ -107,12 +108,13 @@
       "kind": "human"
     },
     {
+      "capabilityId": "xhs.publish.discard_editor",
       "dependsOn": [
         "human_accept_gate"
       ],
       "id": "exit_no_save",
       "intent": "当 exitNoSave=true 时提交 xhs.publish.discard_editor；禁止存草稿与发布",
-      "kind": "run"
+      "kind": "capability"
     },
     {
       "dependsOn": [
@@ -120,9 +122,9 @@
       ],
       "id": "release_sessions",
       "intent": "核对 leases=[]、无 content_published/draft_saved",
-      "kind": "verify"
+      "kind": "workflow"
     }
   ],
   "templateId": "task.xhs.publish-edit-dry-run",
-  "descriptorHash": "a8d3b3849d6f46aa55a33db2850e556ef2fd4dfa43950d4ef77f9d75ef9f887c"
+  "descriptorHash": "4397b428b5226d980b28b4f92cabea309458320cdc807ae35053fcc53854d732"
 }

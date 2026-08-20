@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import {
+  DEFAULT_TASK_TEMPLATE_DIR,
   loadTaskTemplates,
   matchTaskTemplate,
   resolveTaskTemplate,
@@ -61,6 +62,38 @@ function sample(overrides = {}) {
 
 test("valid template passes", () => {
   assert.deepEqual(validateTaskTemplate(sample()), []);
+});
+
+test("step kinds align with the runtime planner contract", () => {
+  // planner-supported kinds (task-plan.mjs): capability/recipe/workflow/explore/human
+  for (const kind of ["capability", "recipe", "workflow", "explore", "human"]) {
+    const withKind = sample();
+    withKind.steps = [{ id: "only", kind, intent: "planner-supported kind" }];
+    assert.deepEqual(validateTaskTemplate(withKind), [], `kind ${kind} must be accepted`);
+  }
+  // "run"/"verify" are not planner kinds and must stay rejected
+  for (const kind of ["run", "verify", "repair"]) {
+    const bad = sample();
+    bad.steps = [{ id: "only", kind, intent: "unsupported kind" }];
+    assert.match(JSON.stringify(validateTaskTemplate(bad)), /steps\[0\]\.kind.*unsupported/, `kind ${kind} must be rejected`);
+  }
+});
+
+test("shipped task.xhs.publish-edit-dry-run template validates and prepares", () => {
+  const loaded = loadTaskTemplates({ dir: DEFAULT_TASK_TEMPLATE_DIR, includeAll: true });
+  assert.deepEqual(loaded.errors, []);
+  const template = loaded.templates.find((item) => item.templateId === "task.xhs.publish-edit-dry-run");
+  assert.ok(template, "xhs publish dry-run template must load");
+  assert.deepEqual(validateTaskTemplate(template), []);
+  assert.deepEqual(template.steps.map((step) => step.kind), ["capability", "human", "capability", "workflow"]);
+  // fixedConstraints carry the dry-run safety contract and must stay intact
+  assert.equal(template.fixedConstraints.neverPublish, true);
+  assert.equal(template.fixedConstraints.resultMode, "dry_run_stay_then_discard");
+  assert.equal(template.fixedConstraints.pilotActorRequired, "claude-pilot-20260809");
+  const prepared = resolveTaskTemplate(template, {});
+  assert.equal(prepared.ok, true);
+  assert.equal(prepared.ready, true);
+  assert.equal(prepared.executionReady, false);
 });
 
 test("prepare asks all missing required parameters in one response", () => {

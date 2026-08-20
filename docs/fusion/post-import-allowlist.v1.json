@@ -14,16 +14,21 @@
         "ops/xw-closeout.mjs",
         "ops/xw-ops-health.mjs",
         "ops/xw-start.mjs",
+        "ops/xw-task.mjs",
         "package.json",
         "query-routing.mjs",
         "registry.mjs",
+        "scripts/lib/task-template.mjs",
         "scripts/lib/xw-start.mjs",
         "serve-restart-01.ps1",
         "serve-restart-02.ps1",
         "serve-restart-03.ps1",
         "serve-restart-04.ps1",
+        "task-templates/task.xhs.publish-edit-dry-run@1.json",
         "tests/registry.test.mjs",
-        "tests/xw-start.test.mjs"
+        "tests/task-template.test.mjs",
+        "tests/xw-start.test.mjs",
+        "tests/xw-task-cli.test.mjs"
       ],
       "allowedModeModified": [],
       "allowedExtra": [

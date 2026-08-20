@@ -20,7 +20,14 @@ export const TASK_TEMPLATE_SCHEMA_ID = "xhs.task-template.v1";
 
 const STATUSES = new Set(["draft", "implemented", "archived"]);
 const PARAM_TYPES = new Set(["string", "integer", "boolean", "array"]);
-const STEP_KINDS = new Set(["capability", "recipe", "workflow", "llm", "explore"]);
+// Step kinds accepted here must be a subset of what the runtime planner
+// (task-plan.mjs) actually schedules: capability, recipe, primitive_steps,
+// workflow (locator/route-hint aware), explore, human (L3 human gate), repair.
+// "human" is the planner's real human-gate kind (task-plan.mjs L3_RE branch).
+// Do not add kinds the planner does not handle (e.g. "run"/"verify" are not
+// planner kinds — use "capability" for capability submissions and "workflow"
+// for verify/closeout stages, as in the douyin templates).
+const STEP_KINDS = new Set(["capability", "recipe", "workflow", "llm", "explore", "human"]);
 const EFFECT_KINDS = new Set(["none", "external_send", "external_write", "destructive", "payment"]);
 const CONFIRMATIONS = new Set(["none", "once_per_run", "per_effect", "human_only"]);
 const PROMPT_POLICIES = new Set(["always", "if_missing", "effect_summary"]);
