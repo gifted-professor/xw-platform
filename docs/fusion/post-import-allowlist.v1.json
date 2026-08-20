@@ -9,10 +9,15 @@
   "services": {
     "orchestrator": {
       "allowedBlobModified": [
-        "registry.mjs"
+        "registry.mjs",
+        "ops/xw-start.mjs",
+        "package.json",
+        "tests/xw-start.test.mjs"
       ],
       "allowedModeModified": [],
-      "allowedExtra": []
+      "allowedExtra": [
+        "ops/xw-repair.mjs"
+      ]
     },
     "control-plane": {
       "allowedBlobModified": [
