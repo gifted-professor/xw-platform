@@ -67,6 +67,14 @@ export const CORRELATION_ID_KEYS = Object.freeze([
   "actionId",
   "effectId",
   "evidenceRef",
+  "planRunId",
+  "shardRunId",
+  "workerRunId",
+  "placementDecisionId",
+  "leaseId",
+  "joinRunId",
+  "reducerRunId",
+  "verificationRunId",
 ]);
 
 export const MISSION_RUN_OWNER = "orchestrator";
@@ -137,6 +145,7 @@ const SPEC_KEYS = Object.freeze([
   "verifiers",
   "recoveryStrategies",
   "fixtures",
+  "parallelismRef",
 ]);
 
 const EXIT_KEYS = Object.freeze([

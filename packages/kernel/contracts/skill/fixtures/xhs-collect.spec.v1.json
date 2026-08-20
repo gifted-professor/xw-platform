@@ -39,5 +39,9 @@
       "id": "xhs-collect-count-compare",
       "executionMode": "fixture"
     }
-  ]
+  ],
+  "parallelismRef": {
+    "sha256": "4e26f0d85fd2c031bd9dcb4ab62188d7bc4d83a4f01302a9170abc02993f3df6",
+    "path": "packages/kernel/contracts/parallelism/fixtures/xhs-collect.parallelism.v1.json"
+  }
 }

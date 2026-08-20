@@ -1,0 +1,136 @@
+{
+  "fixtureId": "plan-device-affine.v1",
+  "input": {
+    "goal": {
+      "intent": "intent:read-local-state",
+      "variants": [
+        {
+          "deviceId": "dev-phone-01",
+          "input": {
+            "read": "drafts"
+          }
+        },
+        {
+          "deviceId": "dev-phone-02",
+          "input": {
+            "read": "drafts"
+          }
+        },
+        {
+          "deviceId": "dev-phone-03",
+          "input": {
+            "read": "drafts"
+          }
+        },
+        {
+          "deviceId": "dev-phone-04",
+          "input": {
+            "read": "drafts"
+          }
+        }
+      ]
+    },
+    "skillVersion": {
+      "skillId": "xhs.collect",
+      "skillVersionRef": {
+        "skillId": "xhs.collect",
+        "skillVersion": "1.1.0",
+        "skillSpecSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "sourceCommit": "f337079d93b6e16993b93f7d28783f57da9a5184",
+        "sourcePath": "services/orchestrator/skills/xhs/xhs-collect/SKILL.md",
+        "sourceBlobSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    "parallelismSpec": {
+      "schemaId": "xw.skill.parallelism.v1",
+      "schemaVersion": 1,
+      "mode": "device_affine",
+      "minWorkers": 1,
+      "maxWorkers": 4,
+      "reassignable": false,
+      "completionPolicy": "minimum_success",
+      "minimumSuccessfulShards": 3,
+      "merge": {
+        "strategy": "concat"
+      }
+    },
+    "availableDevices": [
+      {
+        "deviceId": "dev-phone-01",
+        "status": "online",
+        "profile": "xhs-phone"
+      },
+      {
+        "deviceId": "dev-phone-02",
+        "status": "online",
+        "profile": "xhs-phone"
+      },
+      {
+        "deviceId": "dev-phone-03",
+        "status": "online",
+        "profile": "xhs-phone"
+      },
+      {
+        "deviceId": "dev-phone-04",
+        "status": "offline",
+        "profile": "xhs-phone"
+      }
+    ],
+    "budget": {
+      "maxWorkers": 4
+    }
+  },
+  "expected": {
+    "schemaId": "xw.execution.plan.v1",
+    "schemaVersion": 1,
+    "planRunId": "plan_a8dc62cc3e916c37",
+    "skillId": "xhs.collect",
+    "skillVersionRef": {
+      "skillId": "xhs.collect",
+      "skillVersion": "1.1.0",
+      "skillSpecSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceCommit": "f337079d93b6e16993b93f7d28783f57da9a5184",
+      "sourcePath": "services/orchestrator/skills/xhs/xhs-collect/SKILL.md",
+      "sourceBlobSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "requestedWorkers": 4,
+    "selectedWorkers": 3,
+    "shards": [
+      {
+        "shardRunId": "plan_a8dc62cc3e916c37_shard_1",
+        "input": {
+          "read": "drafts"
+        },
+        "assignedDeviceId": "dev-phone-01"
+      },
+      {
+        "shardRunId": "plan_a8dc62cc3e916c37_shard_2",
+        "input": {
+          "read": "drafts"
+        },
+        "assignedDeviceId": "dev-phone-02"
+      },
+      {
+        "shardRunId": "plan_a8dc62cc3e916c37_shard_3",
+        "input": {
+          "read": "drafts"
+        },
+        "assignedDeviceId": "dev-phone-03"
+      },
+      {
+        "shardRunId": "plan_a8dc62cc3e916c37_shard_4",
+        "input": {
+          "read": "drafts"
+        },
+        "assignedDeviceId": null
+      }
+    ],
+    "join": {
+      "waitPolicy": "minimum",
+      "minimum": 3
+    },
+    "reduce": {
+      "strategy": "concat"
+    }
+  }
+}

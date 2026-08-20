@@ -1,0 +1,187 @@
+{
+  "fixtureId": "plan-shardable-search.v1",
+  "input": {
+    "goal": {
+      "intent": "intent:search-collect",
+      "variants": [
+        {
+          "input": {
+            "queryVariant": "露营咖啡",
+            "sortMode": "latest",
+            "pageRange": [
+              1,
+              3
+            ]
+          }
+        },
+        {
+          "input": {
+            "queryVariant": "露营咖啡",
+            "sortMode": "popular",
+            "pageRange": [
+              1,
+              3
+            ]
+          }
+        },
+        {
+          "input": {
+            "queryVariant": "户外手冲",
+            "sortMode": "latest",
+            "pageRange": [
+              1,
+              3
+            ]
+          }
+        },
+        {
+          "input": {
+            "queryVariant": "户外手冲",
+            "sortMode": "popular",
+            "pageRange": [
+              1,
+              3
+            ]
+          }
+        }
+      ]
+    },
+    "skillVersion": {
+      "skillId": "xhs.collect",
+      "skillVersionRef": {
+        "skillId": "xhs.collect",
+        "skillVersion": "1.1.0",
+        "skillSpecSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "sourceCommit": "f337079d93b6e16993b93f7d28783f57da9a5184",
+        "sourcePath": "services/orchestrator/skills/xhs/xhs-collect/SKILL.md",
+        "sourceBlobSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    "parallelismSpec": {
+      "schemaId": "xw.skill.parallelism.v1",
+      "schemaVersion": 1,
+      "mode": "shardable",
+      "splitDimensions": [
+        "queryVariant",
+        "sortMode",
+        "pageRange"
+      ],
+      "minWorkers": 1,
+      "maxWorkers": 4,
+      "reassignable": true,
+      "completionPolicy": "minimum_success",
+      "minimumSuccessfulShards": 3,
+      "merge": {
+        "strategy": "set_union",
+        "dedupeKey": "canonicalNoteId"
+      },
+      "verification": {
+        "mode": "cross_device_sample",
+        "sampleRate": 0.1
+      }
+    },
+    "availableDevices": [
+      {
+        "deviceId": "dev-phone-01",
+        "status": "online",
+        "profile": "xhs-phone"
+      },
+      {
+        "deviceId": "dev-phone-02",
+        "status": "online",
+        "profile": "xhs-phone"
+      },
+      {
+        "deviceId": "dev-phone-03",
+        "status": "online",
+        "profile": "xhs-phone"
+      },
+      {
+        "deviceId": "dev-phone-04",
+        "status": "online",
+        "profile": "xhs-phone"
+      }
+    ],
+    "budget": {
+      "maxWorkers": 4
+    }
+  },
+  "expected": {
+    "schemaId": "xw.execution.plan.v1",
+    "schemaVersion": 1,
+    "planRunId": "plan_41da3f78d923f821",
+    "skillId": "xhs.collect",
+    "skillVersionRef": {
+      "skillId": "xhs.collect",
+      "skillVersion": "1.1.0",
+      "skillSpecSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceCommit": "f337079d93b6e16993b93f7d28783f57da9a5184",
+      "sourcePath": "services/orchestrator/skills/xhs/xhs-collect/SKILL.md",
+      "sourceBlobSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "requestedWorkers": 4,
+    "selectedWorkers": 4,
+    "shards": [
+      {
+        "shardRunId": "plan_41da3f78d923f821_shard_1",
+        "input": {
+          "queryVariant": "露营咖啡",
+          "sortMode": "latest",
+          "pageRange": [
+            1,
+            3
+          ]
+        },
+        "assignedDeviceId": "dev-phone-01"
+      },
+      {
+        "shardRunId": "plan_41da3f78d923f821_shard_2",
+        "input": {
+          "queryVariant": "露营咖啡",
+          "sortMode": "popular",
+          "pageRange": [
+            1,
+            3
+          ]
+        },
+        "assignedDeviceId": "dev-phone-02"
+      },
+      {
+        "shardRunId": "plan_41da3f78d923f821_shard_3",
+        "input": {
+          "queryVariant": "户外手冲",
+          "sortMode": "latest",
+          "pageRange": [
+            1,
+            3
+          ]
+        },
+        "assignedDeviceId": "dev-phone-03"
+      },
+      {
+        "shardRunId": "plan_41da3f78d923f821_shard_4",
+        "input": {
+          "queryVariant": "户外手冲",
+          "sortMode": "popular",
+          "pageRange": [
+            1,
+            3
+          ]
+        },
+        "assignedDeviceId": "dev-phone-04"
+      }
+    ],
+    "join": {
+      "waitPolicy": "minimum",
+      "minimum": 3
+    },
+    "reduce": {
+      "strategy": "set_union",
+      "dedupeKey": "canonicalNoteId"
+    },
+    "verification": {
+      "mode": "cross_device_sample",
+      "sampleRate": 0.1
+    }
+  }
+}
