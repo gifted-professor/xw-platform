@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:xw:contract:placement-decision:v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaId",
+    "schemaVersion",
+    "placementDecisionId",
+    "shardRunId",
+    "candidateDevices",
+    "selectedDevice",
+    "reasonCode"
+  ],
+  "properties": {
+    "schemaId": { "const": "xw.placement.decision.v1" },
+    "schemaVersion": { "const": 1 },
+    "placementDecisionId": { "type": "string", "minLength": 1 },
+    "shardRunId": { "type": "string", "minLength": 1 },
+    "candidateDevices": { "type": "array", "items": { "type": "string" } },
+    "selectedDevice": { "type": ["string", "null"] },
+    "reasonCode": { "type": "string", "minLength": 1 },
+    "leaseId": { "type": ["string", "null"] }
+  }
+}

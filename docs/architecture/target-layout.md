@@ -13,6 +13,7 @@ xw-platform/
 │   ├── harness-protocol/   ← M4-B Harness-neutral protocol
 │   ├── experience-ledger/  ← M4-C facts/patterns/snapshots/questions
 │   ├── skill-router/       ← M4-C central router + compiler stub
+│   ├── plan-compiler/      ← M4-D parallelism contracts consumer + frozen execution plans
 │   ├── control-client/     ← 上层唯一 Control Plane HTTP 客户端
 │   ├── replay/             ← fixture / recorded / fault backends
 │   └── cli/                ← xw phone

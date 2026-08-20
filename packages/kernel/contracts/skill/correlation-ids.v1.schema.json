@@ -15,6 +15,14 @@
     "toolCallId": { "type": ["string", "null"] },
     "actionId": { "type": ["string", "null"] },
     "effectId": { "type": ["string", "null"] },
-    "evidenceRef": { "type": ["string", "null"] }
+    "evidenceRef": { "type": ["string", "null"] },
+    "planRunId": { "type": ["string", "null"] },
+    "shardRunId": { "type": ["string", "null"] },
+    "workerRunId": { "type": ["string", "null"] },
+    "placementDecisionId": { "type": ["string", "null"] },
+    "leaseId": { "type": ["string", "null"] },
+    "joinRunId": { "type": ["string", "null"] },
+    "reducerRunId": { "type": ["string", "null"] },
+    "verificationRunId": { "type": ["string", "null"] }
   }
 }
