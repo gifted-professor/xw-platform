@@ -154,7 +154,7 @@ async function main() {
       const response = await fetch(new URL("api/capabilities", registryUrl), { signal: AbortSignal.timeout(10000) });
       const result = await response.json();
       if (!response.ok || result?.ok === false) throw new Error(result?.error?.message || `registry catalog failed ${response.status}`);
-      return result;
+      return result.capabilities || [];
     })(),
     client.getCapabilities(),
   ]);
