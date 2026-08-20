@@ -42,7 +42,7 @@
         "version": "1.0.0",
         "implementationMode": "scripted",
         "sourcePath": "services/orchestrator/scripts/lib/m5-result-validator.mjs",
-        "sourceCommit": "bdd5d0559a47a6264bc95ccd882a1888be26490c",
+        "sourceCommit": "b9bf1ed7498ff9c8df20e83b180c72a64b460b9b",
         "sourceBlobSha": "2e454a3d9584142abba0c41d5eede107807cf60e",
         "inputSchema": { "type": "object" },
         "outputSchema": { "type": "object" },
@@ -55,8 +55,8 @@
       "skillVersionRef": {
         "skillId": "xw.validate.card-count",
         "skillVersion": "1.0.0",
-        "skillSpecSha256": "8a37d9f5de8135cf18566e378f49c24c2a25cb36246e801c97d05957e77e1393",
-        "sourceCommit": "bdd5d0559a47a6264bc95ccd882a1888be26490c",
+        "skillSpecSha256": "317ae5dad2344fb2531fa508d7aa53f7f1793935f9af7c573ade521b1835b339",
+        "sourceCommit": "b9bf1ed7498ff9c8df20e83b180c72a64b460b9b",
         "sourcePath": "services/orchestrator/scripts/lib/m5-result-validator.mjs",
         "sourceBlobSha": "2e454a3d9584142abba0c41d5eede107807cf60e"
       },
