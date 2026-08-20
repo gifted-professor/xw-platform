@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:xw:contract:skill-parallelism-spec:v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaId", "schemaVersion", "mode", "completionPolicy"],
+  "properties": {
+    "schemaId": { "const": "xw.skill.parallelism.v1" },
+    "schemaVersion": { "const": 1 },
+    "mode": {
+      "enum": ["single", "shardable", "replicated", "device_affine", "quorum_verify"]
+    },
+    "verificationMode": {
+      "enum": ["single", "shardable", "replicated", "device_affine", "quorum_verify"]
+    },
+    "splitDimensions": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "minWorkers": { "type": "integer", "minimum": 1 },
+    "maxWorkers": { "type": "integer", "minimum": 1 },
+    "reassignable": { "type": "boolean" },
+    "deviceRequirements": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "properties": {
+        "profiles": { "type": "array", "items": { "type": "string" } },
+        "boundDeviceIds": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "completionPolicy": {
+      "enum": ["all_success", "minimum_success", "quorum", "first_success", "best_effort"]
+    },
+    "minimumSuccessfulShards": { "type": "integer", "minimum": 1 },
+    "quorumOf": { "type": "integer", "minimum": 1 },
+    "quorumTotal": { "type": "integer", "minimum": 1 },
+    "merge": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["strategy"],
+      "properties": {
+        "strategy": { "type": "string", "minLength": 1 },
+        "dedupeKey": { "type": "string", "minLength": 1 }
+      }
+    },
+    "verification": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["mode"],
+      "properties": {
+        "mode": { "type": "string", "minLength": 1 },
+        "sampleRate": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "dataClassification": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["classification"],
+      "properties": {
+        "classification": { "enum": ["normal", "financial_sensitive"] },
+        "rawValueInHarnessLog": { "type": "boolean" }
+      },
+      "if": {
+        "properties": { "classification": { "const": "financial_sensitive" } }
+      },
+      "then": {
+        "properties": { "rawValueInHarnessLog": { "const": false } },
+        "required": ["rawValueInHarnessLog"]
+      }
+    }
+  }
+}

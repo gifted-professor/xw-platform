@@ -63,6 +63,15 @@
     },
     "verifiers": { "type": "array", "items": { "type": "object" } },
     "recoveryStrategies": { "type": "array", "items": { "type": "object" } },
-    "fixtures": { "type": "array", "items": { "type": "object" } }
+    "fixtures": { "type": "array", "items": { "type": "object" } },
+    "parallelismRef": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["sha256", "path"],
+      "properties": {
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "path": { "type": "string", "minLength": 1 }
+      }
+    }
   }
 }
