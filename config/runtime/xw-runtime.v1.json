@@ -10,6 +10,7 @@
     "state/orchestrator",
     "state/orchestrator/outbox/work",
     "state/orchestrator/outbox/harvest",
+    "state/orchestrator/trace",
     "evidence",
     "logs",
     "receipts",

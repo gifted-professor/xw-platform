@@ -203,6 +203,8 @@ export async function runTaskOrchestrator({
   fleetProvider,
   worker,
   store,
+  traceBridge = null,
+  validationRequired = false,
 }) {
   assertTaskPlanV2(plan);
   if (!taskRunId) throw new Error("taskRunId is required");
@@ -310,10 +312,12 @@ export async function runTaskOrchestrator({
       };
       store.appendAssignment(assignment);
       store.appendEvent({ type: "work_assigned", nodeId: unit.node.nodeId, shardId: unit.shard.shardId, attemptId: assignment.attemptId, workerId: assignment.workerId, alias: assignment.alias });
+      traceBridge?.workerAssigned({ nodeId: unit.node.nodeId, shardId: unit.shard.shardId, assignment });
     } else {
       store.appendEvent({ type: "work_resumed", nodeId: unit.node.nodeId, shardId: unit.shard.shardId, attemptId: assignment.attemptId, workerId: assignment.workerId, alias: assignment.alias, jobId: assignment.resumeJobId });
     }
     saveState();
+    traceBridge?.skillStarted({ nodeId: unit.node.nodeId, shardId: unit.shard.shardId, assignment });
     const promise = Promise.resolve(worker.execute(assignment)).then((receipt) => ({ unit, assignment, receipt }));
     active.set(assignment.attemptId, promise);
   }
@@ -463,6 +467,21 @@ export async function runTaskOrchestrator({
         businessStatus: receipt.businessStatus,
         retryable: receipt.retryable,
       });
+      traceBridge?.skillFinished({
+        nodeId: completed.unit.node.nodeId,
+        shardId: completed.unit.shard.shardId,
+        assignment: completed.assignment,
+        receipt,
+        status: record.status === "succeeded" ? "succeeded" : (record.status === "blocked" ? "blocked" : "failed"),
+      });
+      if (record.status === "pending") {
+        traceBridge?.repairTriggered({
+          nodeId: completed.unit.node.nodeId,
+          shardId: completed.unit.shard.shardId,
+          assignment: completed.assignment,
+          reasonCode: receipt.error?.code || "RETRYABLE_FAILURE",
+        });
+      }
       saveState();
     }
   }
@@ -495,6 +514,7 @@ export async function runTaskOrchestrator({
   saveState();
   store.writeResult(result);
   store.appendEvent({ type: "task_finished", status: result.status, summary: result.summary });
+  if (validationRequired && result.status === "completed") traceBridge?.validationPassed({ result });
   return result;
   } finally {
     releaseLeadLock();

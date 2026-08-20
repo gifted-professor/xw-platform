@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:xw:contract:orchestration-trace-event:v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaId", "schemaVersion", "eventId", "traceId", "seq", "at", "type", "ids", "status", "payload"],
+  "properties": {
+    "schemaId": { "const": "xw.orchestration.trace-event.v1" },
+    "schemaVersion": { "const": 1 },
+    "eventId": { "type": "string", "pattern": "^evt_[0-9a-f]{12}_[0-9]+$" },
+    "traceId": { "type": "string", "minLength": 1, "maxLength": 512 },
+    "seq": { "type": "integer", "minimum": 1 },
+    "at": { "type": "string", "format": "date-time" },
+    "type": {
+      "enum": [
+        "TaskCreated",
+        "PlanGenerated",
+        "WorkerAssigned",
+        "SkillStarted",
+        "SkillFinished",
+        "ValidationPassed",
+        "RepairTriggered"
+      ]
+    },
+    "ids": { "$ref": "urn:xw:contract:skill-correlation-ids:v1" },
+    "nodeId": { "type": ["string", "null"] },
+    "skillId": { "type": ["string", "null"], "pattern": "^[a-z0-9]+(\\.[a-z0-9-]+)+$" },
+    "alias": { "type": ["string", "null"], "pattern": "^0[1-4]$" },
+    "jobId": { "type": ["string", "null"] },
+    "status": { "enum": ["created", "planned", "assigned", "running", "succeeded", "failed", "blocked", "repair_needed", null] },
+    "payload": { "type": "object" }
+  }
+}

@@ -178,5 +178,6 @@ test("event and error catalogs contain the M3-A names", () => {
     "contracts/orchestration/skill-catalog.v1.schema.json",
     "contracts/orchestration/task-classification.v1.schema.json",
     "contracts/orchestration/dag.v1.schema.json",
+    "contracts/orchestration/trace-event.v1.schema.json",
   ]);
 });

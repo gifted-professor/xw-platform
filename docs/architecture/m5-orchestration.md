@@ -69,6 +69,7 @@ M5 首批只注册正式只读 `xhs.observe.feed` 和既有本地 `validateBusin
 | skill-catalog.v1 | `packages/kernel/contracts/orchestration/skill-catalog.v1.schema.json` | 版本化 Skill 注册与可信执行/effect 绑定 |
 | task-classification.v1 | `packages/kernel/contracts/orchestration/task-classification.v1.schema.json` | Router 输出形状 |
 | dag.v1 | `packages/kernel/contracts/orchestration/dag.v1.schema.json` | Compiler 输出形状 |
+| trace-event.v1 | `packages/kernel/contracts/orchestration/trace-event.v1.schema.json` | 七类持久编排事件 |
 
 两者已在 `packages/kernel/contracts/manifest.v1.json` 的 `orchestrationContracts` 注册。
 
@@ -83,3 +84,11 @@ M5 首批只注册正式只读 `xhs.observe.feed` 和既有本地 `validateBusin
 - 不做真实设备执行：DAG 只冻结结构，执行/占点/结果回写属于后续波次（M5-B runtime/trace、M5-C CLI + 真机验收）。
 - 不写任何 state：TraceStore append-only JSONL 属 M5-B，本层零 IO。
 - 不碰 lease：DAG 不含 lease 语义，`executionReady` 不代表可租设备。
+
+## M5-B 持久 Trace
+
+- `TraceStore` 默认从 `XW_RUNTIME_ROOT` 或 runtime layout 读取 `state/orchestrator/trace`；文件名为 `sha256(traceId).jsonl`，不会把任意 traceId 拼成路径。
+- 每次 append 都先校验已有 JSONL 的 traceId、连续 seq、eventId 和合同，再落盘；只有持久化成功后才调用 onPersisted。坏 JSON、半行、断序、磁盘失败均 fail-closed。
+- payload 禁止 token/secret/authorization/cookie/password/credential/payment/rawValue 等敏感键和 credential-like 文本；单事件默认上限 64 KiB。
+- `queryTrace({harnessSessionId})` 保持 M4-B 原返回形状；新增 `queryTrace({traceId})` 可在 session close 或新 runtime 实例后读取有序事件与完整性摘要。
+- 既有 TaskPlanV2 scheduler 只增加可选 trace bridge，不复制调度逻辑；映射 WorkerAssigned、SkillStarted、SkillFinished、RepairTriggered，并仅在整体 technical + business acceptance 成功时写 ValidationPassed。
