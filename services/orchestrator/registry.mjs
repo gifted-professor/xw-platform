@@ -66,6 +66,7 @@ import {
   completeStallItem,
 } from "./scripts/lib/stall-triage.mjs";
 import { compileTaskPlan } from "./scripts/lib/task-plan.mjs";
+import { planM5Goal } from "./scripts/lib/m5-orchestration-runtime.mjs";
 import { loadFoundationCapabilities } from "./scripts/lib/foundation-capabilities.mjs";
 import { loadWorkflows, summarizeWorkflow } from "./scripts/lib/workflow-catalog.mjs";
 
@@ -2198,6 +2199,22 @@ const server = http.createServer(async (req, res) => {
       const body = await readBody(req);
       const goal = body.goal || body.task || "";
       if (!goal) return sendJson(res, 400, { ok: false, error: "goal is required" });
+      if (body.orchestrationVersion === "m5") {
+        if (body.dryRun !== true) return sendJson(res, 400, { ok: false, error: "M5 registry planning requires dryRun=true" });
+        const aliases = Array.isArray(body.aliases) ? body.aliases : [];
+        const planned = await planM5Goal({ goal, aliases, traceId: body.traceId || null });
+        return sendJson(res, 200, {
+          ok: true,
+          plan: {
+            schemaId: "xw.orchestration.preview.v1",
+            schemaVersion: 1,
+            dryRun: true,
+            executionReady: planned.executionReady,
+            classification: planned.classification,
+            dag: planned.dag,
+          },
+        }, { "cache-control": "no-store" });
+      }
       let catalogCapabilities = [];
       try {
         const catalog = await buildCapabilityCatalog();

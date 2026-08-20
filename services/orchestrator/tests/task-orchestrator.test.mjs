@@ -253,7 +253,7 @@ test("M5 trace bridge maps scheduler assignment, skill lifecycle, retry, and val
     },
     store,
     traceBridge,
-    validationRequired: true,
+    resultValidator: async () => ({ ok: true, code: "FIXTURE_VALIDATION_PASSED" }),
   });
   assert.equal(result.status, "completed");
   const events = traceStore.read("trace-scheduler-retry");
@@ -267,12 +267,45 @@ test("M5 trace bridge maps scheduler assignment, skill lifecycle, retry, and val
     "WorkerAssigned",
     "SkillStarted",
     "SkillFinished",
+    "SkillStarted",
+    "SkillFinished",
     "ValidationPassed",
   ]);
   assert.equal(events[4].status, "failed");
   assert.equal(events[4].payload.errorCode, "ADAPTER_HTTP_UNAVAILABLE");
   assert.deepEqual(events.filter(({ type }) => type === "WorkerAssigned").map(({ alias }) => alias), ["01", "02"]);
   assert.equal(events.at(-1).ids.traceId, "trace-scheduler-retry");
+}));
+
+test("M5 validator exceptions fail the result and close the validation trace", async () => withStore(async (store, root) => {
+  const plan = planWith({
+    nodes: [{ nodeId: "observe", executor: executor("cap.a"), shards: [{ params: {} }] }],
+  });
+  const traceStore = new TraceStore({ traceRoot: join(root, "trace") });
+  const traceBridge = new OrchestrationTraceBridge({
+    traceId: "trace-validator-exception",
+    taskRunId: "run_fixture",
+    traceStore,
+    skillByNode: { observe: "xhs.observe.feed" },
+    validationNode: { nodeId: "validate", skillId: "xw.validate.card-count" },
+  });
+  traceBridge.begin({ taskType: "collection", dagId: "dag_bbbbbbbbbbbbbbbb", planHash: plan.planHash });
+  const result = await runBound({
+    taskRunId: "run_fixture",
+    plan,
+    fleetProvider: async () => fleet(["cap.a"]),
+    worker: { execute: async (assignment) => accepted(assignment, { cardCount: 1 }) },
+    store,
+    traceBridge,
+    resultValidator: async () => { throw Object.assign(new Error("fixture validator crashed"), { code: "VALIDATOR_CRASH" }); },
+  });
+  assert.equal(result.status, "failed");
+  assert.deepEqual(result.validation, { ok: false, code: "VALIDATOR_CRASH", message: "fixture validator crashed" });
+  const events = traceStore.read("trace-validator-exception");
+  assert.equal(events.at(-1).type, "SkillFinished");
+  assert.equal(events.at(-1).status, "failed");
+  assert.equal(events.at(-1).payload.errorCode, "VALIDATOR_CRASH");
+  assert.equal(events.some(({ type }) => type === "ValidationPassed"), false);
 }));
 
 test("Lead learns capability-specific failure from receipts and avoids that device", async () => withStore(async (store) => {

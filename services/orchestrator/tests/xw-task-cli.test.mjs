@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -69,13 +69,14 @@ function makeFixture() {
   return { root, templates, params };
 }
 
-function runCli(args, { registryUrl, timeoutMs = 10_000 } = {}) {
+function runCli(args, { registryUrl, runtimeRoot, timeoutMs = 10_000 } = {}) {
   return new Promise((resolveRun, rejectRun) => {
     const child = spawn(process.execPath, [CLI, ...args], {
       cwd: ROOT,
       env: {
         ...process.env,
         ...(registryUrl ? { XHS_REGISTRY_URL: registryUrl } : {}),
+        ...(runtimeRoot ? { XW_RUNTIME_ROOT: runtimeRoot } : {}),
       },
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
@@ -100,6 +101,30 @@ function runCli(args, { registryUrl, timeoutMs = 10_000 } = {}) {
     });
   });
 }
+
+test("plan-goal --dry-run emits the registered M5 DAG with zero runtime state writes", async () => {
+  const runtimeRoot = mkdtempSync(join(tmpdir(), "m5-dry-run-runtime-"));
+  try {
+    const traceRoot = join(runtimeRoot, "state", "orchestrator", "trace");
+    const result = await runCli([
+      "plan-goal",
+      "--goal", "四台机器各刷一次首页并汇总卡片数",
+      "--aliases", "01,02,03,04",
+      "--trace-id", "trace-cli-dry-run",
+      "--dry-run",
+    ], { runtimeRoot });
+    assert.equal(result.code, 0);
+    const payload = parsePayload(result);
+    assert.equal(payload.ok, true);
+    assert.equal(payload.dryRun, true);
+    assert.equal(payload.classification.taskType, "collection");
+    assert.equal(payload.dag.traceId, "trace-cli-dry-run");
+    assert.equal(payload.dag.nodes.filter(({ skillId }) => skillId === "xhs.observe.feed").length, 4);
+    assert.equal(existsSync(traceRoot), false);
+  } finally {
+    rmSync(runtimeRoot, { recursive: true, force: true });
+  }
+});
 
 function parsePayload(result) {
   assert.equal(result.signal, null);

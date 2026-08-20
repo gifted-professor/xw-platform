@@ -38,34 +38,34 @@
       "skillSpec": {
         "schemaId": "xw.skill.spec.v1",
         "schemaVersion": 1,
-        "skillId": "xw.validate.business-output",
+        "skillId": "xw.validate.card-count",
         "version": "1.0.0",
         "implementationMode": "scripted",
-        "sourcePath": "services/orchestrator/scripts/lib/typed-job-worker.mjs",
-        "sourceCommit": "db8885eb00b50ba80677cebd865e4765e3d7929e",
-        "sourceBlobSha": "98e56f1e6cc76db83f8c04ef741fea48c7554fd3",
+        "sourcePath": "services/orchestrator/scripts/lib/m5-result-validator.mjs",
+        "sourceCommit": "bdd5d0559a47a6264bc95ccd882a1888be26490c",
+        "sourceBlobSha": "2e454a3d9584142abba0c41d5eede107807cf60e",
         "inputSchema": { "type": "object" },
         "outputSchema": { "type": "object" },
         "preconditions": ["upstream-results-terminal"],
         "requiredCapabilities": [],
         "states": ["READY", "RUNNING", "VERIFYING", "BLOCKED", "SUCCEEDED", "FAILED", "CANCELLED"],
         "exits": ["COMPLETED", "RETRY", "REPAIR_REQUIRED", "ABORTED"],
-        "verifiers": [{ "id": "business-output-contract", "exportName": "validateBusinessOutput" }]
+        "verifiers": [{ "id": "four-alias-card-count", "exportName": "validateM5CardCount" }]
       },
       "skillVersionRef": {
-        "skillId": "xw.validate.business-output",
+        "skillId": "xw.validate.card-count",
         "skillVersion": "1.0.0",
-        "skillSpecSha256": "3b89ef54663599e0fcfe3052fdc32eec6c8bd2f22e9ef5e10d8fbb17d2d918bf",
-        "sourceCommit": "db8885eb00b50ba80677cebd865e4765e3d7929e",
-        "sourcePath": "services/orchestrator/scripts/lib/typed-job-worker.mjs",
-        "sourceBlobSha": "98e56f1e6cc76db83f8c04ef741fea48c7554fd3"
+        "skillSpecSha256": "8a37d9f5de8135cf18566e378f49c24c2a25cb36246e801c97d05957e77e1393",
+        "sourceCommit": "bdd5d0559a47a6264bc95ccd882a1888be26490c",
+        "sourcePath": "services/orchestrator/scripts/lib/m5-result-validator.mjs",
+        "sourceBlobSha": "2e454a3d9584142abba0c41d5eede107807cf60e"
       },
       "roles": ["validate"],
       "localValidator": true,
       "executor": {
         "kind": "local",
-        "module": "services/orchestrator/scripts/lib/typed-job-worker.mjs",
-        "exportName": "validateBusinessOutput"
+        "module": "services/orchestrator/scripts/lib/m5-result-validator.mjs",
+        "exportName": "validateM5CardCount"
       },
       "effectContract": { "class": "none", "source": "local-validator" }
     }

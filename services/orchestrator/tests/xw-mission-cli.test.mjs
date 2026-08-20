@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -51,4 +51,48 @@ test("xw-mission run refuses device submission without explicit --execute", () =
   });
   assert.equal(result.status, 1);
   assert.match(result.stderr, /--execute is required/);
+});
+
+test("xw-mission plan-goal is a strict zero-state dry-run", () => {
+  const runtimeRoot = mkdtempSync(join(tmpdir(), "xw-mission-m5-dry-"));
+  try {
+    const stdout = execFileSync(process.execPath, [
+      CLI,
+      "plan-goal",
+      "--goal", "四台机器各刷一次首页并汇总卡片数",
+      "--aliases", "01,02,03,04",
+      "--trace-id", "trace-mission-dry",
+      "--dry-run",
+    ], {
+      encoding: "utf8",
+      windowsHide: true,
+      env: { ...process.env, XW_RUNTIME_ROOT: runtimeRoot },
+    });
+    const payload = JSON.parse(stdout);
+    assert.equal(payload.ok, true);
+    assert.equal(payload.dryRun, true);
+    assert.equal(payload.dag.nodes.filter(({ skillId }) => skillId === "xhs.observe.feed").length, 4);
+    assert.equal(existsSync(join(runtimeRoot, "state", "orchestrator", "trace")), false);
+  } finally {
+    rmSync(runtimeRoot, { recursive: true, force: true });
+  }
+});
+
+test("xw-mission status resolves orchestration state from XW_RUNTIME_ROOT", () => {
+  const runtimeRoot = mkdtempSync(join(tmpdir(), "xw-mission-m5-status-"));
+  try {
+    const stateRoot = join(runtimeRoot, "state", "orchestrator", "outbox", "work", "run_env_fixture", "orchestration");
+    mkdirSync(stateRoot, { recursive: true });
+    writeFileSync(join(stateRoot, "state.v1.json"), `${JSON.stringify({ status: "completed", source: "env-root" })}\n`, "utf8");
+    const stdout = execFileSync(process.execPath, [CLI, "status", "--run", "run_env_fixture"], {
+      encoding: "utf8",
+      windowsHide: true,
+      env: { ...process.env, XW_RUNTIME_ROOT: runtimeRoot },
+    });
+    const payload = JSON.parse(stdout);
+    assert.equal(payload.ok, true);
+    assert.equal(payload.state.source, "env-root");
+  } finally {
+    rmSync(runtimeRoot, { recursive: true, force: true });
+  }
 });

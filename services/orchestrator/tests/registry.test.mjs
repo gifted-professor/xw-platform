@@ -593,6 +593,36 @@ test("task packet recommends autonomous capabilities with eligible devices and n
   assert.equal(explicitApp.inferredApp, "douyin");
 });
 
+test("POST /api/task-plans M5 dry-run returns the registered DAG and never submits", async () => {
+  const before = control.submissions.length;
+  const response = await fetch(`${registry.base}/api/task-plans`, {
+    method: "POST",
+    headers: { "x-registry-token": TOKEN, "content-type": "application/json" },
+    body: JSON.stringify({
+      orchestrationVersion: "m5",
+      dryRun: true,
+      goal: "四台机器各刷一次首页并汇总卡片数",
+      aliases: ["01", "02", "03", "04"],
+      traceId: "trace-registry-preview",
+    }),
+  });
+  assert.equal(response.status, 200);
+  const payload = await response.json();
+  assert.equal(payload.ok, true);
+  assert.equal(payload.plan.schemaId, "xw.orchestration.preview.v1");
+  assert.equal(payload.plan.classification.taskType, "collection");
+  assert.equal(payload.plan.dag.nodes.filter(({ skillId }) => skillId === "xhs.observe.feed").length, 4);
+  assert.equal(control.submissions.length, before);
+
+  const unsafe = await fetch(`${registry.base}/api/task-plans`, {
+    method: "POST",
+    headers: { "x-registry-token": TOKEN, "content-type": "application/json" },
+    body: JSON.stringify({ orchestrationVersion: "m5", goal: "采集首页" }),
+  });
+  assert.equal(unsafe.status, 400);
+  assert.equal(control.submissions.length, before);
+});
+
 test("layered health reports readiness, fleet and capability lint; shallow health stays compatible", async () => {
   const headers = { "x-registry-token": TOKEN };
   const shallow = await (await fetch(`${registry.base}/api/health`, { headers })).json();

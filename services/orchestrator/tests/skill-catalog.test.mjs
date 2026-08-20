@@ -29,7 +29,7 @@ test("versioned M5 Skill registrations satisfy the canonical catalog contract", 
 
 test("production loader verifies immutable source, capability effect, and local validator export", async () => {
   const catalog = await loadM5SkillCatalog({ repoRoot: ROOT });
-  assert.deepEqual(catalog.map(({ skillId }) => skillId), ["xhs.observe.feed", "xw.validate.business-output"]);
+  assert.deepEqual(catalog.map(({ skillId }) => skillId), ["xhs.observe.feed", "xw.validate.card-count"]);
   assert.equal(catalog[0].executor.capabilityId, "xhs.observe.feed");
   assert.equal(catalog[0].effectClass, "none");
   assert.equal(catalog[1].localValidator, true);
@@ -43,7 +43,7 @@ test("the real catalog compiles the task-brief four-device goal without invented
   const classification = classifyTask({ goal: "四台机器各刷一次首页并汇总卡片数", catalog, devices: 4 });
   const dag = compileDag({ classification, catalog, aliases: ["01", "02", "03", "04"], traceId: "trace-real-catalog" });
   assert.equal(dag.nodes.filter((node) => node.skillId === "xhs.observe.feed").length, 4);
-  assert.equal(dag.nodes.at(-1).skillId, "xw.validate.business-output");
+  assert.equal(dag.nodes.at(-1).skillId, "xw.validate.card-count");
   assert.equal(dag.executionReady, true);
 });
 

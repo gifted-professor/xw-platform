@@ -1,9 +1,10 @@
 # M5 只读编排层（Task Router + DAG Compiler）
 
-源码 only。M5 定义上层编排合同（`xw.orchestration.task-classification.v1`、`xw.orchestration.dag.v1`），提供两个纯函数编译器：
+源码 only。M5 定义上层编排合同（`xw.orchestration.task-classification.v1`、`xw.orchestration.dag.v1`），提供两个纯函数编译器，并通过薄适配层复用既有 TaskPlanV2 调度器：
 
 - **Task Router**（`services/orchestrator/scripts/lib/task-router.mjs`）—— 自然语言目标 → 确定性任务分类，无 LLM、无 IO、fail-closed。
 - **DAG Compiler**（`services/orchestrator/scripts/lib/dag-compiler.mjs`）—— 分类结果 + 已注册 skill catalog → 冻结执行 DAG。
+- **M5 Runtime Adapter**（`services/orchestrator/scripts/lib/m5-orchestration-runtime.mjs`）—— DAG → 既有 `xhs.task-plan.v2` / `xhs.execution-plan.v2`，由现有 scheduler、正式 job/session 和可见 lease 执行。
 
 M5 不改 Control Plane、不接手机、不接 DSH、不开 Graph、不碰 SQLite / control.db / registry.db / ADB / 22222 / GatewayOperator。`DSH_LIVE` / `MULTI_AGENT_LIVE` / `OPEN_ACTION_LIVE` 保持 CLOSED。
 
@@ -60,7 +61,7 @@ goal（自然语言或结构化 { text }）
 - capability executor 必须出现在 SkillSpec.requiredCapabilities，且正式能力合同为 implemented + automatic；effect 必须与能力合同一致。
 - local validator 必须为 effect=none、零设备 capability，并实际导出登记函数。
 
-M5 首批只注册正式只读 `xhs.observe.feed` 和既有本地 `validateBusinessOutput`。`wechat.observe.balance` 仍是 dependency_pending 草案，不进入 M5 catalog。
+M5 首批只注册正式只读 `xhs.observe.feed` 和纯本地 `validateM5CardCount`。后者严格验证预期 alias 全量、唯一且每台输出可得非负 cardCount，再按 alias 稳定汇总。`wechat.observe.balance` 仍是 dependency_pending 草案，不进入 M5 catalog。
 
 ## 合同
 
@@ -71,7 +72,7 @@ M5 首批只注册正式只读 `xhs.observe.feed` 和既有本地 `validateBusin
 | dag.v1 | `packages/kernel/contracts/orchestration/dag.v1.schema.json` | Compiler 输出形状 |
 | trace-event.v1 | `packages/kernel/contracts/orchestration/trace-event.v1.schema.json` | 七类持久编排事件 |
 
-两者已在 `packages/kernel/contracts/manifest.v1.json` 的 `orchestrationContracts` 注册。
+这些合同已在 `packages/kernel/contracts/manifest.v1.json` 的 `orchestrationContracts` 注册。
 
 ## 测试
 
@@ -79,11 +80,12 @@ M5 首批只注册正式只读 `xhs.observe.feed` 和既有本地 `validateBusin
 - `services/orchestrator/tests/dag-compiler.test.mjs` —— 三种 taskType 节点结构、validator 终端、外发 WAIT_HUMAN、混合 catalog 非外发优先、forbidden 字段、确定性 dagId/planHash、params 注入。
 - 机器门：`npm --prefix services/orchestrator test`、`npm --prefix services/orchestrator run check`。
 
-## 边界（M5 不做）
+## Runtime / CLI 边界
 
-- 不做真实设备执行：DAG 只冻结结构，执行/占点/结果回写属于后续波次（M5-B runtime/trace、M5-C CLI + 真机验收）。
-- 不写任何 state：TraceStore append-only JSONL 属 M5-B，本层零 IO。
-- 不碰 lease：DAG 不含 lease 语义，`executionReady` 不代表可租设备。
+- `xw-task plan-goal --dry-run`、`xw-mission plan-goal --dry-run` 与 `POST /api/task-plans` 的 M5 模式只在内存中加载版本化 catalog、分类和编图；不写 trace/state、不查或占 lease、不 submit。
+- `xw-mission run --goal ... --trace-id ... --execute` 必须绑定 live capability catalog，再下沉到既有 scheduler。设备访问仍只经正式 Control Plane job/session 与可见 lease；M5 模块自身没有 SQLite、ADB、Gateway 或无 lease 旁路。
+- 本地 validator 仅在全部设备 work receipt 被 technical/business 接受后执行；其失败或异常把任务置为 failed，写失败的 `SkillFinished`，绝不写 `ValidationPassed`。
+- DAG 本身不携带 lease、transport、payment；`executionReady` 只表示图无需人工审批，不代表设备当前可租。
 
 ## M5-B 持久 Trace
 

@@ -204,7 +204,7 @@ export async function runTaskOrchestrator({
   worker,
   store,
   traceBridge = null,
-  validationRequired = false,
+  resultValidator = null,
 }) {
   assertTaskPlanV2(plan);
   if (!taskRunId) throw new Error("taskRunId is required");
@@ -508,13 +508,31 @@ export async function runTaskOrchestrator({
       ...attempt,
     }, attempt);
   });
-  const result = reduceMission({ taskRunId, plan, receipts, workUnits: state.workUnits });
+  let result = reduceMission({ taskRunId, plan, receipts, workUnits: state.workUnits });
+  if (result.status === "completed" && resultValidator) {
+    traceBridge?.localValidationStarted();
+    let validation;
+    try {
+      validation = await resultValidator(result);
+      if (!validation || typeof validation.ok !== "boolean") {
+        throw codeError("RESULT_VALIDATOR_INVALID", "resultValidator must return {ok:boolean}");
+      }
+    } catch (error) {
+      validation = {
+        ok: false,
+        code: error?.code || "RESULT_VALIDATOR_FAILED",
+        message: error?.message || String(error),
+      };
+    }
+    traceBridge?.localValidationFinished({ validation });
+    result = { ...result, status: validation.ok ? result.status : "failed", validation };
+  }
   state.status = result.status;
   state.finishedAt = new Date().toISOString();
   saveState();
   store.writeResult(result);
   store.appendEvent({ type: "task_finished", status: result.status, summary: result.summary });
-  if (validationRequired && result.status === "completed") traceBridge?.validationPassed({ result });
+  if (result.validation?.ok === true) traceBridge?.validationPassed({ result });
   return result;
   } finally {
     releaseLeadLock();

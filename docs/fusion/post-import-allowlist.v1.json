@@ -39,6 +39,7 @@
         "tests/task-orchestrator.test.mjs",
         "tests/xhs-compose.test.mjs",
         "tests/xw-start.test.mjs",
+        "tests/xw-mission-cli.test.mjs",
         "tests/xw-task-cli.test.mjs"
       ],
       "allowedModeModified": [],
@@ -48,10 +49,12 @@
         "scripts/lib/dag-compiler.mjs",
         "scripts/lib/orchestration-trace-bridge.mjs",
         "scripts/lib/m5-result-validator.mjs",
+        "scripts/lib/m5-orchestration-runtime.mjs",
         "scripts/lib/skill-catalog.mjs",
         "scripts/lib/task-router.mjs",
         "tests/dag-compiler.test.mjs",
         "tests/m5-result-validator.test.mjs",
+        "tests/m5-orchestration-runtime.test.mjs",
         "tests/skill-catalog.test.mjs",
         "tests/task-router.test.mjs",
         "tests/xw-closeout-defaults.test.mjs"

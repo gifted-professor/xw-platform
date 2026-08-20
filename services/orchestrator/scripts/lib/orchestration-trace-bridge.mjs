@@ -132,4 +132,36 @@ export class OrchestrationTraceBridge {
       payload: { accepted: result.summary?.accepted ?? 0, failed: result.summary?.failed ?? 0 },
     });
   }
+
+  localValidationStarted() {
+    const nodeId = this.validationNode?.nodeId;
+    const skillId = this.validationNode?.skillId;
+    if (!nodeId || !skillId) fail("TRACE_VALIDATOR_BINDING_MISSING", "local validation requires a registered validator node");
+    this.traceStore.append({
+      traceId: this.traceId,
+      type: "SkillStarted",
+      ids: this.#ids({ nodeId, verification: true }),
+      nodeId,
+      skillId,
+      status: "running",
+      payload: { localValidator: true },
+    });
+  }
+
+  localValidationFinished({ validation }) {
+    const nodeId = this.validationNode?.nodeId;
+    const skillId = this.validationNode?.skillId;
+    if (!nodeId || !skillId) fail("TRACE_VALIDATOR_BINDING_MISSING", "local validation requires a registered validator node");
+    this.traceStore.append({
+      traceId: this.traceId,
+      type: "SkillFinished",
+      ids: this.#ids({ nodeId, verification: true }),
+      nodeId,
+      skillId,
+      status: validation?.ok ? "succeeded" : "failed",
+      payload: validation?.ok
+        ? { resultCode: validation.code || "VALIDATION_PASSED" }
+        : { errorCode: validation?.code || "VALIDATION_FAILED" },
+    });
+  }
 }
