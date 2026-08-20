@@ -1,8 +1,16 @@
-# 接手文档 — 2026-08-19
+# 接手文档
 
-## 🔧 2026-08-20：M4-C/D Skill Router + Hybrid pack（当前工作）
+## 先读这个（2026-08-20）
 
-分支：`feat/m4c-skill-router`。Experience Ledger 四层 + 中央 Router + `xhs.collect` Hybrid 候选。Compiler **不能**自动晋升 STABLE。live 仍关。PR #24/#25 已合进 main。
+当前进度、现场、第一单真机、`/xw` 欠债和下一步，全部在：
+
+**[`docs/handoffs/HANDOFF-2026-08-20-post-m3r-m4-first-live.md`](docs/handoffs/HANDOFF-2026-08-20-post-m3r-m4-first-live.md)**
+
+下面从「M4-C/D」起到文末都是过程记录，**可能过时**。不要用下面的「当前工作 / 下一步」当事实。
+
+## 🔧 2026-08-20：M4-C/D Skill Router + Hybrid pack（已合 PR #26，过程记录）
+
+当时分支：`feat/m4c-skill-router`。Experience Ledger 四层 + 中央 Router + `xhs.collect` Hybrid 候选。Compiler **不能**自动晋升 STABLE。live 仍关。PR #24/#25/#26 已合进 main。
 
 ## 🔧 2026-08-20：M4-B Harness Protocol
 

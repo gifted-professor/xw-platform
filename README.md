@@ -2,7 +2,7 @@
 
 统一源码项目。2026-08-19 起也是**唯一生产运行来源**：17920/17930 由本仓 release（`xw-20260819-f337079`）驱动，两个旧仓已 archive。
 
-**新 agent 先读 [`HANDOFF.md`](HANDOFF.md)**。
+**新 agent 先读 [`docs/handoffs/HANDOFF-2026-08-20-post-m3r-m4-first-live.md`](docs/handoffs/HANDOFF-2026-08-20-post-m3r-m4-first-live.md)**。根 [`HANDOFF.md`](HANDOFF.md) 只做索引，过程段可能过时。
 
 ## 当前状态
 
