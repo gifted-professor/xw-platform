@@ -13,7 +13,7 @@
 
 import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -38,11 +38,23 @@ import {
 const execFileAsync = promisify(execFile);
 const REGISTRY = (process.env.XHS_REGISTRY_URL || "http://127.0.0.1:17930").replace(/\/$/, "");
 const CONTROL = (process.env.XHS_CONTROL_URL || "http://127.0.0.1:17920").replace(/\/$/, "");
-const ROUTING_ROOT = process.env.XHS_ROUTING_ROOT || "C:\\Users\\Public\\xhs-routing-v1-1";
-const CONTROL_TASK = `${ROUTING_ROOT}\\scripts\\control-plane-task.ps1`;
-const SERVE_TASK = `${ROUTING_ROOT}\\scripts\\fast-operator-serve-task.ps1`;
-const TASK_LAUNCH = "C:\\Users\\Public\\xhs-agent-control\\task-launch.json";
-const SERVE_STATE_ROOT = "C:\\Users\\Public\\xhs-agent-control\\fast-operator";
+const XW_RUNTIME_ROOT = resolve(process.env.XW_RUNTIME_ROOT || "C:\\Users\\Public\\xw-runtime");
+const RELEASE_MANIFEST_PATH = join(XW_RUNTIME_ROOT, "current", "release-manifest.v1.json");
+const LAUNCHER_PS1 = join(XW_RUNTIME_ROOT, "launch-fast-operator-serve.ps1");
+const LAUNCH_CONFIG_DIR = join(XW_RUNTIME_ROOT, "state", "control-plane", "fast-operator");
+const launchConfigPath = (alias) => join(LAUNCH_CONFIG_DIR, `serve-launch-${alias}.json`);
+const CONTROL_TASK_NAME = "XW Platform Control Plane";
+const ORCHESTRATOR_TASK_NAME = "XW Platform Orchestrator";
+const serveTaskName = (alias) => `XW Platform FastOperator ${alias}`;
+const SERVE_PORTS = (() => {
+  const defaults = { "01": 17895, "02": 17897, "03": 17898, "04": 17896 };
+  try {
+    return { ...defaults, ...(process.env.XW_SERVE_PORTS_JSON ? JSON.parse(process.env.XW_SERVE_PORTS_JSON) : {}) };
+  } catch {
+    return defaults;
+  }
+})();
+const servePortFor = (alias) => Number(SERVE_PORTS[alias]);
 const REGISTRY_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const IDENTITIES_SEED = join(REGISTRY_ROOT, "identities.seed.json");
 const ADB_PATH = process.env.ADB_PATH || "C:\\Program Files (x86)\\xiaowei_android\\tools\\adb.exe";
@@ -111,16 +123,9 @@ function parseLastJson(stdout) {
   throw new Error("command did not return JSON");
 }
 
-async function runPowerShellScript(path, args) {
-  const { stdout } = await runFile("powershell.exe", [
-    "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", path, ...args,
-  ], { timeout: 45_000 });
-  return parseLastJson(stdout);
-}
-
-async function registryTaskStatus() {
+async function scheduledTaskStatus(taskName) {
   const command = [
-    "$t=Get-ScheduledTask -TaskName 'XhsDeviceRegistry' -ErrorAction SilentlyContinue",
+    `$t=Get-ScheduledTask -TaskName '${taskName}' -ErrorAction SilentlyContinue`,
     "$o=@{installed=($null -ne $t);taskState=$(if($null -ne $t){[string]$t.State}else{'Missing'})}",
     "$o|ConvertTo-Json -Compress",
   ].join(";");
@@ -128,11 +133,58 @@ async function registryTaskStatus() {
   return parseLastJson(stdout);
 }
 
-async function startRegistryTask() {
+async function startScheduledTask(taskName) {
   await runFile("powershell.exe", [
     "-NoProfile", "-NonInteractive", "-Command",
-    "Start-ScheduledTask -TaskName 'XhsDeviceRegistry' -ErrorAction Stop",
+    `Start-ScheduledTask -TaskName '${taskName}' -ErrorAction Stop`,
   ]);
+}
+
+async function stopScheduledTask(taskName) {
+  await runFile("powershell.exe", [
+    "-NoProfile", "-NonInteractive", "-Command",
+    `Stop-ScheduledTask -TaskName '${taskName}' -ErrorAction SilentlyContinue`,
+  ]);
+}
+
+/**
+ * Probe a TCP listener with netstat (same cost profile as inspectUsbAndAdbPorts)
+ * and return the owning PID so stop paths can verify the process identity.
+ */
+async function portListener(port) {
+  const command = [
+    "$listenerPid=$null",
+    `foreach($line in netstat -ano -p TCP){ if($line -match ':${port}\\s+\\S+\\s+LISTENING\\s+(\\d+)'){ $listenerPid=$matches[1]; break } }`,
+    "@{ listening = ($null -ne $listenerPid); pid = $listenerPid } | ConvertTo-Json -Compress",
+  ].join(";");
+  const { stdout } = await runFile("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", command]);
+  const parsed = parseLastJson(stdout);
+  return { listening: parsed.listening === true, pid: parsed.pid ? Number(parsed.pid) : null };
+}
+
+async function waitPortListening(port, timeoutMs = 15_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if ((await portListener(port)).listening) return true;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  return false;
+}
+
+/**
+ * The old serve-task wrapper refused to kill anything it could not prove was
+ * its own worker. Keep that protection: a listener is only ours when its
+ * command line runs fast-operator.mjs with this alias's --port.
+ */
+async function serveListenerOwnedByAlias(pid, port) {
+  if (!pid) return false;
+  const command = [
+    `$p=Get-CimInstance Win32_Process -Filter "ProcessId=${pid}" -ErrorAction SilentlyContinue`,
+    "$c=[string]$p.CommandLine",
+    `@{ owned = (($c -match 'fast-operator\\.mjs') -and ($c -match '--port\\s+${port}([^0-9]|$)')) } | ConvertTo-Json -Compress`,
+  ].join(";");
+  const { stdout } = await runFile("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", command]);
+  return parseLastJson(stdout).owned === true;
 }
 
 async function fetchJson(base, path, options = {}) {
@@ -175,42 +227,137 @@ async function readJson(path) {
   return JSON.parse((await readFile(path, "utf8")).replace(/^\uFEFF/, ""));
 }
 
-async function releaseGate() {
+/**
+ * Fail-closed release identity gate for the xw-runtime world: the control
+ * plane health payload, the current release manifest, and every FastOperator
+ * launch config must agree on releaseId/sourceCommit, and the runtime profile
+ * must stay legacy_compat.
+ */
+export function evaluateReleaseIdentity({ health, manifest, launchConfigs } = {}) {
+  const releaseId = manifest?.releaseId || null;
+  const sourceCommit = manifest?.sourceCommit || null;
+  const mismatches = [];
+  if (!releaseId || !/^[0-9a-f]{40}$/.test(String(sourceCommit || ""))) mismatches.push("manifest_identity_incomplete");
+  if (manifest?.runtimeProfile !== "legacy_compat") mismatches.push("manifest_runtime_profile");
+  if (health?.releaseId !== releaseId) mismatches.push("control_health_release_id");
+  if (health?.sourceCommit !== sourceCommit) mismatches.push("control_health_source_commit");
+  if (health?.runtimeProfile !== "legacy_compat") mismatches.push("control_health_runtime_profile");
+  for (const alias of XW_START_ALIASES) {
+    const config = launchConfigs?.[alias];
+    if (config?.releaseId !== releaseId || config?.sourceCommit !== sourceCommit) mismatches.push(`serve_launch_${alias}`);
+  }
+  const ok = mismatches.length === 0;
+  return {
+    ok,
+    reason: ok ? null : "release_identity_mismatch",
+    head: sourceCommit,
+    releaseId,
+    mismatches,
+  };
+}
+
+export async function releaseGate(dependencies = {}) {
   if (truthyFlag(process.env.MISSION_AUTO_APPROVAL_ENABLED) || truthyFlag(process.env.STANDING_GRANT_ENABLED)) {
     return { ok: false, reason: "unsafe_feature_flag_enabled" };
   }
+  const fetchHealth = dependencies.fetchHealth || (() => fetchJson(CONTROL, "/control/v1/health"));
+  const readManifest = dependencies.readManifest || (() => readJson(RELEASE_MANIFEST_PATH));
+  const readLaunchConfig = dependencies.readLaunchConfig || ((alias) => readJson(launchConfigPath(alias)));
   try {
-    const { stdout } = await runFile(process.execPath, ["scripts/assert-release-gates.mjs", "."], {
-      cwd: ROUTING_ROOT,
-      env: {
-        ...process.env,
-        XHS_REQUIRE_TEST_RECEIPT: "1",
-        XHS_REQUIRE_MAIN_ORIGIN: "1",
-      },
-      timeout: 60_000,
-    });
-    const gate = parseLastJson(stdout);
-    const taskLaunch = await readJson(TASK_LAUNCH);
-    const ok = gate?.ok === true && gate?.head === gate?.originMain && taskLaunch.gitCommit === gate.head;
-    return { ok, reason: ok ? null : "release_identity_mismatch", head: gate?.head || null, taskCommit: taskLaunch.gitCommit || null };
+    const health = await fetchHealth();
+    const manifest = await readManifest();
+    const launchConfigs = Object.fromEntries(
+      await Promise.all(XW_START_ALIASES.map(async (alias) => [alias, await readLaunchConfig(alias)])),
+    );
+    return evaluateReleaseIdentity({ health, manifest, launchConfigs });
   } catch (error) {
     return { ok: false, reason: "release_gate_failed", error: error.message };
   }
 }
 
 async function serveStatus(alias) {
-  const status = await runPowerShellScript(SERVE_TASK, ["-Action", "Status", "-Alias", alias]);
+  const port = servePortFor(alias);
+  const task = await scheduledTaskStatus(serveTaskName(alias));
+  const listener = await portListener(port);
   let launchCommit = null;
   try {
-    launchCommit = (await readJson(`${SERVE_STATE_ROOT}\\serve-launch-${alias}.json`)).gitCommit || null;
+    launchCommit = (await readJson(launchConfigPath(alias))).sourceCommit || null;
   } catch { /* missing/stale launch config is handled by the planner */ }
-  return { ...status, healthy: status.listening === true, launchCommit };
+  return {
+    installed: task.installed === true,
+    listening: listener.listening === true,
+    port,
+    taskState: task.taskState,
+    healthy: listener.listening === true,
+    launchCommit,
+  };
+}
+
+/**
+ * "Rebind" a serve to the deployed release: rewrite its launch config with the
+ * identity from the current release manifest (atomic tmp+rename, UTF-8 without
+ * BOM). Never registers a new scheduled task.
+ */
+async function rebindLaunchConfig(alias) {
+  const manifest = await readJson(RELEASE_MANIFEST_PATH);
+  const path = launchConfigPath(alias);
+  const config = await readJson(path);
+  const next = { ...config, releaseId: manifest.releaseId, sourceCommit: manifest.sourceCommit };
+  const temporary = `${path}.${randomUUID()}.tmp`;
+  await writeFile(temporary, `${JSON.stringify(next, null, 2)}\n`, "utf8");
+  await rename(temporary, path);
+  return next;
+}
+
+/**
+ * Inline replacement for the retired fast-operator-serve-task.ps1 wrapper.
+ * Start/Stop drive the XW Platform FastOperator scheduled task directly;
+ * "Install" never registers a task — it rebinds the launch config to the
+ * deployed release identity. Stop refuses to kill any listener that is not
+ * provably this alias's fast-operator.mjs --port process.
+ */
+async function serveTask(action, alias) {
+  const taskName = serveTaskName(alias);
+  const port = servePortFor(alias);
+  if (action === "Status") return serveStatus(alias);
+  const task = await scheduledTaskStatus(taskName);
+  if (task.installed !== true) {
+    throw new Error(`计划任务不存在，请先注册 XW Platform FastOperator ${alias} 计划任务`);
+  }
+  if (action === "Install") {
+    await rebindLaunchConfig(alias);
+    return serveStatus(alias);
+  }
+  if (action === "Start") {
+    await startScheduledTask(taskName);
+    if (!await waitPortListening(port)) throw new Error(`serve ${alias} did not listen on port ${port}`);
+    return serveStatus(alias);
+  }
+  if (action === "Stop") {
+    await stopScheduledTask(taskName);
+    const listener = await portListener(port);
+    if (listener.listening) {
+      if (!await serveListenerOwnedByAlias(listener.pid, port)) {
+        throw new Error(`port ${port} is owned by an unrelated process (pid ${listener.pid}); refusing to kill it`);
+      }
+      await runFile("powershell.exe", [
+        "-NoProfile", "-NonInteractive", "-Command",
+        `Stop-Process -Id ${listener.pid} -Force -ErrorAction Stop`,
+      ]);
+    }
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline && (await portListener(port)).listening) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    return serveStatus(alias);
+  }
+  throw new Error(`unknown serve task action: ${action}`);
 }
 
 async function serveTaskBindingOk(alias) {
-  const taskName = `XhsFastOperator${alias}Live`;
-  const worker = `${ROUTING_ROOT}\\scripts\\fast-operator-serve-worker.ps1`;
-  const launchConfig = `${SERVE_STATE_ROOT}\\serve-launch-${alias}.json`;
+  const taskName = serveTaskName(alias);
+  const launcher = LAUNCHER_PS1.toLowerCase();
+  const launchConfig = launchConfigPath(alias).toLowerCase();
   const command = [
     `$t=Get-ScheduledTask -TaskName '${taskName}' -ErrorAction SilentlyContinue`,
     "$a=$(if($null -ne $t){@($t.Actions)[0]}else{$null})",
@@ -223,8 +370,8 @@ async function serveTaskBindingOk(alias) {
   const taskArgs = String(binding.arguments || "").toLowerCase();
   return binding.installed === true
     && executableOk
-    && taskArgs.includes(`-file \"${worker.toLowerCase()}\"`)
-    && taskArgs.includes(`-launchconfig \"${launchConfig.toLowerCase()}\"`);
+    && taskArgs.includes(launcher)
+    && taskArgs.includes(launchConfig);
 }
 
 export async function reconcileStoppedServe({
@@ -398,8 +545,8 @@ async function inspectAdb(aliases, serialByAlias) {
  */
 async function inspect({ aliases, gate = null, prev = null } = {}) {
   const [registryTask, controlTask, registryHealthy, controlHealthy, seedSerials] = await Promise.all([
-    registryTaskStatus(),
-    runPowerShellScript(CONTROL_TASK, ["-Action", "Status"]),
+    scheduledTaskStatus(ORCHESTRATOR_TASK_NAME),
+    scheduledTaskStatus(CONTROL_TASK_NAME),
     reachable(REGISTRY, "/api/health"),
     reachable(CONTROL, "/control/v1/health"),
     loadSeedSerials(),
@@ -420,7 +567,7 @@ async function inspect({ aliases, gate = null, prev = null } = {}) {
   if (controlHealthy) {
     leases = (await fetchJson(CONTROL, "/control/v1/leases").catch(() => ({ leases: [] }))).leases || [];
   }
-  const desiredCommit = effectiveGate.head || (await readJson(TASK_LAUNCH).catch(() => ({}))).gitCommit || "";
+  const desiredCommit = effectiveGate.head || (await readJson(RELEASE_MANIFEST_PATH).catch(() => ({}))).sourceCommit || "";
   const activeBlockers = await hydrateActiveBlockers(activeBlockersFromEntry(entry));
   const capabilityLimits = summarizeCapabilityLimits(activeBlockers);
   const devices = devicesFromEntry(entry);
@@ -452,14 +599,14 @@ async function ensureBaseServices(initial, gate, actions) {
   if (!initial.controlPlane.healthy) {
     if (!initial.controlPlane.installed) throw new Error("control-plane scheduled task is missing");
     log("starting control plane");
-    await runPowerShellScript(CONTROL_TASK, ["-Action", "Start"]);
+    await startScheduledTask(CONTROL_TASK_NAME);
     if (!await waitReachable(CONTROL, "/control/v1/health")) throw new Error("control plane did not become healthy");
     actions.push({ kind: "service", service: "control-plane", action: "started" });
   }
   if (!initial.registry.healthy) {
     if (!initial.registry.installed) throw new Error("registry scheduled task is missing");
     log("starting registry");
-    await startRegistryTask();
+    await startScheduledTask(ORCHESTRATOR_TASK_NAME);
     if (!await waitReachable(REGISTRY, "/api/health")) throw new Error("registry did not become healthy");
     actions.push({ kind: "service", service: "registry", action: "started" });
   }
@@ -472,7 +619,7 @@ async function ensureBaseServices(initial, gate, actions) {
  */
 export async function ensureServes(snapshot, aliases, actions, dependencies = {}) {
   const runServeTask = dependencies.runServeTask
-    || ((action, alias) => runPowerShellScript(SERVE_TASK, ["-Action", action, "-Alias", alias]));
+    || ((action, alias) => serveTask(action, alias));
   const getServeStatus = dependencies.getServeStatus || serveStatus;
   const getServeTaskBindingOk = dependencies.getServeTaskBindingOk || serveTaskBindingOk;
   if (snapshot.activeLeases > 0 || snapshot.runningJobs > 0) {
@@ -499,7 +646,7 @@ export async function ensureServes(snapshot, aliases, actions, dependencies = {}
             }),
             start: () => runServeTask("Start", alias),
           });
-          actions.push({ kind: "serve", alias, action: reconciled.rebindAction || "rebound", gitCommit: snapshot.desiredCommit });
+          actions.push({ kind: "serve", alias, action: reconciled.rebindAction || "rebound", sourceCommit: snapshot.desiredCommit });
           actions.push({ kind: "serve", alias, action: "started", port: reconciled.started.port });
           return { alias, status: "ready", action: "rebind_restart", port: reconciled.started.port };
         } catch (error) {
@@ -536,7 +683,7 @@ export async function ensureServes(snapshot, aliases, actions, dependencies = {}
           kind: "serve",
           alias,
           action: reconciled.rebindAction,
-          gitCommit: snapshot.desiredCommit,
+          sourceCommit: snapshot.desiredCommit,
           ...(reconciled.installWarning ? { note: "existing exact-bound task reused after task registration was denied" } : {}),
         });
       }

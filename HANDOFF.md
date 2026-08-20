@@ -2,7 +2,11 @@
 
 ## 先读这个（2026-08-20）
 
-当前进度、现场、第一单真机、`/xw` 欠债和下一步，全部在：
+最新（四机真机全绿 + xw-start 迁移 + repair 链路）：
+
+**[`docs/handoffs/HANDOFF-2026-08-20b-four-device-live-repair.md`](docs/handoffs/HANDOFF-2026-08-20b-four-device-live-repair.md)**
+
+背景（M3-R 切换、M4 源码、第一单真机）：
 
 **[`docs/handoffs/HANDOFF-2026-08-20-post-m3r-m4-first-live.md`](docs/handoffs/HANDOFF-2026-08-20-post-m3r-m4-first-live.md)**
 
