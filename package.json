@@ -17,6 +17,7 @@
     "xw:skill:install": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/sync-xw-skill.ps1 -Mode Install",
     "xw:runtime:check": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/check-xw-runtime.ps1",
     "xw:runtime:init": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/check-xw-runtime.ps1 -CreateMissingDirectories",
+    "test:xw-runtime-tools": "node --test tools/xw-runtime-tools.test.mjs",
     "test:m3eh": "node --test services/control-plane/tests/control-plane-open-action-executor.test.mjs services/control-plane/tests/m3eh-open-action-runtime.test.mjs",
     "test:cutover": "node --test packages/release/test/release-manifest.test.mjs packages/release/test/release-identity.test.mjs packages/cli/test/xw-cutover.test.mjs packages/cutover/test/cutover-r2.test.mjs packages/cutover/test/cutover-r3.test.mjs",
     "test:m0": "node services/orchestrator/tools/m0/cli.mjs test-run services/orchestrator/tools/m0/test",
@@ -25,6 +26,6 @@
     "test:control": "npm --prefix services/control-plane run test:control",
     "test:control-critical": "npm --prefix services/control-plane run test:control",
     "test:gate": "node tools/fusion/cli.mjs test-gate",
-    "test": "npm run test:fusion && npm run test:gate"
+    "test": "npm run test:fusion && npm run test:gate && npm run test:xw-runtime-tools"
   }
 }

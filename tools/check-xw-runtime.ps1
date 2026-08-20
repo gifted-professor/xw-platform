@@ -101,11 +101,17 @@ if ($IsWindows -or $env:OS -eq "Windows_NT") {
         $action = if ($null -ne $task) { @($task.Actions)[0] } else { $null }
         $arguments = if ($null -ne $action) { [string]$action.Arguments } else { "" }
         $launcher = Resolve-RuntimePath ([string]$expected.launcher)
-        $bindingOk = $null -ne $task -and $arguments.IndexOf($launcher, [StringComparison]::OrdinalIgnoreCase) -ge 0
+        $enabled = $null -ne $task -and [bool]$task.Settings.Enabled
+        $stateOk = $state -in @("Ready", "Running")
+        $principalOk = $null -ne $task -and [string]$task.Principal.UserId -ieq [string]$expected.principal
+        $runLevelOk = $null -ne $task -and [string]$task.Principal.RunLevel -ieq [string]$expected.runLevel
+        $triggerTypes = @($task.Triggers | Where-Object { $null -ne $_ } | ForEach-Object { [string]$_.CimClass.CimClassName })
+        $triggerOk = $triggerTypes -contains [string]$expected.requiredTrigger
+        $bindingOk = $null -ne $task -and $enabled -and $stateOk -and $principalOk -and $runLevelOk -and $triggerOk -and $arguments.IndexOf($launcher, [StringComparison]::OrdinalIgnoreCase) -ge 0
         if (-not [string]::IsNullOrWhiteSpace([string]$expected.argumentsContain)) {
             $bindingOk = $bindingOk -and $arguments.IndexOf([string]$expected.argumentsContain, [StringComparison]::OrdinalIgnoreCase) -ge 0
         }
-        Add-Check "task:$($expected.name)" $bindingOk "state=$state"
+        Add-Check "task:$($expected.name)" $bindingOk "state=$state;enabled=$enabled;principal=$($task.Principal.UserId);runLevel=$($task.Principal.RunLevel);triggers=$($triggerTypes -join ',')"
     }
     foreach ($taskName in @($contract.retiredTasksMustStayDisabled)) {
         $task = Get-ScheduledTask -TaskName ([string]$taskName) -ErrorAction SilentlyContinue

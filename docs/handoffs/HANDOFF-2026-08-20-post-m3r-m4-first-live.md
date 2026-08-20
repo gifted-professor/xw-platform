@@ -339,18 +339,20 @@ agent-entry.md 仍夹杂旧路径和旧 `releaseId: rel-2026-08-12-xianyu-qr-mas
 8. **已完成**：仓库新增 `config/runtime/xw-runtime.v1.json` 作为机器配置布局唯一契约，
    `npm run xw:runtime:check` 已校验 current release、所需私有文件名、四机端口、launcher、XW 计划任务与旧任务 Disabled。
    可进 Git 的配置/模板/安装检查逻辑全部在 `xw-platform`；真实 secrets、DB、logs、evidence 只在 `xw-runtime`。
+9. **review 修复已落现场**：四个 `XW Platform FastOperator 01–04` 均为 SYSTEM/Highest、Enabled，且带
+   `MSFT_TaskBootTrigger`；`xw:runtime:check` 会同时核验 state/principal/runLevel/trigger，不能再对无启动触发器的任务假绿。
 
 ### P1 — 部署门（源码已超前于现场）
 
-9. **不要默默把 main@7917ac9 布到生产。** M4 是源码合同，现场仍应 `legacy_compat`。若要新 release：走 M3-R 那套 package / preflight / 计划任务 launcher，另开 releaseId，保留回滚。
-10. 新 release 仍然：`dshEnabled=false`，`openActionLiveEnabled=false`。
+10. **不要默默把 main@7917ac9 布到生产。** M4 是源码合同，现场仍应 `legacy_compat`。若要新 release：走 M3-R 那套 package / preflight / 计划任务 launcher，另开 releaseId，保留回滚。
+11. 新 release 仍然：`dshEnabled=false`，`openActionLiveEnabled=false`。
 
 ### P1 — M4 源码后续（不开真机也能做）
 
-11. 把 Skill Registry 接到现有 `services/orchestrator/skills/`（真源先留这里，不要先搬到仓库根 `skills/`）。
-12. Router 与正式 job 提交打通（现在 Router 是进程内 fixture）。
-13. Experience Ledger 落到 Orchestrator knowledge 的分层，而不是永远内存 Map。
-14. DSH 真插件：仍只改 `integrations/dsh-xw`；升级 DSH 必须独立 PR + compatibility suite。当前 lock 是 rc.7 / `99f6f02f…`。
+12. 把 Skill Registry 接到现有 `services/orchestrator/skills/`（真源先留这里，不要先搬到仓库根 `skills/`）。
+13. Router 与正式 job 提交打通（现在 Router 是进程内 fixture）。
+14. Experience Ledger 落到 Orchestrator knowledge 的分层，而不是永远内存 Map。
+15. DSH 真插件：仍只改 `integrations/dsh-xw`；升级 DSH 必须独立 PR + compatibility suite。当前 lock 是 rc.7 / `99f6f02f…`。
 14. Graph v2 仍是 M5，别塞进 M4。
 15. Compiler 自动改生产 Skill：**禁止**。只能出 CANDIDATE。
 

@@ -24,8 +24,9 @@ under `xw-runtime/secrets`; its safe shape is documented by
 
 Run `npm run xw:runtime:check` from the repository root. It verifies the current
 release boundary and manifest, required state/private files, device aliases and serve
-ports, managed launcher parity, new scheduled-task bindings, and that retired
-FastOperator tasks remain disabled. It never reads secret values into its output.
+ports, managed launcher parity, enabled/healthy task state, SYSTEM principals,
+run levels, BootTriggers, and that retired FastOperator tasks remain disabled. It
+never reads secret values into its output.
 
 `npm run xw:runtime:init` may be used on a new host to create only missing, non-secret
 directories. It does not fabricate secrets, databases, releases, or scheduled tasks;

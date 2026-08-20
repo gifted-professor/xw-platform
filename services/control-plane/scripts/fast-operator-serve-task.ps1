@@ -120,9 +120,10 @@ if ($Action -eq "Install") {
     $powershell = Join-Path $PSHOME "powershell.exe"
     $arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$runtimeLauncher`" -LaunchConfig `"$launchConfig`""
     $taskAction = New-ScheduledTaskAction -Execute $powershell -Argument $arguments -WorkingDirectory $RuntimeRoot
+    $trigger = New-ScheduledTaskTrigger -AtStartup
     $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -DontStopOnIdleEnd -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
-    Register-ScheduledTask -TaskName $taskName -Action $taskAction -Principal $principal -Settings $settings -Force | Out-Null
+    Register-ScheduledTask -TaskName $taskName -Action $taskAction -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
     Write-Result @{ ok = $true; action = "installed"; alias = $Alias; taskName = $taskName; sourceCommit = $launch.sourceCommit; releaseId = $launch.releaseId; port = $servePort; autoStarted = $false }
     exit 0
 }

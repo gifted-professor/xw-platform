@@ -65,31 +65,49 @@
   "scheduledTasks": [
     {
       "name": "XW Platform Control Plane",
-      "launcher": "launch-control-plane.ps1"
+      "launcher": "launch-control-plane.ps1",
+      "principal": "SYSTEM",
+      "runLevel": "Limited",
+      "requiredTrigger": "MSFT_TaskBootTrigger"
     },
     {
       "name": "XW Platform Orchestrator",
-      "launcher": "secrets/launch-orchestrator.ps1"
+      "launcher": "secrets/launch-orchestrator.ps1",
+      "principal": "SYSTEM",
+      "runLevel": "Limited",
+      "requiredTrigger": "MSFT_TaskBootTrigger"
     },
     {
       "name": "XW Platform FastOperator 01",
       "launcher": "launch-fast-operator-serve.ps1",
-      "argumentsContain": "state\\control-plane\\fast-operator\\serve-launch-01.json"
+      "argumentsContain": "state\\control-plane\\fast-operator\\serve-launch-01.json",
+      "principal": "SYSTEM",
+      "runLevel": "Highest",
+      "requiredTrigger": "MSFT_TaskBootTrigger"
     },
     {
       "name": "XW Platform FastOperator 02",
       "launcher": "launch-fast-operator-serve.ps1",
-      "argumentsContain": "state\\control-plane\\fast-operator\\serve-launch-02.json"
+      "argumentsContain": "state\\control-plane\\fast-operator\\serve-launch-02.json",
+      "principal": "SYSTEM",
+      "runLevel": "Highest",
+      "requiredTrigger": "MSFT_TaskBootTrigger"
     },
     {
       "name": "XW Platform FastOperator 03",
       "launcher": "launch-fast-operator-serve.ps1",
-      "argumentsContain": "state\\control-plane\\fast-operator\\serve-launch-03.json"
+      "argumentsContain": "state\\control-plane\\fast-operator\\serve-launch-03.json",
+      "principal": "SYSTEM",
+      "runLevel": "Highest",
+      "requiredTrigger": "MSFT_TaskBootTrigger"
     },
     {
       "name": "XW Platform FastOperator 04",
       "launcher": "launch-fast-operator-serve.ps1",
-      "argumentsContain": "state\\control-plane\\fast-operator\\serve-launch-04.json"
+      "argumentsContain": "state\\control-plane\\fast-operator\\serve-launch-04.json",
+      "principal": "SYSTEM",
+      "runLevel": "Highest",
+      "requiredTrigger": "MSFT_TaskBootTrigger"
     }
   ],
   "retiredTasksMustStayDisabled": [
