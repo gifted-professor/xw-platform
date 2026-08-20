@@ -65,7 +65,7 @@ export function buildProposedTasks({ runtimeRoot = RUNTIME_ROOT_DEFAULT, exists 
   const controlPlaneEntry = join(current, "services", "control-plane", "control-plane", "server.mjs");
   const controlDb = join(stateRoot, "control-plane", "control.db");
   const registryDb = join(stateRoot, "orchestrator", "registry.db");
-  const runsRoot = join(stateRoot, "runs");
+  const runsRoot = join(runtimeRoot, "evidence");
 
   const tasks = [
     {

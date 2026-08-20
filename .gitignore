@@ -10,6 +10,8 @@ logs/
 screenshots/
 *.bak
 runtime/
+!config/runtime/
+!config/runtime/*.json
 *.db
 *.db-journal
 *.db-wal

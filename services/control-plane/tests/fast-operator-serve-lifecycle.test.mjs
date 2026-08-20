@@ -6,7 +6,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 const task = readFileSync(new URL("../scripts/fast-operator-serve-task.ps1", import.meta.url), "utf8");
-const worker = readFileSync(new URL("../scripts/fast-operator-serve-worker.ps1", import.meta.url), "utf8");
+const worker = readFileSync(new URL("../scripts/xw-fast-operator-runtime.ps1", import.meta.url), "utf8");
 const operator = readFileSync(new URL("../scripts/fast-operator.mjs", import.meta.url), "utf8");
 const operatorPath = fileURLToPath(new URL("../scripts/fast-operator.mjs", import.meta.url));
 
@@ -33,30 +33,30 @@ async function waitFor(predicate, { timeoutMs = 5_000, intervalMs = 20 } = {}) {
 test("serve lifecycle owns all four aliases and resolves private runtime data from local config", () => {
   assert.match(task, /ValidateSet\("Install", "Start", "Stop", "Restart", "Status"\)/);
   assert.match(task, /ValidateSet\("01", "02", "03", "04"\)/);
-  assert.match(task, /config\\control-plane\.devices\.json/);
+  assert.match(task, /secrets\\control-plane\.devices\.json/);
   assert.match(task, /\.runtimeId/);
   assert.match(task, /\.metadata\.xhsServePort/);
-  assert.match(task, /XhsFastOperator\$\{Alias\}Live/);
+  assert.match(task, /XW Platform FastOperator \$Alias/);
 });
 
-test("install pins each worker launch and atomically generates the compatibility restart wrapper", () => {
-  for (const key of ["repoRoot", "nodeExe", "gitCommit", "deviceConfig", "alias"]) {
+test("install pins each runtime launch and registers only the XW-named task", () => {
+  for (const key of ["runtimeRoot", "nodeExe", "sourceCommit", "releaseId", "deviceConfig", "alias"]) {
     assert.match(task, new RegExp(`\\b${key}\\s*=`));
   }
-  assert.match(task, /fast-operator-serve-worker\.ps1/);
-  assert.match(task, /C:\\Users\\Public\\xhs-registry/);
-  assert.match(task, /serve-restart-\$Alias\.ps1/);
-  assert.match(task, /-Action Restart -Alias/);
-  assert.match(task, /WriteAllText\(\$wrapperTemp/);
-  assert.match(task, /Move-Item[^\n]+\$wrapperTemp[^\n]+\$wrapperPath[^\n]+-Force/);
+  assert.match(task, /xw-fast-operator-runtime\.ps1/);
+  assert.match(task, /launch-fast-operator-serve\.ps1/);
+  assert.match(task, /C:\\Users\\Public\\xw-runtime/);
+  assert.doesNotMatch(task, /XhsFastOperator|xhs-registry|xhs-routing-v1-1/);
+  assert.match(task, /-UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest/);
   assert.match(task, /-DontStopOnIdleEnd/);
 });
 
-test("worker fails closed on revision drift and launches FastOperator from that same repository", () => {
-  assert.match(worker, /git -C \$repoRoot rev-parse HEAD/);
-  assert.match(worker, /\$actualCommit -ne \$expectedCommit/);
-  assert.match(worker, /Repository commit mismatch/);
-  assert.match(worker, /Join-Path \$repoRoot "scripts\\fast-operator\.mjs"/);
+test("worker resolves current to an immutable release and fails closed on identity drift", () => {
+  assert.match(worker, /Get-Item -LiteralPath \$current/);
+  assert.match(worker, /release-manifest\.v1\.json/);
+  assert.match(worker, /\$manifest\.sourceCommit -ne \$expectedCommit/);
+  assert.match(worker, /Release identity mismatch/);
+  assert.match(worker, /Join-Path \$releaseRoot "services\\control-plane\\scripts\\fast-operator\.mjs"/);
   assert.match(worker, /\.runtimeId/);
   assert.match(worker, /\.metadata\.xhsServePort/);
   assert.match(worker, /"--serial", \$runtimeId/);
@@ -102,7 +102,7 @@ test("worker records a secret-free lifecycle event after the Node process exits"
   assert.match(worker, /exit\s+\$nodeExitCode/);
 
   const record = worker.match(/\$lifecycleRecord\s*=\s*\[ordered\]@[\s\S]*?\n}/)?.[0] ?? "";
-  assert.doesNotMatch(record, /arguments|runtimeId|serial|token|authorization|deviceConfig|repoRoot|nodeExe/i);
+  assert.doesNotMatch(record, /arguments|runtimeId|serial|token|authorization|deviceConfig|runtimeRoot|nodeExe/i);
 });
 
 test("official task start stop and restart requests leave an external secret-free audit trail", () => {
@@ -113,7 +113,7 @@ test("official task start stop and restart requests leave an external secret-fre
   }
   const lifecycleFunction = task.match(/function Write-LifecycleEvent[\s\S]*?\n}/)?.[0] ?? "";
   assert.match(lifecycleFunction, /callerPid\s*=\s*\$PID/);
-  assert.doesNotMatch(lifecycleFunction, /runtimeId|serial|token|authorization|deviceConfig|repoRoot|nodeExe/i);
+  assert.doesNotMatch(lifecycleFunction, /runtimeId|serial|token|authorization|deviceConfig|runtimeRoot|nodeExe/i);
 });
 
 test("serve CLI records process lifecycle without changing imported test servers", () => {

@@ -1,0 +1,6 @@
+interface:
+  display_name: "XW"
+  short_description: "启动、检查并运行 Windows 小薇正式能力"
+  default_prompt: "Use $xw to inspect readiness and run an approved XW task."
+policy:
+  allow_implicit_invocation: false

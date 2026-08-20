@@ -25,7 +25,7 @@ if ([bool]$statusOnly -eq [bool]$execute) { Write-Error "Choose exactly one mode
 $repo = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $watcherPath = Join-Path $repo 'scripts\xhs-watcher.mjs'
 $taskName = "XHS-Watcher-$runId"
-$runDir = 'C:\Users\Public\xhs-agent-runs'
+$runDir = 'C:\Users\Public\xw-runtime\evidence'
 $statePath = Join-Path $runDir "$runId.json"
 $logPath = Join-Path $runDir "$runId.log"
 $xmlPath = Join-Path $runDir "$runId-task.xml"

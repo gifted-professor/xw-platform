@@ -1,0 +1,119 @@
+{
+  "schemaId": "xw.runtime.layout.v1",
+  "sourceRootMarker": "package.json",
+  "runtimeRoot": "C:\\Users\\Public\\xw-runtime",
+  "runtimeProfile": "legacy_compat",
+  "directories": [
+    "releases",
+    "state/control-plane",
+    "state/control-plane/fast-operator",
+    "state/orchestrator",
+    "state/orchestrator/outbox/work",
+    "state/orchestrator/outbox/harvest",
+    "evidence",
+    "logs",
+    "receipts",
+    "rollback",
+    "secrets"
+  ],
+  "runtimeFiles": [
+    {
+      "path": "current/release-manifest.v1.json",
+      "kind": "release-identity",
+      "required": true
+    },
+    {
+      "path": "state/control-plane/control.db",
+      "kind": "mutable-state",
+      "required": true
+    },
+    {
+      "path": "state/orchestrator/registry.db",
+      "kind": "mutable-state",
+      "required": true
+    },
+    {
+      "path": "secrets/control-plane.devices.json",
+      "kind": "machine-private-config",
+      "required": true,
+      "example": "services/control-plane/config/control-plane.devices.example.json"
+    },
+    {
+      "path": "secrets/launch-orchestrator.ps1",
+      "kind": "secret-launcher",
+      "required": true
+    },
+    {
+      "path": "launch-control-plane.ps1",
+      "kind": "managed-launcher",
+      "required": true,
+      "source": "services/control-plane/scripts/xw-control-plane-runtime.ps1"
+    },
+    {
+      "path": "launch-fast-operator-serve.ps1",
+      "kind": "managed-launcher",
+      "required": true,
+      "source": "services/control-plane/scripts/xw-fast-operator-runtime.ps1"
+    }
+  ],
+  "deviceServePorts": {
+    "01": 17895,
+    "02": 17897,
+    "03": 17898,
+    "04": 17896
+  },
+  "scheduledTasks": [
+    {
+      "name": "XW Platform Control Plane",
+      "launcher": "launch-control-plane.ps1",
+      "principal": "SYSTEM",
+      "runLevel": "Limited",
+      "requiredTrigger": "MSFT_TaskBootTrigger"
+    },
+    {
+      "name": "XW Platform Orchestrator",
+      "launcher": "secrets/launch-orchestrator.ps1",
+      "principal": "SYSTEM",
+      "runLevel": "Limited",
+      "requiredTrigger": "MSFT_TaskBootTrigger"
+    },
+    {
+      "name": "XW Platform FastOperator 01",
+      "launcher": "launch-fast-operator-serve.ps1",
+      "argumentsContain": "state\\control-plane\\fast-operator\\serve-launch-01.json",
+      "principal": "SYSTEM",
+      "runLevel": "Highest",
+      "requiredTrigger": "MSFT_TaskBootTrigger"
+    },
+    {
+      "name": "XW Platform FastOperator 02",
+      "launcher": "launch-fast-operator-serve.ps1",
+      "argumentsContain": "state\\control-plane\\fast-operator\\serve-launch-02.json",
+      "principal": "SYSTEM",
+      "runLevel": "Highest",
+      "requiredTrigger": "MSFT_TaskBootTrigger"
+    },
+    {
+      "name": "XW Platform FastOperator 03",
+      "launcher": "launch-fast-operator-serve.ps1",
+      "argumentsContain": "state\\control-plane\\fast-operator\\serve-launch-03.json",
+      "principal": "SYSTEM",
+      "runLevel": "Highest",
+      "requiredTrigger": "MSFT_TaskBootTrigger"
+    },
+    {
+      "name": "XW Platform FastOperator 04",
+      "launcher": "launch-fast-operator-serve.ps1",
+      "argumentsContain": "state\\control-plane\\fast-operator\\serve-launch-04.json",
+      "principal": "SYSTEM",
+      "runLevel": "Highest",
+      "requiredTrigger": "MSFT_TaskBootTrigger"
+    }
+  ],
+  "retiredTasksMustStayDisabled": [
+    "XhsFastOperator01Live",
+    "XhsFastOperator02Live",
+    "XhsFastOperator03Live",
+    "XhsFastOperator04Live"
+  ]
+}

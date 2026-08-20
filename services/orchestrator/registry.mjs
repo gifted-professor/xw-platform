@@ -81,13 +81,13 @@ const HOST = argOf("host", "127.0.0.1");
 const CONTROL = argOf("control", "http://127.0.0.1:17920").replace(/\/+$/, "");
 const DB_PATH = argOf("db", path.join(__dirname, "registry.db"));
 const SEED_PATH = argOf("seed", path.join(__dirname, "identities.seed.json"));
-const CONTROL_DB_PATH = argOf("control-db", "C:\\Users\\Public\\xhs-agent-control\\control.db");
+const CONTROL_DB_PATH = argOf("control-db", "C:\\Users\\Public\\xw-runtime\\state\\control-plane\\control.db");
 // REX Phase 6 P6-A: cross-repo release manifest 所在目录（control-plane-task.ps1 安装时在
 // 同目录写 cross-repo-release.json）。Windows 上与 control-plane 同机；Mac 本地调试缺省走
 // runtime/（通常不存在 → release 块降级 present=false，绝不 500）。
 const CONTROL_PLANE_STATE_DIR = argOf("control-plane-state-dir",
   process.env.CONTROL_PLANE_STATE_DIR
-  || (process.platform === "win32" ? "C:\\Users\\Public\\xhs-agent-control" : path.join(__dirname, "runtime")));
+  || (process.platform === "win32" ? "C:\\Users\\Public\\xw-runtime\\state\\control-plane" : path.join(__dirname, "runtime")));
 const TOKEN = argOf("token", "");
 const AGENT_TOKEN = argOf("agent-token", TOKEN);
 const HUMAN_TOKEN = argOf("human-token", "");
@@ -1234,20 +1234,20 @@ const ENTRY_PROTOCOL = {
     "我的 lease 是否能在 GET /control/v1/leases 或面板看见？",
     "本次 capability id 是什么？",
   ],
-  cwd: "/Volumes/GPFS/Users/a1234/Desktop/Coding/xhs-device-agent-routing-v1-1（Mac 上运行；devicectl 自带 --ssh，不要手写 ssh 包裹）",
+  cwd: "C:\\Users\\Public\\xw-runtime\\current（一次性 CLI；服务主模块仍须使用解析后的真实 release）",
   entrypoints: {
-    foundationCatalog: "ssh xhs-windows 'curl.exe -s http://127.0.0.1:17930/api/foundation-capabilities'",
-    workflowCatalog: "ssh xhs-windows 'curl.exe -s http://127.0.0.1:17930/api/workflows'",
-    locatorStatus: "ssh xhs-windows 'node C:\\Users\\Public\\xhs-registry\\ops\\xw-locator.mjs status'",
-    routePlan: "node control-plane/devicectl.mjs --ssh xhs-windows route plan --actor <actor> --capability <id>",
-    job: "node control-plane/devicectl.mjs --ssh xhs-windows job submit --capability <id> --actor <actor> --idempotency-key <key> --params '<json>'",
-    jobStatus: "node control-plane/devicectl.mjs --ssh xhs-windows job status --job <jobId>",
-    session: "node control-plane/devicectl.mjs --ssh xhs-windows session acquire --actor <actor> --capability <id> --alias <01-04>",
-    controlPlaneReload: "ssh xhs-windows 'powershell -NoProfile -NonInteractive -File C:\\Users\\Public\\xhs-routing-v1-1\\scripts\\control-plane-task.ps1 -Action Stop; powershell -NoProfile -NonInteractive -File C:\\Users\\Public\\xhs-routing-v1-1\\scripts\\control-plane-task.ps1 -Action Start'",
-    serveReload01: "ssh xhs-windows 'powershell -NoProfile -NonInteractive -File C:\\Users\\Public\\xhs-registry\\serve-restart-01.ps1'",
-    serveReload02: "ssh xhs-windows 'powershell -NoProfile -NonInteractive -File C:\\Users\\Public\\xhs-registry\\serve-restart-02.ps1'",
-    serveReload03: "ssh xhs-windows 'powershell -NoProfile -NonInteractive -File C:\\Users\\Public\\xhs-registry\\serve-restart-03.ps1'",
-    serveReload04: "ssh xhs-windows 'powershell -NoProfile -NonInteractive -File C:\\Users\\Public\\xhs-registry\\serve-restart-04.ps1'",
+    foundationCatalog: "curl.exe -s http://127.0.0.1:17930/api/foundation-capabilities",
+    workflowCatalog: "curl.exe -s http://127.0.0.1:17930/api/workflows",
+    locatorStatus: "node C:\\Users\\Public\\xw-fusion\\xw-platform\\services\\orchestrator\\ops\\xw-locator.mjs status",
+    routePlan: "node services\\control-plane\\control-plane\\devicectl.mjs --local route plan --actor <actor> --capability <id>",
+    job: "node services\\control-plane\\control-plane\\devicectl.mjs --local job submit --capability <id> --actor <actor> --idempotency-key <key> --params '<json>'",
+    jobStatus: "node services\\control-plane\\control-plane\\devicectl.mjs --local job status --job <jobId>",
+    session: "node services\\control-plane\\control-plane\\devicectl.mjs --local session acquire --actor <actor> --capability <id> --alias <01-04>",
+    controlPlaneReload: "powershell -NoProfile -NonInteractive -Command \"Stop-ScheduledTask -TaskName 'XW Platform Control Plane'; Start-ScheduledTask -TaskName 'XW Platform Control Plane'\"",
+    serveReload01: "powershell -NoProfile -NonInteractive -File C:\\Users\\Public\\xw-fusion\\xw-platform\\services\\control-plane\\scripts\\fast-operator-serve-task.ps1 -Action Restart -Alias 01",
+    serveReload02: "powershell -NoProfile -NonInteractive -File C:\\Users\\Public\\xw-fusion\\xw-platform\\services\\control-plane\\scripts\\fast-operator-serve-task.ps1 -Action Restart -Alias 02",
+    serveReload03: "powershell -NoProfile -NonInteractive -File C:\\Users\\Public\\xw-fusion\\xw-platform\\services\\control-plane\\scripts\\fast-operator-serve-task.ps1 -Action Restart -Alias 03",
+    serveReload04: "powershell -NoProfile -NonInteractive -File C:\\Users\\Public\\xw-fusion\\xw-platform\\services\\control-plane\\scripts\\fast-operator-serve-task.ps1 -Action Restart -Alias 04",
   },
   redLines: [
     "部署 reload 仅限 exact reviewed revision、activeLeases=0、runningJobs=0 且 MISSION_AUTO_APPROVAL_ENABLED/STANDING_GRANT_ENABLED 均为 OFF；不得把 reload 当设备动作入口",

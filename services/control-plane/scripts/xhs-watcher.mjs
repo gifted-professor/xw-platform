@@ -6,8 +6,8 @@
  *   --status-only  纯只读，只 GET /status 和 /agent/state，绝不 takeover/heartbeat/release
  *   默认模式       完整生命周期：takeover → home → start task → heartbeat → 监控 → 总结 → 写进度 → release
  *
- * 日志：内部写入 C:\Users\Public\xhs-agent-runs\<runId>.log（JSONL 逐行 append）
- * run-state：原子写入 C:\Users\Public\xhs-agent-runs\<runId>.json（tmp + rename）
+ * 日志：内部写入 C:\Users\Public\xw-runtime\evidence\<runId>.log（JSONL 逐行 append）
+ * run-state：原子写入 C:\Users\Public\xw-runtime\evidence\<runId>.json（tmp + rename）
  *
  * 环境要求：Node.js >= 18，dashboard 运行在 localhost:17900
  */
@@ -22,7 +22,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const BASE = 'http://localhost:17900';
 const PROGRESS_PATH = String.raw`C:\Users\Public\xhs-agent-progress.md`;
-const RUN_STATE_DIR = String.raw`C:\Users\Public\xhs-agent-runs`;
+const RUN_STATE_DIR = process.env.XW_EVIDENCE_ROOT || String.raw`C:\Users\Public\xw-runtime\evidence`;
 const RETRYABLE_HTTP = new Set([502, 503, 504]);
 
 const DEFAULT_PLAN = {

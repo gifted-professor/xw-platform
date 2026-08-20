@@ -39,12 +39,15 @@ const SCHEMA_VERSION = 1;
 const CONTRACT_SHA256 =
   "c65448325d5a7a587a803908c78bf4c189926aec468999e646f2b10d5e64eba2";
 
-const DEFAULT_OUTBOX = "C:\\Users\\Public\\xhs-registry\\outbox\\harvest";
-const DEFAULT_WORK = "C:\\Users\\Public\\xhs-registry\\outbox\\work";
+const DEFAULT_OUTBOX = "C:\\Users\\Public\\xw-runtime\\state\\orchestrator\\outbox\\harvest";
+const DEFAULT_WORK = "C:\\Users\\Public\\xw-runtime\\state\\orchestrator\\outbox\\work";
 const DEFAULT_ROOTS = Object.freeze({
-  "windows:xhs-registry": "C:\\Users\\Public\\xhs-registry",
-  "windows:xhs-agent-runs": "C:\\Users\\Public\\xhs-agent-runs",
-  "windows:routing": "C:\\Users\\Public\\xhs-routing-v1-1",
+  "windows:xw-platform": "C:\\Users\\Public\\xw-fusion\\xw-platform",
+  "windows:xw-runtime-state": "C:\\Users\\Public\\xw-runtime\\state\\orchestrator",
+  "windows:xw-evidence": "C:\\Users\\Public\\xw-runtime\\evidence",
+  "windows:xhs-registry": "C:\\Users\\Public\\xw-fusion\\xw-platform\\services\\orchestrator",
+  "windows:xhs-agent-runs": "C:\\Users\\Public\\xw-runtime\\evidence",
+  "windows:routing": "C:\\Users\\Public\\xw-fusion\\xw-platform\\services\\control-plane",
 });
 
 const MODES = new Set(["explorer", "runner", "repair", "engineering", "recover"]);
@@ -465,7 +468,7 @@ function attachWorkLedger(runId, closeout) {
         artifacts.push({
           artifactId: `work_task_${runId}`,
           kind: "other",
-          rootRef: "windows:xhs-registry",
+          rootRef: "windows:xw-runtime-state",
           path: workArtifactRelPath(runId, "task.json"),
           sha256: sha256File(taskAbs),
           bytes: taskMeta.st.size,
@@ -510,7 +513,7 @@ function attachWorkLedger(runId, closeout) {
       artifacts.push({
         artifactId: `work_steps_${runId}`,
         kind: "log",
-        rootRef: "windows:xhs-registry",
+        rootRef: "windows:xw-runtime-state",
         path: workArtifactRelPath(runId, "steps.jsonl"),
         sha256: sha256File(stepsAbs),
         bytes: stepsMeta.st.size,
@@ -1228,7 +1231,7 @@ function attachRecipeSpecArtifacts(runId, closeout, extrasMap) {
       fail(`unsafe recipe_spec path: ${artifactRel}`);
     }
 
-    // Persist under work ledger so rootRef windows:xhs-registry can hash it.
+    // Persist under the runtime work ledger so the artifact root is stable.
     const workDir = resolveRunWorkDir(runId, { create: true, allowMissing: false });
     const absWork = join(workDir.dir, artifactRel);
     mkdirSync(dirname(absWork), { recursive: true });
@@ -1245,7 +1248,7 @@ function attachRecipeSpecArtifacts(runId, closeout, extrasMap) {
     artifacts.push({
       artifactId,
       kind: "recipe_spec",
-      rootRef: "windows:xhs-registry",
+      rootRef: "windows:xw-runtime-state",
       path: workArtifactPath,
       sha256: sealed.artifact.sha256,
       bytes: sealed.artifact.bytes,
@@ -2135,6 +2138,7 @@ function cmdSelfTest() {
     XW_CLOSEOUT_ROOTS_JSON: JSON.stringify({
       "windows:self-test": artRoot,
       "windows:xhs-registry": registryRoot,
+      "windows:xw-runtime-state": registryRoot,
     }),
   };
 
