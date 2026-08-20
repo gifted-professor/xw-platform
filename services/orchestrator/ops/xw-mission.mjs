@@ -216,7 +216,7 @@ async function main(argv = process.argv.slice(2)) {
     if (!flag(argv, "--execute")) throw new Error("--execute is required; plan validation alone never submits jobs");
     const taskRunId = required(argv, "--run");
     const actorId = required(argv, "--actor");
-    const taskPath = join("C:\\Users\\Public\\xhs-registry\\outbox\\work", taskRunId, "task.json");
+    const taskPath = join("C:\\Users\\Public\\xw-runtime\\state\\orchestrator\\outbox\\work", taskRunId, "task.json");
     if (!existsSync(taskPath)) throw new Error("explicit runId is not an active xw closeout run");
     const registryUrl = option(argv, "--registry-url", "http://127.0.0.1:17930/");
     // Foundation: bind live contracts before Scheduler; ExecutionPlan is not authorization.

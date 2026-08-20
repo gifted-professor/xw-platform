@@ -45,6 +45,7 @@ const DEFAULT_ROOTS = Object.freeze({
   "windows:xw-platform": "C:\\Users\\Public\\xw-fusion\\xw-platform",
   "windows:xw-runtime-state": "C:\\Users\\Public\\xw-runtime\\state\\orchestrator",
   "windows:xw-evidence": "C:\\Users\\Public\\xw-runtime\\evidence",
+  "windows:xw-outbox": "C:\\Users\\Public\\xw-runtime\\state\\orchestrator\\outbox",
   "windows:xhs-registry": "C:\\Users\\Public\\xw-fusion\\xw-platform\\services\\orchestrator",
   "windows:xhs-agent-runs": "C:\\Users\\Public\\xw-runtime\\evidence",
   "windows:routing": "C:\\Users\\Public\\xw-fusion\\xw-platform\\services\\control-plane",
