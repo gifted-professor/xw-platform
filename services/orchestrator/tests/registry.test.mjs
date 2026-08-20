@@ -174,7 +174,9 @@ async function startRegistry({ root, controlUrl, requireAuth = true, extraArgs =
   child.stdout.on("data", (chunk) => { logs += chunk; });
   child.stderr.on("data", (chunk) => { logs += chunk; });
   const base = `http://127.0.0.1:${port}`;
-  for (let attempt = 0; attempt < 80; attempt += 1) {
+  // registry 遇 EADDRINUSE 会静默等待 2s 后重听（计划任务自愈约定），因此探活窗口必须大于 2s，
+  // 否则 CI 上偶发端口占用会先于重试超时（旧 Windows CI continue-on-error 掩盖了这个竞态）。
+  for (let attempt = 0; attempt < 240; attempt += 1) {
     if (child.exitCode !== null) throw new Error(`registry exited early: ${logs}`);
     try {
       const probe = probeToken || (requireAuth ? TOKEN : null);

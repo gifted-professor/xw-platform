@@ -1,4 +1,4 @@
-import { dirname } from "node:path";
+import { win32 } from "node:path";
 
 /** Pinned production Node on the Windows control-plane host. */
 export const DEFAULT_NODE_EXE = "D:\\Program Files\\Node\\node.exe";
@@ -14,7 +14,8 @@ export function resolveNodeExe(env = process.env) {
  */
 export function buildChildEnv(baseEnv = process.env) {
   const nodeExe = resolveNodeExe(baseEnv);
-  const nodeDir = dirname(nodeExe);
+  // 生产目标是 Windows control-plane 主机，显式 win32 语义保证在 POSIX CI 上同样成立。
+  const nodeDir = win32.dirname(nodeExe);
   const pathKey = Object.keys(baseEnv).find((key) => key.toLowerCase() === "path") || "PATH";
   const currentPath = String(baseEnv[pathKey] || "");
   const segments = currentPath.split(";").filter(Boolean);

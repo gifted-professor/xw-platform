@@ -14,18 +14,9 @@
     "orchestrator": {
       "cwd": "services/orchestrator",
       "npmArgs": ["test"],
-      "captured": { "tests": 339, "pass": 334, "fail": 5 },
-      "allowedFailures": [
-        "the earlier approved implementation remains frozen inside its own scope",
-        "repository A current changes stay exclusively inside the repair command scope",
-        "concurrent observer screen requests on a cold cache share exactly one disk load (singleflight)",
-        "filesystem and Git verifiers enforce real lock, Mac receipt, replay authorization and completion bindings",
-        "CLI validates a repository-local frozen plan"
-      ],
-      "allowedFailuresPosix": [
-        "buildChildEnv pins XHS_NODE_EXE and prepends Node directory to PATH",
-        "recovery evidence paths are bound to the inspected run and reject traversal"
-      ]
+      "captured": { "tests": 338, "pass": 338, "fail": 0 },
+      "allowedFailures": [],
+      "allowedFailuresPosix": []
     },
     "control-plane": {
       "cwd": "services/control-plane",

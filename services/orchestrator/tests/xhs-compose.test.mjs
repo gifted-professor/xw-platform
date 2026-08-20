@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -117,7 +116,11 @@ test("CLI plans source-only and execute stays fail-closed", () => {
 });
 
 test("CLI validates a repository-local frozen plan", () => {
-  const fixture = mkdtempSync(join(ROOT, "runtime", "plans", "xhs-compose-test-"));
+  // CLI 要求 plan 输入在仓库内；runtime/plans 是 gitignore 产物，全新 checkout 下不存在，
+  // mkdtemp 会 ENOENT —— 先确保父目录存在（gitignore，测试后由 rmSync 清理）。
+  const plansDir = join(ROOT, "runtime", "plans");
+  mkdirSync(plansDir, { recursive: true });
+  const fixture = mkdtempSync(join(plansDir, "xhs-compose-test-"));
   try {
     const plan = compileXhsComposePlan({ goal: "小红书观察首页" });
     const path = join(fixture, "plan.json");

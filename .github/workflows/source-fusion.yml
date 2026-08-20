@@ -60,8 +60,7 @@ jobs:
 
       - name: Orchestrator tests against known-failure allowlist
         timeout-minutes: 6
-        continue-on-error: ${{ runner.os == 'Windows' }}
-        run: node tools/fusion/cli.mjs test-gate --suite orchestrator
+        run: npm run test:orchestrator
 
       - name: Control-plane tests against known-failure allowlist
         timeout-minutes: 8

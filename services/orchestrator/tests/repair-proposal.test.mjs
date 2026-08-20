@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -403,7 +403,8 @@ test("filesystem and Git verifiers enforce real lock, Mac receipt, replay author
     renameSync(attemptDir, realAttemptDir);
     symlinkSync(realAttemptDir, attemptDir);
     assert.equal(verifiers.verifyClaimLock({ proposal, projection, event: claim, lock: claim.payload }), false);
-    rmSync(attemptDir);
+    // Windows 目录 symlink 不能 rmSync（会尝试递归进链接目标），用 unlinkSync 删链接本身。
+    unlinkSync(attemptDir);
     renameSync(realAttemptDir, attemptDir);
     projection = applyRepairEvent(proposal, projection, claim, verifiers);
     const lockPath = join(outboxRoot, lockRef);
