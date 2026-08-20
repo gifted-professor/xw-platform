@@ -47,8 +47,13 @@ function readJson(path, label) {
 function catalog(args) {
   const dir = resolve(args.dir || DEFAULT_TASK_TEMPLATE_DIR);
   const loaded = loadTaskTemplates({ dir, includeAll: Boolean(args.all) });
-  if (loaded.errors.length) fail(`template catalog invalid: ${loaded.errors.map((item) => `${item.file}:${item.message}`).join("; ")}`);
-  return { dir, templates: loaded.templates };
+  // A single invalid template must not poison the whole catalog: skip it,
+  // warn on stderr, and keep serving the valid templates. Validation itself
+  // stays strict — the invalid file is never loaded or matched.
+  if (loaded.errors.length) {
+    console.error(`XW_TASK_WARN skipped invalid template file(s): ${loaded.errors.map((item) => `${item.file}:${item.message}`).join("; ")}`);
+  }
+  return { dir, templates: loaded.templates, catalogErrors: loaded.errors };
 }
 
 function findTemplate(args) {
@@ -57,7 +62,12 @@ function findTemplate(args) {
   const loaded = catalog(args);
   const matched = matchTaskTemplate(loaded.templates, query);
   if (matched.ambiguous.length) fail(`task is ambiguous: ${matched.ambiguous.map((item) => item.name).join(", ")}`);
-  if (!matched.match) fail(`task template not found: ${query}`);
+  if (!matched.match) {
+    const hint = loaded.catalogErrors.length
+      ? ` (skipped invalid template file(s): ${loaded.catalogErrors.map((item) => item.file).join(", ")})`
+      : "";
+    fail(`task template not found: ${query}${hint}`);
+  }
   return { ...loaded, template: matched.match };
 }
 
@@ -189,7 +199,7 @@ async function main() {
   const command = args._[0] || "list";
   if (command === "list") {
     const loaded = catalog(args);
-    console.log(JSON.stringify({ ok: true, command, count: loaded.templates.length, templates: loaded.templates.map((item) => ({ templateId: item.templateId, revision: item.revision, name: item.name, aliases: item.aliases, status: item.status })) }, null, 2));
+    console.log(JSON.stringify({ ok: true, command, count: loaded.templates.length, catalogErrors: loaded.catalogErrors, templates: loaded.templates.map((item) => ({ templateId: item.templateId, revision: item.revision, name: item.name, aliases: item.aliases, status: item.status })) }, null, 2));
     return;
   }
   if (command === "show") {

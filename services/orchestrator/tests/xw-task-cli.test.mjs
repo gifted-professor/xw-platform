@@ -251,6 +251,42 @@ test("plan fails closed with a nonzero exit when Registry is unreachable", async
   }
 });
 
+test("one invalid template does not poison the catalog", async () => {
+  const fixture = makeFixture();
+  try {
+    const invalid = templateFixture();
+    invalid.templateId = "task.xhs.broken";
+    invalid.steps = [{ id: "only", kind: "run", intent: "unsupported kind" }];
+    writeFileSync(
+      join(fixture.templates, "task.xhs.broken@1.json"),
+      `${JSON.stringify(invalid, null, 2)}\n`,
+    );
+
+    const prepared = await runCli([
+      "prepare",
+      "--task", TASK_NAME,
+      "--dir", fixture.templates,
+      "--params", fixture.params,
+    ]);
+    assert.equal(prepared.code, 0);
+    assert.match(prepared.stderr, /XW_TASK_WARN skipped invalid template file\(s\): task\.xhs\.broken@1\.json/);
+    const payload = JSON.parse(prepared.stdout);
+    assert.equal(payload.ok, true);
+    assert.equal(payload.prepared.ready, true);
+
+    const missing = await runCli([
+      "prepare",
+      "--task", "task.balance.read-all",
+      "--dir", fixture.templates,
+    ]);
+    assert.equal(missing.code, 2);
+    assert.match(missing.stdout, /XW_TASK_FAILED task template not found: task\.balance\.read-all/);
+    assert.match(missing.stdout, /skipped invalid template file\(s\): task\.xhs\.broken@1\.json/);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test("compile-workflow plans wechat balance offline as session_workflow without executionReady", async () => {
   const result = await runCli([
     "compile-workflow",
