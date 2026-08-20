@@ -1,0 +1,73 @@
+{
+  "schemaId": "xw.orchestration.skill-catalog.v1",
+  "schemaVersion": 1,
+  "catalogId": "m5-readonly-v1",
+  "registrations": [
+    {
+      "skillSpec": {
+        "schemaId": "xw.skill.spec.v1",
+        "schemaVersion": 1,
+        "skillId": "xhs.observe.feed",
+        "version": "0.1.0",
+        "implementationMode": "scripted",
+        "sourcePath": "services/orchestrator/skills/xhs/xhs-observe-feed/SKILL.md",
+        "sourceCommit": "db8885eb00b50ba80677cebd865e4765e3d7929e",
+        "sourceBlobSha": "65a71251aa1c4e9cc8712f0e48237183c05c1a48",
+        "inputSchema": { "type": "object", "additionalProperties": false },
+        "outputSchema": { "type": "object" },
+        "preconditions": ["formal-job-or-session", "visible-lease", "xhs-feed-ready"],
+        "requiredCapabilities": ["xhs.observe.feed"],
+        "states": ["READY", "RUNNING", "VERIFYING", "BLOCKED", "SUCCEEDED", "FAILED", "CANCELLED"],
+        "exits": ["COMPLETED", "RETRY", "REPAIR_REQUIRED", "ABORTED"],
+        "verifiers": [{ "id": "xhs-feed-business-output", "mode": "typed-job-worker" }]
+      },
+      "skillVersionRef": {
+        "skillId": "xhs.observe.feed",
+        "skillVersion": "0.1.0",
+        "skillSpecSha256": "3f851a543544d046939d03b391fe7dcdf6e210612b3a68ea27837e5387254d58",
+        "sourceCommit": "db8885eb00b50ba80677cebd865e4765e3d7929e",
+        "sourcePath": "services/orchestrator/skills/xhs/xhs-observe-feed/SKILL.md",
+        "sourceBlobSha": "65a71251aa1c4e9cc8712f0e48237183c05c1a48"
+      },
+      "roles": ["collect"],
+      "localValidator": false,
+      "executor": { "kind": "capability", "capabilityId": "xhs.observe.feed" },
+      "effectContract": { "class": "none", "source": "capability-contract" }
+    },
+    {
+      "skillSpec": {
+        "schemaId": "xw.skill.spec.v1",
+        "schemaVersion": 1,
+        "skillId": "xw.validate.card-count",
+        "version": "1.0.0",
+        "implementationMode": "scripted",
+        "sourcePath": "services/orchestrator/scripts/lib/m5-result-validator.mjs",
+        "sourceCommit": "b9bf1ed7498ff9c8df20e83b180c72a64b460b9b",
+        "sourceBlobSha": "2e454a3d9584142abba0c41d5eede107807cf60e",
+        "inputSchema": { "type": "object" },
+        "outputSchema": { "type": "object" },
+        "preconditions": ["upstream-results-terminal"],
+        "requiredCapabilities": [],
+        "states": ["READY", "RUNNING", "VERIFYING", "BLOCKED", "SUCCEEDED", "FAILED", "CANCELLED"],
+        "exits": ["COMPLETED", "RETRY", "REPAIR_REQUIRED", "ABORTED"],
+        "verifiers": [{ "id": "four-alias-card-count", "exportName": "validateM5CardCount" }]
+      },
+      "skillVersionRef": {
+        "skillId": "xw.validate.card-count",
+        "skillVersion": "1.0.0",
+        "skillSpecSha256": "317ae5dad2344fb2531fa508d7aa53f7f1793935f9af7c573ade521b1835b339",
+        "sourceCommit": "b9bf1ed7498ff9c8df20e83b180c72a64b460b9b",
+        "sourcePath": "services/orchestrator/scripts/lib/m5-result-validator.mjs",
+        "sourceBlobSha": "2e454a3d9584142abba0c41d5eede107807cf60e"
+      },
+      "roles": ["validate"],
+      "localValidator": true,
+      "executor": {
+        "kind": "local",
+        "module": "services/orchestrator/scripts/lib/m5-result-validator.mjs",
+        "exportName": "validateM5CardCount"
+      },
+      "effectContract": { "class": "none", "source": "local-validator" }
+    }
+  ]
+}

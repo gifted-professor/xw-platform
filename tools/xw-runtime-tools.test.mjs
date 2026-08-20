@@ -17,6 +17,7 @@ test("runtime checker requires enabled healthy tasks, exact principal, run level
     assert.match(source, new RegExp(`\\${signal}\\b`));
   }
   const contract = JSON.parse(read("config/runtime/xw-runtime.v1.json"));
+  assert.ok(contract.directories.includes("state/orchestrator/trace"));
   assert.equal(contract.scheduledTasks.length, 6);
   for (const task of contract.scheduledTasks) {
     assert.equal(task.principal, "SYSTEM");

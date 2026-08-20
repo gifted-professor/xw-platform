@@ -8,6 +8,8 @@ import { createWorkReceipt } from "../scripts/lib/work-receipt.mjs";
 import { OrchestrationStore } from "../scripts/lib/orchestration-store.mjs";
 import { runTaskOrchestrator } from "../scripts/lib/task-orchestrator.mjs";
 import { bindFixturePlan } from "./helpers/bind-fixture-plan.mjs";
+import { TraceStore } from "../../../packages/harness-protocol/lib/trace-store.mjs";
+import { OrchestrationTraceBridge } from "../scripts/lib/orchestration-trace-bridge.mjs";
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -211,6 +213,99 @@ test("retryable failure is dynamically reassigned to another device", async () =
   assert.deepEqual(aliases, ["01", "02"]);
   assert.equal(result.status, "completed");
   assert.equal(result.results[0].attemptCount, 2);
+}));
+
+test("M5 trace bridge maps scheduler assignment, skill lifecycle, retry, and validation", async () => withStore(async (store, root) => {
+  const plan = planWith({
+    nodes: [{ nodeId: "retry", executor: executor("cap.a"), shards: [{ params: {} }] }],
+    execution: { maxWorkers: 4, allowReassign: true, maxAttemptsPerShard: 2 },
+  });
+  const traceStore = new TraceStore({ traceRoot: join(root, "trace") });
+  const traceBridge = new OrchestrationTraceBridge({
+    traceId: "trace-scheduler-retry",
+    taskRunId: "run_fixture",
+    traceStore,
+    skillByNode: { retry: "xhs.observe.feed" },
+    validationNode: { nodeId: "validate", skillId: "xw.validate.business-output" },
+  });
+  traceBridge.begin({ taskType: "collection", dagId: "dag_aaaaaaaaaaaaaaaa", planHash: plan.planHash });
+
+  const result = await runBound({
+    taskRunId: "run_fixture",
+    plan,
+    fleetProvider: async () => fleet(["cap.a"]),
+    worker: {
+      async execute(assignment) {
+        if (assignment.attemptIndex === 0) {
+          const now = new Date().toISOString();
+          return createWorkReceipt({
+            assignment,
+            technicalStatus: "failed",
+            businessStatus: "not_evaluated",
+            retryable: true,
+            error: { code: "ADAPTER_HTTP_UNAVAILABLE", message: "not persisted to M5 trace" },
+            startedAt: now,
+            finishedAt: now,
+          });
+        }
+        return accepted(assignment, { items: [{ cardCount: 3 }] });
+      },
+    },
+    store,
+    traceBridge,
+    resultValidator: async () => ({ ok: true, code: "FIXTURE_VALIDATION_PASSED" }),
+  });
+  assert.equal(result.status, "completed");
+  const events = traceStore.read("trace-scheduler-retry");
+  assert.deepEqual(events.map(({ type }) => type), [
+    "TaskCreated",
+    "PlanGenerated",
+    "WorkerAssigned",
+    "SkillStarted",
+    "SkillFinished",
+    "RepairTriggered",
+    "WorkerAssigned",
+    "SkillStarted",
+    "SkillFinished",
+    "SkillStarted",
+    "SkillFinished",
+    "ValidationPassed",
+  ]);
+  assert.equal(events[4].status, "failed");
+  assert.equal(events[4].payload.errorCode, "ADAPTER_HTTP_UNAVAILABLE");
+  assert.deepEqual(events.filter(({ type }) => type === "WorkerAssigned").map(({ alias }) => alias), ["01", "02"]);
+  assert.equal(events.at(-1).ids.traceId, "trace-scheduler-retry");
+}));
+
+test("M5 validator exceptions fail the result and close the validation trace", async () => withStore(async (store, root) => {
+  const plan = planWith({
+    nodes: [{ nodeId: "observe", executor: executor("cap.a"), shards: [{ params: {} }] }],
+  });
+  const traceStore = new TraceStore({ traceRoot: join(root, "trace") });
+  const traceBridge = new OrchestrationTraceBridge({
+    traceId: "trace-validator-exception",
+    taskRunId: "run_fixture",
+    traceStore,
+    skillByNode: { observe: "xhs.observe.feed" },
+    validationNode: { nodeId: "validate", skillId: "xw.validate.card-count" },
+  });
+  traceBridge.begin({ taskType: "collection", dagId: "dag_bbbbbbbbbbbbbbbb", planHash: plan.planHash });
+  const result = await runBound({
+    taskRunId: "run_fixture",
+    plan,
+    fleetProvider: async () => fleet(["cap.a"]),
+    worker: { execute: async (assignment) => accepted(assignment, { cardCount: 1 }) },
+    store,
+    traceBridge,
+    resultValidator: async () => { throw Object.assign(new Error("fixture validator crashed"), { code: "VALIDATOR_CRASH" }); },
+  });
+  assert.equal(result.status, "failed");
+  assert.deepEqual(result.validation, { ok: false, code: "VALIDATOR_CRASH", message: "fixture validator crashed" });
+  const events = traceStore.read("trace-validator-exception");
+  assert.equal(events.at(-1).type, "SkillFinished");
+  assert.equal(events.at(-1).status, "failed");
+  assert.equal(events.at(-1).payload.errorCode, "VALIDATOR_CRASH");
+  assert.equal(events.some(({ type }) => type === "ValidationPassed"), false);
 }));
 
 test("Lead learns capability-specific failure from receipts and avoids that device", async () => withStore(async (store) => {

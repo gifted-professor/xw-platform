@@ -36,6 +36,12 @@
     "contracts/parallelism/shard-run.v1.schema.json",
     "contracts/parallelism/placement-decision.v1.schema.json"
   ],
+  "orchestrationContracts": [
+    "contracts/orchestration/skill-catalog.v1.schema.json",
+    "contracts/orchestration/task-classification.v1.schema.json",
+    "contracts/orchestration/dag.v1.schema.json",
+    "contracts/orchestration/trace-event.v1.schema.json"
+  ],
   "skillEvents": ["event-protocol/skill-events.v1.json"],
   "skillErrorCodes": ["error-codes/skill-error-codes.v1.json"],
   "note": "sharedCopies must remain LF-normalized identical in both services. openAction and skill contracts stay kernel-only; services import validators, they do not copy these schemas. M4-A does not enable dshEnabled."

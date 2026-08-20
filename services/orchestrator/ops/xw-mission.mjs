@@ -1,12 +1,18 @@
 #!/usr/bin/env node
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { createTaskPlanV2, validateTaskPlanV2 } from "../scripts/lib/task-plan-v2.mjs";
 import { bindTaskPlanToLiveCapabilities } from "../scripts/lib/task-plan-capability-binding.mjs";
 import { OrchestrationStore } from "../scripts/lib/orchestration-store.mjs";
 import { ControlPlaneHttpClient, TypedJobWorker } from "../scripts/lib/typed-job-worker.mjs";
 import { MissionWorkerRouter, SessionWorkflowWorker } from "../scripts/lib/session-workflow-worker.mjs";
 import { runTaskOrchestrator } from "../scripts/lib/task-orchestrator.mjs";
+import { executeM5Goal, planM5Goal } from "../scripts/lib/m5-orchestration-runtime.mjs";
+import { TraceStore } from "../../../packages/harness-protocol/lib/trace-store.mjs";
+
+const RUNTIME_ROOT = resolve(process.env.XW_RUNTIME_ROOT || "C:\\Users\\Public\\xw-runtime");
+const WORK_ROOT = join(RUNTIME_ROOT, "state", "orchestrator", "outbox", "work");
 
 function option(argv, name, fallback = undefined) {
   const index = argv.indexOf(name);
@@ -61,9 +67,12 @@ export async function loadLiveFleet({ registryUrl = "http://127.0.0.1:17930/", t
   const devices = parseAgentEntry(await entryResponse.text());
   const safeCapabilities = new Set((catalog.capabilities || [])
     .filter((capability) => capability.policy?.availability === "implemented")
-    .filter((capability) => capability.policy?.runnableAsJob === true)
-    .filter((capability) => capability.policy?.externalEffect === false)
-    .filter((capability) => capability.policy?.approvalRequired === false)
+    // Foundation authorization fields are intentionally null. Static job support
+    // proves only that the capability has an implementation; Control Plane still
+    // owns route/authorization at submit time. Keep the legacy field additive.
+    .filter((capability) => capability.policy?.implementationSupport?.job === true
+      || capability.policy?.runnableAsJob === true)
+    .filter((capability) => capability.normalizedEffect?.class === "none")
     .filter((capability) => ["read_only", "replay_safe"].includes(capability.idempotency))
     .map((capability) => capability.id));
   for (const device of devices) {
@@ -90,6 +99,8 @@ function usage() {
            # validate + bind + fleet eligibility (advisory)
   run      (--plan <plan.v2.json> | --input <plan-authoring.json>) --run <closeout-run-id> --actor <actor> --execute
   status   --run <closeout-run-id>
+  plan-goal --goal <text> [--aliases 01,02,03,04] --dry-run
+  run      --goal <text> --trace-id <id> [--aliases 01,02,03,04] --run <closeout-run-id> --actor <actor> --execute
 
 run refuses to submit jobs unless --execute is explicit.
 Foundation: bind is required before preflight/run; Scheduler only sees raw plan work units after bind succeeds.
@@ -99,6 +110,25 @@ session_workflow actions come from catalog only (no params.actions injection).`;
 async function loadCapabilityCatalog(registryUrl) {
   const result = await fetchJson(new URL("api/capabilities", registryUrl));
   return result.capabilities || [];
+}
+
+export function reconcileLiveCapabilityCatalog(registryCatalog, controlCatalog) {
+  if (!Array.isArray(registryCatalog) || !Array.isArray(controlCatalog)) {
+    throw new Error("registry and Control Plane capability catalogs are required");
+  }
+  const controlById = new Map(controlCatalog.map((capability) => [capability?.id, capability]));
+  return registryCatalog.map((registryCapability) => {
+    const controlCapability = controlById.get(registryCapability?.id);
+    if (!controlCapability) throw new Error(`Control Plane is missing registry capability ${registryCapability?.id || "unknown"}`);
+    const registryHash = registryCapability.capabilityContractHash || null;
+    const controlHash = controlCapability.capabilityContractHash || null;
+    if (registryHash && controlHash && registryHash !== controlHash) {
+      throw Object.assign(new Error(`live capability contract drift for ${registryCapability.id}`), {
+        code: "IMPLEMENTATION_CONTRACT_CHANGED",
+      });
+    }
+    return controlCapability;
+  });
 }
 
 async function loadAndBindPlan({ planPath, inputPath, registryUrl, requireBind = true }) {
@@ -129,6 +159,23 @@ async function main(argv = process.argv.slice(2)) {
     const input = readJson(required(argv, "--input"));
     const plan = createTaskPlanV2(input);
     console.log(JSON.stringify(plan, null, 2));
+    return;
+  }
+
+  if (command === "plan-goal") {
+    if (!flag(argv, "--dry-run")) throw new Error("plan-goal requires --dry-run");
+    const goal = required(argv, "--goal");
+    const aliases = String(option(argv, "--aliases", "")).split(/[,:\s]+/).filter(Boolean);
+    const planned = await planM5Goal({ goal, aliases, traceId: option(argv, "--trace-id", null) });
+    console.log(JSON.stringify({
+      ok: planned.ok,
+      dryRun: true,
+      executionReady: planned.executionReady,
+      classification: planned.classification,
+      dag: planned.dag,
+      note: "local compile only; no trace/lease/submit/state write",
+    }, null, 2));
+    if (!planned.ok) process.exitCode = 3;
     return;
   }
 
@@ -204,7 +251,7 @@ async function main(argv = process.argv.slice(2)) {
 
   if (command === "status") {
     const taskRunId = required(argv, "--run");
-    const store = new OrchestrationStore({ taskRunId });
+    const store = new OrchestrationStore({ taskRunId, workRoot: WORK_ROOT });
     if (!existsSync(store.statePath)) throw new Error("orchestration state not found for explicit runId");
     const state = readJson(store.statePath);
     const result = existsSync(store.resultPath) ? readJson(store.resultPath) : null;
@@ -216,9 +263,43 @@ async function main(argv = process.argv.slice(2)) {
     if (!flag(argv, "--execute")) throw new Error("--execute is required; plan validation alone never submits jobs");
     const taskRunId = required(argv, "--run");
     const actorId = required(argv, "--actor");
-    const taskPath = join("C:\\Users\\Public\\xw-runtime\\state\\orchestrator\\outbox\\work", taskRunId, "task.json");
+    const taskPath = join(WORK_ROOT, taskRunId, "task.json");
     if (!existsSync(taskPath)) throw new Error("explicit runId is not an active xw closeout run");
     const registryUrl = option(argv, "--registry-url", "http://127.0.0.1:17930/");
+    const goal = option(argv, "--goal");
+    if (goal && (option(argv, "--plan") || option(argv, "--input"))) throw new Error("use --goal or --plan/--input, not both");
+    const client = new ControlPlaneHttpClient({ baseUrl: option(argv, "--control-url", "http://127.0.0.1:17920/") });
+    const pollMs = Number(option(argv, "--poll-ms", 1000));
+    const typedJobWorker = new TypedJobWorker({ client, actorId, pollMs });
+    const sessionWorkflowWorker = new SessionWorkflowWorker({ client, actorId, pollMs: 0 });
+    const worker = new MissionWorkerRouter({ typedJobWorker, sessionWorkflowWorker });
+    const store = new OrchestrationStore({ taskRunId, workRoot: WORK_ROOT });
+    if (goal) {
+      const traceId = required(argv, "--trace-id");
+      const aliases = String(option(argv, "--aliases", "")).split(/[,:\s]+/).filter(Boolean);
+      const [registryCatalog, controlCatalogResponse] = await Promise.all([
+        loadCapabilityCatalog(registryUrl),
+        client.getCapabilities(),
+      ]);
+      const liveCatalog = reconcileLiveCapabilityCatalog(
+        registryCatalog,
+        controlCatalogResponse?.capabilities || controlCatalogResponse?.data?.capabilities || [],
+      );
+      const result = await executeM5Goal({
+        goal,
+        aliases,
+        traceId,
+        taskRunId,
+        liveCatalog,
+        fleetProvider: () => loadLiveFleet({ registryUrl }),
+        worker,
+        store,
+        traceStore: new TraceStore(),
+      });
+      console.log(JSON.stringify(result, null, 2));
+      if (result.status !== "completed") process.exitCode = 2;
+      return;
+    }
     // Foundation: bind live contracts before Scheduler; ExecutionPlan is not authorization.
     const { plan, executionPlan, executionPlanHash } = await loadAndBindPlan({
       planPath: option(argv, "--plan"),
@@ -226,12 +307,6 @@ async function main(argv = process.argv.slice(2)) {
       registryUrl,
       requireBind: true,
     });
-    const client = new ControlPlaneHttpClient({ baseUrl: option(argv, "--control-url", "http://127.0.0.1:17920/") });
-    const pollMs = Number(option(argv, "--poll-ms", 1000));
-    const typedJobWorker = new TypedJobWorker({ client, actorId, pollMs });
-    const sessionWorkflowWorker = new SessionWorkflowWorker({ client, actorId, pollMs: 0 });
-    const worker = new MissionWorkerRouter({ typedJobWorker, sessionWorkflowWorker });
-    const store = new OrchestrationStore({ taskRunId });
     const result = await runTaskOrchestrator({
       taskRunId,
       plan,
@@ -249,7 +324,9 @@ async function main(argv = process.argv.slice(2)) {
   throw new Error(`unknown command ${command}`);
 }
 
-main().catch((error) => {
-  console.error(JSON.stringify({ ok: false, error: { code: error?.code || "XW_MISSION_FAILED", message: error?.message || String(error) } }, null, 2));
-  process.exit(1);
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((error) => {
+    console.error(JSON.stringify({ ok: false, error: { code: error?.code || "XW_MISSION_FAILED", message: error?.message || String(error) } }, null, 2));
+    process.exit(1);
+  });
+}

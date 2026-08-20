@@ -12,6 +12,7 @@ import {
   loadSkillFixtureSpec,
 } from "../../kernel/lib/skill-runtime.mjs";
 import { loadRuntimeProfile } from "../../kernel/lib/runtime-profile.mjs";
+import { TraceStore } from "./trace-store.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -108,11 +109,13 @@ export class HarnessRuntime {
     harnessVersion,
     harnessCommit,
     now = () => Date.now(),
+    traceStore = null,
   }) {
     this.harness = harness;
     this.harnessVersion = harnessVersion;
     this.harnessCommit = harnessCommit;
     this.now = now;
+    this.traceStore = traceStore || new TraceStore();
     this.sessions = new Map();
     this.closed = new Set();
     this.dshLiveGate = DSH_LIVE_GATE;
@@ -322,7 +325,12 @@ export class HarnessRuntime {
     return session.machine.applyExit(exit);
   }
 
-  queryTrace({ harnessSessionId }) {
+  queryTrace({ harnessSessionId, traceId } = {}) {
+    if (traceId !== undefined) {
+      if (harnessSessionId !== undefined) throw codedError("TRACE_QUERY_AMBIGUOUS", "queryTrace accepts either traceId or harnessSessionId, not both");
+      return this.traceStore.query(traceId);
+    }
+    if (harnessSessionId === undefined) throw codedError("TRACE_QUERY_REQUIRED", "queryTrace requires traceId or harnessSessionId");
     const session = this.#require(harnessSessionId);
     return {
       ref: { ...session.ref },

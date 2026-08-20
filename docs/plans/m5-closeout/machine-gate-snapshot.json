@@ -1,0 +1,218 @@
+{
+  "ok": true,
+  "mode": "check",
+  "ready": true,
+  "adbOk": true,
+  "allHealthy": false,
+  "releaseGate": {
+    "ok": true,
+    "reason": null,
+    "head": "f337079d93b6e16993b93f7d28783f57da9a5184",
+    "releaseId": "xw-20260819-f337079",
+    "runtimeProfile": "legacy_compat",
+    "releaseRoot": "C:\\Users\\Public\\xw-runtime\\releases\\xw-20260819-f337079"
+  },
+  "adb": {
+    "schemaId": "xhs.xw-start-adb.v2",
+    "schemaVersion": 2,
+    "port": "5038",
+    "adbPath": "C:\\Program Files (x86)\\xiaowei_android\\tools\\adb.exe",
+    "ok": true,
+    "error": null,
+    "sampleCount": 3,
+    "missing": [],
+    "repairCandidates": [],
+    "devices": {
+      "01": {
+        "alias": "01",
+        "serial": "1511f78c",
+        "state": "device",
+        "states": [
+          "device",
+          "device",
+          "device"
+        ],
+        "ok": true,
+        "stable": true,
+        "pnpPresent": true,
+        "reason": "device",
+        "wrongPort": false,
+        "observedPorts": [
+          "5038"
+        ]
+      },
+      "02": {
+        "alias": "02",
+        "serial": "9b18cccb",
+        "state": "device",
+        "states": [
+          "device",
+          "device",
+          "device"
+        ],
+        "ok": true,
+        "stable": true,
+        "pnpPresent": true,
+        "reason": "device",
+        "wrongPort": false,
+        "observedPorts": [
+          "5038"
+        ]
+      },
+      "03": {
+        "alias": "03",
+        "serial": "211d0120",
+        "state": "device",
+        "states": [
+          "device",
+          "device",
+          "device"
+        ],
+        "ok": true,
+        "stable": true,
+        "pnpPresent": true,
+        "reason": "device",
+        "wrongPort": false,
+        "observedPorts": [
+          "5038"
+        ]
+      },
+      "04": {
+        "alias": "04",
+        "serial": "H6NNHU8LLFHAIRLV",
+        "state": "device",
+        "states": [
+          "device",
+          "device",
+          "device"
+        ],
+        "ok": true,
+        "stable": true,
+        "pnpPresent": true,
+        "reason": "device",
+        "wrongPort": false,
+        "observedPorts": [
+          "5038"
+        ]
+      }
+    },
+    "action": "report_only",
+    "reason": "healthy",
+    "wrongPortAliases": [],
+    "diagnosticPorts": [
+      {
+        "port": "5037",
+        "ok": false,
+        "missing": [
+          "01",
+          "02",
+          "03",
+          "04"
+        ]
+      }
+    ],
+    "primaryPort": "5038",
+    "probedPorts": [
+      {
+        "port": "5038",
+        "ok": true,
+        "missing": []
+      },
+      {
+        "port": "5037",
+        "ok": false,
+        "missing": [
+          "01",
+          "02",
+          "03",
+          "04"
+        ]
+      }
+    ]
+  },
+  "capabilityLimits": [
+    {
+      "blockerId": "pitfall-xhs-copy-link-label-cluster-paste-dump-miss-20260814",
+      "appId": "xiaohongshu",
+      "title": "复制链接文案在子 TextView；评论框长按「粘贴」不进 dump",
+      "capabilityIds": [
+        "xiaowei.explorer.primitive"
+      ],
+      "deviceAliases": [],
+      "scope": "capability"
+    }
+  ],
+  "plan": {
+    "schemaId": "xhs.xw-start-plan.v1",
+    "schemaVersion": 2,
+    "aliases": [
+      "01",
+      "02",
+      "03",
+      "04"
+    ],
+    "busy": false,
+    "activeLeases": 0,
+    "runningJobs": 0,
+    "releaseGateOk": true,
+    "releaseGateReason": null,
+    "stateKnown": true,
+    "services": {
+      "registry": {
+        "action": "none",
+        "reason": "healthy"
+      },
+      "controlPlane": {
+        "action": "none",
+        "reason": "healthy"
+      },
+      "serves": {
+        "01": {
+          "action": "none",
+          "reason": "listening"
+        },
+        "02": {
+          "action": "none",
+          "reason": "listening"
+        },
+        "03": {
+          "action": "none",
+          "reason": "listening"
+        },
+        "04": {
+          "action": "none",
+          "reason": "listening"
+        }
+      }
+    },
+    "devices": {
+      "01": {
+        "action": "none",
+        "reason": "ready"
+      },
+      "02": {
+        "action": "none",
+        "reason": "ready"
+      },
+      "03": {
+        "action": "none",
+        "reason": "ready"
+      },
+      "04": {
+        "action": "none",
+        "reason": "ready"
+      }
+    },
+    "adb": {
+      "action": "none",
+      "ok": true,
+      "reason": "healthy",
+      "port": "5038",
+      "missing": [],
+      "repairCandidates": [],
+      "wrongPortAliases": []
+    },
+    "mutationCount": 0,
+    "blockerCount": 0
+  }
+}

@@ -10,6 +10,7 @@ import {
   validateTaskTemplate,
 } from "../scripts/lib/task-template.mjs";
 import { createTaskPlanV2 } from "../scripts/lib/task-plan-v2.mjs";
+import { planM5Goal } from "../scripts/lib/m5-orchestration-runtime.mjs";
 import {
   compileWorkflowNodeAuthoring,
   getWorkflow,
@@ -269,7 +270,25 @@ async function main() {
     if (!compiled.ok) process.exitCode = 3;
     return;
   }
-  fail("usage: xw-task.mjs list|show|prepare|plan|compile-workflow|validate|save");
+  if (command === "plan-goal") {
+    if (!args["dry-run"]) fail("plan-goal requires --dry-run (strictly no trace, lease, submit, or state write)");
+    const goal = args.goal || args.task || args._.slice(1).join(" ");
+    if (!goal) fail("plan-goal requires --goal <text>");
+    const aliases = args.aliases ? String(args.aliases).split(/[,:\s]+/).filter(Boolean) : [];
+    const planned = await planM5Goal({ goal, aliases, traceId: args["trace-id"] || null });
+    console.log(JSON.stringify({
+      ok: planned.ok,
+      command,
+      dryRun: true,
+      executionReady: planned.executionReady,
+      classification: planned.classification,
+      dag: planned.dag,
+      note: "dry-run performed local registry validation and graph compilation only; no trace/lease/submit/state write",
+    }, null, 2));
+    if (!planned.ok) process.exitCode = 3;
+    return;
+  }
+  fail("usage: xw-task.mjs list|show|prepare|plan|plan-goal --dry-run|compile-workflow|validate|save");
 }
 
 main().catch((error) => fail(error?.message || String(error)));
