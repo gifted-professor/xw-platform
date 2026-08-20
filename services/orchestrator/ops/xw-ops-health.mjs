@@ -58,7 +58,7 @@ function parseArgs(argv) {
     root: argOf(argv, "--root", ROOT_DEFAULT),
     db: argOf(argv, "--db", join(argOf(argv, "--root", ROOT_DEFAULT), "registry.db")),
     sessionsRoot: argOf(argv, "--sessions-root", join(homedir(), ".xhs-explorer-sessions")),
-    runsRoot: argOf(argv, "--runs-root", "C:\\Users\\Public\\xhs-agent-runs"),
+    runsRoot: argOf(argv, "--runs-root", "C:\\Users\\Public\\xw-runtime\\evidence"),
   };
 }
 

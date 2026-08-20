@@ -177,10 +177,10 @@ export function buildXwStartPlan(snapshot, { aliases = XW_START_ALIASES } = {}) 
       adbAction = "blocked";
       adbActionReason = "release_gate_failed";
     } else if (Array.isArray(adb.wrongPortAliases) && adb.wrongPortAliases.length > 0) {
-      // Devices on the orphan 5037 daemon: /xw start kills that daemon so they
-      // return to Xiaowei's authoritative 5038. Only ever touches 5037.
-      adbAction = "repair";
-      adbActionReason = "adb_wrong_port";
+      // A wrong-daemon device needs Xiaowei-owned recovery. /xw start reports
+      // the condition but never kills or starts an ADB daemon directly.
+      adbAction = "human_required";
+      adbActionReason = "xiaowei_restart_adb_required";
     } else if (!targetDevicesReady) {
       adbAction = "blocked";
       adbActionReason = "gateway_not_ready";
@@ -214,7 +214,7 @@ export function buildXwStartPlan(snapshot, { aliases = XW_START_ALIASES } = {}) 
     },
     mutationCount: actions.filter((item) => [
       "start", "rebind_start", "rebind_restart", "audited_recovery", "readiness_job",
-    ].includes(item.action)).length + (adbAction === "repair" ? 1 : 0),
+    ].includes(item.action)).length,
     blockerCount: actions.filter((item) => item.action === "blocked").length,
   };
 }

@@ -38,9 +38,17 @@
 | F1-F | 增加根命令和离线 CI | 完成 |
 | F1-G | 完成 Physical Fusion 验收 | 完成 |
 | M3-EH | Open Action Runtime v1（fixture/replay） | 源码完成；live 仍关 |
-| M4-A | Skill Contract + fixture SkillRun | PR #24；DSH live 仍关 |
-| M4-B | Harness Protocol + DSH State Bridge | PR #25；真机仍关 |
-| M4-C/D | Skill Router + Experience Ledger + xhs.collect hybrid pack | 进行中；Compiler 不自动晋升 |
+| M4-A | Skill Contract + fixture SkillRun | 已合 PR #24；DSH live 仍关 |
+| M4-B | Harness Protocol + DSH State Bridge | 已合 PR #25；真机仍关 |
+| M4-C/D | Skill Router + Experience Ledger + xhs.collect hybrid pack | 已合 PR #26；Compiler 不自动晋升 |
+
+## `/xw` 人工入口
+
+- 唯一真源：`integrations/codex/skills/xw/`。
+- `npm run xw:skill:install` 投放到 `.agents` / `.codex`；`npm run xw:skill:check` 校验一致性。
+- `/xw start` 以 deployed release manifest + 17920/17930 health 为身份门，不要求源码 HEAD 等于现场 release。
+- FastOperator 使用 `XW Platform FastOperator 01–04`，启动状态与日志均在 `xw-runtime`；旧 `XhsFastOperator*` 保持 Disabled。
+- 运行配置边界以 `config/runtime/xw-runtime.v1.json` 为准；`npm run xw:runtime:check` 一次校验 release、私有配置文件名、设备端口、launcher 与计划任务绑定。真实密钥、数据库、日志和证据只留在 `xw-runtime`，不进 Git。
 
 ## 更多
 

@@ -1,7 +1,7 @@
 {
   "schemaId": "xw.platform.fusion.post-import-allowlist.v1",
   "schemaVersion": 1,
-  "title": "Post-import path allowlist — M3-B through M3-EH",
+  "title": "Post-import path allowlist — M3-B through M4 runtime consolidation",
   "description": "fusion:verify subtracts only these exact paths. Blob and mode mismatches are separate. Missing imported files are never allowed. This is not a whole-tree relax and does not open runtime cutover.",
   "runtimeCutoverAllowed": false,
   "sourceFusionGate": "OPEN",
@@ -9,31 +9,46 @@
   "services": {
     "orchestrator": {
       "allowedBlobModified": [
-        "registry.mjs",
+        ".env.example",
+        "contracts/foundation-capabilities.v1.json",
+        "ops/xw-closeout.mjs",
+        "ops/xw-ops-health.mjs",
         "ops/xw-start.mjs",
-        "package.json",
+        "query-routing.mjs",
+        "registry.mjs",
+        "scripts/lib/xw-start.mjs",
+        "serve-restart-01.ps1",
+        "serve-restart-02.ps1",
+        "serve-restart-03.ps1",
+        "serve-restart-04.ps1",
+        "tests/registry.test.mjs",
         "tests/xw-start.test.mjs"
       ],
       "allowedModeModified": [],
-      "allowedExtra": [
-        "ops/xw-repair.mjs"
-      ]
+      "allowedExtra": []
     },
     "control-plane": {
       "allowedBlobModified": [
+        ".env.example",
         "control-plane/lib/state-store.mjs",
         "control-plane/lib/control-plane.mjs",
         "control-plane/router.mjs",
+        "scripts/fast-operator-serve-task.ps1",
+        "scripts/xhs-watcher-launch.ps1",
+        "scripts/xhs-watcher.mjs",
         "tests/control-plane-placement.test.mjs",
         "tests/discovery-session-state.test.mjs",
         "tests/foundation-pr3-transport-boundary.test.mjs",
-        "tests/discovery-session.test.mjs"
+        "tests/discovery-session.test.mjs",
+        "tests/fast-operator-serve-lifecycle.test.mjs"
       ],
       "allowedModeModified": [],
       "allowedExtra": [
         "control-plane/lib/open-action-session.mjs",
         "control-plane/lib/payment-firewall.mjs",
         "control-plane/lib/open-action-executor.mjs",
+        "scripts/xw-control-plane-runtime.ps1",
+        "scripts/xw-fast-operator-runtime.ps1",
         "tests/open-action-device-session.test.mjs",
         "tests/control-plane-payment-firewall.test.mjs",
         "tests/control-plane-open-action-executor.test.mjs",

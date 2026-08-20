@@ -20,9 +20,13 @@ M4 源码     A/B/C(+D fixture) 已合进 main，尚未部署到现场
 真机        切仓后第一单只读 xhs.observe.feed 已在 01 成功
             job_8a3c6676-b190-449b-8b0f-e018fb8f4310 succeeded
 
+/xw 尾巴    skill 真源已进 integrations/codex/skills/xw
+            /xw start --check 已按 deployed release 身份门返回 ready=true
+            XW Platform FastOperator 01-04 已注册并全部 Listen
+
 还不能       打开 DSH live / Open Action live
 不要        重新启用 XhsFastOperator* / 旧计划任务
-不要        直接跑现在的 /xw start（仍指向 retired 路径）
+限制        02/03/04 仍只在 ADB 5037，需效卫侧恢复到 5038
 ```
 
 **最大陷阱：源码 `main` 已经含 M4，现场 release 仍是 8-19 切换那一版 `f337079`。新 Skill Runtime / Harness / Router 还没进 17920/17930 进程。**
@@ -263,55 +267,38 @@ node C:\Users\Public\xw-runtime\releases\xw-20260819-f337079\services\control-pl
    `xw-runtime\evidence\run_0a358d59-79ff-4ce1-a7c1-323ab8163235\evidence\`  
    恢复回到桌面。这是正确 fail-closed。
 
-### FastOperator 现状（重要）
+### FastOperator 现状（2026-08-20 补尾后）
 
 - 旧任务 `XhsFastOperator01-04Live` **保持 Disabled**
-- 01 的 17895 是从 **当前 release** 临时拉起的 node 进程，**不是计划任务**，重启会丢
-- 启动器：`C:\Users\Public\xw-runtime\logs\start-serve-01.ps1`（须带 `ANDROID_ADB_SERVER_PORT=5038`）
-- 02/03/04 对应 17897/17898/17896 **未启动**
+- 新任务 `XW Platform FastOperator 01–04` 已注册为 SYSTEM，并全部监听 17895/17897/17898/17896
+- 稳定启动器：`C:\Users\Public\xw-runtime\launch-fast-operator-serve.ps1`；每次解析 `current` 的真实 release 并校验 manifest 身份
+- launch state：`xw-runtime\state\control-plane\fast-operator\`；日志：`xw-runtime\logs\fast-operator\`
+- 01 原临时进程已安全切为新任务；没有复活任何旧 `XhsFastOperator*` 任务
 - ADB 权威口是效卫 **5038**，不是 5037
-- 01 serial `1511f78c`；adb：`C:\Program Files (x86)\xiaowei_android\tools\adb.exe`
+- 只读检查：01 在 5038；02/03/04 仍在 5037，`/xw start` 只报 `xiaowei_restart_adb_required`，不会裸跑 `kill-server/start-server`
 
 设备配置（勿把 secrets 贴进聊天/PR）：`C:\Users\Public\xw-runtime\secrets\control-plane.devices.json`
 
 ---
 
-## 6. `/xw` 入口已经过时（下一任优先项）
+## 6. `/xw` 入口已迁入 xw-platform
 
-人用的 `/xw` skill 真源（两份必须同内容）：
-
-```text
-C:\Users\windows 10\.agents\skills\xw\
-C:\Users\windows 10\.codex\skills\xw\
-```
-
-里面大量命令仍是：
+人用的 `/xw` skill 唯一真源：
 
 ```text
-node C:\Users\Public\xhs-registry\ops\xw-start.mjs
+C:\Users\Public\xw-fusion\xw-platform\integrations\codex\skills\xw\
 ```
 
-该文件已不存在。`xw-start.mjs` 源码在：
+安装副本由仓库同步器投放并校验，不直接编辑：
 
 ```text
-xw-platform\services\orchestrator\ops\xw-start.mjs
+npm run xw:skill:install
+npm run xw:skill:check
 ```
 
-但脚本默认：
+`xw-start.mjs` 现在以 `xw-runtime\current` 的真实 release + manifest + 17920/17930 双 health 为身份门。源码 main 可以领先现场；不能拿源码 HEAD 代替 deployed release 身份。closeout 默认写 `xw-runtime\state\orchestrator\outbox`，不再写 retired 目录。
 
-```text
-ROUTING_ROOT = C:\Users\Public\xhs-routing-v1-1
-CONTROL_TASK / SERVE_TASK = 旧 ps1
-TASK_LAUNCH = C:\Users\Public\xhs-agent-control\task-launch.json
-```
-
-它会：认旧计划任务名、要求 `main == origin/main == task-launch.gitCommit == release receipt`、任务缺失 `fail closed`（`task_missing`），**不会**把 serve 装到 `xw-runtime`。
-
-若对正在听的 01 serve 跑旧 start，可能按 stale commit **停掉再装旧任务**。
-
-`/xw start` 设计上正是「拉四机 serve + 核对 ADB 5038 + 不健康机才丢 R0」。**概念对，路径错。** 要换，不要启用 `XhsFastOperator*`。
-
-live HTTP 已经是新系统，所以 `devicectl --local job submit` 能成。缺的是人入口和 serve 常驻。
+live HTTP 与四机 serve 都已归入新系统。02/03/04 的 ADB 错口仍需效卫正道处理，不属于 `/xw start` 自动杀 daemon 的权限。
 
 agent-entry.md 仍夹杂旧路径和旧 `releaseId: rel-2026-08-12-xianyu-qr-mask-v3`，同时 health 是 `xw-20260819-f337079`。以 health JSON 的 `releaseId/sourceCommit/runtimeProfile` 为准。
 
@@ -340,27 +327,30 @@ agent-entry.md 仍夹杂旧路径和旧 `releaseId: rel-2026-08-12-xianyu-qr-mas
 ### P0 — 现场稳定性（可以和文档/源码并行）
 
 1. Kimi 把 **8-21、8-22** 09:23 只读巡检跑完。漏了说「补巡检」。
-2. 给 FastOperator 做 **XW 命名的计划任务**（01–04），从 `xw-runtime\current` 解析后的真实 release 启动，环境必须 `ANDROID_ADB_SERVER_PORT=5038`。BootTrigger 或按需。不要复活 `XhsFastOperator*Live`。
-3. 01 的临时 17895 进程重启会丢；做成任务前不要当常驻。
+2. **已完成**：FastOperator 的 XW 命名任务（01–04）已注册并监听；不要复活 `XhsFastOperator*Live`。
+3. 剩余现场限制：由效卫正道把 02/03/04 从 ADB 5037 恢复到 5038；`/xw start` 不自动杀 daemon。
 
 ### P0 — `/xw` 迁到新家（人入口）
 
-4. 改 `~\.agents\skills\xw` 与 `~\.codex\skills\xw`：所有 `xhs-registry` / `xhs-routing-v1-1` 路径改为 `xw-platform` ops + `xw-runtime` 证据/outbox 约定（outbox 新位置要设计，别写回 retired 目录）。
-5. 改 `ops/xw-start.mjs`：认 `XW Platform Control Plane/Orchestrator`，认新 serve 任务，release gate 对齐 `xw-20260819-f337079`（以及以后每次新 release），任务缺失 fail closed 时给出「请先注册 XW serve 任务」而不是去装旧 XML。
-6. 更新 live `agent-entry.md` 生成逻辑：命令骨架不要再 ssh 到旧 Mac 路径、不要指向 retired 目录。
-7. 先 `/xw start --check`（只读）在新逻辑上变绿，再允许真 start。
+4. **已完成**：skill 真源进仓、installed copies 同步；命令改走 xw-platform，outbox 改到 xw-runtime。
+5. **已完成**：`xw-start.mjs` 识别 XW 平台任务和 deployed release 身份，任务缺失 fail closed。
+6. **源码已完成，现场待下个 release**：`agent-entry.md` 生成逻辑已换成 xw-platform/XW 任务骨架；当前 `f337079` 进程仍会显示旧文案，不为这项单独热改生产。
+7. **已完成**：`/xw start --check` 返回 `ready=true`；`adbOk=false` 是 02–04 错口的明确限制，不是全局假绿。
+8. **已完成**：仓库新增 `config/runtime/xw-runtime.v1.json` 作为机器配置布局唯一契约，
+   `npm run xw:runtime:check` 已校验 current release、所需私有文件名、四机端口、launcher、XW 计划任务与旧任务 Disabled。
+   可进 Git 的配置/模板/安装检查逻辑全部在 `xw-platform`；真实 secrets、DB、logs、evidence 只在 `xw-runtime`。
 
 ### P1 — 部署门（源码已超前于现场）
 
-8. **不要默默把 main@7917ac9 布到生产。** M4 是源码合同，现场仍应 `legacy_compat`。若要新 release：走 M3-R 那套 package / preflight / 计划任务 launcher，另开 releaseId，保留回滚。
-9. 新 release 仍然：`dshEnabled=false`，`openActionLiveEnabled=false`。
+9. **不要默默把 main@7917ac9 布到生产。** M4 是源码合同，现场仍应 `legacy_compat`。若要新 release：走 M3-R 那套 package / preflight / 计划任务 launcher，另开 releaseId，保留回滚。
+10. 新 release 仍然：`dshEnabled=false`，`openActionLiveEnabled=false`。
 
 ### P1 — M4 源码后续（不开真机也能做）
 
-10. 把 Skill Registry 接到现有 `services/orchestrator/skills/`（真源先留这里，不要先搬到仓库根 `skills/`）。
-11. Router 与正式 job 提交打通（现在 Router 是进程内 fixture）。
-12. Experience Ledger 落到 Orchestrator knowledge 的分层，而不是永远内存 Map。
-13. DSH 真插件：仍只改 `integrations/dsh-xw`；升级 DSH 必须独立 PR + compatibility suite。当前 lock 是 rc.7 / `99f6f02f…`。
+11. 把 Skill Registry 接到现有 `services/orchestrator/skills/`（真源先留这里，不要先搬到仓库根 `skills/`）。
+12. Router 与正式 job 提交打通（现在 Router 是进程内 fixture）。
+13. Experience Ledger 落到 Orchestrator knowledge 的分层，而不是永远内存 Map。
+14. DSH 真插件：仍只改 `integrations/dsh-xw`；升级 DSH 必须独立 PR + compatibility suite。当前 lock 是 rc.7 / `99f6f02f…`。
 14. Graph v2 仍是 M5，别塞进 M4。
 15. Compiler 自动改生产 Skill：**禁止**。只能出 CANDIDATE。
 

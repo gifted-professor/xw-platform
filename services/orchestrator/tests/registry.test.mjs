@@ -230,12 +230,12 @@ test("agent entry aggregates leases, jobs, blockers and omits private identity f
   assert.equal(response.headers.get("cache-control"), "no-store");
   const entry = await response.json();
   assert.equal(entry.schemaVersion, "xhs.agent-entry.v2");
-  assert.match(entry.protocol.entrypoints.controlPlaneReload, /XhsDeviceControlPlaneV1|control-plane-task\.ps1/);
+  assert.match(entry.protocol.entrypoints.controlPlaneReload, /XW Platform Control Plane/);
   assert.match(entry.protocol.entrypoints.foundationCatalog, /foundation-capabilities/);
   assert.match(entry.protocol.entrypoints.workflowCatalog, /\/api\/workflows/);
   assert.match(entry.protocol.entrypoints.locatorStatus, /xw-locator\.mjs status/);
   for (const alias of ["01", "02", "03", "04"]) {
-    assert.match(entry.protocol.entrypoints[`serveReload${alias}`], new RegExp(`serve-restart-${alias}\\.ps1`));
+    assert.match(entry.protocol.entrypoints[`serveReload${alias}`], new RegExp(`fast-operator-serve-task\\.ps1.*-Alias ${alias}`));
   }
   const protocol = JSON.stringify(entry.protocol);
   assert.doesNotMatch(protocol, /--serial\b|--token\b|x-control-token|22222|XHS_ALLOW_BYPASS|fast-operator\.mjs/i);
@@ -317,14 +317,14 @@ test("markdown entry is curl-readable and carries protocol red lines", async () 
   assert.match(body, /03 物理断连/);
   assert.match(body, /job 还是 session/);
   assert.match(body, /5038/);
-  assert.match(body, /--ssh xhs-windows/);
+  assert.match(body, /--local/);
   assert.match(body, /controlPlaneReload/);
   assert.match(body, /foundationCatalog/);
   assert.match(body, /workflowCatalog/);
   assert.match(body, /locatorStatus/);
-  assert.match(body, /XhsDeviceControlPlaneV1|control-plane-task\.ps1/);
+  assert.match(body, /XW Platform Control Plane/);
   for (const alias of ["01", "02", "03", "04"]) {
-    assert.match(body, new RegExp(`serveReload${alias}.*serve-restart-${alias}\\.ps1`));
+    assert.match(body, new RegExp(`serveReload${alias}.*fast-operator-serve-task\\.ps1.*-Alias ${alias}`));
   }
   assert.match(body, /online=yes/);
   assert.match(body, /ready=/);

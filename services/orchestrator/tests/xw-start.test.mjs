@@ -376,13 +376,13 @@ test("5038 remains authoritative while devices seen only on 5037 are wrong_port"
   const snapshot = healthySnapshot();
   snapshot.adb = adb;
   const plan = buildXwStartPlan(snapshot, { aliases: ["01", "02"] });
-  assert.equal(plan.adb.action, "repair");
-  assert.equal(plan.adb.reason, "adb_wrong_port");
+  assert.equal(plan.adb.action, "human_required");
+  assert.equal(plan.adb.reason, "xiaowei_restart_adb_required");
   assert.deepEqual(plan.adb.wrongPortAliases, ["01"]);
-  assert.equal(plan.mutationCount, 1);
+  assert.equal(plan.mutationCount, 0);
 
   snapshot.devices["01"].ready = false;
-  assert.equal(buildXwStartPlan(snapshot, { aliases: ["01", "02"] }).adb.reason, "adb_wrong_port");
+  assert.equal(buildXwStartPlan(snapshot, { aliases: ["01", "02"] }).adb.reason, "xiaowei_restart_adb_required");
 
   const result = classifyXwStartFinal(snapshot, { aliases: ["01", "02"] });
   assert.equal(result.adbOk, false);
@@ -416,16 +416,17 @@ test("wrong-port ADB repair is blocked while the release gate is closed", () => 
   assert.equal(plan.mutationCount, 0);
 });
 
-test("ensureAdbRepair kills only the orphan 5037 daemon when wrong-port and idle", async () => {
+test("ensureAdbRepair reports wrong-port devices without touching either daemon", async () => {
   const snapshot = healthySnapshot();
   snapshot.adb = { wrongPortAliases: ["01"] };
   const actions = [];
   let killed = false;
   const result = await ensureAdbRepair(snapshot, actions, { kill: async () => { killed = true; } });
-  assert.equal(killed, true);
-  assert.equal(result.status, "repaired");
+  assert.equal(killed, false);
+  assert.equal(result.status, "human_required");
+  assert.equal(result.reason, "xiaowei_restart_adb_required");
   assert.deepEqual(result.aliases, ["01"]);
-  assert.deepEqual(actions, [{ kind: "adb", action: "kill_orphan_daemon", port: "5037", aliases: ["01"] }]);
+  assert.deepEqual(actions, []);
 });
 
 test("ensureAdbRepair is a no-op without wrong-port devices and blocked under active work", async () => {
@@ -445,18 +446,6 @@ test("ensureAdbRepair is a no-op without wrong-port devices and blocked under ac
     { status: "blocked", reason: "active_work", aliases: ["01"] },
   );
   assert.equal(killed, false);
-});
-
-test("ensureAdbRepair records a failed kill without throwing", async () => {
-  const snapshot = healthySnapshot();
-  snapshot.adb = { wrongPortAliases: ["01"] };
-  const actions = [];
-  const result = await ensureAdbRepair(snapshot, actions, {
-    kill: async () => { throw new Error("adb gone"); },
-  });
-  assert.equal(result.status, "failed");
-  assert.equal(result.reason, "adb gone");
-  assert.equal(actions[0].action, "kill_orphan_daemon_failed");
 });
 
 test("audited recovery permits one reversible action but requires fresh main-safe before clearing", () => {

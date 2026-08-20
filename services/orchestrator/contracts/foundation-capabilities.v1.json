@@ -27,7 +27,7 @@
       "maturity": "E2",
       "effect": "none",
       "directRun": false,
-      "entry": "node C:\\Users\\Public\\xhs-registry\\ops\\xw-locator.mjs status",
+      "entry": "node C:\\Users\\Public\\xw-fusion\\xw-platform\\services\\orchestrator\\ops\\xw-locator.mjs status",
       "provides": [
         "locator.visual-target.v1"
       ],
