@@ -17,7 +17,7 @@ repair     新 ops/xw-repair.mjs 已实战修复 RP-0001（03 wrong_port）
 
 1. **四机 observe 首通**：01（job_9828e22d）→ 03（job_af9db228）→ 02/04 修复后（job_a187b753 / job_7a0bb1ab）全部 succeeded，pageClass=xhs.feed.index，lease 归零。
 2. **RP-0001 ADB 双 server 事故**：本机有两套效卫 Android 工具——`C:\Program Files (x86)\xiaowei_android`（serve 用，权威口 5038）和 `D:\Ksoftware\xiaowei_android`（抢 5037）。02/04 设备被 5037 认领 → serve 侧 uiautomator dump 截断 → `ADAPTER_REJECTED / hierarchy dump incomplete`。效卫 UI 与 Explorer（transport 22222）不受影响，造成"看起来全通"假象。手动修复：kill 5037 server + 重启受影响 serve。全过程已固化进 `docs/ops/repair-runbook.md` RP-0001。
-   - **断根未做**：`D:\Ksoftware\xiaowei_android` 的 adb 还会复活抢设备（当天下午 03 就复发了一次）。需要查清它是哪个软件拉起的并停用/卸载。
+   - **断根（2026-08-20 晚）**：`D:\Ksoftware\xiaowei_android` 查明 = 正在运行的效卫 UI 本体（持有 22222 transport，不能删）。它硬编码额外起 5037 adb server。处置：setx 用户级 `ANDROID_ADB_SERVER_PORT=5038` + 重启效卫进程，其 adb 流量并入 5038，四机归一。残余：效卫仍占一个空 5037 server；设备重插时有被抢窗口，`xw-repair` 兜底。
 3. **P0-2 其实已完成**：`XW Platform FastOperator 01-04` 计划任务已注册且指向 `xw-runtime\launch-fast-operator-serve.ps1`（上一篇写"待做"是过时信息）。02/04 曾被手动 Stop-Process 重启过，已收口回任务托管（Start-ScheduledTask），验证 succeeded。
 4. **P0-4 大部分已完成**：`~/.agents/skills/xw` 与 `~/.codex/skills/xw` 已无旧路径引用。但 SKILL.md 自称的仓库真源 `integrations/codex/skills/xw/` **不存在**，同步器也没有——当前两份副本靠手工保持一致（SKILL.md 声明已改诚实）。
 5. **xw-start.mjs 迁移**（本分支）：删光 retired 路径（xhs-routing-v1-1 / xhs-agent-control / XhsFastOperator 任务名）；任务管理改内联 cmdlet（保留"拒杀无关监听进程"保护）；releaseGate 改为 17920 health + release-manifest + 四个 serve-launch 配置三方比对 releaseId/sourceCommit + runtimeProfile=legacy_compat；rebind = 用当前 manifest 重写 serve-launch-NN.json 后重启任务；任务缺失报「请先注册 XW Platform FastOperator NN」不再装旧 XML。`--check` 严格只读，实测全绿。
@@ -33,7 +33,7 @@ repair     新 ops/xw-repair.mjs 已实战修复 RP-0001（03 wrong_port）
 
 ## 3. 下一步（更新版优先级）
 
-1. **断根 RP-0001**：查清 `D:\Ksoftware\xiaowei_android` 是谁在用，停用或统一；否则 wrong_port 会反复
+1. ~~断根 RP-0001~~ 已处理（见 §1.2 断根记录）；残余风险由 `xw-repair` 兜底
 2. 本分支合 main（merge commit，禁 squash）；**不部署**进 release（M4 源码仍不超前部署，除非人明确说打新 release）
 3. P1 不变：Skill Registry 接 orchestrator、Router 接正式 job、Ledger 持久化
 4. M5（Task Router / Plan Compiler / Execution DAG / Event Trace）单独设计文档先行

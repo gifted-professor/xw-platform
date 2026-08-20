@@ -72,11 +72,12 @@ powershell -NoProfile -Command "Start-Process powershell -WindowStyle Hidden -Ar
 # 4. 验证：launch_app 小红书 → 提交 xhs.observe.feed → succeeded
 ```
 
-预防（未做，按优先级）：
-1. 查清 `D:\Ksoftware\xiaowei_android` 是哪个软件在用，停用或卸载；至少禁止它常驻 5037
-2. 所有脚本/agent 调 adb 必须显式 `ANDROID_ADB_SERVER_PORT=5038`（写进 /xw 与 agent-entry 的硬规则）
-3. `xw-start --check` 已有 wrong_port 检测（5037 只作诊断证据）——但它还指向 retired 路径，等 P0 迁移后才能上岗
-4. 固化成 repair recipe：`wrong_port → kill-server(5037) + 重启对应 serve`，由 `/xw repair` 半自动执行
+预防（2026-08-20 晚更新，部分已做）：
+1. ~~查清 `D:\Ksoftware\xiaowei_android` 是谁在用~~ → 已查清：**它就是正在运行的效卫 UI 本体**（`D:\Ksoftware\xiaowei_android\xiaowei.exe`，同时持有 22222 transport），**不能删不能杀**。它硬编码额外起一个 5037 adb server，杀进程无效（会重生）。
+2. 已做：用户级环境变量 `ANDROID_ADB_SERVER_PORT=5038`（setx 持久化）+ 重启 xiaowei.exe。重启后效卫自己的 adb 流量也并到 5038，四台设备归一。
+3. 残余风险：效卫仍会额外占用 5037（空 server，无设备）。设备重新插拔/重启时存在被 5037 抢先认领的窗口——此时 `xw-repair --check` 会报 wrong_port，`--fix rp-0001 --confirm` 收敛。此为已知残余，接受。
+4. 所有脚本/agent 调 adb 必须显式 `ANDROID_ADB_SERVER_PORT=5038`（写进 /xw 与 agent-entry 的硬规则）
+5. `xw-start --check` 的 wrong_port 检测已随迁移上岗（2026-08-20b）
 
 ---
 
