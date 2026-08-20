@@ -1,0 +1,107 @@
+{
+  "fixtureId": "plan-quorum-verify.v1",
+  "input": {
+    "goal": {
+      "intent": "intent:verify-balance",
+      "input": {
+        "account": "main"
+      }
+    },
+    "skillVersion": {
+      "skillId": "xhs.collect",
+      "skillVersionRef": {
+        "skillId": "xhs.collect",
+        "skillVersion": "1.1.0",
+        "skillSpecSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "sourceCommit": "f337079d93b6e16993b93f7d28783f57da9a5184",
+        "sourcePath": "services/orchestrator/skills/xhs/xhs-collect/SKILL.md",
+        "sourceBlobSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    "parallelismSpec": {
+      "schemaId": "xw.skill.parallelism.v1",
+      "schemaVersion": 1,
+      "mode": "quorum_verify",
+      "minWorkers": 2,
+      "maxWorkers": 3,
+      "completionPolicy": "quorum",
+      "quorumOf": 2,
+      "quorumTotal": 3,
+      "merge": {
+        "strategy": "majority_value"
+      },
+      "verification": {
+        "mode": "quorum_compare"
+      }
+    },
+    "availableDevices": [
+      {
+        "deviceId": "dev-phone-01",
+        "status": "online",
+        "profile": "xhs-phone"
+      },
+      {
+        "deviceId": "dev-phone-02",
+        "status": "online",
+        "profile": "xhs-phone"
+      },
+      {
+        "deviceId": "dev-phone-03",
+        "status": "online",
+        "profile": "xhs-phone"
+      }
+    ],
+    "budget": {
+      "maxWorkers": 3
+    }
+  },
+  "expected": {
+    "schemaId": "xw.execution.plan.v1",
+    "schemaVersion": 1,
+    "planRunId": "plan_2de18e9f1fffa209",
+    "skillId": "xhs.collect",
+    "skillVersionRef": {
+      "skillId": "xhs.collect",
+      "skillVersion": "1.1.0",
+      "skillSpecSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceCommit": "f337079d93b6e16993b93f7d28783f57da9a5184",
+      "sourcePath": "services/orchestrator/skills/xhs/xhs-collect/SKILL.md",
+      "sourceBlobSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "requestedWorkers": 3,
+    "selectedWorkers": 3,
+    "shards": [
+      {
+        "shardRunId": "plan_2de18e9f1fffa209_shard_1",
+        "input": {
+          "account": "main"
+        },
+        "assignedDeviceId": "dev-phone-01"
+      },
+      {
+        "shardRunId": "plan_2de18e9f1fffa209_shard_2",
+        "input": {
+          "account": "main"
+        },
+        "assignedDeviceId": "dev-phone-02"
+      },
+      {
+        "shardRunId": "plan_2de18e9f1fffa209_shard_3",
+        "input": {
+          "account": "main"
+        },
+        "assignedDeviceId": "dev-phone-03"
+      }
+    ],
+    "join": {
+      "waitPolicy": "quorum",
+      "minimum": 2
+    },
+    "reduce": {
+      "strategy": "majority_value"
+    },
+    "verification": {
+      "mode": "quorum_compare"
+    }
+  }
+}

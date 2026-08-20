@@ -30,6 +30,15 @@
     "evaluationReceipt": { "type": ["string", "null"] },
     "canaryReceipt": { "type": ["string", "null"] },
     "promotionReceipt": { "type": ["string", "null"] },
-    "rollbackTarget": { "type": ["string", "null"] }
+    "rollbackTarget": { "type": ["string", "null"] },
+    "parallelismRef": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["sha256", "path"],
+      "properties": {
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "path": { "type": "string", "minLength": 1 }
+      }
+    }
   }
 }

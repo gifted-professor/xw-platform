@@ -1,0 +1,19 @@
+{
+  "schemaId": "xw.skill.parallelism.v1",
+  "schemaVersion": 1,
+  "mode": "shardable",
+  "splitDimensions": ["queryVariant", "sortMode", "pageRange"],
+  "minWorkers": 1,
+  "maxWorkers": 4,
+  "reassignable": true,
+  "completionPolicy": "minimum_success",
+  "minimumSuccessfulShards": 3,
+  "merge": {
+    "strategy": "set_union",
+    "dedupeKey": "canonicalNoteId"
+  },
+  "verification": {
+    "mode": "cross_device_sample",
+    "sampleRate": 0.1
+  }
+}

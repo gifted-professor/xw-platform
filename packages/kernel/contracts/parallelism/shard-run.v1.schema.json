@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:xw:contract:shard-run:v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaId", "schemaVersion", "shardRunId", "planRunId", "status", "events"],
+  "properties": {
+    "schemaId": { "const": "xw.shard.run.v1" },
+    "schemaVersion": { "const": 1 },
+    "shardRunId": { "type": "string", "minLength": 1 },
+    "planRunId": { "type": "string", "minLength": 1 },
+    "status": {
+      "enum": [
+        "PENDING",
+        "LEASED",
+        "RUNNING",
+        "SUCCEEDED",
+        "FAILED",
+        "REASSIGNED",
+        "SKIPPED_AMBIGUOUS"
+      ]
+    },
+    "events": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["seq", "type"],
+        "properties": {
+          "seq": { "type": "integer", "minimum": 1 },
+          "type": { "type": "string", "minLength": 1 },
+          "at": { "type": ["integer", "null"] },
+          "detail": { "type": ["object", "null"] }
+        }
+      }
+    }
+  }
+}
