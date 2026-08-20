@@ -17,6 +17,7 @@ const TOKEN = "registry-test-token";
 const HUMAN_TOKEN = "registry-test-human-token";
 const OBSERVER_TOKEN = "registry-test-observer-token";
 const OPERATOR_TOKEN = "registry-test-operator-token";
+const REGISTRY_START_TIMEOUT_MS = 20_000;
 // 真实 PNG 头字节（魔数 89 50 4E 47）+ IHDR 片段；Screen API 只校验魔数/SHA/字节数，不需完整可解码 PNG。
 const SCREEN_PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52]);
 const SCREEN_SHA = createHash("sha256").update(SCREEN_PNG).digest("hex");
@@ -171,11 +172,22 @@ async function startRegistry({ root, controlUrl, requireAuth = true, extraArgs =
   args.push(...extraArgs);
   const child = spawn(process.execPath, args, { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...env } });
   let logs = "";
+  let spawnError = null;
+  child.once("error", (error) => { spawnError = error; });
   child.stdout.on("data", (chunk) => { logs += chunk; });
   child.stderr.on("data", (chunk) => { logs += chunk; });
   const base = `http://127.0.0.1:${port}`;
-  for (let attempt = 0; attempt < 80; attempt += 1) {
-    if (child.exitCode !== null) throw new Error(`registry exited early: ${logs}`);
+  // registry 遇 EADDRINUSE 会静默等待 2s 后重听（计划任务自愈约定），因此探活窗口必须大于 2s，
+  // 否则 CI 上偶发端口占用会先于重试超时（旧 Windows CI continue-on-error 掩盖了这个竞态）。
+  const deadline = Date.now() + REGISTRY_START_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    if (spawnError) {
+      await stopRegistry(child);
+      throw new Error(`registry spawn failed on port ${port}: ${spawnError.message}`);
+    }
+    if (child.exitCode !== null) {
+      throw new Error(`registry exited early on port ${port} (exit=${child.exitCode}, signal=${child.signalCode || "none"}): ${logs}`);
+    }
     try {
       const probe = probeToken || (requireAuth ? TOKEN : null);
       const response = await fetch(`${base}/api/health`, probe ? { headers: { "x-registry-token": probe } } : {});
@@ -183,15 +195,25 @@ async function startRegistry({ root, controlUrl, requireAuth = true, extraArgs =
     } catch {}
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
-  child.kill("SIGTERM");
-  throw new Error(`registry did not start: ${logs}`);
+  await stopRegistry(child);
+  throw new Error(`registry did not start within ${REGISTRY_START_TIMEOUT_MS}ms on port ${port} (exit=${child.exitCode}, signal=${child.signalCode || "none"}): ${logs}`);
 }
 
 async function stopRegistry(child) {
+  if (!child) return;
   if (child.exitCode !== null) return;
   child.kill("SIGTERM");
-  await Promise.race([once(child, "exit"), new Promise((resolve) => setTimeout(resolve, 1000))]);
-  if (child.exitCode === null) child.kill("SIGKILL");
+  await Promise.race([
+    once(child, "exit").catch(() => undefined),
+    new Promise((resolve) => setTimeout(resolve, 1000)),
+  ]);
+  if (child.exitCode === null) {
+    child.kill("SIGKILL");
+    await Promise.race([
+      once(child, "exit").catch(() => undefined),
+      new Promise((resolve) => setTimeout(resolve, 1000)),
+    ]);
+  }
 }
 
 let tempRoot;
@@ -219,9 +241,9 @@ test.before(async () => {
 });
 
 test.after(async () => {
-  await stopRegistry(registry.child);
-  control.server.close();
-  await rm(tempRoot, { recursive: true, force: true });
+  await stopRegistry(registry?.child);
+  control?.server.close();
+  if (tempRoot) await rm(tempRoot, { recursive: true, force: true });
 });
 
 test("agent entry aggregates leases, jobs, blockers and omits private identity fields", async () => {

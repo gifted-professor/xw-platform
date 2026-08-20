@@ -66,7 +66,16 @@ export function runSuite(root, name, suite) {
   const text = `${result.stdout || ""}\n${result.stderr || ""}`;
   const failingNames = parseFailingNames(text);
   const summary = parseSummary(text);
-  const verdict = evaluateSuite(allowedNamesFor(suite), failingNames);
+  let verdict = evaluateSuite(allowedNamesFor(suite), failingNames);
+  // 进程非零退出但解析不到失败名（崩溃、无 "✖ failing tests:" 摘要）→ 必须 BLOCK，
+  // 不能当作 PASS 放过。解析不到 = 无法证明失败在 allowlist 内。
+  if ((result.status ?? 1) !== 0 && failingNames.length === 0) {
+    verdict = {
+      unexpectedFailures: ["<unparseable> test process exited non-zero without a parseable failing-tests summary"],
+      allowedFailuresHit: [],
+      status: "BLOCK",
+    };
+  }
   return {
     name,
     cwd: suite.cwd,

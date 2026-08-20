@@ -3,7 +3,7 @@
  * Raw TaskPlan → Binder → ExecutionPlan → assignment.boundNode → TypedJobWorker → fake CP
  */
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -437,6 +437,8 @@ test("parent-directory symlink in closure path fails closed", () => {
       (e) => e.code === "IMPLEMENTATION_CLOSURE_SYMLINK",
     );
   } finally {
+    // Windows 目录 symlink 不能 rmSync（会递归进链接目标）；先 unlink 链接本身。
+    try { unlinkSync(join(root, "apps", "runtime-link")); } catch {}
     rmSync(root, { recursive: true, force: true });
   }
 });

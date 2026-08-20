@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import test from "node:test";
 
 import {
@@ -543,13 +543,14 @@ test("visual OCR blocks are converted to the audited recovery envelope coordinat
 });
 
 test("recovery evidence paths are bound to the inspected run and reject traversal", () => {
-  const runsRoot = "C:\\safe-runs";
+  // 生产实现用宿主 path 模块（Windows 目标），测试用宿主 join 构造期望，跨平台断言同一行为契约。
+  const runsRoot = join("safe-runs");
   assert.equal(
-    requireRunsEvidencePath("evidence\\screen.png", "run_12345678", { runsRoot }),
-    "C:\\safe-runs\\run_12345678\\evidence\\screen.png",
+    requireRunsEvidencePath(join("evidence", "screen.png"), "run_12345678", { runsRoot }),
+    resolve(runsRoot, "run_12345678", "evidence", "screen.png"),
   );
   assert.throws(
-    () => requireRunsEvidencePath("..\\..\\outside.png", "run_12345678", { runsRoot }),
+    () => requireRunsEvidencePath(join("..", "..", "outside.png"), "run_12345678", { runsRoot }),
     /outside the configured runs root/,
   );
 });
