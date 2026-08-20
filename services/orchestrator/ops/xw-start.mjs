@@ -177,21 +177,25 @@ async function readJson(path) {
   return JSON.parse((await readFile(path, "utf8")).replace(/^\uFEFF/, ""));
 }
 
-async function releaseGate() {
+export async function releaseGate(dependencies = {}) {
   if (truthyFlag(process.env.MISSION_AUTO_APPROVAL_ENABLED) || truthyFlag(process.env.STANDING_GRANT_ENABLED)) {
     return { ok: false, reason: "unsafe_feature_flag_enabled" };
   }
+  const runtimeRoot = dependencies.runtimeRoot || RUNTIME_ROOT;
+  const readReleaseRoot = dependencies.readReleaseRoot || (() => realpath(CURRENT_RELEASE));
+  const readManifest = dependencies.readManifest
+    || (async () => readJson(join(await readReleaseRoot(), "release-manifest.v1.json")));
+  const fetchControlHealth = dependencies.fetchControlHealth || (() => fetchJson(CONTROL, "/control/v1/health"));
+  const fetchRegistryHealth = dependencies.fetchRegistryHealth || (() => fetchJson(REGISTRY, "/api/health"));
   try {
-    const releaseRoot = await realpath(CURRENT_RELEASE);
-    const releasesRoot = `${resolve(RUNTIME_ROOT, "releases")}\\`.toLowerCase();
-    if (!`${resolve(releaseRoot)}\\`.toLowerCase().startsWith(releasesRoot)) {
+    const releaseRoot = await readReleaseRoot();
+    const releasesRoot = resolve(runtimeRoot, "releases");
+    const relativeRelease = relative(releasesRoot, resolve(releaseRoot));
+    if (relativeRelease.startsWith("..") || isAbsolute(relativeRelease)) {
       return { ok: false, reason: "current_release_outside_runtime" };
     }
-    const manifest = await readJson(join(releaseRoot, "release-manifest.v1.json"));
-    const [controlHealth, registryHealth] = await Promise.all([
-      fetchJson(CONTROL, "/control/v1/health"),
-      fetchJson(REGISTRY, "/api/health"),
-    ]);
+    const manifest = await readManifest();
+    const [controlHealth, registryHealth] = await Promise.all([fetchControlHealth(), fetchRegistryHealth()]);
     const expected = {
       releaseId: manifest.releaseId,
       sourceCommit: manifest.sourceCommit,
