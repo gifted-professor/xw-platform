@@ -136,6 +136,66 @@
     },
     {
       "schemaVersion": 1,
+      "id": "xiaowei.m6.observe_frame",
+      "appId": "xiaowei",
+      "packageName": null,
+      "versionRange": "observed:9.10.113",
+      "maturity": "E1",
+      "risk": "R0",
+      "resources": [
+        "device",
+        "transport:xiaowei:22222"
+      ],
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object"
+      },
+      "preconditions": [
+        "exclusive canary session",
+        "closed read-only observation only; no caller shell/coordinates/actions"
+      ],
+      "verification": {
+        "mode": "custom",
+        "description": "vendor success and complete closed observation (ok, capturedAt, skew, observation, evidence)"
+      },
+      "restoration": {
+        "required": false,
+        "description": "read-only — never mutates device state"
+      },
+      "timeoutMs": 40000,
+      "idempotency": "read_only",
+      "automationPolicy": {
+        "mode": "lab_only",
+        "canaryOnly": true
+      },
+      "implementation": {
+        "adapter": "xiaowei",
+        "action": "observe_frame"
+      },
+      "evidence": [
+        "HANDOFF-2026-08-21-m6-2-w4-read-observation"
+      ],
+      "availability": "canary_only",
+      "effect": {
+        "class": "none",
+        "phase": "na",
+        "commitBoundary": "automatic"
+      },
+      "exposure": "public",
+      "invocationPolicy": {
+        "allowedModes": [
+          "job",
+          "session"
+        ]
+      },
+      "lifecycle": "canary_only"
+    },
+    {
+      "schemaVersion": 1,
       "id": "xiaowei.explorer.primitive",
       "appId": "xiaowei",
       "packageName": null,

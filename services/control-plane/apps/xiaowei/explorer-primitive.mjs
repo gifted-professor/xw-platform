@@ -90,7 +90,7 @@ export function validateExplorerPrimitiveParams(params) {
   return params;
 }
 
-function parseFocus(raw) {
+export function parseFocus(raw) {
   const s = String(raw || "");
   const m = s.match(/([a-zA-Z0-9_]+(?:\.[a-zA-Z0-9_]+)+)\/(\S+)/);
   if (m) return { package: m[1], activity: m[2].replace(/[\}\s].*$/, ""), raw: s.slice(0, 300) };
@@ -126,9 +126,16 @@ async function adbShell(transport, serial, command, timeoutMs = 20000) {
   return String(data);
 }
 
-async function doScreen(transport, serial, evidenceDirectory) {
-  mkdirSync(evidenceDirectory, { recursive: true });
-  const saveDir = join(evidenceDirectory, `_screen_${randomUUID()}`);
+// ---------------------------------------------------------------------------
+// Shared read-only capture helpers (M6-2 W4). read-observation reuses these —
+// there is exactly ONE implementation of the safe read paths. These are the
+// only functions a capture can compose; they never mutate device state.
+// ---------------------------------------------------------------------------
+
+// Captures one full PNG via the vendor Screen action and returns its bytes.
+// saveDir must be a fresh caller-owned directory; the returned file is left in
+// place for the caller to rename/consume.
+export async function readScreenPng({ transport, serial, saveDir }) {
   mkdirSync(saveDir, { recursive: true });
   const before = new Set(readdirSync(saveDir).filter((f) => /\.png$/i.test(f)));
   const response = await transport.invoke({
@@ -148,20 +155,12 @@ async function doScreen(transport, serial, evidenceDirectory) {
   if (!found) {
     throw new ControlPlaneError("EXPLORER_SCREEN_EMPTY", "screen capture produced no png", { status: 502 });
   }
-  const target = join(evidenceDirectory, "screen.png");
-  renameSync(found, target);
-  return {
-    ok: true,
-    primitive: "screen",
-    path: target,
-    bytes: readFileSync(target).length,
-    vendorCode: response?.code ?? null,
-  };
+  return { path: found, bytes: readFileSync(found), vendorCode: response?.code ?? null };
 }
 
-async function doDumpUi(transport, serial, evidenceDirectory) {
-  mkdirSync(evidenceDirectory, { recursive: true });
-  const out = join(evidenceDirectory, "dump-ui.xml");
+// Captures the uiautomator hierarchy as well-formed XML text via a bounded
+// shell sequence (uiautomator dump → base64 → rm). Returns the parsed XML.
+export async function readDumpXml({ transport, serial }) {
   const token = randomUUID();
   const remote = `/sdcard/xhs-dump-${token}.xml`;
   await adbShell(transport, serial, `uiautomator dump ${remote}`, 25000);
@@ -178,17 +177,38 @@ async function doDumpUi(transport, serial, evidenceDirectory) {
   if (!xml.includes("<hierarchy")) {
     throw new ControlPlaneError("EXPLORER_DUMP_INVALID", "dump missing hierarchy", { status: 502 });
   }
-  writeFileSync(out, xml, "utf8");
-  return { ok: true, primitive: "dump_ui", path: out, bytes: Buffer.byteLength(xml) };
+  return { xml, bytes: Buffer.byteLength(xml) };
 }
 
-async function doFocus(transport, serial) {
-  const raw = await adbShell(
+// Reads the focused window / resumed activity text (read-only dumpsys).
+export async function readWindowFocusText({ transport, serial }) {
+  return adbShell(
     transport,
     serial,
     "dumpsys window 2>/dev/null | grep -E 'mCurrentFocus|mFocusedApp'; dumpsys activity activities 2>/dev/null | grep -E 'mResumedActivity' | head -1",
     15000,
   );
+}
+
+async function doScreen(transport, serial, evidenceDirectory) {
+  mkdirSync(evidenceDirectory, { recursive: true });
+  const saveDir = join(evidenceDirectory, `_screen_${randomUUID()}`);
+  const { path, bytes, vendorCode } = await readScreenPng({ transport, serial, saveDir });
+  const target = join(evidenceDirectory, "screen.png");
+  renameSync(path, target);
+  return { ok: true, primitive: "screen", path: target, bytes: bytes.length, vendorCode };
+}
+
+async function doDumpUi(transport, serial, evidenceDirectory) {
+  mkdirSync(evidenceDirectory, { recursive: true });
+  const { xml, bytes } = await readDumpXml({ transport, serial });
+  const out = join(evidenceDirectory, "dump-ui.xml");
+  writeFileSync(out, xml, "utf8");
+  return { ok: true, primitive: "dump_ui", path: out, bytes };
+}
+
+async function doFocus(transport, serial) {
+  const raw = await readWindowFocusText({ transport, serial });
   return { ok: true, primitive: "focus", ...parseFocus(raw) };
 }
 

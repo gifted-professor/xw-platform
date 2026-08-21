@@ -24,7 +24,15 @@ export const M6_SCHEMA_FILES = Object.freeze({
   "xw.agentic-executor.v1": "xw.agentic-executor.v1.schema.json",
   "xw.visual-assets.lock.v1": "xw.visual-assets.lock.v1.schema.json",
   "xw.replay-corpus-manifest.v1": "xw.replay-corpus-manifest.v1.schema.json",
+  "xw.capture-attempt-receipt.v1": "xw.capture-attempt-receipt.v1.schema.json",
+  "xw.m6-live-gate.v1": "xw.m6-live-gate.v1.schema.json",
 });
+
+export const CAPTURE_RECEIPT_STATUSES = Object.freeze(["accepted", "rejected"]);
+
+export const M6_LIVE_GATE_MODES = Object.freeze(["CLOSED", "OBSERVE_ONLY"]);
+
+export const M6_LIVE_GATE_STATUSES = Object.freeze(["active", "closed"]);
 
 export const GROUNDING_CHECK_NAMES = Object.freeze([
   "freshness",
@@ -407,6 +415,85 @@ export function validateReplayCorpusManifest(document) {
     } else if (expected.frameOutcome === "REJECT" && expected.targetStableIndex !== undefined) {
       fail(errors, code, `rejected frame ${entry.entryId} cannot declare a targetStableIndex`);
     }
+  }
+  return { ok: errors.length === 0, errors };
+}
+
+// ---------------------------------------------------------------------------
+// M6-2: capture attempt receipt + live gate epoch validators.
+// ---------------------------------------------------------------------------
+
+// Derived from the canonical receipt payload minus the self-referential
+// receiptSha256, so any mutation of run/linkage/status/refs invalidates it.
+export function deriveCaptureAttemptReceiptSha256(receipt) {
+  const { receiptSha256: _ignored, ...rest } = receipt || {};
+  return sha256Hex(`xw.capture-attempt-receipt.v1:${stableStringify(rest)}`);
+}
+
+export function validateCaptureAttemptReceipt(receipt) {
+  const code = "INVALID_M6_CAPTURE_ATTEMPT_RECEIPT";
+  const errors = validateAgainstSchema(receipt, "xw.capture-attempt-receipt.v1", code);
+  if (errors.length > 0) return { ok: false, errors };
+  if (receipt.receiptSha256 !== deriveCaptureAttemptReceiptSha256(receipt)) {
+    fail(errors, code, "receiptSha256 does not match the canonical receipt payload");
+  }
+  if (receipt.status === "accepted" && !receipt.frameRef) {
+    fail(errors, code, "accepted receipts must carry a frameRef");
+  }
+  if (receipt.status === "rejected" && receipt.frameRef) {
+    fail(errors, code, "rejected receipts must not carry a frameRef");
+  }
+  if (receipt.status === "rejected" && receipt.errorCodes.length === 0) {
+    fail(errors, code, "rejected receipts must carry at least one M6_ error code");
+  }
+  if (receipt.status === "accepted" && receipt.errorCodes.length > 0) {
+    fail(errors, code, "accepted receipts must not carry error codes");
+  }
+  if (!Number.isFinite(Date.parse(receipt.capturedAt)) || !Number.isFinite(Date.parse(receipt.committedAt))) {
+    fail(errors, code, "capturedAt/committedAt must be valid date-time strings");
+  } else if (Date.parse(receipt.committedAt) < Date.parse(receipt.capturedAt)) {
+    fail(errors, code, "committedAt must be at or after capturedAt");
+  }
+  if (receipt.skew) {
+    const skew = receipt.skew;
+    if (!Number.isInteger(skew.aToBMs) || skew.aToBMs < 0) {
+      fail(errors, code, "skew.aToBMs must be a non-negative integer");
+    }
+    if (!Number.isInteger(skew.bToFocusBMs) || skew.bToFocusBMs < 0) {
+      fail(errors, code, "skew.bToFocusBMs must be a non-negative integer");
+    }
+  }
+  return { ok: errors.length === 0, errors };
+}
+
+// Derived from the canonical immutable epoch payload minus self-referential
+// epochHash. Includes the parent link and closeout ref so the chain is total.
+export function deriveM6LiveGateEpochHash(gate) {
+  const { epochHash: _ignored, ...rest } = gate || {};
+  return sha256Hex(`xw.m6-live-gate.v1:${stableStringify(rest)}`);
+}
+
+export function validateM6LiveGate(gate) {
+  const code = "INVALID_M6_LIVE_GATE";
+  const errors = validateAgainstSchema(gate, "xw.m6-live-gate.v1", code);
+  if (errors.length > 0) return { ok: false, errors };
+  if (gate.epochHash !== deriveM6LiveGateEpochHash(gate)) {
+    fail(errors, code, "epochHash does not match the canonical epoch payload");
+  }
+  if (gate.mode === "CLOSED" && gate.status !== "closed") {
+    fail(errors, code, "CLOSED epochs must have status=closed");
+  }
+  if (gate.mode === "OBSERVE_ONLY" && gate.status !== "active") {
+    fail(errors, code, "OBSERVE_ONLY epochs must have status=active");
+  }
+  // An active observe-only epoch may legitimately carry closeoutRef=null (the
+  // frozen activation shape); only CLOSED epochs are required to reference a
+  // closeout receipt.
+  if (gate.mode === "CLOSED" && !gate.closeoutRef) {
+    fail(errors, code, "CLOSED epochs must reference a closeout receipt");
+  }
+  if (gate.status === "active" && Date.parse(gate.expiresAt) <= Date.parse(gate.issuedAt)) {
+    fail(errors, code, "expiresAt must be after issuedAt for an active epoch");
   }
   return { ok: errors.length === 0, errors };
 }

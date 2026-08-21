@@ -13,6 +13,9 @@ import { XiaoweiTransport } from "./lib/xiaowei-transport.mjs";
 import { CapabilityRegistry } from "./lib/capability-registry.mjs";
 import { AdapterRegistry, ControlPlane } from "./lib/control-plane.mjs";
 import { EvidenceStore } from "./lib/evidence-store.mjs";
+import { M6FrameEvidenceStore } from "./lib/m6-frame-evidence-store.mjs";
+import { createM6FrameCapture } from "./lib/m6-frame-capture.mjs";
+import { loadReleaseIdentity } from "../../../packages/release/lib/release-identity.mjs";
 import { ControlPlaneError } from "./lib/errors.mjs";
 import { DelegationGrantRuntime } from "./lib/delegation-grant-runtime.mjs";
 import {
@@ -87,6 +90,21 @@ export function loadStandingGrantIssuer({ standingGrantEnabled, issuerKeysPath }
   return TrustedHumanIssuer.fromFile(issuerKeysPath);
 }
 
+// The immutable release profile bit for M6: only legacy_compat with
+// agenticGroundingEnabled=true is admissible. Missing contract → null (fail
+// closed: the facade then rejects every capture with M6_PROFILE_DISABLED).
+export function loadLegacyCompatProfile({ startDir = dirname(fileURLToPath(import.meta.url)) } = {}) {
+  try {
+    const path = join(dirname(dirname(dirname(startDir))), "packages", "kernel", "contracts", "runtime-profile.v1.json");
+    const contract = JSON.parse(readFileSync(path, "utf8"));
+    const profile = contract.profiles?.["legacy_compat"];
+    if (!profile) return null;
+    return { runtimeProfile: "legacy_compat", agenticGroundingEnabled: profile.agenticGroundingEnabled === true };
+  } catch {
+    return null;
+  }
+}
+
 export function createControlPlaneRuntime({
   nodeId = process.env.CONTROL_PLANE_NODE_ID || "DESKTOP-3I1EVHE",
   dbPath,
@@ -109,6 +127,14 @@ export function createControlPlaneRuntime({
   standingGrantAdrPath,
   discoveryCapabilityForPrimitive = {},
   policyMode = null,
+  // M6-2 W5: opt-in only. Default off keeps every existing runtime byte-identical;
+  // zero-live is preserved because an empty gate epoch chain fails closed.
+  m6Enabled = false,
+  m6Root = null,
+  m6Gate = { chain: [], closeouts: {} },
+  m6Release = null,
+  m6Profile = null,
+  m6LockHashes = null,
 } = {}) {
   const defaults = defaultRuntimePaths();
   const resolvedDbPath = dbPath || process.env.CONTROL_PLANE_DB || defaults.dbPath;
@@ -177,6 +203,29 @@ export function createControlPlaneRuntime({
   });
   control.installDiscoveryProducer({ capabilityForPrimitive: discoveryCapabilityForPrimitive });
 
+  // M6-2 W5 closed facade. Opt-in; with no operator epochs the gate is CLOSED and
+  // every capture/preflight fails closed before touching a device. The M6 frame
+  // evidence + audit roots live under the canonical xw-runtime directory.
+  let m6 = null;
+  if (m6Enabled) {
+    const m6RootPath = m6Root || join(root, "xw-runtime");
+    const m6Evidence = new M6FrameEvidenceStore({ root: join(m6RootPath, "m6-frames") });
+    const releaseIdentity = m6Release || loadReleaseIdentity({ startDir: root });
+    const profile = m6Profile ?? loadLegacyCompatProfile();
+    m6 = createM6FrameCapture({
+      control,
+      state: runtimeState,
+      capabilities: registry,
+      evidence: m6Evidence,
+      auditRoot: join(m6RootPath, "m6-audit"),
+      gate: m6Gate,
+      release: { releaseId: releaseIdentity.releaseId, sourceCommit: releaseIdentity.sourceCommit },
+      profile,
+      devices: { findByAlias: (alias) => runtimeState.listDevices().find((d) => d.alias === alias) || null },
+      lockHashes: m6LockHashes,
+    });
+  }
+
   // Phase 4: optional generated recipe overlay. Never removes static capabilities;
   // never auto-executes recipes. Flag off → skip attach entirely.
   const overlayMode = resolveOverlayMode();
@@ -206,5 +255,6 @@ export function createControlPlaneRuntime({
     deviceConfigPath,
     nodeId,
     policyMode: resolvedPolicyMode,
+    m6,
   };
 }

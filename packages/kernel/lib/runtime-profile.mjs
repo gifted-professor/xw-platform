@@ -18,7 +18,12 @@ const PROFILE_FIELDS = Object.freeze([
   "multiAgentEnabled",
   "paymentCredentialRequiresHuman",
   "paymentFinalCommitRequiresHuman",
+  // M6-2: additive capability bit on the immutable release profile. Absent in an
+  // old profile or fixture it defaults to false (never inferred from live state).
+  "agenticGroundingEnabled",
 ]);
+
+const DEFAULT_FALSE_FIELDS = Object.freeze(["agenticGroundingEnabled"]);
 
 let cachedProfiles = null;
 
@@ -39,11 +44,14 @@ export function loadRuntimeProfile(name = DEFAULT_RUNTIME_PROFILE) {
     throw new Error(`UNKNOWN_RUNTIME_PROFILE: ${name}`);
   }
   for (const field of PROFILE_FIELDS) {
+    if (profile[field] === undefined && DEFAULT_FALSE_FIELDS.includes(field)) continue;
     if (typeof profile[field] !== "boolean") {
       throw new Error(`RUNTIME_PROFILE_INVALID: ${name}.${field} must be boolean`);
     }
   }
   const copy = {};
-  for (const field of PROFILE_FIELDS) copy[field] = profile[field];
+  for (const field of PROFILE_FIELDS) {
+    copy[field] = profile[field] === undefined && DEFAULT_FALSE_FIELDS.includes(field) ? false : profile[field];
+  }
   return Object.freeze(copy);
 }

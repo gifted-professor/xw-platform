@@ -28,6 +28,7 @@
     "test:control-critical": "npm --prefix services/control-plane run test:control",
     "test:gate": "node tools/fusion/cli.mjs test-gate",
     "test": "npm run test:fusion && npm run test:gate && npm run test:xw-runtime-tools",
-    "test:m6": "node --test services/orchestrator/tests/m6-contracts.test.mjs services/orchestrator/tests/m6-autonomy-grant.test.mjs services/orchestrator/tests/m6-hard-redline.test.mjs services/orchestrator/tests/m6-tool-surface.test.mjs services/orchestrator/tests/m6-inventory.test.mjs services/orchestrator/tests/m6-grounding-runtime.test.mjs services/orchestrator/tests/m6-locator-convergence.test.mjs services/orchestrator/tests/m6-replay-corpus.test.mjs services/orchestrator/tests/m6-grounding-metrics.test.mjs"
+    "test:m6": "node --test services/orchestrator/tests/m6-contracts.test.mjs services/orchestrator/tests/m6-autonomy-grant.test.mjs services/orchestrator/tests/m6-hard-redline.test.mjs services/orchestrator/tests/m6-tool-surface.test.mjs services/orchestrator/tests/m6-inventory.test.mjs services/orchestrator/tests/m6-grounding-runtime.test.mjs services/orchestrator/tests/m6-screen-frame.test.mjs services/orchestrator/tests/m6-locator-convergence.test.mjs services/orchestrator/tests/m6-replay-corpus.test.mjs services/orchestrator/tests/m6-grounding-metrics.test.mjs",
+    "test:m6-2:offline": "node --test services/control-plane/tests/m6-live-gate.test.mjs services/control-plane/tests/m6-frame-evidence-store.test.mjs services/control-plane/tests/m6-read-observation.test.mjs services/control-plane/tests/m6-frame-capture.test.mjs services/control-plane/tests/control-plane-server.test.mjs"
   }
 }

@@ -1,0 +1,2 @@
+  mInputShown=false
+  mImeWindowVis=0

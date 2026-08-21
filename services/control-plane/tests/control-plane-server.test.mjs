@@ -5,7 +5,9 @@ import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { createXiaoweiAdapter } from "../apps/xiaowei/adapter.mjs";
 import { assertPinnedNodeVersion, createControlPlaneRuntime, loadStandingGrantIssuer } from "../control-plane/bootstrap.mjs";
+import { deriveM6EpochHash } from "../control-plane/lib/m6-live-gate.mjs";
 import { CapabilityRegistry } from "../control-plane/lib/capability-registry.mjs";
 import { AdapterRegistry, ControlPlane } from "../control-plane/lib/control-plane.mjs";
 import { validateJsonSchema } from "../control-plane/lib/json-schema-validator.mjs";
@@ -1111,3 +1113,98 @@ test("GET /control/v1/jobs/:id exposes exclusive 22222 lock and refuses true-spl
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+
+test("bootstrap m6Enabled=off leaves M6 uninstalled; the M6 namespace refuses (503)", async () => {
+  const root = mkdtempSync(join(tempBase, "m6-bootstrap-off-"));
+  const state = new StateStore({ dbPath: join(root, "control.db") });
+  try {
+    const runtime = createControlPlaneRuntime({
+      state,
+      capabilities: new CapabilityRegistry([capability]),
+      adapters: new AdapterRegistry([{ id: "test", async execute() { return {}; }, async verify() { return { ok: true }; }, async restore() { return { ok: true }; } }]),
+      evidence: new EvidenceStore({ runsRoot: join(root, "runs"), state, minFreeBytes: 0, minExternalEffectFreeBytes: 0 }),
+      deviceConfigPath: join(root, "missing-devices.json"),
+    });
+    assert.equal(runtime.m6, null, "M6 is opt-in only: the default runtime has no facade");
+    const router = new ControlRouter({ control: runtime.control, state, capabilities: runtime.capabilities, evidence: runtime.evidence, m6: runtime.m6 });
+    await assert.rejects(
+      router.handle({ method: "POST", path: "/control/v1/m6/frames/capture", body: {} }),
+      (e) => e.code === "M6_FACADE_UNAVAILABLE",
+    );
+  } finally { state.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test("bootstrap m6Enabled wires the closed facade; routes are observe-capture only", async () => {
+  const root = mkdtempSync(join(tempBase, "m6-bootstrap-on-"));
+  const state = new StateStore({ dbPath: join(root, "control.db") });
+  const gate = { chain: [epochRecord()] };
+  try {
+    // The real xiaowei registry (observe_frame must exist) + real adapters over
+    // a transport that must NEVER be read by a preflight.
+    let reads = 0;
+    const transport = {
+      readCount: () => reads,
+      async runExclusive(callback) { return callback(this); },
+      async invoke() { reads += 1; throw new Error("M6 preflight must never read a device"); },
+    };
+    const runtime = createControlPlaneRuntime({
+      state,
+      adapters: new AdapterRegistry([createXiaoweiAdapter({ transport })]),
+      evidence: new EvidenceStore({ runsRoot: join(root, "runs"), state, minFreeBytes: 0, minExternalEffectFreeBytes: 0 }),
+      deviceConfigPath: join(root, "missing-devices.json"),
+      m6Enabled: true,
+      m6Root: join(root, "m6-runtime"),
+      m6Gate: gate,
+      m6Release: { releaseId: "release-1", sourceCommit: "abc123" },
+      m6Profile: { runtimeProfile: "legacy_compat", agenticGroundingEnabled: true },
+    });
+    assert.ok(runtime.m6, "m6Enabled installs the closed facade");
+    for (const op of ["preflight", "capture", "status", "closeout"]) {
+      assert.equal(typeof runtime.m6[op], "function", `facade exposes ${op}`);
+    }
+    state.upsertDevice({
+      deviceId: "device-alpha",
+      alias: "alpha",
+      physicalLabel: "LAB-ALPHA",
+      nodeId: runtime.nodeId,
+      runtimeId: "serial-alpha",
+      routingProfile: { enabled: true, capabilityIds: ["xiaowei.m6.observe_frame"] },
+    });
+    const router = new ControlRouter({ control: runtime.control, state, capabilities: runtime.capabilities, evidence: runtime.evidence, m6: runtime.m6 });
+    const pre = await router.handle({ method: "POST", path: "/control/v1/m6/frames/preflight", body: { alias: "alpha", scenarioLabel: "observe" } });
+    assert.equal(pre.status, 200);
+    assert.equal(pre.body.preflight.gateMode, "OBSERVE_ONLY");
+    assert.equal(transport.readCount(), 0, "preflight performs zero device reads");
+    // The M6 surface cannot be coerced into an action: extra fields are rejected.
+    await assert.rejects(
+      router.handle({ method: "POST", path: "/control/v1/m6/frames/capture", body: { alias: "alpha", scenarioLabel: "observe", idempotencyKey: "ik-1", action: "tap", x: 1, y: 1 } }),
+      (e) => e.code === "M6_INPUT_CLOSED",
+    );
+    await assert.rejects(
+      router.handle({ method: "GET", path: "/control/v1/m6/frames/status" }),
+      (e) => e.code === "M6_ATTEMPT_ID_REQUIRED",
+    );
+  } finally { state.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+// A valid OBSERVE_ONLY epoch for the closed bootstrap gate (hash derived, never
+// hand-filled — matches the m6-live-gate derivation exactly).
+function epochRecord() {
+  const raw = {
+    schemaId: "xw.m6-live-gate.v1",
+    gateId: "m6-gate-1",
+    mode: "OBSERVE_ONLY",
+    status: "active",
+    releaseId: "release-1",
+    sourceCommit: "abc123",
+    actor: "operator",
+    lockHashes: null,
+    allowlist: ["alpha"],
+    issuedAt: "2026-08-21T00:00:00.000Z",
+    expiresAt: "2027-01-01T00:00:00.000Z",
+    parentEpochHash: null,
+    closeoutRef: null,
+  };
+  return { ...raw, epochHash: deriveM6EpochHash(raw) };
+}

@@ -1,0 +1,3 @@
+mCurrentFocus=Window{0x3c8e90f u0 com.tencent.mm/com.tencent.mm.ui.LauncherUI}
+mFocusedApp=AppRecord{0x3c8e90f u0 com.tencent.mm/com.tencent.mm.ui.LauncherUI}
+mResumedActivity: ActivityRecord{0x2f0a1b9 u0 com.tencent.mm/.ui.LauncherUI t1000}

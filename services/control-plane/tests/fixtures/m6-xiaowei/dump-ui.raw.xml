@@ -1,0 +1,12 @@
+<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" text="" resource-id="com.tencent.mm:id/root" class="android.widget.FrameLayout" package="com.tencent.mm" content-desc="" checkable="false" checked="false" clickable="false" enabled="true" focusable="true" focused="false" scrollable="false" long-clickable="false" password="false" selected="false" bounds="[0,0][1080,2400]">
+    <node index="1" text="微信" resource-id="com.tencent.mm:id/title" class="android.widget.TextView" package="com.tencent.mm" content-desc="微信" clickable="false" enabled="true" focused="false" bounds="[20,100][1060,180]"/>
+    <node index="2" text="" resource-id="com.tencent.mm:id/search" class="android.widget.EditText" package="com.tencent.mm" content-desc="搜索" clickable="true" enabled="true" focused="false" bounds="[40,220][1040,300]"/>
+    <node index="3" text="" resource-id="com.tencent.mm:id/list" class="android.widget.ListView" package="com.tencent.mm" clickable="false" enabled="true" focused="false" bounds="[0,300][1080,2304]">
+      <node index="4" text="文件传输助手" resource-id="com.tencent.mm:id/conv" class="android.widget.LinearLayout" package="com.tencent.mm" content-desc="" clickable="true" enabled="true" focused="false" bounds="[0,300][1080,468]"/>
+      <node index="5" text="订阅号消息" resource-id="com.tencent.mm:id/conv" class="android.widget.LinearLayout" package="com.tencent.mm" content-desc="" clickable="true" enabled="true" focused="false" bounds="[0,468][1080,636]"/>
+    </node>
+    <node index="6" text="" resource-id="com.tencent.mm:id/tabbar" class="android.widget.LinearLayout" package="com.tencent.mm" content-desc="" clickable="true" enabled="true" focused="false" bounds="[0,2304][1080,2400]"/>
+  </node>
+</hierarchy>

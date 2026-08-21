@@ -8,6 +8,12 @@ data/*
 *.xml
 *.csv
 *.log
+# synthetic M6-2 test fixtures are source (checked in despite the media ignores)
+!tests/fixtures/m6-xiaowei/*.png
+!tests/fixtures/m6-xiaowei/*.xml
+# synthetic M6-2 test fixtures are source (checked in despite the media ignores)
+!tests/fixtures/m6-xiaowei/*.png
+!tests/fixtures/m6-xiaowei/*.xml
 .idea/
 .vscode/
 control-plane/runtime/

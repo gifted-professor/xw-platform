@@ -26,7 +26,20 @@ const cliRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 function usage() {
   return `xw phone attach|observe|act|trace|replay|release [--json] [--jsonl] [--non-interactive] [--context-file PATH] [--trace-id ID]
 Token is read from XW_CONTROL_TOKEN or --token-file. Never pass tokens on argv, query, or stdout.
+xw m6 frame preflight|capture|status|closeout — closed M6-2 observe-capture (see: xw m6 frame --help)
 xw cutover collect|package|verify|preflight — offline release tools, see: xw cutover --help`;
+}
+
+function m6FrameUsage() {
+  return `xw m6 frame — M6-2 closed observe frame capture (zero-live, gate stays CLOSED/OBSERVE_ONLY)
+
+  xw m6 frame preflight --alias ALPHA [--scenario observe] [--control URL] --json
+  xw m6 frame capture --alias ALPHA [--scenario observe] --idempotency-key K --json
+  xw m6 frame status --attempt-id ID [--control URL] --json
+  xw m6 frame closeout --attempt-id ID --reason R --control URL --json
+
+JSON output is machine-readable and redacted; it never carries a device token,
+serial, coordinate, or action. Default does not loop and does not flip the gate.`;
 }
 
 function cutoverUsage() {
@@ -242,6 +255,38 @@ async function cutoverMain(argv) {
       for (const entry of ["services/orchestrator/registry.mjs", "services/control-plane/control-plane/router.mjs"]) {
         checks.push({ id: `release:entry:${entry}`, ok: existsSync(join(dir, entry)) });
       }
+      // M6-2 profile proof: the packaged release's immutable profile bit must be
+      // true and the release must be on the legacy_compat runtime. Both facts are
+      // validated directly from the packaged bytes (never from live runtime).
+      const profileRel = "packages/kernel/contracts/runtime-profile.v1.json";
+      const profilePath = join(dir, profileRel);
+      let profileOk = false;
+      let profileDetail = null;
+      if (existsSync(profilePath)) {
+        try {
+          const doc = JSON.parse(readFileSync(profilePath, "utf8"));
+          const legacy = doc?.profiles?.legacy_compat;
+          profileOk = legacy?.agenticGroundingEnabled === true;
+          profileDetail = {
+            runtimeProfile: DEFAULT_RUNTIME_PROFILE,
+            agenticGroundingEnabled: legacy?.agenticGroundingEnabled ?? null,
+          };
+        } catch (error) {
+          profileDetail = { error: error.message };
+        }
+      } else {
+        profileDetail = { missing: profileRel };
+      }
+      checks.push({
+        id: "release:m6-2:runtime-profile",
+        ok: profileOk,
+        detail: profileOk ? profileDetail : profileDetail,
+      });
+      checks.push({
+        id: "release:m6-2:agentic-grounding-enabled",
+        ok: profileOk,
+        detail: profileDetail,
+      });
     }
     const ok = checks.every((check) => check.ok);
     emit(argv, { ok, checks });
@@ -393,6 +438,7 @@ async function cutoverMain(argv) {
 
 async function main(argv = process.argv.slice(2)) {
   if (argv[0] === "cutover") return cutoverMain(argv.slice(1));
+  if (argv[0] === "m6") return m6FrameMain(argv.slice(1));
   if (argv[0] !== "phone" || !argv[1] || argv.includes("--help")) {
     process.stderr.write(`${usage()}\n`);
     return argv.includes("--help") ? 0 : 2;
@@ -464,6 +510,53 @@ if (import.meta.url === `file://${process.argv[1].replaceAll("\\", "/")}` || pro
     process.stderr.write(`${error.code || "CLI_ERROR"}: ${error.message}\n`);
     process.exitCode = 1;
   });
+}
+
+// M6-2 closed frame capture thin client: forwards only alias/scenarioLabel/
+// idempotencyKey (closedM6Input on the server rejects anything else). Output is
+// redacted and machine-ready; it never loops and never flips the live gate.
+async function m6FrameMain(argv) {
+  const command = argv[0];
+  if (!command || has(argv, "--help")) {
+    process.stderr.write(`${m6FrameUsage()}\n`);
+    return has(argv, "--help") ? 0 : 2;
+  }
+  const baseUrl = argOf(argv, "--control", process.env.XW_CONTROL_URL || "http://127.0.0.1:17920");
+  const token = readToken(argv);
+  const client = new ControlClient({ baseUrl, token });
+
+  if (command === "preflight") {
+    const result = await client.m6Preflight({
+      alias: argOf(argv, "--alias"),
+      scenarioLabel: argOf(argv, "--scenario", "observe"),
+    });
+    emit(argv, redact(result));
+    return 0;
+  }
+  if (command === "capture") {
+    const result = await client.m6Capture({
+      alias: argOf(argv, "--alias"),
+      scenarioLabel: argOf(argv, "--scenario", "observe"),
+      idempotencyKey: argOf(argv, "--idempotency-key", argOf(argv, "--idempotency", "")),
+    });
+    emit(argv, redact(result));
+    return 0;
+  }
+  if (command === "status") {
+    const result = await client.m6Status(argOf(argv, "--attempt-id", ""));
+    emit(argv, redact(result));
+    return 0;
+  }
+  if (command === "closeout") {
+    const result = await client.m6Closeout({
+      attemptId: argOf(argv, "--attempt-id"),
+      reason: argOf(argv, "--reason"),
+    });
+    emit(argv, redact(result));
+    return 0;
+  }
+  process.stderr.write(`${m6FrameUsage()}\n`);
+  return 2;
 }
 
 export { main, redact };
