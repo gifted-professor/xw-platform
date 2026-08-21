@@ -15,9 +15,10 @@ export const DEFAULT_ACTOR = process.env.XHS_ACTOR || "claude-pilot-20260809";
 export const ALIPAY_PKG = "com.eg.android.AlipayGphone";
 export const WECHAT_PKG = "com.tencent.mm";
 export const WEIGOU_PKG = "com.truedian.dragon";
-export const DEFAULT_PADDLE_OCR_PYTHON =
-  process.env.XHS_PADDLE_OCR_PYTHON
-  || "C:\\Users\\Public\\xhs-registry-visual-tap\\experiments\\visual-tap-resolver\\.venv-ocr\\Scripts\\python.exe";
+// M6-1: the machine-external PaddleOCR venv default is removed. The OCR python
+// interpreter must be provided explicitly via XHS_PADDLE_OCR_PYTHON; without it
+// read-only balance OCR fails closed rather than reaching outside the repo.
+export const DEFAULT_PADDLE_OCR_PYTHON = process.env.XHS_PADDLE_OCR_PYTHON || null;
 
 export function normalizeAliases(raw) {
   const parts = String(raw ?? "01,02,03,04").split(/[,:\s]+/).filter(Boolean);
@@ -174,6 +175,9 @@ export function ocrScreen(imagePath, {
 } = {}) {
   if (!imagePath || !existsSync(imagePath)) {
     return { ok: false, code: "IMAGE_NOT_FOUND", message: `missing ${imagePath}` };
+  }
+  if (!pythonPath) {
+    return { ok: false, code: "OCR_PYTHON_NOT_CONFIGURED", message: "set XHS_PADDLE_OCR_PYTHON to a PaddleOCR-enabled python interpreter (no machine-external default in M6-1)" };
   }
   if (!existsSync(pythonPath)) {
     return { ok: false, code: "OCR_PYTHON_MISSING", message: pythonPath };

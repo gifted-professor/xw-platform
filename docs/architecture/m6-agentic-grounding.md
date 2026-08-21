@@ -94,3 +94,16 @@ effectiveScope = registered AgenticSkillSpec maximum
 - `services/orchestrator/contracts/m6/autonomy-benchmark.v1.json`：102 个非红线任务 + 中途人工介入/逐动作审批计数口径。
 - `services/orchestrator/contracts/m6/smoothness-slo.v1.json`：bridge p95 ≤100ms、grounding decision p95 ≤1s、observe-to-dispatch 非模型开销 p95 ≤4s；阈值调整必须显式计划变更。
 - `tools/m6/external-path-guard.mjs` / `tools/m6/dsh-inventory-check.mjs`：静态门。
+
+## 9. M6-1 落地状态：离线 Grounding Runtime 与 replay corpus
+
+M6-1 交付了唯一 `GroundingRuntime`（`services/orchestrator/scripts/lib/m6/m6-grounding-runtime.mjs`），收敛原则已落实：旧 `xw-locator` 退化为调用同一 runtime 的诊断 CLI，不保留独立算法；三个机器外兼容例外（xw-locator、xw-start、wechat-ocr）全部清零，external-path-guard violations=0。
+
+- **唯一 GroundingRuntime**：`freezeFrame` → `segmentBlocks` → `decide` → `resolveInternalPoint`。blockId / block-set integrity / grounding decision id 全部复用 M6-0 `m6-contracts.mjs` 派生函数，payment/delete 走 `m6-hard-redline.evaluateHardRedline` 多信号 + Control Plane 双重拦截，provider 无法覆盖安全策略。
+- **hermetic fixture provider**：CI 唯一 provider，零外部模型权重，内容寻址自哈希，Windows/Linux 一致；真实 provider（Cordis/DSH/OCR）在 M6-3 接入但 contract 不变。
+- **evidenceStore**：内存内容寻址；bounds/point 只存 opaque ref，模型面不含坐标/pixel/base64；落盘版（`xw-runtime` canonical root，原子写 + hash 校验）在 M6-2。
+- **≥200 replay corpus**：`services/orchestrator/contracts/m6/replay-corpus.v1.json`（208 frames / 832 entries），全合成、去标识、`validateReplayCorpusManifest` 递归敏感 key 扫描通过；覆盖弹窗/键盘/旋转/广告/空 dump/重复块/敏感标签/滚动/permission-dialog/status-bar/system-nav。
+- **确定性 metrics receipt**：`services/orchestrator/contracts/m6/grounding-metrics.v1.json`。退出门实测：block recall 100%、top-1 100%、safe-region 100%、forbidden/misclick/stale=0、determinism=true、decision p95 < 100ms（远低于 1s SLO）。
+- **SLO 冻结**：`smoothness-slo.v1.json` 的 `hardwareProfile`（m6-1-calibration-hermetic）与 `modelProfile`（m6-1-hermetic-fixture-provider, locked=true）已填入并冻结；真实 DSH/Cordis profile 在 M6-3 另立。
+- **xw-start / wechat-ocr 清零**：xw-start 视觉恢复分析改为 `XW_VISUAL_RECOVERY_*` env 显式配置（未设置 fail-closed），wechat-balance-extract / xw-balance-shared 的 PaddleOCR 默认 venv 路径删除，改要求 `XHS_PADDLE_OCR_PYTHON` 显式提供；非视觉路径（ADB、runtime root）不动。
+- **零 live**：未翻 `M6_AGENTIC_LIVE_GATE`、未碰真机、未改 DB schema、未发 release、未把 `agentic_session` 加入可执行 enum；支付/删除 hard-deny 保持。

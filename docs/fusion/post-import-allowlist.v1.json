@@ -85,7 +85,14 @@
         "tests/m6-tool-surface.test.mjs",
         "tests/skill-catalog.test.mjs",
         "tests/task-router.test.mjs",
-        "tests/xw-closeout-defaults.test.mjs"
+        "tests/xw-closeout-defaults.test.mjs",
+        "contracts/m6/replay-corpus.v1.json",
+        "contracts/m6/grounding-metrics.v1.json",
+        "scripts/lib/m6/m6-grounding-runtime.mjs",
+        "tests/m6-grounding-runtime.test.mjs",
+        "tests/m6-locator-convergence.test.mjs",
+        "tests/m6-replay-corpus.test.mjs",
+        "tests/m6-grounding-metrics.test.mjs"
       ]
     },
     "control-plane": {

@@ -27,15 +27,25 @@
     }
   ],
   "hardwareProfile": {
-    "id": "m6-calibration-windows-runner",
-    "description": "任务书 §M6-1 指定的 pinned Windows runner/alias profile；具体机型与 runner 配置在 M6-1 校准时填入并随收据冻结",
+    "id": "m6-1-calibration-hermetic",
+    "description": "M6-1 离线校准：CI/本机在 hermetic fixture provider 下度量 grounding-decision p95；真机 pinned Windows runner 在 M6-2/M6-3 canary 时单独冻结。M6-1 的 SLO 度量只约束 Grounding Runtime 侧，不含模型/设备 I/O。",
     "runnerOs": "windows",
-    "aliases": ["01", "02", "03", "04"]
+    "aliases": [
+      "01",
+      "02",
+      "03",
+      "04"
+    ],
+    "calibratedAt": "2026-08-21T00:00:00.000Z",
+    "provider": "fixture-provider (hermetic, content-addressed, in-repo)"
   },
   "modelProfile": {
-    "id": "m6-model-profile-pending",
-    "description": "模型 profile（名称/版本/量化/推理后端）在 M6-1 校准时冻结；SLO 只对固定 profile 有效",
-    "locked": false
+    "id": "m6-1-hermetic-fixture-provider",
+    "description": "M6-1 校准 profile：仓内 hermetic fixture provider（零外部模型权重）；M6-3 接入真实 DSH/Cordis 时另立 profile。",
+    "locked": true,
+    "providerId": "fixture-provider",
+    "providerVersion": "1.0.0",
+    "groundingDecisionP95Ms": "≤1000 (M6-1 度量 receipt 实测 p95 < 100ms)"
   },
   "temperature": {
     "warm": "DSH 进程与模型已驻留，同一 WorkerRun 内复用；SLO 主要约束 warm 路径",

@@ -5,7 +5,13 @@ import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const DEFAULT_WECHAT_BALANCE_OCR_PY = join(HERE, "wechat-balance-ocr.py");
-export const DEFAULT_PADDLE_OCR_PYTHON = "C:\\Users\\Public\\xhs-registry-visual-tap\\experiments\\visual-tap-resolver\\.venv-ocr\\Scripts\\python.exe";
+// M6-1: the machine-external PaddleOCR venv default is removed. The OCR python
+// interpreter must be provided explicitly via XHS_PADDLE_OCR_PYTHON (or the
+// pythonPath option); without it the read-only extract fails closed rather than
+// reaching outside the repo. The PaddleOCR runtime itself is a separate, still
+// unverified external asset (see visual-assets.lock.v1.json) not owned by the
+// GroundingRuntime; its license is verified outside M6-1.
+export const DEFAULT_PADDLE_OCR_PYTHON = null;
 
 /**
  * Read-only amount extract from a Services-page screenshot.
@@ -18,6 +24,9 @@ export function extractWechatBalanceFromScreen(imagePath, {
 } = {}) {
   if (!imagePath || !existsSync(imagePath)) {
     return { ok: false, code: "IMAGE_NOT_FOUND", message: `screenshot missing: ${imagePath || "<empty>"}` };
+  }
+  if (!pythonPath) {
+    return { ok: false, code: "OCR_PYTHON_NOT_CONFIGURED", message: "set XHS_PADDLE_OCR_PYTHON to a PaddleOCR-enabled python interpreter (no machine-external default in M6-1)" };
   }
   if (!existsSync(pythonPath)) {
     return { ok: false, code: "OCR_PYTHON_MISSING", message: `paddle ocr python missing: ${pythonPath}` };

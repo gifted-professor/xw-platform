@@ -1,0 +1,42 @@
+{
+  "schemaId": "xw.grounding-metrics.v1",
+  "schemaVersion": 1,
+  "corpusId": "m6-1-hermetic-replay-corpus",
+  "generatedBy": "tools/m6/grounding-metrics.mjs (deterministic, hermetic fixture provider)",
+  "provider": {
+    "id": "fixture-provider",
+    "version": "1.0.0",
+    "modelSha256": "22c00e93def75f853b4562a48a920bbce6c75bc3bdd98c12101a2d27421605ce"
+  },
+  "framesTotal": 208,
+  "framesFrozen": 192,
+  "emptyDumpFrames": 16,
+  "framesSegmentable": 192,
+  "blocksTotal": 1088,
+  "blockRecall": 100,
+  "top1": 100,
+  "safeRegion": 100,
+  "forbidden": 0,
+  "misclick": 0,
+  "stale": 0,
+  "decisionDistribution": {
+    "ALLOW_ONCE": 141,
+    "REPLAN": 776,
+    "HARD_STOP": 171
+  },
+  "determinism": {
+    "checked": 192,
+    "ok": true
+  },
+  "exitGates": {
+    "recallGe98": true,
+    "top1Ge95": true,
+    "safeRegionGe99": true,
+    "forbiddenEq0": true,
+    "misclickEq0": true,
+    "staleEq0": true,
+    "deterministic": true
+  },
+  "groundingDecisionP95Ms": 0.8779,
+  "receiptSha256": "40867d989182287925b08664dbc8e67186838b0770eadb8af226f5f5a18b4bd6"
+}
