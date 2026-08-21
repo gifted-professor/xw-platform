@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:xw:contract:m6:visual-block-set:v1",
+  "title": "xw.visual-block-set.v1",
+  "description": "Ordered set of visual blocks for one frame, with segmentation provenance and an integrity hash over the block ids.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaId",
+    "frameId",
+    "segmentation",
+    "ordering",
+    "blocks",
+    "integritySha256"
+  ],
+  "properties": {
+    "schemaId": { "const": "xw.visual-block-set.v1" },
+    "frameId": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "segmentation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "version", "modelSha256"],
+      "properties": {
+        "provider": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 },
+        "modelSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "ordering": { "enum": ["reading-order", "confidence-desc", "stable-index"] },
+    "blocks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schemaId",
+          "frameId",
+          "blockId",
+          "stableIndex",
+          "regionHash",
+          "boundsRef",
+          "label",
+          "category",
+          "confidence",
+          "source"
+        ],
+        "properties": {
+          "schemaId": { "const": "xw.visual-block.v1" },
+          "frameId": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "blockId": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "stableIndex": { "type": "integer", "minimum": 0 },
+          "regionHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "boundsRef": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "sha256"],
+            "properties": {
+              "id": { "type": "string", "minLength": 1 },
+              "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+            }
+          },
+          "label": { "type": "string", "minLength": 1 },
+          "category": {
+            "enum": [
+              "payment",
+              "delete",
+              "ads",
+              "system-navigation",
+              "status-bar",
+              "keyboard",
+              "permission-dialog",
+              "content",
+              "unknown"
+            ]
+          },
+          "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+          "source": { "enum": ["ocr", "vision", "a11y", "resource-id", "fused"] }
+        }
+      }
+    },
+    "integritySha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+  }
+}

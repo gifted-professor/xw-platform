@@ -1,0 +1,36 @@
+{
+  "schemaId": "xw.agentic-executor.v1",
+  "executorId": "m6.agentic-session",
+  "modelProfile": {
+    "provider": "fixture",
+    "model": "fixture-model",
+    "profileSha256": "31354db5838cace8b79eb49ab1938b33bb8146530b75dfb3e5fa4bb231ec2b74"
+  },
+  "toolAllowlist": [
+    "phone_observe",
+    "phone_ground",
+    "phone_act",
+    "phone_verify",
+    "checkpoint_save",
+    "trace_query",
+    "wait_human",
+    "worker_lifecycle"
+  ],
+  "budgets": {
+    "maxSteps": 40,
+    "maxActions": 60,
+    "maxTokens": 200000,
+    "wallClockSeconds": 900
+  },
+  "checkpointPolicy": {
+    "saveEverySteps": 5,
+    "saveOnTerminal": true
+  },
+  "autonomyPolicy": {
+    "authorizationMode": "task_grant",
+    "grantRef": "grant_b748d507292b9be82619061f26f241b3"
+  },
+  "groundingRuntimeRef": "grounding-runtime/fixture",
+  "runtimeLockSha256": "aef4b458deed4ad20a0f4647f6ad06c6fdf7c8712dc665151aaf5d309348b85e",
+  "dshLockSha256": "cbe354b408783d1d71b707ff12eeb98d577b4dcf45e02e2508c9d8c493557461"
+}
