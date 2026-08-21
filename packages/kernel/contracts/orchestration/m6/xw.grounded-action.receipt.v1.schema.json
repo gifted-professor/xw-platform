@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:xw:contract:m6:grounded-action-receipt:v1",
+  "title": "xw.grounded-action.receipt.v1",
+  "description": "M6 upper-layer receipt for one grounded action. References the Action Ledger (the device-action source of truth) instead of duplicating it; carries grant/redline policy versions and hashes for audit.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaId",
+    "receiptId",
+    "taskRef",
+    "planRef",
+    "nodeRef",
+    "shardRef",
+    "workerRef",
+    "sessionId",
+    "leaseRef",
+    "actionRef",
+    "operationKey",
+    "grantRef",
+    "beforeFrameRef",
+    "groundingDecisionRef",
+    "controlPlaneActionRef",
+    "ledgerRef",
+    "status",
+    "policyVersion",
+    "policySha256",
+    "grantPolicySha256",
+    "implementationClosureSha256"
+  ],
+  "properties": {
+    "schemaId": { "const": "xw.grounded-action.receipt.v1" },
+    "receiptId": { "type": "string", "minLength": 8 },
+    "taskRef": { "type": "string", "minLength": 1 },
+    "planRef": { "type": "string", "minLength": 1 },
+    "nodeRef": { "type": "string", "minLength": 1 },
+    "shardRef": { "type": "string", "minLength": 1 },
+    "workerRef": { "type": "string", "minLength": 1 },
+    "sessionId": { "type": "string", "minLength": 1 },
+    "leaseRef": { "type": "string", "minLength": 1 },
+    "actionRef": { "type": "string", "minLength": 1 },
+    "operationKey": { "type": "string", "minLength": 1 },
+    "grantRef": { "type": "string", "minLength": 1 },
+    "beforeFrameRef": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "groundingDecisionRef": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "controlPlaneActionRef": { "type": "string", "minLength": 1 },
+    "ledgerRef": { "type": "string", "minLength": 1 },
+    "afterFrameRef": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "verificationRef": { "type": "string", "minLength": 1 },
+    "status": {
+      "enum": ["AUTHORIZED", "DISPATCHED", "VERIFIED", "FAILED", "AMBIGUOUS", "RECONCILED"]
+    },
+    "policyVersion": { "type": "string", "minLength": 1 },
+    "policySha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "grantPolicySha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "implementationClosureSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "taxonomy", "message"],
+      "properties": {
+        "code": { "type": "string", "minLength": 1 },
+        "taxonomy": {
+          "enum": [
+            "stale-frame",
+            "focus-mismatch",
+            "ambiguity",
+            "redline-hit",
+            "grant-out-of-scope",
+            "budget-exhausted",
+            "dispatch-failed",
+            "verification-failed",
+            "ledger-ambiguous",
+            "internal"
+          ]
+        },
+        "message": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

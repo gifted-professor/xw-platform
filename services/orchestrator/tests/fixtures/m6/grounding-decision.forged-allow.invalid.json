@@ -1,0 +1,40 @@
+{
+  "schemaId": "xw.grounding-decision.v1",
+  "goalRef": "c954b0ab9d24fa8491951f8827fd0701532bbfe631142ceb9ffacc4bc3725b9d",
+  "stepRef": "step-1",
+  "grantRef": "grant_b748d507292b9be82619061f26f241b3",
+  "frameId": "38ea88b2f4c22f1e9703cd12eb79648c416af682debfcf8c39b6955c90d040f8",
+  "blockId": "009259926cdb58cd4664dc0e7a49c74b4a0ae64b46532bf695bc41621d3495ea",
+  "intent": "tap",
+  "effectClass": "navigation",
+  "policyVersion": "1.0.0",
+  "policySha256": "06e11528195bebfd0a6241f3935523312782b0f3a9090db0b9a83ba0bb0bd42b",
+  "checks": [
+    {
+      "name": "freshness",
+      "result": "FAIL"
+    },
+    {
+      "name": "focus",
+      "result": "PASS"
+    },
+    {
+      "name": "ambiguity",
+      "result": "PASS"
+    },
+    {
+      "name": "safe-region",
+      "result": "PASS"
+    },
+    {
+      "name": "sensitive-label",
+      "result": "PASS"
+    },
+    {
+      "name": "confidence",
+      "result": "PASS"
+    }
+  ],
+  "result": "ALLOW_ONCE",
+  "groundingDecisionId": "b8a0d501f4d6187c0a5e37ba312e7628ec8d76a87c780305be1ca4b4991f221d"
+}

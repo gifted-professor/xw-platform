@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:xw:contract:m6:grounding-decision:v1",
+  "title": "xw.grounding-decision.v1",
+  "description": "Server-side grounding decision binding goal/step, AutonomyGrant, frame, block, intent and policy. ALLOW_ONCE carries a derived one-time groundingDecisionId; forged frame/block/grant/effect or upgraded results are invalid.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaId",
+    "goalRef",
+    "stepRef",
+    "grantRef",
+    "frameId",
+    "blockId",
+    "intent",
+    "effectClass",
+    "policyVersion",
+    "policySha256",
+    "checks",
+    "result"
+  ],
+  "properties": {
+    "schemaId": { "const": "xw.grounding-decision.v1" },
+    "goalRef": { "type": "string", "minLength": 1 },
+    "stepRef": { "type": "string", "minLength": 1 },
+    "grantRef": { "type": "string", "minLength": 1 },
+    "frameId": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "blockId": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "intent": { "type": "string", "minLength": 1 },
+    "effectClass": {
+      "enum": ["none", "read", "navigation", "input", "social", "publish", "account", "payment", "delete"]
+    },
+    "policyVersion": { "type": "string", "minLength": 1 },
+    "policySha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "checks": {
+      "type": "array",
+      "minItems": 6,
+      "maxItems": 6,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "result"],
+        "properties": {
+          "name": {
+            "enum": ["freshness", "focus", "ambiguity", "safe-region", "sensitive-label", "confidence"]
+          },
+          "result": { "enum": ["PASS", "FAIL", "UNKNOWN"] }
+        }
+      }
+    },
+    "result": { "enum": ["ALLOW_ONCE", "REPLAN", "HARD_STOP"] },
+    "groundingDecisionId": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "reason": { "type": "string" }
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "schemaId": "xw.visual-block-set.v1",
+  "frameId": "38ea88b2f4c22f1e9703cd12eb79648c416af682debfcf8c39b6955c90d040f8",
+  "segmentation": {
+    "provider": "fixture-provider",
+    "version": "1.0.0",
+    "modelSha256": "191462c96ad76d402b63459ae335ca711d903cf79e78e520e7ae8c10e427ed7d"
+  },
+  "ordering": "stable-index",
+  "blocks": [
+    {
+      "schemaId": "xw.visual-block.v1",
+      "frameId": "38ea88b2f4c22f1e9703cd12eb79648c416af682debfcf8c39b6955c90d040f8",
+      "blockId": "009259926cdb58cd4664dc0e7a49c74b4a0ae64b46532bf695bc41621d3495ea",
+      "stableIndex": 0,
+      "regionHash": "bcddfb26045847eaa95ad8bddb217686bd6361ba55cb47d2471b9819477a9ade",
+      "boundsRef": {
+        "id": "att-bounds-0",
+        "sha256": "656ec7650df10f6dc152c6ccc5be29c36842d59dcdf99023e92562cc3f32d289"
+      },
+      "label": "搜索",
+      "category": "content",
+      "confidence": 0.97,
+      "source": "fused"
+    },
+    {
+      "schemaId": "xw.visual-block.v1",
+      "frameId": "38ea88b2f4c22f1e9703cd12eb79648c416af682debfcf8c39b6955c90d040f8",
+      "blockId": "962b9b513b44b9059dc1d28ef159f933eafb3da0cdb155818e86050b481009eb",
+      "stableIndex": 1,
+      "regionHash": "5b56b7935a4bd1c94173c6fd2b300df0f6bc2457a2d7714c5e411710f599dddf",
+      "boundsRef": {
+        "id": "att-bounds-1",
+        "sha256": "961d7d257d99cc65183fb37ad13d1788e30c069d9860295e4ad5ff3905777946"
+      },
+      "label": "发现",
+      "category": "system-navigation",
+      "confidence": 0.97,
+      "source": "fused"
+    }
+  ],
+  "integritySha256": "0821dbb666740c1a4a1d255eb28ccf492be1ce266e3b80e0689c491203cb0c5e"
+}

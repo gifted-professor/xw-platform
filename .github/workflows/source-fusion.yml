@@ -62,6 +62,10 @@ jobs:
         timeout-minutes: 6
         run: npm run test:orchestrator
 
+      - name: M6 contract and inventory tests
+        timeout-minutes: 4
+        run: npm run test:m6
+
       - name: Control-plane tests against known-failure allowlist
         timeout-minutes: 8
         continue-on-error: ${{ runner.os == 'Windows' }}

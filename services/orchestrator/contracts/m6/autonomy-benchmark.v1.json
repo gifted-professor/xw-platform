@@ -1,0 +1,836 @@
+{
+  "schemaId": "xw.autonomy-benchmark.v1",
+  "schemaVersion": 1,
+  "generatedAt": "2026-08-21T00:00:00Z",
+  "generatedBy": "tools/m6/generate-autonomy-benchmark.mjs (deterministic)",
+  "countingRules": {
+    "midRunHumanIntervention": {
+      "definition": "任务授权编译完成、WorkerRun 启动之后，到任务终态之间发生的任何人工介入次数：包括 WAIT_HUMAN 被人工应答、人工接管设备、人工补充确认。任务开始前的一次性任务授权（AutonomyGrant 签发）不计入。",
+      "unit": "interventions per task run",
+      "budget": "非红线任务集中 <10% 的任务允许发生中途人工介入（任务书 §9.3 / §12.9）"
+    },
+    "perActionApproval": {
+      "definition": "正常路径上每次 action dispatch 前要求人工逐步审批/点确认的次数。grant 范围内自主执行的动作不产生审批；仅 hard stop、范围扩张或恢复预算耗尽触发的 WAIT_HUMAN 计入 midRunHumanIntervention 而非本项。",
+      "unit": "approval prompts per action",
+      "budget": "正常路径必须为 0（任务书 §1.8 / §9.3）"
+    }
+  },
+  "tasks": [
+    {
+      "id": "m6-bench-app-launch-01",
+      "app": "xiaohongshu",
+      "actionFamily": "app-launch",
+      "intent": "从桌面启动 xiaohongshu 并等待首页可交互",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-app-launch-02",
+      "app": "wechat",
+      "actionFamily": "app-launch",
+      "intent": "冷启动 wechat 后定位首页搜索入口",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-app-launch-03",
+      "app": "douyin",
+      "actionFamily": "app-launch",
+      "intent": "从桌面启动 douyin 并等待首页可交互",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-app-launch-04",
+      "app": "xianyu",
+      "actionFamily": "app-launch",
+      "intent": "冷启动 xianyu 后定位首页搜索入口",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-app-launch-05",
+      "app": "system-settings",
+      "actionFamily": "app-launch",
+      "intent": "从桌面启动 system-settings 并等待首页可交互",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-app-launch-06",
+      "app": "gallery",
+      "actionFamily": "app-launch",
+      "intent": "冷启动 gallery 后定位首页搜索入口",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-app-launch-07",
+      "app": "xiaohongshu",
+      "actionFamily": "app-launch",
+      "intent": "从桌面启动 xiaohongshu 并等待首页可交互",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-app-launch-08",
+      "app": "wechat",
+      "actionFamily": "app-launch",
+      "intent": "冷启动 wechat 后定位首页搜索入口",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-app-launch-09",
+      "app": "douyin",
+      "actionFamily": "app-launch",
+      "intent": "从桌面启动 douyin 并等待首页可交互",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-app-launch-10",
+      "app": "xianyu",
+      "actionFamily": "app-launch",
+      "intent": "冷启动 xianyu 后定位首页搜索入口",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-app-launch-11",
+      "app": "system-settings",
+      "actionFamily": "app-launch",
+      "intent": "从桌面启动 system-settings 并等待首页可交互",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-app-launch-12",
+      "app": "gallery",
+      "actionFamily": "app-launch",
+      "intent": "冷启动 gallery 后定位首页搜索入口",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-app-switch-01",
+      "app": "xiaohongshu",
+      "actionFamily": "app-switch",
+      "intent": "从 xiaohongshu 切到最近任务再切回，确认页面状态保持",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-app-switch-02",
+      "app": "wechat",
+      "actionFamily": "app-switch",
+      "intent": "在 wechat 与系统桌面之间往返切换并恢复前台",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-app-switch-03",
+      "app": "douyin",
+      "actionFamily": "app-switch",
+      "intent": "从 douyin 切到最近任务再切回，确认页面状态保持",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-app-switch-04",
+      "app": "xianyu",
+      "actionFamily": "app-switch",
+      "intent": "在 xianyu 与系统桌面之间往返切换并恢复前台",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-app-switch-05",
+      "app": "xiaohongshu",
+      "actionFamily": "app-switch",
+      "intent": "从 xiaohongshu 切到最近任务再切回，确认页面状态保持",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-app-switch-06",
+      "app": "wechat",
+      "actionFamily": "app-switch",
+      "intent": "在 wechat 与系统桌面之间往返切换并恢复前台",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-app-switch-07",
+      "app": "douyin",
+      "actionFamily": "app-switch",
+      "intent": "从 douyin 切到最近任务再切回，确认页面状态保持",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-app-switch-08",
+      "app": "xianyu",
+      "actionFamily": "app-switch",
+      "intent": "在 xianyu 与系统桌面之间往返切换并恢复前台",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-app-switch-09",
+      "app": "xiaohongshu",
+      "actionFamily": "app-switch",
+      "intent": "从 xiaohongshu 切到最近任务再切回，确认页面状态保持",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-app-switch-10",
+      "app": "wechat",
+      "actionFamily": "app-switch",
+      "intent": "在 wechat 与系统桌面之间往返切换并恢复前台",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-search-01",
+      "app": "xiaohongshu",
+      "actionFamily": "search",
+      "intent": "在 xiaohongshu 搜索框输入给定关键词并打开结果列表",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-search-02",
+      "app": "douyin",
+      "actionFamily": "search",
+      "intent": "在 douyin 搜索结果中按筛选条件浏览并定位首个非广告条目",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-search-03",
+      "app": "xianyu",
+      "actionFamily": "search",
+      "intent": "在 xianyu 搜索框输入给定关键词并打开结果列表",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-search-04",
+      "app": "wechat",
+      "actionFamily": "search",
+      "intent": "在 wechat 搜索结果中按筛选条件浏览并定位首个非广告条目",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-search-05",
+      "app": "xiaohongshu",
+      "actionFamily": "search",
+      "intent": "在 xiaohongshu 搜索框输入给定关键词并打开结果列表",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-search-06",
+      "app": "douyin",
+      "actionFamily": "search",
+      "intent": "在 douyin 搜索结果中按筛选条件浏览并定位首个非广告条目",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-search-07",
+      "app": "xianyu",
+      "actionFamily": "search",
+      "intent": "在 xianyu 搜索框输入给定关键词并打开结果列表",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-search-08",
+      "app": "wechat",
+      "actionFamily": "search",
+      "intent": "在 wechat 搜索结果中按筛选条件浏览并定位首个非广告条目",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-search-09",
+      "app": "xiaohongshu",
+      "actionFamily": "search",
+      "intent": "在 xiaohongshu 搜索框输入给定关键词并打开结果列表",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-search-10",
+      "app": "douyin",
+      "actionFamily": "search",
+      "intent": "在 douyin 搜索结果中按筛选条件浏览并定位首个非广告条目",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-search-11",
+      "app": "xianyu",
+      "actionFamily": "search",
+      "intent": "在 xianyu 搜索框输入给定关键词并打开结果列表",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-search-12",
+      "app": "wechat",
+      "actionFamily": "search",
+      "intent": "在 wechat 搜索结果中按筛选条件浏览并定位首个非广告条目",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-search-13",
+      "app": "xiaohongshu",
+      "actionFamily": "search",
+      "intent": "在 xiaohongshu 搜索框输入给定关键词并打开结果列表",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-search-14",
+      "app": "douyin",
+      "actionFamily": "search",
+      "intent": "在 douyin 搜索结果中按筛选条件浏览并定位首个非广告条目",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-text-input-01",
+      "app": "xiaohongshu",
+      "actionFamily": "text-input",
+      "intent": "在 xiaohongshu 输入框键入指定文本并校验回显",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-text-input-02",
+      "app": "wechat",
+      "actionFamily": "text-input",
+      "intent": "在 wechat 输入后逐字修正错别字并确认最终内容",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-text-input-03",
+      "app": "xianyu",
+      "actionFamily": "text-input",
+      "intent": "在 xianyu 输入框键入指定文本并校验回显",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-text-input-04",
+      "app": "xiaohongshu",
+      "actionFamily": "text-input",
+      "intent": "在 xiaohongshu 输入后逐字修正错别字并确认最终内容",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-text-input-05",
+      "app": "wechat",
+      "actionFamily": "text-input",
+      "intent": "在 wechat 输入框键入指定文本并校验回显",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-text-input-06",
+      "app": "xianyu",
+      "actionFamily": "text-input",
+      "intent": "在 xianyu 输入后逐字修正错别字并确认最终内容",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-text-input-07",
+      "app": "xiaohongshu",
+      "actionFamily": "text-input",
+      "intent": "在 xiaohongshu 输入框键入指定文本并校验回显",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-text-input-08",
+      "app": "wechat",
+      "actionFamily": "text-input",
+      "intent": "在 wechat 输入后逐字修正错别字并确认最终内容",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-text-input-09",
+      "app": "xianyu",
+      "actionFamily": "text-input",
+      "intent": "在 xianyu 输入框键入指定文本并校验回显",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-text-input-10",
+      "app": "xiaohongshu",
+      "actionFamily": "text-input",
+      "intent": "在 xiaohongshu 输入后逐字修正错别字并确认最终内容",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-text-input-11",
+      "app": "wechat",
+      "actionFamily": "text-input",
+      "intent": "在 wechat 输入框键入指定文本并校验回显",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-text-input-12",
+      "app": "xianyu",
+      "actionFamily": "text-input",
+      "intent": "在 xianyu 输入后逐字修正错别字并确认最终内容",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-scroll-01",
+      "app": "xiaohongshu",
+      "actionFamily": "scroll",
+      "intent": "在 xiaohongshu 列表匀速下滑指定屏数并记录可见条目",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-scroll-02",
+      "app": "douyin",
+      "actionFamily": "scroll",
+      "intent": "在 douyin 长页面滚动到底部后回到顶部",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-scroll-03",
+      "app": "xianyu",
+      "actionFamily": "scroll",
+      "intent": "在 xianyu 列表匀速下滑指定屏数并记录可见条目",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-scroll-04",
+      "app": "wechat",
+      "actionFamily": "scroll",
+      "intent": "在 wechat 长页面滚动到底部后回到顶部",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-scroll-05",
+      "app": "xiaohongshu",
+      "actionFamily": "scroll",
+      "intent": "在 xiaohongshu 列表匀速下滑指定屏数并记录可见条目",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-scroll-06",
+      "app": "douyin",
+      "actionFamily": "scroll",
+      "intent": "在 douyin 长页面滚动到底部后回到顶部",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-scroll-07",
+      "app": "xianyu",
+      "actionFamily": "scroll",
+      "intent": "在 xianyu 列表匀速下滑指定屏数并记录可见条目",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-scroll-08",
+      "app": "wechat",
+      "actionFamily": "scroll",
+      "intent": "在 wechat 长页面滚动到底部后回到顶部",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-scroll-09",
+      "app": "xiaohongshu",
+      "actionFamily": "scroll",
+      "intent": "在 xiaohongshu 列表匀速下滑指定屏数并记录可见条目",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-scroll-10",
+      "app": "douyin",
+      "actionFamily": "scroll",
+      "intent": "在 douyin 长页面滚动到底部后回到顶部",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-scroll-11",
+      "app": "xianyu",
+      "actionFamily": "scroll",
+      "intent": "在 xianyu 列表匀速下滑指定屏数并记录可见条目",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-scroll-12",
+      "app": "wechat",
+      "actionFamily": "scroll",
+      "intent": "在 wechat 长页面滚动到底部后回到顶部",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-tab-back-01",
+      "app": "xiaohongshu",
+      "actionFamily": "tab-back",
+      "intent": "在 xiaohongshu 底部 tab 之间依次切换并核对选中态",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-tab-back-02",
+      "app": "douyin",
+      "actionFamily": "tab-back",
+      "intent": "进入 douyin 二级页面后逐级返回首页",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-tab-back-03",
+      "app": "xianyu",
+      "actionFamily": "tab-back",
+      "intent": "在 xianyu 底部 tab 之间依次切换并核对选中态",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-tab-back-04",
+      "app": "system-settings",
+      "actionFamily": "tab-back",
+      "intent": "进入 system-settings 二级页面后逐级返回首页",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-tab-back-05",
+      "app": "xiaohongshu",
+      "actionFamily": "tab-back",
+      "intent": "在 xiaohongshu 底部 tab 之间依次切换并核对选中态",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-tab-back-06",
+      "app": "douyin",
+      "actionFamily": "tab-back",
+      "intent": "进入 douyin 二级页面后逐级返回首页",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-tab-back-07",
+      "app": "xianyu",
+      "actionFamily": "tab-back",
+      "intent": "在 xianyu 底部 tab 之间依次切换并核对选中态",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-tab-back-08",
+      "app": "system-settings",
+      "actionFamily": "tab-back",
+      "intent": "进入 system-settings 二级页面后逐级返回首页",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-tab-back-09",
+      "app": "xiaohongshu",
+      "actionFamily": "tab-back",
+      "intent": "在 xiaohongshu 底部 tab 之间依次切换并核对选中态",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-tab-back-10",
+      "app": "douyin",
+      "actionFamily": "tab-back",
+      "intent": "进入 douyin 二级页面后逐级返回首页",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-form-edit-01",
+      "app": "xianyu",
+      "actionFamily": "form-edit",
+      "intent": "在 xianyu 编辑表单字段、保存草稿并核对持久化",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-form-edit-02",
+      "app": "wechat",
+      "actionFamily": "form-edit",
+      "intent": "在 wechat 表单中切换选项控件并确认状态变更",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-form-edit-03",
+      "app": "xiaohongshu",
+      "actionFamily": "form-edit",
+      "intent": "在 xiaohongshu 编辑表单字段、保存草稿并核对持久化",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-form-edit-04",
+      "app": "xianyu",
+      "actionFamily": "form-edit",
+      "intent": "在 xianyu 表单中切换选项控件并确认状态变更",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-form-edit-05",
+      "app": "wechat",
+      "actionFamily": "form-edit",
+      "intent": "在 wechat 编辑表单字段、保存草稿并核对持久化",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-form-edit-06",
+      "app": "xiaohongshu",
+      "actionFamily": "form-edit",
+      "intent": "在 xiaohongshu 表单中切换选项控件并确认状态变更",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-form-edit-07",
+      "app": "xianyu",
+      "actionFamily": "form-edit",
+      "intent": "在 xianyu 编辑表单字段、保存草稿并核对持久化",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-form-edit-08",
+      "app": "wechat",
+      "actionFamily": "form-edit",
+      "intent": "在 wechat 表单中切换选项控件并确认状态变更",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-form-edit-09",
+      "app": "xiaohongshu",
+      "actionFamily": "form-edit",
+      "intent": "在 xiaohongshu 编辑表单字段、保存草稿并核对持久化",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-form-edit-10",
+      "app": "xianyu",
+      "actionFamily": "form-edit",
+      "intent": "在 xianyu 表单中切换选项控件并确认状态变更",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-settings-nav-01",
+      "app": "system-settings",
+      "actionFamily": "settings-nav",
+      "intent": "在系统设置中进入指定子页面并读取开关状态",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-settings-nav-02",
+      "app": "system-settings",
+      "actionFamily": "settings-nav",
+      "intent": "在系统设置中切换非破坏性显示/音量类开关并恢复初值",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-settings-nav-03",
+      "app": "system-settings",
+      "actionFamily": "settings-nav",
+      "intent": "在系统设置中进入指定子页面并读取开关状态",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-settings-nav-04",
+      "app": "system-settings",
+      "actionFamily": "settings-nav",
+      "intent": "在系统设置中切换非破坏性显示/音量类开关并恢复初值",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-settings-nav-05",
+      "app": "system-settings",
+      "actionFamily": "settings-nav",
+      "intent": "在系统设置中进入指定子页面并读取开关状态",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-settings-nav-06",
+      "app": "system-settings",
+      "actionFamily": "settings-nav",
+      "intent": "在系统设置中切换非破坏性显示/音量类开关并恢复初值",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-settings-nav-07",
+      "app": "system-settings",
+      "actionFamily": "settings-nav",
+      "intent": "在系统设置中进入指定子页面并读取开关状态",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-settings-nav-08",
+      "app": "system-settings",
+      "actionFamily": "settings-nav",
+      "intent": "在系统设置中切换非破坏性显示/音量类开关并恢复初值",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-settings-nav-09",
+      "app": "system-settings",
+      "actionFamily": "settings-nav",
+      "intent": "在系统设置中进入指定子页面并读取开关状态",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-settings-nav-10",
+      "app": "system-settings",
+      "actionFamily": "settings-nav",
+      "intent": "在系统设置中切换非破坏性显示/音量类开关并恢复初值",
+      "scenario": "replay",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-social-publish-account-01",
+      "app": "xiaohongshu",
+      "actionFamily": "social-publish-account",
+      "intent": "用授权测试账号在 xiaohongshu 发布一条预置文本笔记并随后核验可见",
+      "scenario": "authorized_test_account",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-social-publish-account-02",
+      "app": "douyin",
+      "actionFamily": "social-publish-account",
+      "intent": "用授权测试账号在 douyin 对指定内容点赞/收藏并按任务要求核验",
+      "scenario": "authorized_test_account",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-social-publish-account-03",
+      "app": "wechat",
+      "actionFamily": "social-publish-account",
+      "intent": "用授权测试账号在 wechat 关注指定测试账号并核对列表",
+      "scenario": "authorized_test_account",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-social-publish-account-04",
+      "app": "xiaohongshu",
+      "actionFamily": "social-publish-account",
+      "intent": "用授权测试账号在 xiaohongshu 编辑个人资料签名并恢复",
+      "scenario": "authorized_test_account",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-social-publish-account-05",
+      "app": "douyin",
+      "actionFamily": "social-publish-account",
+      "intent": "用授权测试账号在 douyin 发布一条预置文本笔记并随后核验可见",
+      "scenario": "authorized_test_account",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-social-publish-account-06",
+      "app": "wechat",
+      "actionFamily": "social-publish-account",
+      "intent": "用授权测试账号在 wechat 对指定内容点赞/收藏并按任务要求核验",
+      "scenario": "authorized_test_account",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-social-publish-account-07",
+      "app": "xiaohongshu",
+      "actionFamily": "social-publish-account",
+      "intent": "用授权测试账号在 xiaohongshu 关注指定测试账号并核对列表",
+      "scenario": "authorized_test_account",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-social-publish-account-08",
+      "app": "douyin",
+      "actionFamily": "social-publish-account",
+      "intent": "用授权测试账号在 douyin 编辑个人资料签名并恢复",
+      "scenario": "authorized_test_account",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-social-publish-account-09",
+      "app": "wechat",
+      "actionFamily": "social-publish-account",
+      "intent": "用授权测试账号在 wechat 发布一条预置文本笔记并随后核验可见",
+      "scenario": "authorized_test_account",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-social-publish-account-10",
+      "app": "xiaohongshu",
+      "actionFamily": "social-publish-account",
+      "intent": "用授权测试账号在 xiaohongshu 对指定内容点赞/收藏并按任务要求核验",
+      "scenario": "authorized_test_account",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-social-publish-account-11",
+      "app": "douyin",
+      "actionFamily": "social-publish-account",
+      "intent": "用授权测试账号在 douyin 关注指定测试账号并核对列表",
+      "scenario": "authorized_test_account",
+      "expectedAutonomous": true
+    },
+    {
+      "id": "m6-bench-social-publish-account-12",
+      "app": "wechat",
+      "actionFamily": "social-publish-account",
+      "intent": "用授权测试账号在 wechat 编辑个人资料签名并恢复",
+      "scenario": "authorized_test_account",
+      "expectedAutonomous": true
+    }
+  ]
+}

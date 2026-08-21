@@ -1,0 +1,15 @@
+{
+  "schemaId": "xw.visual-block.v1",
+  "frameId": "38ea88b2f4c22f1e9703cd12eb79648c416af682debfcf8c39b6955c90d040f8",
+  "blockId": "f9267a4015cb3aab26b15e72476ec56fe2d2675aac17109db41159d6b2d55585",
+  "stableIndex": 0,
+  "regionHash": "bcddfb26045847eaa95ad8bddb217686bd6361ba55cb47d2471b9819477a9ade",
+  "boundsRef": {
+    "id": "att-bounds-0",
+    "sha256": "656ec7650df10f6dc152c6ccc5be29c36842d59dcdf99023e92562cc3f32d289"
+  },
+  "label": "搜索",
+  "category": "content",
+  "confidence": 0.97,
+  "source": "fused"
+}

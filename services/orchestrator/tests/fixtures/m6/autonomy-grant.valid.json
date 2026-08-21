@@ -1,0 +1,52 @@
+{
+  "schemaId": "xw.autonomy-grant.v1",
+  "grantId": "grant_b748d507292b9be82619061f26f241b3",
+  "issuer": {
+    "kind": "user",
+    "actorId": "user-local",
+    "issuedAt": "2026-08-20T09:59:00.000Z",
+    "authorizationRef": "authz-local-user-0001"
+  },
+  "goal": {
+    "raw": "在小红书搜索攀岩笔记并打开前两个非广告结果",
+    "goalSha256": "c954b0ab9d24fa8491951f8827fd0701532bbfe631142ceb9ffacc4bc3725b9d"
+  },
+  "taskRef": "task-m6-fixture",
+  "planRef": "plan-m6-fixture",
+  "scope": {
+    "apps": [
+      "com.xingin.xhs"
+    ],
+    "aliases": [
+      "01"
+    ],
+    "skills": [
+      "xhs.search.notes"
+    ],
+    "capabilities": [
+      "xhs.search.notes"
+    ],
+    "intents": [
+      "observe",
+      "open_app",
+      "tap",
+      "scroll",
+      "input",
+      "search",
+      "back",
+      "wait"
+    ]
+  },
+  "budgets": {
+    "maxSteps": 40,
+    "maxActions": 60,
+    "maxTokens": 200000,
+    "wallClockSeconds": 900
+  },
+  "notBefore": "2026-08-20T09:59:00.000Z",
+  "notAfter": "2027-08-20T10:30:00.000Z",
+  "hardRedlinePolicyRef": {
+    "policyVersion": "1.0.0",
+    "policySha256": "06e11528195bebfd0a6241f3935523312782b0f3a9090db0b9a83ba0bb0bd42b"
+  }
+}

@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:xw:contract:m6:agentic-executor:v1",
+  "title": "xw.agentic-executor.v1",
+  "description": "Contract-only description of the M6 agentic executor profile. M6-0 defines the contract; agentic_session is NOT added to the executable TaskPlanV2 enum until worker, gate and binder land in one PR.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaId",
+    "executorId",
+    "modelProfile",
+    "toolAllowlist",
+    "budgets",
+    "checkpointPolicy",
+    "autonomyPolicy",
+    "groundingRuntimeRef",
+    "runtimeLockSha256",
+    "dshLockSha256"
+  ],
+  "properties": {
+    "schemaId": { "const": "xw.agentic-executor.v1" },
+    "executorId": { "type": "string", "pattern": "^[a-z0-9]+(\\.[a-z0-9-]+)+$" },
+    "modelProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "model", "profileSha256"],
+      "properties": {
+        "provider": { "type": "string", "minLength": 1 },
+        "model": { "type": "string", "minLength": 1 },
+        "profileSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "toolAllowlist": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "phone_observe",
+          "phone_ground",
+          "phone_act",
+          "phone_verify",
+          "checkpoint_save",
+          "trace_query",
+          "wait_human",
+          "worker_lifecycle"
+        ]
+      }
+    },
+    "budgets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["maxSteps", "maxActions", "maxTokens", "wallClockSeconds"],
+      "properties": {
+        "maxSteps": { "type": "integer", "minimum": 1 },
+        "maxActions": { "type": "integer", "minimum": 1 },
+        "maxTokens": { "type": "integer", "minimum": 1 },
+        "wallClockSeconds": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "checkpointPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["saveEverySteps", "saveOnTerminal"],
+      "properties": {
+        "saveEverySteps": { "type": "integer", "minimum": 1 },
+        "saveOnTerminal": { "type": "boolean" }
+      }
+    },
+    "autonomyPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["authorizationMode", "grantRef"],
+      "properties": {
+        "authorizationMode": { "const": "task_grant" },
+        "grantRef": { "type": "string", "minLength": 1 }
+      }
+    },
+    "groundingRuntimeRef": { "type": "string", "minLength": 1 },
+    "runtimeLockSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "dshLockSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+  }
+}

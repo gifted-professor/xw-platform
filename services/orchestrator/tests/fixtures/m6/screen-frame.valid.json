@@ -1,0 +1,48 @@
+{
+  "schemaId": "xw.screen-frame.v1",
+  "frameId": "38ea88b2f4c22f1e9703cd12eb79648c416af682debfcf8c39b6955c90d040f8",
+  "manifestSha256": "155b483fdacb9475e8e43e6b381523b22888cb1fe13f2022151359a574530cbb",
+  "observationRef": {
+    "id": "att-observation",
+    "sha256": "323816ebb2f2c26220dab678133fe22af4fc407390903c47c492f65ae04a03b3"
+  },
+  "screenshotARef": {
+    "id": "att-screenshot-a",
+    "sha256": "54a2d44be52da42b3387d744f03b04b631f8a208ea5162dcfddb40a7c0d4590c"
+  },
+  "screenshotBRef": {
+    "id": "att-screenshot-b",
+    "sha256": "300af9ca69ca3fe74300e670fca6c9d01cb8ca7ee57b06b8275ca1663c853a31"
+  },
+  "dumpRef": {
+    "id": "att-dump",
+    "sha256": "7a0ad6a6d4c24181ead2f0df3ac06954986e5c5fb7e910eeb905ab5073023b82"
+  },
+  "focusRef": {
+    "id": "att-focus",
+    "sha256": "22bbfd6a68df8d3c752cdd7627b911d9225e1b86a9101dbc2b06fae8d63e500e"
+  },
+  "screenshotASha256": "5aaea41724ebafb9dc42ea4b55a636c3f762803041c31001e4fc1508a3e74895",
+  "screenshotBSha256": "deadc934e40d596ab7ba5383543aef7d587a6d0121fd6acb13a7dab2a7dee68e",
+  "width": 1080,
+  "height": 2400,
+  "orientation": "portrait",
+  "density": 3,
+  "capturedAt": "2026-08-20T10:00:00.000Z",
+  "expiresAt": "2026-08-20T10:00:05.000Z",
+  "linkage": {
+    "sessionId": "sess-01",
+    "leaseRef": "lease-01",
+    "alias": "01",
+    "appId": "com.xingin.xhs"
+  },
+  "stability": {
+    "verdict": "stable",
+    "pageFingerprint": "81e396a04c4ba33cb4df025e2468319e4a776ce044aa208d8418b635a0c61fd8",
+    "focusFingerprint": "22bbfd6a68df8d3c752cdd7627b911d9225e1b86a9101dbc2b06fae8d63e500e"
+  },
+  "flags": {
+    "partial": false,
+    "missing": false
+  }
+}

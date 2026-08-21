@@ -1,0 +1,48 @@
+{
+  "schemaId": "xw.smoothness-slo.v1",
+  "schemaVersion": 1,
+  "generatedAt": "2026-08-21T00:00:00Z",
+  "freezeNote": "本文件冻结 M6 丝滑计时边界（任务书 §M6-1 校准目标）。任何阈值调整必须作为显式计划变更（独立 PR + 更新本文件 + 变更说明），禁止在 closeout 阶段临时放宽。",
+  "metrics": [
+    {
+      "id": "json-rpc-bridge",
+      "description": "Worker 与 DSH 子进程之间 JSON-RPC bridge 的单次请求/响应往返开销，不含模型推理与设备 I/O",
+      "boundary": "request written to stdin → response parsed from stdout，扣除模型生成时间",
+      "p95Ms": 100,
+      "source": "任务书 M6-1：JSON-RPC bridge p95 ≤100 ms"
+    },
+    {
+      "id": "grounding-decision",
+      "description": "Grounding Runtime 对一个已冻结 frame 产生 grounding decision 的服务端开销",
+      "boundary": "冻结 frame 输入 → ALLOW_ONCE/REPLAN/HARD_STOP decision 落盘，不含截图采集",
+      "p95Ms": 1000,
+      "source": "任务书 M6-1：grounding decision p95 ≤1 s"
+    },
+    {
+      "id": "observe-to-dispatch-overhead",
+      "description": "稳定 observe 到 action dispatch 之间的非模型开销（frame 稳定化、block 解析、授权复核、ledger 写入）",
+      "boundary": "phone_observe 完成 → Control Plane dispatch 开始，扣除模型推理时间",
+      "p95Ms": 4000,
+      "source": "任务书 M6-1：observe-to-dispatch 非模型开销 p95 ≤4 s"
+    }
+  ],
+  "hardwareProfile": {
+    "id": "m6-calibration-windows-runner",
+    "description": "任务书 §M6-1 指定的 pinned Windows runner/alias profile；具体机型与 runner 配置在 M6-1 校准时填入并随收据冻结",
+    "runnerOs": "windows",
+    "aliases": ["01", "02", "03", "04"]
+  },
+  "modelProfile": {
+    "id": "m6-model-profile-pending",
+    "description": "模型 profile（名称/版本/量化/推理后端）在 M6-1 校准时冻结；SLO 只对固定 profile 有效",
+    "locked": false
+  },
+  "temperature": {
+    "warm": "DSH 进程与模型已驻留，同一 WorkerRun 内复用；SLO 主要约束 warm 路径",
+    "cold": "WorkerRun 首次启动 DSH/加载模型；cold 允许一次性超过 p95，但每个 WorkerRun 只允许发生一次"
+  },
+  "notes": [
+    "一个 WorkerRun 只启动一次 DSH；不得因每个动作重启进程来规避 cold 开销（任务书 §12.10）。",
+    "不达标时先优化实现，禁止以增加人工确认换取表面达标（任务书 §M6-1）。"
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "tool": "phone_ground",
+  "args": {
+    "frameRef": "38ea88b2f4c22f1e9703cd12eb79648c416af682debfcf8c39b6955c90d040f8",
+    "blockId": "009259926cdb58cd4664dc0e7a49c74b4a0ae64b46532bf695bc41621d3495ea",
+    "intent": "tap",
+    "x": 540,
+    "y": 1200
+  }
+}

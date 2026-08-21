@@ -1,0 +1,108 @@
+{
+  "schemaId": "xw.hard-redline-policy.v1",
+  "policyVersion": "1.0.0",
+  "policySha256": "06e11528195bebfd0a6241f3935523312782b0f3a9090db0b9a83ba0bb0bd42b",
+  "categories": [
+    {
+      "name": "payment",
+      "synonyms": [
+        "支付",
+        "付款",
+        "pay",
+        "确认支付"
+      ],
+      "iconLabels": [
+        "pay-icon"
+      ]
+    },
+    {
+      "name": "purchase",
+      "synonyms": [
+        "购买",
+        "buy",
+        "下单",
+        "立即抢购"
+      ]
+    },
+    {
+      "name": "transfer",
+      "synonyms": [
+        "转账",
+        "汇款",
+        "transfer"
+      ]
+    },
+    {
+      "name": "tip",
+      "synonyms": [
+        "打赏",
+        "赞赏",
+        "tip"
+      ]
+    },
+    {
+      "name": "subscription",
+      "synonyms": [
+        "订阅",
+        "续费",
+        "会员开通",
+        "subscribe"
+      ]
+    },
+    {
+      "name": "credential-submit",
+      "synonyms": [
+        "输入密码",
+        "银行卡号",
+        "cvv",
+        "支付密码",
+        "credential"
+      ]
+    },
+    {
+      "name": "delete",
+      "synonyms": [
+        "删除",
+        "delete",
+        "移除",
+        "清空聊天记录"
+      ],
+      "iconLabels": [
+        "trash-icon"
+      ]
+    },
+    {
+      "name": "uninstall",
+      "synonyms": [
+        "卸载",
+        "uninstall"
+      ]
+    },
+    {
+      "name": "clear-data",
+      "synonyms": [
+        "清除数据",
+        "清空缓存",
+        "clear data",
+        "注销账号"
+      ]
+    }
+  ],
+  "riskPages": [
+    "confirm-dialog",
+    "payment-page",
+    "order-page",
+    "assets-page",
+    "destructive-settings"
+  ],
+  "signals": [
+    "ocr",
+    "semantic",
+    "resourceId",
+    "a11yLabel",
+    "iconLabel",
+    "pageFingerprint",
+    "actionIntent"
+  ],
+  "uncertaintyRule": "REPLAN"
+}
