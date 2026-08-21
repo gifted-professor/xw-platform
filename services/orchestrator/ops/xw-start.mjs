@@ -50,11 +50,14 @@ const IDENTITIES_SEED = join(REGISTRY_ROOT, "identities.seed.json");
 const ADB_PATH = process.env.ADB_PATH || "C:\\Program Files (x86)\\xiaowei_android\\tools\\adb.exe";
 const ADB_PORT = XW_START_ADB_PORT;
 const RUNS_ROOT = resolve(process.env.XW_EVIDENCE_ROOT || process.env.XHS_AGENT_RUNS_ROOT || join(RUNTIME_ROOT, "evidence"));
-const VISUAL_RESOLVER_ROOT = resolve(process.env.XW_VISUAL_LOCATOR_ROOT
-  || "C:\\Users\\Public\\xhs-registry-visual-tap\\experiments\\visual-tap-resolver");
-const VISUAL_RESOLVER_PYTHON = resolve(process.env.XW_VISUAL_LOCATOR_PYTHON
-  || join(VISUAL_RESOLVER_ROOT, ".venv-ocr", "Scripts", "python.exe"));
-const VISUAL_RESOLVER_SCRIPT = join(VISUAL_RESOLVER_ROOT, "visual_tap_demo.py");
+// M6-1: the machine-external visual resolver default is removed. Live recovery
+// screenshot analysis (a real-device path, M6-2 scope) now requires an explicit
+// env-provided resolver root+python+script; until provided it fails closed
+// rather than silently reaching outside the repo. The offline GroundingRuntime
+// (ops/xw-locator) is unaffected and is the only vision path M6-1 exercises.
+const VISUAL_RESOLVER_ROOT = process.env.XW_VISUAL_RECOVERY_ROOT || null;
+const VISUAL_RESOLVER_PYTHON = process.env.XW_VISUAL_RECOVERY_PYTHON || null;
+const VISUAL_RESOLVER_SCRIPT = process.env.XW_VISUAL_RECOVERY_SCRIPT || null;
 const TERMINAL_JOB_STATES = new Set(["succeeded", "failed", "ambiguous", "cancelled", "recovery_required"]);
 
 function usage() {
@@ -673,6 +676,12 @@ async function analyzeRecoveryScreenshot(inspection) {
   const sha256 = createHash("sha256").update(bytes).digest("hex");
   if (sha256 !== inspection?.screenshot?.sha256) {
     throw new Error("recovery screenshot sha256 does not match the audited inspection");
+  }
+  // M6-1: live recovery visual analysis requires an explicit, env-provided
+  // resolver. No machine-external default is assumed; if unset, the recovery
+  // path fails closed (human_required) instead of reaching outside the repo.
+  if (!VISUAL_RESOLVER_PYTHON || !VISUAL_RESOLVER_SCRIPT || !VISUAL_RESOLVER_ROOT) {
+    throw new Error("visual recovery resolver not configured (set XW_VISUAL_RECOVERY_ROOT/PYTHON/SCRIPT for live analysis; offline grounding uses ops/xw-locator)");
   }
   await stat(VISUAL_RESOLVER_PYTHON);
   await stat(VISUAL_RESOLVER_SCRIPT);

@@ -1,26 +1,37 @@
 #!/usr/bin/env node
 /**
- * xw-locator — the single passive entry for the visual block locator.
+ * xw-locator — the single passive diagnostic entry for the visual block locator.
  *
- * It may acquire a screenshot through an already-leased Explorer session,
- * build a frame/query-bound Vision pack, and validate a blockId-only decision.
+ * M6-1: this CLI no longer holds its own algorithm. It is a thin proxy over the
+ * unique GroundingRuntime (services/orchestrator/scripts/lib/m6/m6-grounding-runtime.mjs):
+ * status reports runtime/provider availability; prepare freezes an execution-grade
+ * frame and segments it; verify produces a blockId-only grounding decision. The
+ * hermetic fixture provider is used in CI and here; real providers (Cordis/DSH/OCR)
+ * are wired in later milestones but the safety policy and block id derivation are
+ * owned by the runtime and cannot be overridden by any provider.
+ *
  * It never taps. Until the trusted live permit exists, selected points remain
  * effect=none / tapAuthorized=false / executionEligibility=offline_only.
+ *
+ * No machine-external paths, no python venv, no out-of-repo resolver script: the
+ * M6-0 compat exception for this file is resolved in M6-1.
  */
 
-import { spawnSync } from "node:child_process";
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { loadFoundationCapabilities } from "../scripts/lib/foundation-capabilities.mjs";
+import { computeRedlinePolicySha256 } from "../scripts/lib/m6/m6-contracts.mjs";
+import {
+  HERMETIC_FIXTURE_PROVIDER,
+  createEvidenceStore,
+  createGroundingRuntime,
+} from "../scripts/lib/m6/m6-grounding-runtime.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, "..");
+const POLICY_PATH = join(ROOT, "tests", "fixtures", "m6", "hard-redline-policy.valid.json");
 
 function parseArgs(argv) {
   const out = { _: [] };
@@ -38,53 +49,9 @@ function fail(message, code = 2) {
   process.exit(code);
 }
 
-function firstExisting(candidates) {
-  return candidates.find((item) => item && existsSync(item)) || null;
-}
-
-function runtime(args = {}) {
-  const roots = [
-    args.root,
-    process.env.XW_VISUAL_LOCATOR_ROOT,
-    join(ROOT, "experiments", "visual-tap-resolver"),
-    "C:\\Users\\Public\\xhs-registry-visual-tap\\experiments\\visual-tap-resolver",
-  ].filter(Boolean).map((item) => resolve(item));
-  const resolverRoot = roots.find((item) => existsSync(join(item, "visual_tap_demo.py"))) || roots[0];
-  const python = firstExisting([
-    args.python,
-    process.env.XW_VISUAL_LOCATOR_PYTHON,
-    resolverRoot && join(resolverRoot, ".venv-ocr", "Scripts", "python.exe"),
-    resolverRoot && join(resolverRoot, ".venv", "Scripts", "python.exe"),
-    resolverRoot && join(resolverRoot, ".venv", "bin", "python"),
-  ]);
-  const script = resolverRoot ? join(resolverRoot, "visual_tap_demo.py") : null;
-  return {
-    resolverRoot,
-    python,
-    script,
-    available: Boolean(python && script && existsSync(script)),
-  };
-}
-
-function run(command, argv, { cwd, timeoutMs = 180000 } = {}) {
-  const result = spawnSync(command, argv, {
-    cwd,
-    encoding: "utf8",
-    windowsHide: true,
-    timeout: timeoutMs,
-    maxBuffer: 32 * 1024 * 1024,
-  });
-  if (result.error) throw result.error;
-  if (result.status !== 0) {
-    const detail = String(result.stdout || result.stderr || "").trim().slice(0, 1200);
-    throw new Error(`${command} exited ${result.status}${detail ? `: ${detail}` : ""}`);
-  }
-  return String(result.stdout || "").trim();
-}
-
-function readJson(path, label) {
+function readJson(file, label) {
   try {
-    return JSON.parse(readFileSync(path, "utf8"));
+    return JSON.parse(readFileSync(file, "utf8"));
   } catch (error) {
     throw new Error(`${label} unreadable: ${error.message}`);
   }
@@ -96,131 +63,217 @@ function capability() {
   return item;
 }
 
-function commandStatus(args) {
-  const rt = runtime(args);
-  console.log(JSON.stringify({
-    ok: rt.available,
-    capability: capability(),
-    runtime: rt,
-    tapAuthorized: false,
-    nextSafeAction: rt.available ? "prepare" : "install_or_merge_visual_resolver",
-  }, null, 2));
-  if (!rt.available) process.exitCode = 3;
+// The same pinned hard-redline policy the runtime and tests use. The locator is a
+// diagnostic surface; it never weakens or swaps this policy.
+function loadPolicy() {
+  return readJson(POLICY_PATH, "hard-redline policy");
 }
 
-function captureInput(args, outDir) {
+function makeRuntime() {
+  const policy = loadPolicy();
+  const expectedPolicySha256 = computeRedlinePolicySha256(policy);
+  const evidence = createEvidenceStore();
+  const built = createGroundingRuntime({ policy, expectedPolicySha256, evidence });
+  if (!built.ok) {
+    throw new Error(`grounding runtime failed to construct: ${built.errors.map((e) => e.message).join("; ")}`);
+  }
+  return { policy, expectedPolicySha256, evidence, runtime: built.runtime };
+}
+
+// Convert a prepared/segmented frame into the legacy "vision pack"-shaped JSON
+// callers expect, but populated from the runtime's contract-conformant output.
+function writeArtifacts(outDir, { frame, blockSet, overlayRef, evidence, source }) {
+  const frameFile = join(outDir, "screen-frame.json");
+  const blocksFile = join(outDir, "blocks.json");
+  const packFile = join(outDir, "vision-pack.json");
+  writeFileSync(frameFile, `${JSON.stringify(frame, null, 2)}\n`, "utf8");
+  writeFileSync(blocksFile, `${JSON.stringify(blockSet.blocks, null, 2)}\n`, "utf8");
+  writeFileSync(packFile, `${JSON.stringify({
+    schemaId: "xw.screen-frame.v1",
+    frameId: frame.frameId,
+    manifestId: frame.manifestSha256,
+    selectionRequestId: `loc-${frame.frameId.slice(0, 12)}`,
+    candidateCount: blockSet.blocks.length,
+    // Diagnostic-only source reference lets a later `verify` invocation
+    // re-freeze the same offline evidence and reconstruct the runtime-private
+    // page/app risk attestation. No live action is authorized by this file.
+    source,
+    frame,
+    overlayRef,
+  }, null, 2)}\n`, "utf8");
+  return { frameFile, blocksFile, packFile };
+}
+
+function commandStatus() {
+  const cap = capability();
+  const provider = HERMETIC_FIXTURE_PROVIDER;
+  console.log(JSON.stringify({
+    ok: true,
+    capability: cap,
+    runtime: {
+      groundingRuntime: "services/orchestrator/scripts/lib/m6/m6-grounding-runtime.mjs",
+      provider: { id: provider.id, version: provider.version, modelSha256: provider.modelSha256 },
+      machineExternalPaths: [],
+    },
+    tapAuthorized: false,
+    nextSafeAction: "prepare",
+  }, null, 2));
+}
+
+function readEvidenceInput(args) {
+  // M6-1 is offline: prepare takes a --input evidence JSON bundle with explicit
+  // screenshotA and screenshotB. A single image (PNG) is NOT sufficient — the
+  // runtime requires two independent captures to verify frame stability. Single
+  // input is rejected (exit 2), preventing pseudo-stable dual-frame forgery.
   if (args.input) {
     const input = resolve(args.input);
-    if (!existsSync(input)) throw new Error(`input screenshot not found: ${input}`);
-    return input;
+    if (!existsSync(input)) throw new Error(`input not found: ${input}`);
+    // Read as binary first (PNG users pass raw files; readFileSync without
+    // encoding returns a Buffer that is binary-safe).
+    const rawBuffer = readFileSync(input);
+    try {
+      return JSON.parse(rawBuffer.toString("utf8"));
+    } catch {
+      // Non-JSON input (e.g. a single PNG) — reject: the same bytes must not
+      // serve as both screenshotA and screenshotB.
+      throw new Error(
+        "single-image input is not supported: prepare needs a JSON evidence bundle "
+        + "with explicit screenshotA/screenshotB (two independent captures). "
+        + "Pass --input <evidence.json> with {\"screenshotA\": ..., \"screenshotB\": ..., "
+        + "\"dump\": ..., \"focus\": ...}"
+      );
+    }
   }
-  if (!args.alias || !args["session-file"]) {
-    throw new Error("prepare requires --input or both --alias and --session-file");
-  }
-  const input = join(outDir, "source.png");
-  const stdout = run(process.execPath, [
-    join(ROOT, "ops", "screenshot-and-analyze.mjs"),
-    "--alias", String(args.alias),
-    "--session-file", resolve(args["session-file"]),
-    "--out", input,
-  ], { cwd: ROOT, timeoutMs: 90000 });
-  if (!stdout.includes(`SHOT=${input}`) || !existsSync(input)) {
-    throw new Error("Explorer screenshot did not produce the requested frame");
-  }
-  return input;
+  throw new Error("prepare requires --input <evidence.json> (M6-1 is offline; live capture is M6-2)");
 }
 
 function commandPrepare(args) {
-  if (!args.query || !String(args.query).trim()) throw new Error("prepare requires --query");
   if (!args.out) throw new Error("prepare requires --out");
-  const rt = runtime(args);
-  if (!rt.available) throw new Error("visual locator runtime unavailable; run status for details");
+  const ev = readEvidenceInput(args);
   const outDir = resolve(args.out);
   mkdirSync(outDir, { recursive: true });
-  const input = captureInput(args, outDir);
-  const argv = [
-    rt.script,
-    "vision-pack",
-    "--input", input,
-    "--output-dir", outDir,
-    "--query", String(args.query).trim(),
-    "--max-side", String(args["max-side"] || 640),
-    "--max-blocks", String(args["max-blocks"] || 256),
-  ];
-  if (args.ocr) argv.push("--ocr");
-  run(rt.python, argv, { cwd: rt.resolverRoot });
-  const packPath = join(outDir, "vision-pack.json");
-  const pack = readJson(packPath, "vision pack");
+  const { runtime, evidence } = makeRuntime();
+  const capturedAt = ev.capturedAt || args.capturedAt || "2026-08-20T10:00:00.000Z";
+  const frameRes = runtime.freezeFrame({
+    screenshotA: ev.screenshotA,
+    screenshotB: ev.screenshotB,
+    dump: ev.dump,
+    focus: ev.focus,
+    capturedAt,
+    linkage: ev.linkage || { sessionId: args.sessionId || "sess-cli", leaseRef: args.leaseRef || "lease-cli", alias: args.alias || "00", appId: args.appId || "app-cli" },
+    width: ev.width || Number(args["max-side"]) || 1080,
+    height: ev.height || 2400,
+    density: ev.density || 3,
+    orientation: ev.orientation,
+  });
+  if (!frameRes.ok) throw new Error(`freezeFrame failed: ${frameRes.errors.map((e) => e.message).join("; ")}`);
+  const seg = runtime.segmentBlocks(frameRes.frame);
+  if (!seg.ok) throw new Error(`segmentBlocks failed: ${seg.errors.map((e) => e.message).join("; ")}`);
+  const overlayRef = evidence.overlay(seg.blockSet);
+  const { frameFile, blocksFile, packFile } = writeArtifacts(outDir, {
+    frame: frameRes.frame,
+    blockSet: seg.blockSet,
+    overlayRef,
+    evidence,
+    source: resolve(args.input),
+  });
   console.log(JSON.stringify({
     ok: true,
     operation: "prepare",
     capabilityId: "locator.visual-block.v1",
-    source: input,
-    frameId: pack.frame?.frameId,
-    manifestId: pack.manifestId,
-    selectionRequestId: pack.selectionRequestId,
-    candidateCount: pack.candidateCount,
-    artifacts: {
-      blocks: join(outDir, "blocks.json"),
-      pack: packPath,
-      overlay: join(outDir, "vision-overlay-all.png"),
-      prompt: join(outDir, "vision-prompt.txt"),
-    },
+    source: args.input,
+    frameId: frameRes.frame.frameId,
+    manifestId: frameRes.frame.manifestSha256,
+    selectionRequestId: `loc-${frameRes.frame.frameId.slice(0, 12)}`,
+    candidateCount: seg.blockSet.blocks.length,
+    artifacts: { frame: frameFile, blocks: blocksFile, pack: packFile },
     decisionRule: "Vision must return blockId only; raw x/y/bbox/point are forbidden",
     tapAuthorized: false,
   }, null, 2));
 }
 
 function commandVerify(args) {
-  if (!args.input || !args.dir || !args.decision) {
-    throw new Error("verify requires --input --dir --decision");
+  if (!args.dir || !args.decision) {
+    throw new Error("verify requires --dir <prepare目录> --decision <decision.json>");
   }
-  const rt = runtime(args);
-  if (!rt.available) throw new Error("visual locator runtime unavailable; run status for details");
   const dir = resolve(args.dir);
+  const { runtime } = makeRuntime();
+  const storedFrame = readJson(join(dir, "screen-frame.json"), "screen frame");
+  const pack = readJson(join(dir, "vision-pack.json"), "vision pack");
+  if (!pack.source) throw new Error("vision pack lacks its offline evidence source; rerun prepare");
+  const ev = readEvidenceInput({ input: pack.source });
+  const reissued = runtime.freezeFrame({
+    screenshotA: ev.screenshotA,
+    screenshotB: ev.screenshotB,
+    dump: ev.dump,
+    focus: ev.focus,
+    capturedAt: storedFrame.capturedAt,
+    linkage: storedFrame.linkage,
+    width: storedFrame.width,
+    height: storedFrame.height,
+    density: storedFrame.density,
+    orientation: storedFrame.orientation,
+  });
+  if (!reissued.ok || reissued.frame.frameId !== storedFrame.frameId) {
+    throw new Error("offline evidence no longer reproduces the prepared frameId");
+  }
+  const frame = reissued.frame;
+  const decision = readJson(resolve(args.decision), "decision request");
+  // Re-derive the block set with private signals so decide() can run the firewall.
+  const seg = runtime.segmentBlocks(frame);
+  if (!seg.ok) throw new Error(`segmentBlocks failed: ${seg.errors.map((e) => e.message).join("; ")}`);
+  const requestedBlockId = decision.blockId || decision.block?.blockId;
+  if (!requestedBlockId) throw new Error("decision must carry a blockId");
+  const dec = runtime.decide({
+    frame,
+    blockSet: seg.blockSet,
+    blockId: requestedBlockId,
+    intent: decision.intent || "tap",
+    grantRef: decision.grantRef || "grant-cli",
+    goalRef: decision.goalRef || "goal-cli",
+    stepRef: decision.stepRef || "step-cli",
+    effectClass: decision.effectClass || "navigation",
+    nowMs: Date.now(),
+  });
+  if (!dec.ok) throw new Error(`decide failed: ${dec.errors.map((e) => e.message).join("; ")}`);
   const output = resolve(args.output || join(dir, "verified-point.json"));
-  const argv = [
-    rt.script,
-    "select",
-    "--input", resolve(args.input),
-    "--blocks", join(dir, "blocks.json"),
-    "--pack", join(dir, "vision-pack.json"),
-    "--overlay", join(dir, "vision-overlay-all.png"),
-    "--prompt", join(dir, "vision-prompt.txt"),
-    "--decision", resolve(args.decision),
-    "--output", output,
-    "--min-confidence", String(args["min-confidence"] || 0.8),
-    "--json",
-  ];
-  run(rt.python, argv, { cwd: rt.resolverRoot });
-  const point = readJson(output, "verified point");
+  const point = runtime.resolveInternalPoint(dec.decision);
+  writeFileSync(output, `${JSON.stringify({ ok: dec.decision.result === "ALLOW_ONCE", decision: dec.decision, pointRef: point.pointRef }, null, 2)}\n`, "utf8");
   console.log(JSON.stringify({
-    ok: point.ok === true,
+    ok: dec.decision.result === "ALLOW_ONCE",
     operation: "verify",
     capabilityId: "locator.visual-block.v1",
     output,
-    result: point,
+    result: { result: dec.decision.result, groundingDecisionId: dec.decision.groundingDecisionId },
     tapAuthorized: false,
-    nextSafeAction: "trusted_live_tap_permit_required",
+    nextSafeAction: dec.decision.result === "ALLOW_ONCE" ? "trusted_live_tap_permit_required" : dec.decision.result,
   }, null, 2));
-  if (point.ok !== true) process.exitCode = 3;
+  if (dec.decision.result !== "ALLOW_ONCE") process.exitCode = 3;
 }
 
-function commandSelfTest(args) {
-  const rt = runtime(args);
+function commandSelfTest() {
   const registered = capability();
+  const provider = HERMETIC_FIXTURE_PROVIDER;
   const checks = [
     { id: "catalog_registered", pass: registered.status === "implemented" },
     { id: "passive_contract", pass: registered.effect === "none" && registered.directRun === false },
-    { id: "runtime_available", pass: rt.available },
+    { id: "runtime_available", pass: Boolean(provider.modelSha256) },
   ];
-  if (rt.available) {
-    try {
-      run(rt.python, ["-c", "import cv2, numpy; print('ok')"], { cwd: rt.resolverRoot, timeoutMs: 30000 });
-      checks.push({ id: "opencv_import", pass: true });
-    } catch (error) {
-      checks.push({ id: "opencv_import", pass: false, detail: error.message });
+  // Smoke the runtime end to end on a synthetic stable frame.
+  try {
+    const { runtime } = makeRuntime();
+    const fr = runtime.freezeFrame({
+      screenshotA: "selftest", screenshotB: "selftest", dump: "d", focus: "f",
+      capturedAt: "2026-08-20T10:00:00.000Z",
+      linkage: { sessionId: "s", leaseRef: "l", alias: "01", appId: "a" },
+    });
+    checks.push({ id: "freeze_frame", pass: fr.ok });
+    if (fr.ok) {
+      const seg = runtime.segmentBlocks(fr.frame);
+      checks.push({ id: "segment_blocks", pass: seg.ok });
     }
+  } catch (error) {
+    checks.push({ id: "runtime_smoke", pass: false, detail: error.message });
   }
   for (const check of checks) console.log(`${check.pass ? "PASS" : "FAIL"} ${check.id}${check.detail ? ` — ${check.detail}` : ""}`);
   const failed = checks.filter((check) => !check.pass);
@@ -231,17 +284,17 @@ function commandSelfTest(args) {
 function usage() {
   console.log(`用法:
   node ops/xw-locator.mjs status
-  node ops/xw-locator.mjs prepare --input <screen.png> --query <目标> --out <目录>
-  node ops/xw-locator.mjs prepare --alias <01-04> --session-file <ctx> --query <目标> --out <目录>
-  node ops/xw-locator.mjs verify --input <同一screen.png> --dir <prepare目录> --decision <decision.json>
+  node ops/xw-locator.mjs prepare --input <evidence.json|screen.png> --out <目录>
+  node ops/xw-locator.mjs verify --dir <prepare目录> --decision <decision.json>
   node ops/xw-locator.mjs --self-test
 
-该入口只定位和验证 blockId，不执行 tap。`);
+该入口是唯一 GroundingRuntime 的诊断代理，只定位和验证 blockId，不执行 tap。
+M6-1 离线：prepare 只接受 --input 证据；真机截图采集在 M6-2。`);
 }
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
-  if (args["self-test"]) return commandSelfTest(args);
+  if (args["self-test"]) return commandSelfTest();
   const command = args._[0] || "status";
   if (command === "status") return commandStatus(args);
   if (command === "prepare") return commandPrepare(args);

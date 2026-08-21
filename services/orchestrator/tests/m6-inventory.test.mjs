@@ -38,22 +38,42 @@ test("vision-inventory: every registered file exists and its sha256 matches", ()
   }
 });
 
-test("vision-inventory: core external-path claims are verifiable in the referenced source", () => {
+test("vision-inventory: the three M6-1 compat exceptions are zeroed out of source", () => {
+  // M6-1 converges xw-locator to the GroundingRuntime and clears the machine-
+  // external defaults from xw-start and wechat-balance-extract. None of these
+  // source files may still reference the external resolver root, its python venv
+  // or the visual_tap_demo.py script.
   const locator = readFileSync(path.join(REPO_ROOT, "services/orchestrator/ops/xw-locator.mjs"), "utf8");
-  assert.ok(locator.includes("C:\\\\Users\\\\Public\\\\xhs-registry-visual-tap\\\\experiments\\\\visual-tap-resolver"));
-  assert.ok(locator.includes(".venv-ocr"));
   const xwStart = readFileSync(path.join(REPO_ROOT, "services/orchestrator/ops/xw-start.mjs"), "utf8");
-  assert.ok(xwStart.includes("VISUAL_RESOLVER_ROOT"));
-  assert.ok(xwStart.includes(".venv-ocr"));
   const wechat = readFileSync(path.join(REPO_ROOT, "services/orchestrator/scripts/lib/wechat-balance-extract.mjs"), "utf8");
-  assert.ok(wechat.includes("C:\\\\Users\\\\Public\\\\xhs-registry-visual-tap\\\\experiments\\\\visual-tap-resolver\\\\.venv-ocr\\\\Scripts\\\\python.exe"));
+  const shared = readFileSync(path.join(REPO_ROOT, "services/orchestrator/scripts/lib/xw-balance-shared.mjs"), "utf8");
+  for (const [label, src] of [["xw-locator", locator], ["xw-start", xwStart], ["wechat-ocr", wechat], ["xw-balance-shared", shared]]) {
+    assert.ok(!src.includes("xhs-registry-visual-tap"), `${label} must not reference the machine-external resolver root`);
+    assert.ok(!src.includes("visual_tap_demo.py"), `${label} must not reference the machine-external resolver script`);
+    assert.ok(!src.includes(".venv-ocr"), `${label} must not reference the machine-external OCR venv`);
+  }
+  // xw-locator must now delegate to the single GroundingRuntime.
+  assert.ok(locator.includes("m6-grounding-runtime"), "xw-locator must delegate to the GroundingRuntime");
+  // xw-start recovery analysis must require explicit env config (no default).
+  assert.ok(xwStart.includes("XW_VISUAL_RECOVERY_ROOT"), "xw-start live recovery must require explicit env config");
+  // wechat OCR must fail closed without an explicit python interpreter.
+  assert.ok(wechat.includes("OCR_PYTHON_NOT_CONFIGURED"), "wechat OCR must fail closed without an explicit interpreter");
 });
 
-test("vision-inventory: exactly the three compat exceptions are marked", () => {
+test("vision-inventory: the three M6-1 compat exceptions are resolved (zeroed external paths)", () => {
   const exceptionIds = inventory.compatExceptions.map((entry) => entry.id).sort();
   assert.deepEqual(exceptionIds, ["wechat-ocr", "xw-locator", "xw-start"]);
-  const flagged = inventory.files.filter((entry) => entry.compatException).map((entry) => entry.exceptionId);
-  for (const id of ["xw-locator", "xw-start", "wechat-ocr"]) assert.ok(flagged.includes(id), `missing ${id}`);
+  for (const entry of inventory.compatExceptions) {
+    assert.equal(entry.resolved, true, `${entry.id} must be marked resolved in M6-1`);
+    assert.equal(entry.removeBy, "M6-1", `${entry.id} must target M6-1`);
+  }
+  // The three formerly-exception files must now carry no machine-external paths.
+  for (const id of ["xw-locator", "xw-start", "wechat-ocr"]) {
+    const file = inventory.files.find((entry) => entry.exceptionId === id);
+    assert.ok(file, `${id} file entry missing`);
+    assert.deepEqual(file.externalPaths, [], `${id} external paths must be zeroed`);
+    assert.equal(file.compatException, false, `${id} must no longer be an active compat exception`);
+  }
 });
 
 test("external-path-guard: repo baseline has zero violations", () => {
