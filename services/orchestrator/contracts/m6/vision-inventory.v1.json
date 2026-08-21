@@ -1,0 +1,262 @@
+{
+  "schemaId": "xw.vision-inventory.v1",
+  "schemaVersion": 1,
+  "generatedAt": "2026-08-21T00:00:00Z",
+  "generatedBy": "M6-0 offline inventory (grep-verified against worktree codex/m6-0-contracts)",
+  "scope": "All in-repo source files that implement or invoke vision/OCR/screenshot-classification behavior, plus the exact machine-external path baseline used by tools/m6/external-path-guard.mjs.",
+  "compatExceptions": [
+    {
+      "id": "xw-locator",
+      "file": "services/orchestrator/ops/xw-locator.mjs",
+      "reason": "历史视觉 PoC 定位器：默认解析 C:\\Users\\Public\\xhs-registry-visual-tap\\experiments\\visual-tap-resolver 及其 .venv-ocr/.venv Python 解释器（cv2/numpy + visual_tap_demo.py）。M6-1 必须收敛进唯一 Grounding Runtime 并清零该例外；在此之前退化为诊断 CLI。",
+      "removeBy": "M6-1"
+    },
+    {
+      "id": "xw-start",
+      "file": "services/orchestrator/ops/xw-start.mjs",
+      "reason": "/xw start 预检引用同一 visual-tap-resolver 根与 .venv-ocr python 做 vision-pack/OCR 可用性检查。属既有兼容行为，M6-1 清零。",
+      "removeBy": "M6-1"
+    },
+    {
+      "id": "wechat-ocr",
+      "file": "services/orchestrator/scripts/lib/wechat-balance-extract.mjs",
+      "reason": "微信余额只读 OCR 默认硬编码 PaddleOCR venv 解释器 C:\\Users\\Public\\xhs-registry-visual-tap\\experiments\\visual-tap-resolver\\.venv-ocr\\Scripts\\python.exe（可用 XHS_PADDLE_OCR_PYTHON 覆盖）。M6-1 迁移为受版本控制/内容寻址资产后清零。",
+      "removeBy": "M6-1"
+    }
+  ],
+  "files": [
+    {
+      "path": "services/orchestrator/ops/xw-locator.mjs",
+      "sha256": "0cef7c7804ebdf6958e4ef0b7e6d323693d32e58394e02e1e9171d49b24ee9f2",
+      "role": "visual block locator CLI（被动入口；blockId-only、tapAuthorized=false、effect=none）",
+      "externalPaths": [
+        "C:\\Users\\Public\\xhs-registry-visual-tap\\experiments\\visual-tap-resolver",
+        ".venv-ocr/Scripts/python.exe",
+        ".venv/Scripts/python.exe",
+        ".venv/bin/python"
+      ],
+      "externalDependencies": ["visual_tap_demo.py (机器外)", "python3 + opencv(cv2) + numpy (机器外 venv)"],
+      "callers": [
+        "services/orchestrator/registry.mjs (locatorStatus 命令)",
+        "services/orchestrator/scripts/lib/ops-health.mjs",
+        "services/orchestrator/contracts/foundation-capabilities.v1.json (capability entry)"
+      ],
+      "compatException": true,
+      "exceptionId": "xw-locator"
+    },
+    {
+      "path": "services/orchestrator/ops/xw-start.mjs",
+      "sha256": "b0feae6e4d25271dfebbe23bd75136575351bc563a15449836b854c30b753bfc",
+      "role": "/xw start 预检/启动编排；含 vision-pack --ocr 可用性检查",
+      "externalPaths": [
+        "C:\\Users\\Public\\xw-runtime (XW_RUNTIME_ROOT 默认值)",
+        "C:\\Program Files (x86)\\xiaowei_android\\tools\\adb.exe (ADB_PATH 默认值)",
+        "C:\\Users\\Public\\xhs-registry-visual-tap\\experiments\\visual-tap-resolver (VISUAL_RESOLVER_ROOT 默认值)",
+        ".venv-ocr/Scripts/python.exe"
+      ],
+      "externalDependencies": ["adb (xiaowei_android 工具目录)", "visual-tap-resolver + PaddleOCR venv (机器外)"],
+      "callers": ["services/orchestrator/scripts/lib/xw-start.mjs (纯规划 lib)", "ops CLI: /xw start"],
+      "compatException": true,
+      "exceptionId": "xw-start"
+    },
+    {
+      "path": "services/orchestrator/scripts/lib/wechat-balance-extract.mjs",
+      "sha256": "c64264034b45037eb4fb9ba5fadd2428d02c4f7ec9a8ae5209c7195d4e7a2155",
+      "role": "微信服务页截图余额只读 OCR 提取（fail-closed）",
+      "externalPaths": [
+        "C:\\Users\\Public\\xhs-registry-visual-tap\\experiments\\visual-tap-resolver\\.venv-ocr\\Scripts\\python.exe (DEFAULT_PADDLE_OCR_PYTHON，可用 XHS_PADDLE_OCR_PYTHON 覆盖)"
+      ],
+      "externalDependencies": ["PaddleOCR (机器外 .venv-ocr)", "wechat-balance-ocr.py (仓内)"],
+      "callers": ["services/orchestrator/scripts/lib/session-workflow-worker.mjs"],
+      "compatException": true,
+      "exceptionId": "wechat-ocr"
+    },
+    {
+      "path": "services/orchestrator/scripts/lib/wechat-balance-ocr.py",
+      "sha256": "62dffd4c4c52cc6f8b957b6eb3e95d1401583da86efcd81e884c1e18f8ccb671",
+      "role": "PaddleOCR 余额提取脚本（stdout 单行 JSON，只读）",
+      "externalPaths": [],
+      "externalDependencies": ["paddleocr/paddlepaddle (由调用方 venv 提供)"],
+      "callers": ["services/orchestrator/scripts/lib/wechat-balance-extract.mjs (spawnSync)"],
+      "compatException": true,
+      "exceptionId": "wechat-ocr"
+    },
+    {
+      "path": "services/orchestrator/ops/screenshot-and-analyze.mjs",
+      "sha256": "a17f7b66a55106714a95f3e2e904ac4c00d7e56b70a1223fc45eefa06db0738a",
+      "role": "截图 + 视觉分析 PoC 包装（VGP analyze.py）",
+      "externalPaths": [
+        "$HOME/Desktop/Coding/visual-grounding-poc (--vgp 默认值)",
+        ".venv/bin/python",
+        ".venv/Scripts/python.exe"
+      ],
+      "externalDependencies": ["visual-grounding-poc analyze.py + venv (机器外)"],
+      "callers": [
+        "ops CLI；被 douyin-share-friend-harvest.mjs、feishu-to-xianyu-idle-publish.mjs、shell.mjs、xhs-free-explore-paced.mjs、xianyu-dismiss-tuoguan.mjs 引用"
+      ],
+      "compatException": false
+    },
+    {
+      "path": "services/orchestrator/ops/recover-main-safe.mjs",
+      "sha256": "a55eb916ba9281b5ece0211a1520ee020238bce88ed54ac7df5990993bf01a30",
+      "role": "主界面恢复（视觉回退路径，VGP venv）",
+      "externalPaths": [
+        "/Volumes/GPFS/Users/a1234/Desktop/Coding/xhs-device-agent-routing-v1-1 (--gpfs 默认值)",
+        "/Users/a1234/Desktop/Coding/visual-grounding-poc (--vgp 默认值)",
+        ".venv/bin/python",
+        "C:/Users/Public/xhs-agent-runs (WIN_RUNS)"
+      ],
+      "externalDependencies": ["visual-grounding-poc venv (机器外, macOS 遗留)"],
+      "callers": ["services/control-plane/control-plane/lib/return-home.mjs"],
+      "compatException": false
+    },
+    {
+      "path": "services/orchestrator/ops/douyin-share-friend-harvest.mjs",
+      "sha256": "007e5a761ede8f031c9270e9dfd0cd31a32b3c975e2a662d41f8fb7968cdb865",
+      "role": "抖音分享 harvesting，视觉 tap fallback（visual_tap_demo.py）",
+      "externalPaths": [
+        "C:/Users/Public/xhs-registry/../xhs-registry-visual-tap/experiments/visual-tap-resolver (VISUAL_TAP_ROOT 由 ROOT 推导)",
+        ".venv-ocr/Scripts/python.exe"
+      ],
+      "externalDependencies": ["visual-tap-resolver visual_tap_demo.py + PaddleOCR venv (机器外)"],
+      "callers": ["services/orchestrator/ops/douyin-share-friend-consec.mjs"],
+      "compatException": false
+    },
+    {
+      "path": "services/orchestrator/ops/_win-screencap.mjs",
+      "sha256": "a75bdf7c832556eed8f323e9a2c4576bcd2e2a209b92e30538ee51f9ae75fcf0",
+      "role": "Windows 截屏辅助（adb screencap 包装）",
+      "externalPaths": [
+        "D:\\download\\lvjian\\tools\\adb.exe",
+        "C:\\platform-tools\\adb.exe"
+      ],
+      "externalDependencies": ["adb (机器外工具目录)"],
+      "callers": ["ops CLI helper（无仓内 import 方）"],
+      "compatException": false
+    },
+    {
+      "path": "services/control-plane/scripts/vision-safety.mjs",
+      "sha256": "d36e65ae0374aa4616df8bb807a9b999b84a686aabb5be1767fbab0d9f1c1c13",
+      "role": "视觉安全规则：敏感标签/区域/歧义/page fingerprint/gateTap（纯函数，无外部路径）",
+      "externalPaths": [],
+      "externalDependencies": [],
+      "callers": [
+        "services/control-plane/apps/vision/adapter.mjs",
+        "services/control-plane/scripts/xianyu-operator.mjs"
+      ],
+      "compatException": false
+    },
+    {
+      "path": "services/control-plane/scripts/cloud-vision.mjs",
+      "sha256": "1a0f724be6f62b8fe6cb2393ec90e274ebc5b7ba83e77c954012793ed3295650",
+      "role": "云端视觉分类 CLI（VISION_API_URL/VISION_API_KEY/VISION_MODEL env，base64 截图外发；无仓内 import 方）",
+      "externalPaths": [],
+      "externalDependencies": ["外部多模态 HTTP API（env 配置，无默认端点）"],
+      "callers": ["ops CLI（无仓内 import 方）"],
+      "compatException": false
+    },
+    {
+      "path": "services/control-plane/scripts/recovery-page-classifier.mjs",
+      "sha256": "736bf4302158ff11e6b951bec0b0a300fd64e8eec31ec1f12b562b2deb6c4dbc",
+      "role": "恢复场景页面分类（launcher/标签规则，纯函数）",
+      "externalPaths": [],
+      "externalDependencies": [],
+      "callers": ["services/control-plane/control-plane/lib/recovery-inspection.mjs"],
+      "compatException": false
+    },
+    {
+      "path": "services/control-plane/scripts/xianyu-page-classifier.mjs",
+      "sha256": "37ae590a55253049b0b8862c7b7aa2d4c9bacf6cab5367859cbe9f2d90c1a1c9",
+      "role": "闲鱼页面分类（文本/标签规则，纯函数）",
+      "externalPaths": [],
+      "externalDependencies": [],
+      "callers": [
+        "services/control-plane/scripts/recovery-page-classifier.mjs",
+        "services/control-plane/scripts/xianyu-operator.mjs"
+      ],
+      "compatException": false
+    },
+    {
+      "path": "services/control-plane/control-plane/lib/financial-commit-classifier.mjs",
+      "sha256": "3ecf4d9d3aa508053d80a6c8de03205410a1f3d0e6fc52399356e58683532be6",
+      "role": "金融/提交类动作分类（支付防火墙输入信号，纯函数）",
+      "externalPaths": [],
+      "externalDependencies": [],
+      "callers": [
+        "services/control-plane/control-plane/lib/control-plane.mjs",
+        "services/control-plane/control-plane/lib/state-store.mjs",
+        "services/control-plane/control-plane/lib/xiaowei-transport.mjs",
+        "services/control-plane/scripts/fast-operator.mjs",
+        "services/control-plane/scripts/gateway-operator.mjs"
+      ],
+      "compatException": false
+    },
+    {
+      "path": "services/control-plane/apps/vision/adapter.mjs",
+      "sha256": "6e0ebab2e237795d5578cb465ab69a1c74a27358b6faaf839bc814e752dc5925",
+      "role": "vision app adapter：语义/视觉 resolve 安全闸 dry-run（默认不 tap）",
+      "externalPaths": [],
+      "externalDependencies": ["services/control-plane/scripts/vision-safety.mjs"],
+      "callers": ["control-plane app registry (apps/vision)"],
+      "compatException": false
+    },
+    {
+      "path": "services/control-plane/apps/vision/capabilities.json",
+      "sha256": "22a8d229db422709ad89b802964eda32faa1435060c813b9397b049c145541b1",
+      "role": "vision.resolve_tap_dry_run capability 声明（risk R0, maturity E2）",
+      "externalPaths": [],
+      "externalDependencies": [],
+      "callers": ["control-plane capability registry"],
+      "compatException": false
+    }
+  ],
+  "externalPathBaseline": [
+    { "literal": "C:\\Users\\Public\\xw-fusion\\xw-platform\\services\\orchestrator\\ops\\xw-locator.mjs status", "files": ["services/orchestrator/contracts/foundation-capabilities.v1.json", "services/orchestrator/registry.mjs"], "category": "doc-config", "compatException": false, "note": "指向仓库检出位置的 locator status 命令示例" },
+    { "literal": "C:\\Users\\Public\\xhs-agent-runs", "files": ["services/orchestrator/knowledge-seed-campaign-20260727.json", "services/orchestrator/scripts/lib/recipe-attempt-receipt.mjs"], "category": "runtime-root-legacy", "compatException": false },
+    { "literal": "C:\\Users\\windows 10 带空格；②.PS1 命令行禁传中文和 raw JSON（cmd 吞引号、GBK 乱码污染），用 chunkpush 分块 base64 传文件 + 双端 sha256 校验；③bridge exec 的 $ErrorActionPreference=Stop 会把原生命令首条 stderr 变终止错误——远程 node 脚本禁 console.error，必要时 node --no-warnings；④node Windows stdout 中文经 bridge 捕获显示 mojibake 是假象，内存/落盘 JSON 是干净 UTF-8，校验用 bridge fetch 拉回本地读。", "files": ["services/orchestrator/knowledge-seed-core.json"], "category": "knowledge-record", "compatException": false, "note": "知识库散文中提及家目录" },
+    { "literal": "/Volumes/GPFS/Users/a1234/Desktop/Coding/xhs-device-agent-routing-v1-1", "files": ["services/orchestrator/ops/conc4-full-dry-run.mjs", "services/orchestrator/ops/feishu-to-xianyu.mjs", "services/orchestrator/ops/recover-main-safe.mjs"], "category": "macos-legacy-root", "compatException": false },
+    { "literal": "C:/Users/Public/xhs-registry", "files": ["services/orchestrator/ops/douyin-share-friend-consec.mjs", "services/orchestrator/tools/m0/_pr-assets-collect.mjs"], "category": "runtime-root-legacy", "compatException": false },
+    { "literal": ".venv-ocr", "files": ["services/orchestrator/ops/douyin-share-friend-harvest.mjs", "services/orchestrator/ops/xw-locator.mjs", "services/orchestrator/ops/xw-start.mjs", "services/orchestrator/scripts/lib/wechat-balance-extract.mjs", "services/orchestrator/scripts/lib/xw-balance-shared.mjs"], "category": "python-venv-ocr", "compatException": true, "exceptionIds": ["xw-locator", "xw-start", "wechat-ocr"], "note": "PaddleOCR venv 标记；douyin-share-friend-harvest 与 xw-balance-shared 为关联使用" },
+    { "literal": "C:\\Program Files (x86", "files": ["services/orchestrator/ops/feishu-to-xhs-publish.mjs", "services/orchestrator/ops/feishu-to-xianyu-idle-publish.mjs", "services/orchestrator/ops/xw-repair.mjs", "services/orchestrator/ops/xw-start.mjs"], "category": "tool-default", "compatException": false, "note": "xiaowei_android adb.exe 默认值（提取器在 ')' 截断）" },
+    { "literal": "C:\\Users\\Public\\xhs-routing-v1-1", "files": ["packages/cutover/lib/live-collect.mjs", "services/orchestrator/ops/feishu-to-xianyu-idle-publish.mjs", "services/orchestrator/ops/xw-evolve-replay-once.mjs"], "category": "runtime-root-legacy", "compatException": false },
+    { "literal": "/Users/a1234", "files": ["services/orchestrator/ops/feishu-to-xianyu.mjs"], "category": "macos-legacy-root", "compatException": false },
+    { "literal": "/Users/a1234/Desktop/Coding/visual-grounding-poc", "files": ["services/orchestrator/ops/recover-main-safe.mjs"], "category": "vision-poc-root", "compatException": false, "note": "视觉 PoC 根（macOS 遗留），非三个登记例外之一" },
+    { "literal": ".venv", "files": ["services/orchestrator/ops/recover-main-safe.mjs", "services/orchestrator/ops/screenshot-and-analyze.mjs", "services/orchestrator/ops/xw-locator.mjs"], "category": "python-venv", "compatException": true, "exceptionIds": ["xw-locator"], "note": "recover-main-safe/screenshot-and-analyze 为 VGP PoC 关联使用" },
+    { "literal": "C:/Users/Public/xhs-agent-runs", "files": ["services/orchestrator/ops/recover-main-safe.mjs"], "category": "runtime-root-legacy", "compatException": false },
+    { "literal": "C:/Users/Public/xhs-agent-runs/_explore/follow-$", "files": ["services/orchestrator/ops/xhs-follow-one.mjs"], "category": "template-path", "compatException": false },
+    { "literal": "C:/Users/Public/xhs-agent-runs/_explore/dump-$", "files": ["services/orchestrator/ops/xhs-like-one.mjs"], "category": "template-path", "compatException": false },
+    { "literal": "C:\\Users\\Public\\xw-runtime\\state\\orchestrator\\outbox\\harvest", "files": ["services/orchestrator/ops/xw-closeout.mjs"], "category": "runtime-root", "compatException": false },
+    { "literal": "C:\\Users\\Public\\xw-runtime\\state\\orchestrator\\outbox\\work", "files": ["services/orchestrator/ops/xw-closeout.mjs", "services/orchestrator/scripts/lib/orchestration-store.mjs"], "category": "runtime-root", "compatException": false },
+    { "literal": "C:\\Users\\Public\\xw-fusion\\xw-platform", "files": ["services/orchestrator/ops/xw-closeout.mjs"], "category": "doc-config", "compatException": false },
+    { "literal": "C:\\Users\\Public\\xw-runtime\\state\\orchestrator", "files": ["services/orchestrator/ops/xw-closeout.mjs"], "category": "runtime-root", "compatException": false },
+    { "literal": "C:\\Users\\Public\\xw-runtime\\evidence", "files": ["services/orchestrator/ops/xw-closeout.mjs", "services/orchestrator/ops/xw-ops-health.mjs"], "category": "runtime-root", "compatException": false },
+    { "literal": "C:\\Users\\Public\\xw-runtime\\state\\orchestrator\\outbox", "files": ["services/orchestrator/ops/xw-closeout.mjs"], "category": "runtime-root", "compatException": false },
+    { "literal": "C:\\Users\\Public\\xw-fusion\\xw-platform\\services\\orchestrator", "files": ["services/orchestrator/ops/xw-closeout.mjs"], "category": "doc-config", "compatException": false },
+    { "literal": "C:\\Users\\Public\\xw-fusion\\xw-platform\\services\\control-plane", "files": ["services/orchestrator/ops/xw-closeout.mjs"], "category": "doc-config", "compatException": false },
+    { "literal": "D:\\Program Files\\Node\\node.exe", "files": ["services/orchestrator/ops/xw-evolve-replay-once.mjs", "services/orchestrator/scripts/lib/node-runtime.mjs"], "category": "tool-default", "compatException": false },
+    { "literal": "C:\\Users\\Public\\xhs-registry-visual-tap\\experiments\\visual-tap-resolver", "files": ["services/orchestrator/ops/xw-locator.mjs", "services/orchestrator/ops/xw-start.mjs"], "category": "vision-resolver-root", "compatException": true, "exceptionIds": ["xw-locator", "xw-start"] },
+    { "literal": "C:\\Users\\Public\\xw-runtime", "files": ["packages/cutover/lib/tasks.mjs", "services/orchestrator/ops/xw-mission.mjs", "services/orchestrator/ops/xw-repair.mjs", "services/orchestrator/ops/xw-start.mjs"], "category": "runtime-root", "compatException": false },
+    { "literal": "C:\\Users\\Public\\xhs-registry", "files": ["packages/cutover/lib/live-collect.mjs", "services/orchestrator/ops/xw-session-canary-noop.mjs", "services/orchestrator/scripts/adopt-from-windows.mjs", "services/orchestrator/scripts/lib/xw-balance-shared.mjs", "services/orchestrator/scripts/review-windows.mjs"], "category": "runtime-root-legacy", "compatException": false },
+    { "literal": "C:\\Users\\Public\\xhs-registry\\registry.db", "files": ["services/orchestrator/ops/xw-stall-worker.mjs", "services/orchestrator/tools/m0/_sqlite-ro-forensics.mjs"], "category": "db-path-legacy", "compatException": false },
+    { "literal": "C:/Users/Public/xhs-agent-runs/ops-trace", "files": ["services/orchestrator/ops/_biz-trace.mjs", "services/orchestrator/ops/_trace-pitfall.mjs", "services/orchestrator/ops/_win-xiaowei.mjs"], "category": "runtime-root-legacy", "compatException": false },
+    { "literal": "C:/Users/Public/xhs-registry/tmp-know/$", "files": ["services/orchestrator/ops/_explore-lib.mjs"], "category": "template-path", "compatException": false },
+    { "literal": "C:\\... /tmp", "files": ["services/orchestrator/ops/_trace-pitfall.mjs"], "category": "comment-example", "compatException": false },
+    { "literal": "C:\\Users\\Public\\xhs-registry\\ops\\_trace-pitfall.mjs --evidence", "files": ["services/orchestrator/ops/_trace-pitfall.mjs"], "category": "comment-example", "compatException": false },
+    { "literal": "C:\\Users\\Public\\xhs-agent-runs\\ops-trace\\context\\$", "files": ["services/orchestrator/ops/_trace-pitfall.mjs"], "category": "template-path", "compatException": false },
+    { "literal": "D:\\download\\lvjian\\tools\\adb.exe", "files": ["services/orchestrator/ops/_win-screencap.mjs"], "category": "tool-default", "compatException": false },
+    { "literal": "C:\\platform-tools\\adb.exe", "files": ["services/orchestrator/ops/_win-screencap.mjs"], "category": "tool-default", "compatException": false },
+    { "literal": "C:\\Users\\Public\\xw-runtime\\state\\control-plane\\control.db", "files": ["services/orchestrator/query-routing.mjs", "services/orchestrator/registry.mjs"], "category": "db-path", "compatException": false },
+    { "literal": "C:\\Users\\Public\\xw-runtime\\state\\control-plane", "files": ["services/orchestrator/registry.mjs"], "category": "runtime-root", "compatException": false },
+    { "literal": "C:\\Users\\Public\\xw-runtime\\current（一次性 CLI；服务主模块仍须使用解析后的真实 release）", "files": ["services/orchestrator/registry.mjs"], "category": "comment-example", "compatException": false },
+    { "literal": "C:\\Users\\Public\\xw-fusion\\xw-platform\\services\\control-plane\\scripts\\fast-operator-serve-task.ps1 -Action Restart -Alias 01", "files": ["services/orchestrator/registry.mjs"], "category": "doc-config", "compatException": false },
+    { "literal": "C:\\Users\\Public\\xw-fusion\\xw-platform\\services\\control-plane\\scripts\\fast-operator-serve-task.ps1 -Action Restart -Alias 02", "files": ["services/orchestrator/registry.mjs"], "category": "doc-config", "compatException": false },
+    { "literal": "C:\\Users\\Public\\xw-fusion\\xw-platform\\services\\control-plane\\scripts\\fast-operator-serve-task.ps1 -Action Restart -Alias 03", "files": ["services/orchestrator/registry.mjs"], "category": "doc-config", "compatException": false },
+    { "literal": "C:\\Users\\Public\\xw-fusion\\xw-platform\\services\\control-plane\\scripts\\fast-operator-serve-task.ps1 -Action Restart -Alias 04", "files": ["services/orchestrator/registry.mjs"], "category": "doc-config", "compatException": false },
+    { "literal": "C:\\Users\\Public\\xhs-agent-control\\generated-overlay\\recipe-catalog.json", "files": ["services/orchestrator/scripts/lib/recipe-catalog.mjs"], "category": "runtime-root-legacy", "compatException": false },
+    { "literal": "C:\\Users\\Public\\xhs-registry-visual-tap\\experiments\\visual-tap-resolver\\.venv-ocr\\Scripts\\python.exe", "files": ["services/orchestrator/scripts/lib/wechat-balance-extract.mjs", "services/orchestrator/scripts/lib/xw-balance-shared.mjs"], "category": "python-venv-ocr", "compatException": true, "exceptionIds": ["wechat-ocr"] },
+    { "literal": "C:\\Users\\Public\\xhs-agent-control\\control.db", "files": ["packages/cutover/lib/live-collect.mjs", "services/orchestrator/tools/m0/_sqlite-ro-forensics.mjs"], "category": "db-path-legacy", "compatException": false },
+    { "literal": "C:\\Users", "files": ["packages/cutover/lib/live-collect.mjs"], "category": "runtime-root-legacy", "compatException": false },
+    { "literal": "C:\\Users\\Public\\xw-cutover-rehearsal", "files": ["packages/cutover/lib/rehearse.mjs"], "category": "runtime-root", "compatException": false },
+    { "literal": "C:\\Users\\Public\\xw-runtime\\current 的启动入口；", "files": ["packages/cutover/lib/tasks.mjs"], "category": "comment-example", "compatException": false }
+  ]
+}
