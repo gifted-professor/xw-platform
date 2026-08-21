@@ -85,6 +85,7 @@
         "tests/m6-contracts.test.mjs",
         "tests/m6-hard-redline.test.mjs",
         "tests/m6-inventory.test.mjs",
+        "tests/m6-screen-frame.test.mjs",
         "tests/m6-tool-surface.test.mjs",
         "tests/skill-catalog.test.mjs",
         "tests/task-router.test.mjs",
