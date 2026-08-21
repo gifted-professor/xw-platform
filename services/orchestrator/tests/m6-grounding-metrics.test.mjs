@@ -11,7 +11,9 @@ import { buildMetrics, generate, measureDecisionP95Ms } from "../../../tools/m6/
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "../../..");
 const RECEIPT_PATH = path.join(REPO_ROOT, "services/orchestrator/contracts/m6/grounding-metrics.v1.json");
+const CORPUS_PATH = path.join(REPO_ROOT, "services/orchestrator/contracts/m6/replay-corpus.v1.json");
 const receipt = JSON.parse(readFileSync(RECEIPT_PATH, "utf8"));
+const manifest = JSON.parse(readFileSync(CORPUS_PATH, "utf8"));
 
 test("grounding metrics: the committed receipt passes every task-brief exit gate", () => {
   assert.equal(receipt.schemaId, "xw.grounding-metrics.v1");
@@ -22,7 +24,19 @@ test("grounding metrics: the committed receipt passes every task-brief exit gate
   assert.equal(g.forbiddenEq0, true, `forbidden must be 0 (got ${receipt.forbidden})`);
   assert.equal(g.misclickEq0, true, `misclick must be 0 (got ${receipt.misclick})`);
   assert.equal(g.staleEq0, true, `unexpected stale must be 0 (got ${receipt.stale})`);
+  assert.equal(g.evidenceIntegrity, true, `evidence hash integrity must hold (got ${receipt.evidenceMismatches} mismatches)`);
   assert.equal(g.deterministic, true, "per-frame determinism must hold");
+});
+
+test("P1-5: a tampered corpus (corrupted evidence sha256) causes evidenceIntegrity gate to fail", () => {
+  const tampered = JSON.parse(JSON.stringify(manifest));
+  // Corrupt the first screenshot entry's sha256.
+  const screenshot = tampered.entries.find((e) => e.kind === "screenshot");
+  assert.ok(screenshot, "corpus must have a screenshot entry");
+  screenshot.sha256 = "0".repeat(64);
+  const result = buildMetrics({ corpus: tampered });
+  assert.ok(result.evidenceMismatches > 0, `tampered corpus must produce evidence mismatches (got ${result.evidenceMismatches})`);
+  assert.equal(result.exitGates.evidenceIntegrity, false, "tampered corpus must fail the evidenceIntegrity gate");
 });
 
 test("grounding metrics: covers >=200 frames and reports the hermetic provider", () => {

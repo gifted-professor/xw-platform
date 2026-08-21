@@ -268,6 +268,12 @@ export function createGroundingRuntime({
   // be resolved at most once — replay or reuse of a consumed decisionId always
   // fails closed, preventing point-ref forgery and double-dispatch.
   const consumedDecisions = new Set();
+  // Runtime-private issuance registry (P1-4): every ALLOW_ONCE decisionId this
+  // runtime produced is registered here with the exact bounds binding it was
+  // decided against. resolveInternalPoint only honors decisions present in this
+  // registry — a well-formed but never-issued (forged) decision can never obtain
+  // a point, and the resolved point is always bound to the registered boundsRef.
+  const issuedDecisions = new Map();
 
   // freezeFrame: produce an execution-grade xw.screen-frame.v1 from captured
   // evidence. Unstable / partial / missing evidence must NOT become actionable.
@@ -453,14 +459,36 @@ export function createGroundingRuntime({
     // Resolve private signals from the evidence store. These are stored by
     // blockId during segmentation and cannot be resolved for a forged/unknown
     // blockId (which would produce a different blockId than the one signed by
+    // the block set's integrity hash).
+    //
     // Resolve private geometry + signals from the bounds blob bound to the
     // block's boundsRef. The boundsRef is content-addressed and preserved across
     // category relabeling, so a provider that relabels payment→content cannot
     // strip the original signals (e.g. ocrText "确认支付") — they still resolve
     // here and the redline firewall still fires.
-    const bounds = evidence.resolveBounds(block.boundsRef.id);
-    const geometry = bounds?.geometry;
-    const privSignals = bounds?.signals || {};
+    //
+    // P1-1: the resolved bounds blob must be EXACTLY bound to the block being
+    // decided: blockId AND regionHash must match, and the blob's content hash
+    // must equal boundsRef.sha256 (detecting any payload tampering). A swapped
+    // boundsRef (pointing at a benign block's blob) or a relabeled block with a
+    // legitimately recomputed blockId/integrity is rejected — fail closed via
+    // HARD_STOP, never degraded to ALLOW_ONCE.
+    const bounds = evidence.resolveBounds(block.boundsRef?.id);
+    if (
+      !bounds
+      || bounds.blockId !== block.blockId
+      || bounds.regionHash !== block.regionHash
+      || evidence.ref(block.boundsRef.id)?.sha256 !== block.boundsRef.sha256
+    ) {
+      const reason = "boundsRef does not resolve to a bounds blob exactly bound to this block (swapped ref or tampered payload)";
+      return {
+        ok: true,
+        errors: [],
+        decision: hardStop({ frame, block, intent, grantRef, goalRef, stepRef, effectClass, checks: [], reason }),
+      };
+    }
+    const geometry = bounds.geometry;
+    const privSignals = bounds.signals || {};
 
     // 1. freshness — frame must not be expired relative to the caller's clock.
     const expiresMs = Date.parse(frame.expiresAt);
@@ -536,16 +564,27 @@ export function createGroundingRuntime({
     const decision = buildDecision({ frame, block, intent, grantRef, goalRef, stepRef, effectClass, checks, result, reason });
     const valid = validateGroundingDecision(decision, { block });
     if (!valid.ok) return { ok: false, errors: valid.errors, decision: null };
+    // P1-4: register every issued ALLOW_ONCE with its exact bounds binding so
+    // resolveInternalPoint can only honor decisions this runtime produced, and
+    // only against the bounds the redline firewall actually saw.
+    if (decision.result === "ALLOW_ONCE") {
+      issuedDecisions.set(decision.groundingDecisionId, {
+        blockId: block.blockId,
+        boundsRef: { id: block.boundsRef.id, sha256: block.boundsRef.sha256 },
+      });
+    }
     return { ok: true, errors: [], decision };
   }
 
   // resolveInternalPoint: the one-time private tap-point resolution. Only valid
-  // on ALLOW_ONCE; the point is consumed in the same dispatch transaction and
-  // cannot be replayed. Every decisionId is resolved at most once — reuse is
-  // always rejected — and the resolved point is cryptographically bound to the
-  // block's boundsRef so a forged point cannot reference a different target.
-  // Coordinates stay in the evidence store.
-  function resolveInternalPoint(decision, evidenceStore = evidence) {
+  // on ALLOW_ONCE decisions actually ISSUED by this runtime (P1-4): the
+  // decisionId must be present in the runtime-private issuedDecisions registry,
+  // the decision's blockId must match the registered binding, and the registered
+  // boundsRef must still resolve to an exactly-bound bounds blob. Resolution is
+  // atomic — the decision is consumed on success and can never be resolved
+  // again. A point is always bound to the registered boundsRef; a point without
+  // a valid boundsRef is never produced. Coordinates stay in the evidence store.
+  function resolveInternalPoint(decision) {
     const errs = [];
     if (!decision || decision.schemaId !== "xw.grounding-decision.v1") {
       fail(errs, CODE, "resolveInternalPoint requires a grounding decision");
@@ -568,30 +607,43 @@ export function createGroundingRuntime({
       fail(errs, CODE, "resolveInternalPoint: decision already consumed — replay attack prevented");
       return { ok: false, errors: errs, pointRef: null };
     }
+    // P1-4: only decisions issued by THIS runtime resolve. The registry binding
+    // (blockId + exact boundsRef) is authoritative; a forged-but-well-formed
+    // decision that was never issued is rejected here.
+    const issued = issuedDecisions.get(decision.groundingDecisionId);
+    if (!issued) {
+      fail(errs, CODE, "resolveInternalPoint: decision was never issued by this runtime — forged decision rejected");
+      return { ok: false, errors: errs, pointRef: null };
+    }
+    if (issued.blockId !== decision.blockId) {
+      fail(errs, CODE, "resolveInternalPoint: decision blockId does not match the issued binding");
+      return { ok: false, errors: errs, pointRef: null };
+    }
+    // Resolve against the registered boundsRef only, and require an exact
+    // blockId binding — never scan the store for a first match, never produce a
+    // boundsRef:null point.
+    const bounds = evidence.resolveBounds(issued.boundsRef.id);
+    if (
+      !bounds
+      || bounds.blockId !== issued.blockId
+      || evidence.ref(issued.boundsRef.id)?.sha256 !== issued.boundsRef.sha256
+    ) {
+      fail(errs, CODE, "resolveInternalPoint: registered boundsRef no longer resolves to an exactly-bound bounds blob");
+      return { ok: false, errors: errs, pointRef: null };
+    }
+    // Atomic consumption: remove from issued BEFORE producing the point so a
+    // re-entrant or replayed resolution can never succeed twice.
+    issuedDecisions.delete(decision.groundingDecisionId);
     consumedDecisions.add(decision.groundingDecisionId);
 
-    // Bind the point to the block's boundsRef from the evidence store, so a
-    // forged point cannot reference a different target. We scan the store for
-    // a bounds blob whose parsed blockId matches the decision's blockId.
-    const boundsRefForPoint = (() => {
-      for (const v of evidenceStore.snapshot().values()) {
-        if (v.kind === "bounds") {
-          try {
-            const parsed = JSON.parse(v.bytes.toString("utf8"));
-            if (parsed.blockId === decision.blockId) return { id: v.id, sha256: v.sha256 };
-          } catch { /* skip */ }
-        }
-      }
-      return null;
-    })();
     const payload = stableStringify({
       groundingDecisionId: decision.groundingDecisionId,
       frameId: decision.frameId,
       blockId: decision.blockId,
-      boundsRef: boundsRefForPoint,
+      boundsRef: issued.boundsRef,
       nonce: consumedDecisions.size,
     });
-    const pointRef = evidenceStore.put("point", payload);
+    const pointRef = evidence.put("point", payload);
     return { ok: true, errors: [], pointRef };
   }
 

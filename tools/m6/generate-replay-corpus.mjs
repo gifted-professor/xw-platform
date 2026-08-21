@@ -46,7 +46,7 @@ function sha256(input) {
 }
 
 // Deterministic synthetic evidence for one frame. Stable across runs and platforms.
-function syntheticEvidence(frameIndex, scenarioId) {
+export function syntheticEvidence(frameIndex, scenarioId) {
   const seed = `${frameIndex}:${scenarioId}`;
   const screenshotA = `synthetic-frame-${seed}`;
   const screenshotB = screenshotA; // stable frame

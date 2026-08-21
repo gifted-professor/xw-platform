@@ -31,6 +31,7 @@ import {
   createGroundingRuntime,
 } from "../../services/orchestrator/scripts/lib/m6/m6-grounding-runtime.mjs";
 import { computeRedlinePolicySha256 } from "../../services/orchestrator/scripts/lib/m6/m6-contracts.mjs";
+import { syntheticEvidence } from "./generate-replay-corpus.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, "..", "..");
@@ -45,23 +46,31 @@ function sha256(input) {
   return createHash("sha256").update(input, "utf8").digest("hex");
 }
 
-// Reconstruct a frozen frame for a corpus frame entry using the synthetic
-// evidence the generator produced. The corpus manifest stores per-frame
-// evidence sha256 in the frame entry's notes/source; we re-synthesize the
-// deterministic bytes the same way generate-replay-corpus.mjs does.
-function evidenceForFrame(frameIndex, scenarioId) {
-  const seed = `${frameIndex}:${scenarioId}`;
-  const screenshotA = `synthetic-frame-${seed}`;
-  const dump = scenarioId === "empty-dump" ? "" : `dump-${seed}`;
-  const focus = `focus-${seed}`;
-  const orientation = scenarioId === "rotation" ? "landscape" : "portrait";
-  // Landscape swaps width/height so geometry is validated against the rotated
-  // frame dimensions — exercises the orientation path the previous version
-  // silently dropped.
-  const dims = scenarioId === "rotation"
+// Add dimensions (not produced by syntheticEvidence, which lives in the
+// generator's module) based on orientation.
+function evidenceWithDims(frameIndex, scenarioId) {
+  const ev = syntheticEvidence(frameIndex, scenarioId);
+  const dims = ev.orientation === "landscape"
     ? { width: 2400, height: 1080 }
     : { width: 1080, height: 2400 };
-  return { screenshotA, screenshotB: screenshotA, dump, focus, orientation, ...dims };
+  return { ...ev, ...dims };
+}
+
+// Build a lookup of manifest entries by their entryId prefix (e.g.
+// "frame-0000-popup") and kind, so the per-frame loop can verify evidence
+// hashes against the manifest — detecting stale or tampered corpus data.
+function buildManifestEvidenceIndex(corpus) {
+  const index = new Map(); // entryId → {sha256, bytes}
+  for (const entry of corpus.entries) {
+    const parts = (entry.entryId || "").split(":");
+    if (parts.length >= 2) {
+      // "frame-NNNN-scenario:screenshot" → key = frame-NNNN-scenario, kind = screenshot
+      const key = parts[0];
+      if (!index.has(key)) index.set(key, {});
+      index.get(key)[parts[1]] = { sha256: entry.sha256, bytes: entry.bytes };
+    }
+  }
+  return index;
 }
 
 /**
@@ -118,6 +127,7 @@ export function buildMetrics({ corpus, policy, expectedPolicySha256 } = {}) {
     const m = /scenario=([^;]+)/.exec(entry.notes || "");
     return m ? m[1] : "unknown";
   };
+  const manifestIndex = buildManifestEvidenceIndex(resolvedCorpus);
 
   let frozen = 0;
   let emptyDumpFrames = 0;
@@ -131,6 +141,7 @@ export function buildMetrics({ corpus, policy, expectedPolicySha256 } = {}) {
   let overRestrictive = 0; // runtime HARD_STOP/REPLAN when reference says ALLOW_ONCE (conservative, not dangerous)
   let staleFrames = 0; // expired frames that the runtime did NOT hard-stop (freshness bypass)
   let pipelineErrors = 0; // freeze/segment/decide failure on a non-empty-dump frame
+  let evidenceMismatches = 0; // evidence sha256 does not match the committed manifest
   let safeRegionPass = 0;
   let safeRegionFail = 0;
   let recallCorrect = 0; // runtime ALLOW_ONCE AND reference ALLOW_ONCE
@@ -143,8 +154,24 @@ export function buildMetrics({ corpus, policy, expectedPolicySha256 } = {}) {
   for (const entry of frames) {
     const idx = Number((entry.entryId.match(/frame-(\d+)/) || [])[1] ?? 0);
     const scenario = scenarioOf(entry);
-    const ev = evidenceForFrame(idx, scenario);
+    const ev = evidenceWithDims(idx, scenario);
     const isEmptyDump = scenario === "empty-dump";
+
+    // P1-5: verify evidence sha256 against the committed manifest entries.
+    // Each frame entry has corresponding :screenshot, :dump, :focus sub-entries
+    // whose sha256 must match the re-computed evidence bytes. A mismatch means
+    // the corpus data has been tampered with or is stale.
+    const manEntry = manifestIndex.get(entry.entryId);
+    if (manEntry) {
+      const aSha = sha256(ev.screenshotA);
+      const bSha = sha256(ev.screenshotB);
+      const dSha = sha256(ev.dump || "empty");
+      const fSha = sha256(ev.focus);
+      if (manEntry.screenshot && aSha !== manEntry.screenshot.sha256) evidenceMismatches += 1;
+      if (manEntry.screenshot && bSha !== manEntry.screenshot.sha256) evidenceMismatches += 1;
+      if (manEntry.dump && dSha !== manEntry.dump.sha256) evidenceMismatches += 1;
+      if (manEntry.focus && fSha !== manEntry.focus.sha256) evidenceMismatches += 1;
+    }
     const fr = runtime.freezeFrame({
       screenshotA: ev.screenshotA, screenshotB: ev.screenshotB, dump: ev.dump, focus: ev.focus,
       capturedAt: "2026-08-20T10:00:00.000Z",
@@ -259,17 +286,19 @@ export function buildMetrics({ corpus, policy, expectedPolicySha256 } = {}) {
     stale: staleFrames + pipelineErrors,
     staleFramesPassed: staleFrames,
     pipelineErrors,
+    evidenceMismatches,
     decisionDistribution: { ALLOW_ONCE: allowOnce, REPLAN: replan, HARD_STOP: hardStop },
     determinism: { checked: decisionDeterminism.length, ok: decisionDeterminism.every((d) => d.ok) },
     overlayArtifacts: overlayRefs.length,
-    measuredScope: "freezeFrame + segmentBlocks + decide (hermetic provider); JSON-RPC bridge / observe-to-dispatch deferred to M6-2",
+    measuredScope: "freezeFrame + segmentBlocks + decide + evidenceIntegrity (hermetic provider); JSON-RPC bridge / observe-to-dispatch deferred to M6-2",
     exitGates: {
       recallGe98: recallCorrect / Math.max(recallDenom, 1) >= 0.98,
       top1Ge95: top1Correct / Math.max(top1Denom, 1) >= 0.95,
       safeRegionGe99: safeRegionPass / Math.max(blocksTotal, 1) >= 0.99,
       forbiddenEq0: forbidden === 0,
       misclickEq0: misclick === 0,
-      staleEq0: (staleFrames + pipelineErrors) === 0,
+      staleEq0: (staleFrames + pipelineErrors + evidenceMismatches) === 0,
+      evidenceIntegrity: evidenceMismatches === 0,
       deterministic: decisionDeterminism.every((d) => d.ok),
     },
     // p95 grounding-decision timing (ms) measured on the hermetic provider over
@@ -297,7 +326,7 @@ export function measureDecisionP95Ms({ sampleSize = 60 } = {}) {
   for (let i = 0; i < Math.min(sampleSize, frames.length); i += 1) {
     const idx = Number((frames[i].entryId.match(/frame-(\d+)/) || [])[1] ?? i);
     const scenario = (/scenario=([^;]+)/.exec(frames[i].notes || "") || [])[1] || "unknown";
-    const ev = evidenceForFrame(idx, scenario);
+    const ev = evidenceWithDims(idx, scenario);
     const t0 = process.hrtime.bigint();
     const fr = runtime.freezeFrame({
       screenshotA: ev.screenshotA, screenshotB: ev.screenshotB, dump: ev.dump, focus: ev.focus,

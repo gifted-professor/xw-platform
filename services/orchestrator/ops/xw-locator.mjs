@@ -117,20 +117,30 @@ function commandStatus() {
 }
 
 function readEvidenceInput(args) {
-  // M6-1 is offline: prepare takes a --input evidence bundle (screenshotA/B,
-  // dump, focus as files or a single JSON) or a --replay-corpus frame id.
+  // M6-1 is offline: prepare takes a --input evidence JSON bundle with explicit
+  // screenshotA and screenshotB. A single image (PNG) is NOT sufficient — the
+  // runtime requires two independent captures to verify frame stability. Single
+  // input is rejected (exit 2), preventing pseudo-stable dual-frame forgery.
   if (args.input) {
     const input = resolve(args.input);
     if (!existsSync(input)) throw new Error(`input not found: ${input}`);
-    const raw = readFileSync(input, "utf8");
+    // Read as binary first (PNG users pass raw files; readFileSync without
+    // encoding returns a Buffer that is binary-safe).
+    const rawBuffer = readFileSync(input);
     try {
-      return JSON.parse(raw);
+      return JSON.parse(rawBuffer.toString("utf8"));
     } catch {
-      // Treat the input as a raw screenshot for A and synthesize a stable frame.
-      return { screenshotA: raw, screenshotB: raw, dump: "cli-input", focus: "cli-input" };
+      // Non-JSON input (e.g. a single PNG) — reject: the same bytes must not
+      // serve as both screenshotA and screenshotB.
+      throw new Error(
+        "single-image input is not supported: prepare needs a JSON evidence bundle "
+        + "with explicit screenshotA/screenshotB (two independent captures). "
+        + "Pass --input <evidence.json> with {\"screenshotA\": ..., \"screenshotB\": ..., "
+        + "\"dump\": ..., \"focus\": ...}"
+      );
     }
   }
-  throw new Error("prepare requires --input <evidence.json|screen.png> (M6-1 is offline; live capture is M6-2)");
+  throw new Error("prepare requires --input <evidence.json> (M6-1 is offline; live capture is M6-2)");
 }
 
 function commandPrepare(args) {

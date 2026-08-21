@@ -123,7 +123,7 @@
       "kind": "source-tree",
       "source": "仓内 services/orchestrator/scripts/lib/m6/m6-grounding-runtime.mjs (HERMETIC_FIXTURE_PROVIDER)",
       "version": "1.0.0",
-      "sha256": "77f019b0c132c530fd192af3910cf8765fd1dfa25a810b9980ce89f257a6ea70",
+      "sha256": "fca7dbb43a1957b685ca40e325d17de7ff14f0802452cc05bfa8d50f939e63a1",
       "license": {
         "spdx": null,
         "status": "repo-internal",

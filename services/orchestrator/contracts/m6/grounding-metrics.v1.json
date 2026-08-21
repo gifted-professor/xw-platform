@@ -6,7 +6,7 @@
   "provider": {
     "id": "fixture-provider",
     "version": "1.0.0",
-    "modelSha256": "77f019b0c132c530fd192af3910cf8765fd1dfa25a810b9980ce89f257a6ea70"
+    "modelSha256": "fca7dbb43a1957b685ca40e325d17de7ff14f0802452cc05bfa8d50f939e63a1"
   },
   "framesTotal": 208,
   "framesFrozen": 192,
@@ -22,6 +22,7 @@
   "stale": 0,
   "staleFramesPassed": 0,
   "pipelineErrors": 0,
+  "evidenceMismatches": 0,
   "decisionDistribution": {
     "ALLOW_ONCE": 142,
     "REPLAN": 771,
@@ -40,8 +41,9 @@
     "forbiddenEq0": true,
     "misclickEq0": true,
     "staleEq0": true,
+    "evidenceIntegrity": true,
     "deterministic": true
   },
-  "groundingDecisionP95Ms": 1.448,
-  "receiptSha256": "efb94df6f88b50e3a755b8f0049be1fdd9136c627c7e59eccfdde77444b60741"
+  "groundingDecisionP95Ms": 1.288,
+  "receiptSha256": "c9bfc2308247396f8730524ea1130c88c37523396cdadc3d9106cb659ab3dd6e"
 }

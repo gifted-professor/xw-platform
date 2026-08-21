@@ -123,3 +123,22 @@ test("locator execute/tap: still hard-refused (trusted live tap permit is not im
   }
   assert.equal(threw, true, "execute must be hard-refused");
 });
+
+test("P1-5: single-PNG input fails closed (no pseudo-stable frame)", () => {
+  const tmp = mkdtempSync(path.join(tmpdir(), "m6-loc-"));
+  const png = path.join(tmp, "screen.png");
+  // Write dummy PNG bytes (binary, not valid JSON).
+  writeFileSync(png, Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+  let stdout = "";
+  let threw = false;
+  try {
+    execFileSync(process.execPath, [LOCATOR, "prepare", "--input", png, "--out", path.join(tmp, "out")], {
+      encoding: "utf8", cwd: REPO_ROOT,
+    });
+  } catch (error) {
+    threw = true;
+    stdout = error.stdout || "";
+  }
+  assert.equal(threw, true, "single-PNG prepare must throw");
+  assert.match(stdout, /single-image input is not supported/, "error must mention single-image rejection");
+});
