@@ -30,7 +30,7 @@
   "files": [
     {
       "path": "services/orchestrator/ops/xw-locator.mjs",
-      "sha256": "5e581b54d0b684a2ddb64b9c9dd99ac45404e38ac9fc2825a623098f1685f0cb",
+      "sha256": "7bb7c18f4a141fe9bd2e9f5b206912f239dfa4aeca6fdc665ebf70d701416cab",
       "role": "visual block locator 诊断 CLI（收敛进唯一 GroundingRuntime；blockId-only、tapAuthorized=false、effect=none）；M6-1 已清零机器外引用",
       "externalPaths": [],
       "externalDependencies": [],
@@ -237,7 +237,7 @@
     },
     {
       "path": "services/orchestrator/scripts/lib/m6/m6-grounding-runtime.mjs",
-      "sha256": "22c00e93def75f853b4562a48a920bbce6c75bc3bdd98c12101a2d27421605ce",
+      "sha256": "77f019b0c132c530fd192af3910cf8765fd1dfa25a810b9980ce89f257a6ea70",
       "role": "唯一 GroundingRuntime：stable-frame validator、hermetic fixture provider、block-set、decision policy、private point resolver（纯函数、零设备 IO、零第三方依赖）",
       "externalPaths": [],
       "externalDependencies": [],
@@ -262,7 +262,7 @@
     },
     {
       "path": "tools/m6/grounding-metrics.mjs",
-      "sha256": "1cd9ac2fa90be7a46d302d4e4b25e35dd256d8eb8b47052884a75ac0543ac28f",
+      "sha256": "f47ce9e37b0e163a4701715085aae4cd64e69b7fa93972fc6087f418c4a0b4bf",
       "role": "M6-1 grounding metrics + SLO 校准工具：跑 GroundingRuntime over corpus，产出确定性 metrics receipt（recall/top-1/safe-region/forbidden/misclick/stale/determinism）",
       "externalPaths": [],
       "externalDependencies": [],

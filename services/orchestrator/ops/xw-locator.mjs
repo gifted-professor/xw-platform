@@ -194,6 +194,7 @@ function commandVerify(args) {
     goalRef: decision.goalRef || "goal-cli",
     stepRef: decision.stepRef || "step-cli",
     effectClass: decision.effectClass || "navigation",
+    nowMs: Date.now(),
   });
   if (!dec.ok) throw new Error(`decide failed: ${dec.errors.map((e) => e.message).join("; ")}`);
   const output = resolve(args.output || join(dir, "verified-point.json"));

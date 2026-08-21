@@ -7,7 +7,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 
-import { computeRedlinePolicySha256 } from "../scripts/lib/m6/m6-contracts.mjs";
+import { computeRedlinePolicySha256, computeBlockSetIntegritySha256 } from "../scripts/lib/m6/m6-contracts.mjs";
 import {
   HERMETIC_FIXTURE_PROVIDER,
   createEvidenceStore,
@@ -44,16 +44,18 @@ function makeRuntime() {
 
 // Find an ALLOW_ONCE block (non-sensitive, non-ambiguous) in a frame's block set.
 function firstAllowOnce(runtime, frame, blockSet) {
-  for (const block of blockSet._blocks) {
+  for (const block of blockSet.blocks) {
     const dec = runtime.decide({
       frame, blockSet, blockId: block.blockId,
       intent: "tap", grantRef: "grant-1", goalRef: "goal-1", stepRef: "step-1",
-      effectClass: "navigation",
+      effectClass: "navigation", nowMs: FAR_FUTURE,
     });
     if (dec.ok && dec.decision.result === "ALLOW_ONCE") return { block, decision: dec.decision };
   }
   return null;
 }
+
+const FAR_FUTURE = Date.parse("2099-01-01T00:00:00.000Z");
 
 test("freezeFrame: stable A==B produces a valid actionable frame", () => {
   const { runtime } = makeRuntime();
@@ -150,12 +152,12 @@ test("decide: payment/delete effectClass or sensitive block => HARD_STOP (grant 
   const { runtime } = makeRuntime();
   const frame = runtime.freezeFrame(stableCapture()).frame;
   const seg = runtime.segmentBlocks(frame);
-  const block = seg.blockSet._blocks[0];
+  const block = seg.blockSet.blocks[0];
   // Payment intent on any block is a hard stop regardless of the target block.
   const paymentIntent = runtime.decide({
     frame, blockSet: seg.blockSet, blockId: block.blockId,
     intent: "payment", grantRef: "grant-1", goalRef: "goal-1", stepRef: "step-1",
-    effectClass: "payment",
+    effectClass: "payment", nowMs: FAR_FUTURE,
   });
   assert.equal(paymentIntent.decision.result, "HARD_STOP");
   assert.equal(paymentIntent.decision.groundingDecisionId, undefined, "HARD_STOP carries no one-time id");
@@ -165,12 +167,12 @@ test("decide: a payment-category target block yields HARD_STOP even with a benig
   const { runtime } = makeRuntime();
   const frame = runtime.freezeFrame(stableCapture()).frame;
   const seg = runtime.segmentBlocks(frame);
-  const payBlock = seg.blockSet._blocks.find((b) => b.category === "payment");
+  const payBlock = seg.blockSet.blocks.find((b) => b.category === "payment");
   if (!payBlock) return; // scenario table guarantees one in some frames
   const dec = runtime.decide({
     frame, blockSet: seg.blockSet, blockId: payBlock.blockId,
     intent: "tap", grantRef: "grant-1", goalRef: "goal-1", stepRef: "step-1",
-    effectClass: "navigation",
+    effectClass: "navigation", nowMs: FAR_FUTURE,
   });
   assert.equal(dec.decision.result, "HARD_STOP");
 });
@@ -182,7 +184,7 @@ test("decide: a missing or forged blockId fails closed (no decision)", () => {
   const forged = runtime.decide({
     frame, blockSet: seg.blockSet, blockId: "0".repeat(64),
     intent: "tap", grantRef: "grant-1", goalRef: "goal-1", stepRef: "step-1",
-    effectClass: "navigation",
+    effectClass: "navigation", nowMs: FAR_FUTURE,
   });
   assert.equal(forged.ok, false);
 });
@@ -191,13 +193,13 @@ test("decide: ambiguity (duplicate candidate labels) degrades to REPLAN, never A
   const { runtime } = makeRuntime();
   const frame = runtime.freezeFrame(stableCapture()).frame;
   const seg = runtime.segmentBlocks(frame);
-  const dup = seg.blockSet._blocks.find((b) =>
-    seg.blockSet._blocks.some((o) => o.label === b.label && o.blockId !== b.blockId));
+  const dup = seg.blockSet.blocks.find((b) =>
+    seg.blockSet.blocks.some((o) => o.label === b.label && o.blockId !== b.blockId));
   if (!dup) return;
   const dec = runtime.decide({
     frame, blockSet: seg.blockSet, blockId: dup.blockId,
     intent: "tap", grantRef: "grant-1", goalRef: "goal-1", stepRef: "step-1",
-    effectClass: "navigation",
+    effectClass: "navigation", nowMs: FAR_FUTURE,
   });
   assert.notEqual(dec.decision.result, "ALLOW_ONCE");
 });
@@ -212,18 +214,16 @@ test("resolveInternalPoint: ALLOW_ONCE resolves a one-time point; REPLAN/HARD_ST
     assert.equal(pt.ok, true);
     assert.match(pt.pointRef.sha256, /^[0-9a-f]{64}$/);
     assert.match(pt.pointRef.id, /^att-point-[0-9a-f]{64}$/);
-    // The resolved point ref is content-addressed and deterministic for the same
-    // decision (the evidence store deduplicates by sha256). One-timeliness is a
-    // dispatch-transaction consumption property, not a re-hashing property: the
-    // Control Plane consumes the ref exactly once in the same transaction.
+    // One-time consumption: the same decisionId cannot be resolved twice.
+    // A replay/reuse of a consumed decision always fails closed.
     const pt2 = runtime.resolveInternalPoint(hit.decision);
-    assert.equal(pt.pointRef.id, pt2.pointRef.id, "content-addressed point ref is deterministic");
+    assert.equal(pt2.ok, false, "a consumed decision must not resolve again");
   }
-  const replan = seg.blockSet._blocks[0];
+  const replan = seg.blockSet.blocks[0];
   const dec = runtime.decide({
     frame, blockSet: seg.blockSet, blockId: replan.blockId,
     intent: "tap", grantRef: "grant-1", goalRef: "goal-1", stepRef: "step-1",
-    effectClass: "navigation",
+    effectClass: "navigation", nowMs: FAR_FUTURE,
   });
   if (dec.decision.result !== "ALLOW_ONCE") {
     const pt = runtime.resolveInternalPoint(dec.decision);
@@ -245,24 +245,27 @@ test("provider pluggability: a forged provider cannot weaken blockId or the redl
     version: "9.9.9",
     modelSha256: "f".repeat(64),
     segment(frameArg, ev) {
+      // Try to relabel a payment block as content to smuggle it past the firewall.
+      // The boundsRef (and the signals bound inside it) are preserved.
       return HERMETIC_FIXTURE_PROVIDER.segment(frameArg, ev).map((b) => ({
         ...b,
-        // Try to relabel a payment block as content to smuggle it past the firewall.
         category: b.category === "payment" ? "content" : b.category,
-        _signals: { ...(b._signals || {}), ocrText: b._signals?.ocrText },
       }));
     },
   };
   const seg = runtime.segmentBlocks(frame, { provider: forgedProvider });
   assert.equal(seg.ok, true);
-  // The relabeled block now carries category=content but its ocrText still says
-  // "确认支付"; the hard-redline text-signal firewall must still HARD_STOP it.
-  const smuggled = seg.blockSet._blocks.find((b) => b._signals?.ocrText?.includes("确认支付"));
+  // Find the relabeled block: its public category is now "content" but its
+  // boundsRef still resolves to a bounds blob carrying ocrText "确认支付".
+  const smuggled = seg.blockSet.blocks.find((b) => {
+    const bd = evidence.resolveBounds(b.boundsRef.id);
+    return bd?.signals?.ocrText?.includes("确认支付");
+  });
   if (smuggled) {
     const dec = runtime.decide({
       frame, blockSet: seg.blockSet, blockId: smuggled.blockId,
       intent: "tap", grantRef: "grant-1", goalRef: "goal-1", stepRef: "step-1",
-      effectClass: "navigation",
+      effectClass: "navigation", nowMs: FAR_FUTURE,
     });
     assert.equal(dec.decision.result, "HARD_STOP", "redline text signal must not be bypassed by relabeling");
   }
@@ -279,4 +282,140 @@ test("determinism: the hermetic fixture provider modelSha256 is 64-hex and stabl
   assert.match(HERMETIC_FIXTURE_PROVIDER.modelSha256, /^[0-9a-f]{64}$/);
   assert.equal(HERMETIC_FIXTURE_PROVIDER.id, "fixture-provider");
   assert.equal(HERMETIC_FIXTURE_PROVIDER.version, "1.0.0");
+});
+
+// ---- P1 regression tests (security hardening) ----
+
+test("P1-1: a mutated public block set (relabeled payment→content) breaks integrity and fails closed", () => {
+  const { runtime } = makeRuntime();
+  const frame = runtime.freezeFrame(stableCapture()).frame;
+  const seg = runtime.segmentBlocks(frame);
+  // Deep-clone the block set and relabel a payment block as content on the
+  // PUBLIC surface (what decide() now trusts). The integrity hash no longer
+  // matches → decide() must reject it, never silently ALLOW_ONCE.
+  const mutated = JSON.parse(JSON.stringify(seg.blockSet));
+  const payBlock = mutated.blocks.find((b) => b.category === "payment");
+  if (payBlock) {
+    payBlock.category = "content";
+    payBlock.label = "继续";
+  }
+  const target = mutated.blocks[0];
+  const dec = runtime.decide({
+    frame, blockSet: mutated, blockId: target.blockId,
+    intent: "tap", grantRef: "grant-1", goalRef: "goal-1", stepRef: "step-1",
+    effectClass: "navigation", nowMs: FAR_FUTURE,
+  });
+  assert.equal(dec.ok, false, "a mutated block set must fail closed (integrity mismatch)");
+});
+
+test("P1-1: a block set bound to a different frame fails closed", () => {
+  const { runtime } = makeRuntime();
+  const frameA = runtime.freezeFrame(stableCapture({ capturedAt: "2026-08-20T10:00:00.000Z" })).frame;
+  const frameB = runtime.freezeFrame(stableCapture({ capturedAt: "2026-08-20T11:00:00.000Z" })).frame;
+  const segB = runtime.segmentBlocks(frameB);
+  const dec = runtime.decide({
+    frame: frameA, blockSet: segB.blockSet, blockId: segB.blockSet.blocks[0].blockId,
+    intent: "tap", grantRef: "grant-1", goalRef: "goal-1", stepRef: "step-1",
+    effectClass: "navigation", nowMs: FAR_FUTURE,
+  });
+  assert.equal(dec.ok, false, "a block set from a different frame must fail closed");
+});
+
+test("P1-2: an expired frame (capturedAt far in the past) with a current nowMs fails freshness, never ALLOW_ONCE", () => {
+  const { runtime } = makeRuntime();
+  const frame = runtime.freezeFrame(stableCapture({ capturedAt: "2020-01-01T00:00:00.000Z" })).frame;
+  const seg = runtime.segmentBlocks(frame);
+  const block = seg.blockSet.blocks[0];
+  // nowMs is 2026 — the 2020 frame is long expired.
+  const dec = runtime.decide({
+    frame, blockSet: seg.blockSet, blockId: block.blockId,
+    intent: "tap", grantRef: "grant-1", goalRef: "goal-1", stepRef: "step-1",
+    effectClass: "navigation", nowMs: Date.parse("2026-08-21T00:00:00.000Z"),
+  });
+  const freshness = dec.decision.checks.find((c) => c.name === "freshness");
+  assert.equal(freshness.result, "FAIL");
+  assert.notEqual(dec.decision.result, "ALLOW_ONCE", "an expired frame must never be ALLOW_ONCE");
+});
+
+test("P1-2: decide without nowMs fails closed (no ambient-clock fallback)", () => {
+  const { runtime } = makeRuntime();
+  const frame = runtime.freezeFrame(stableCapture()).frame;
+  const seg = runtime.segmentBlocks(frame);
+  const dec = runtime.decide({
+    frame, blockSet: seg.blockSet, blockId: seg.blockSet.blocks[0].blockId,
+    intent: "tap", grantRef: "grant-1", goalRef: "goal-1", stepRef: "step-1",
+    effectClass: "navigation",
+  });
+  assert.equal(dec.ok, false, "decide must reject a missing nowMs");
+});
+
+test("P1-3: safe-region PASS only when geometry is within screen bounds", () => {
+  const { runtime, evidence } = makeRuntime();
+  const frame = runtime.freezeFrame(stableCapture({ width: 1080, height: 2400 })).frame;
+  // Manually create a block with in-bounds geometry → safe-region PASS.
+  const regionHash = "a".repeat(64);
+  const blockId = "b".repeat(64);
+  const inBoundsRef = evidence.bounds(blockId, regionHash, { x: 10, y: 10, w: 100, h: 100 }, {});
+  const inBlockSet = {
+    schemaId: "xw.visual-block-set.v1",
+    frameId: frame.frameId,
+    segmentation: { provider: "test", version: "1.0.0", modelSha256: "0".repeat(64) },
+    ordering: "stable-index",
+    blocks: [{ schemaId: "xw.visual-block.v1", frameId: frame.frameId, blockId, stableIndex: 0, regionHash, boundsRef: inBoundsRef, label: "ok", category: "content", confidence: 0.9, source: "fused" }],
+  };
+  inBlockSet.integritySha256 = computeBlockSetIntegritySha256(inBlockSet);
+  const decIn = runtime.decide({
+    frame, blockSet: inBlockSet, blockId, intent: "tap",
+    grantRef: "g", goalRef: "go", stepRef: "st", effectClass: "navigation", nowMs: FAR_FUTURE,
+  });
+  assert.equal(decIn.decision.checks.find((c) => c.name === "safe-region").result, "PASS");
+
+  // Out-of-bounds geometry (x+w > width) → safe-region FAIL.
+  const oobRef = evidence.bounds("c".repeat(64), "d".repeat(64), { x: 1000, y: 0, w: 200, h: 100 }, {});
+  const oobBlockSet = JSON.parse(JSON.stringify(inBlockSet));
+  oobBlockSet.blocks[0] = { ...oobBlockSet.blocks[0], blockId: "c".repeat(64), boundsRef: oobRef };
+  oobBlockSet.integritySha256 = computeBlockSetIntegritySha256(oobBlockSet);
+  const decOob = runtime.decide({
+    frame, blockSet: oobBlockSet, blockId: "c".repeat(64), intent: "tap",
+    grantRef: "g", goalRef: "go", stepRef: "st", effectClass: "navigation", nowMs: FAR_FUTURE,
+  });
+  assert.equal(decOob.decision.checks.find((c) => c.name === "safe-region").result, "FAIL");
+  assert.notEqual(decOob.decision.result, "ALLOW_ONCE", "out-of-bounds geometry must never be ALLOW_ONCE");
+});
+
+test("P1-4: a forged ALLOW_ONCE decision (hand-crafted groundingDecisionId) fails to resolve a point", () => {
+  const { runtime } = makeRuntime();
+  const frame = runtime.freezeFrame(stableCapture()).frame;
+  const seg = runtime.segmentBlocks(frame);
+  const block = seg.blockSet.blocks[0];
+  // Hand-craft a decision that looks valid but has a forged groundingDecisionId.
+  const forged = {
+    schemaId: "xw.grounding-decision.v1",
+    goalRef: "g", stepRef: "s", grantRef: "gr",
+    frameId: frame.frameId, blockId: block.blockId,
+    intent: "tap", effectClass: "navigation",
+    policyVersion: "1.0.0", policySha256: "0".repeat(64),
+    checks: [
+      { name: "freshness", result: "PASS" }, { name: "focus", result: "PASS" },
+      { name: "ambiguity", result: "PASS" }, { name: "safe-region", result: "PASS" },
+      { name: "sensitive-label", result: "PASS" }, { name: "confidence", result: "PASS" },
+    ],
+    result: "ALLOW_ONCE", reason: "forged",
+    groundingDecisionId: "e".repeat(64),
+  };
+  const pt = runtime.resolveInternalPoint(forged);
+  assert.equal(pt.ok, false, "a forged decision must not resolve a point");
+});
+
+test("P1-4: a replayed ALLOW_ONCE decision (resolve twice) fails on the second call", () => {
+  const { runtime } = makeRuntime();
+  const frame = runtime.freezeFrame(stableCapture()).frame;
+  const seg = runtime.segmentBlocks(frame);
+  const hit = firstAllowOnce(runtime, frame, seg.blockSet);
+  if (hit) {
+    const pt1 = runtime.resolveInternalPoint(hit.decision);
+    assert.equal(pt1.ok, true);
+    const pt2 = runtime.resolveInternalPoint(hit.decision);
+    assert.equal(pt2.ok, false, "a consumed decision must not resolve again (replay prevented)");
+  }
 });

@@ -65,18 +65,38 @@ export function createEvidenceStore() {
     return entry ? { id: entry.id, sha256: entry.sha256 } : null;
   }
 
-  function bounds(blockId, regionHash, geometry) {
-    // Geometry (pixel coordinates) is the private resolution surface; only the
-    // opaque ref reaches the model. The ref binds blockId+regionHash+geometry
-    // so a relabeled or swapped target produces a different ref.
-    const payload = stableStringify({ blockId, regionHash, geometry });
+  // Geometry (pixel coordinates) AND private signals (ocrText/iconLabel/...) are
+  // the private resolution surface; only the opaque ref reaches the model. The
+  // ref binds blockId+regionHash+geometry+signals, so:
+  //   * a relabeled or swapped target produces a different blockId but KEEPS
+  //     the same boundsRef — the original signals (e.g. ocrText "确认支付") still
+  //     resolve, so a provider that relabels payment→content cannot smuggle the
+  //     block past the redline firewall;
+  //   * a caller that mutates the public block set breaks integritySha256,
+  //     which decide() re-verifies on every call.
+  function bounds(blockId, regionHash, geometry, signals = {}) {
+    const payload = stableStringify({ blockId, regionHash, geometry, signals });
     return put("bounds", payload);
+  }
+
+  // Resolve the private geometry + signals bound to a boundsRef. Returns null
+  // if the ref is absent or not a bounds blob — decide() treats absence as a
+  // safe-region failure, never as silent PASS.
+  function resolveBounds(id) {
+    const entry = blobs.get(id);
+    if (!entry || entry.kind !== "bounds") return null;
+    try {
+      return JSON.parse(entry.bytes.toString("utf8"));
+    } catch {
+      return null;
+    }
   }
 
   return {
     put,
     ref,
     bounds,
+    resolveBounds,
     size: () => blobs.size,
     snapshot: () => blobs,
     // Deterministic overlay: per-block bounds drawn as a diagnostic artifact.
@@ -122,11 +142,12 @@ export const HERMETIC_FIXTURE_PROVIDER = Object.freeze({
       const s = scenarios[index % scenarios.length];
       const regionHash = regionHashOf(frame.frameId, index, s.label, s.category);
       const geometry = geometryOf(seed, index, frame.width, frame.height);
-      const boundsRef = evidence.bounds(
-        deriveBlockId({ frameId: frame.frameId, stableIndex: index, regionHash, label: s.label, category: s.category }),
-        regionHash,
-        geometry,
-      );
+      const blockId = deriveBlockId({ frameId: frame.frameId, stableIndex: index, regionHash, label: s.label, category: s.category });
+      // Private signals (ocrText/iconLabel/...) are stored INSIDE the bounds blob,
+      // cryptographically bound to the opaque boundsRef. A provider that relabels
+      // payment→content changes the blockId but preserves the boundsRef, so the
+      // original signals still resolve and the redline firewall still fires.
+      const boundsRef = evidence.bounds(blockId, regionHash, geometry, s.signals || {});
       blocks.push({
         stableIndex: index,
         regionHash,
@@ -135,8 +156,6 @@ export const HERMETIC_FIXTURE_PROVIDER = Object.freeze({
         category: s.category,
         confidence: s.confidence,
         source: s.source,
-        // Private signals consumed by decide() — never serialized to the model.
-        _signals: s.signals || {},
       });
     }
     return blocks;
@@ -204,10 +223,16 @@ function regionHashOf(frameId, stableIndex, label, category) {
 function geometryOf(seed, index, width, height) {
   // Pure deterministic geometry for the evidence store. Coordinates never leave
   // the evidence store; only the opaque boundsRef reaches the model surface.
+  // The geometry always fits within [0,width)×[0,height) — the modulo bounds
+  // guarantee x0+w ≤ width and y0+h ≤ height so safe-region can PASS for
+  // legitimate blocks.
   const step = Math.floor(width / 8) || 1;
-  const x0 = (index * step + seed[2 % seed.length]) % Math.max(width, 1);
-  const y0 = (index * Math.floor(height / 6) + seed[3 % seed.length]) % Math.max(height, 1);
-  return { x: x0, y: y0, w: step, h: Math.floor(height / 6) || 1 };
+  const h = Math.floor(height / 6) || 1;
+  const xMod = Math.max(width - step, 1);
+  const yMod = Math.max(height - h, 1);
+  const x0 = (index * step + seed[2 % seed.length]) % xMod;
+  const y0 = (index * h + seed[3 % seed.length]) % yMod;
+  return { x: x0, y: y0, w: step, h };
 }
 
 function fingerprintOf(content, salt) {
@@ -238,6 +263,11 @@ export function createGroundingRuntime({
   if (errors.length > 0) {
     return { ok: false, errors, runtime: null };
   }
+
+  // One-time consumption registry for ALLOW_ONCE decision IDs. A decisionId can
+  // be resolved at most once — replay or reuse of a consumed decisionId always
+  // fails closed, preventing point-ref forgery and double-dispatch.
+  const consumedDecisions = new Set();
 
   // freezeFrame: produce an execution-grade xw.screen-frame.v1 from captured
   // evidence. Unstable / partial / missing evidence must NOT become actionable.
@@ -329,6 +359,9 @@ export function createGroundingRuntime({
 
   // segmentBlocks: turn a frozen frame into a model-visible block set. blockId is
   // derived by the runtime (not the provider); integrity covers full metadata.
+  // Private signals are stored in the evidence store keyed by blockId — never on
+  // the block surface — so decide() can only resolve them for blocks whose
+  // blockId is integrity-covered.
   function segmentBlocks(frame, opts = {}) {
     const errs = [];
     if (!frame || frame.schemaId !== "xw.screen-frame.v1") {
@@ -356,8 +389,6 @@ export function createGroundingRuntime({
         category: raw.category,
         confidence: raw.confidence,
         source: raw.source,
-        // Private signals retained for decide(); stripped before model exposure.
-        _signals: raw._signals || {},
       };
     });
     const segmentation = {
@@ -370,41 +401,68 @@ export function createGroundingRuntime({
       frameId: frame.frameId,
       segmentation,
       ordering,
-      blocks: blocks.map(stripPrivate),
+      blocks,
     });
     const blockSet = {
       schemaId: "xw.visual-block-set.v1",
       frameId: frame.frameId,
       segmentation,
       ordering,
-      blocks: blocks.map(stripPrivate),
+      blocks,
       integritySha256,
     };
     const valid = validateVisualBlockSet(blockSet);
     if (!valid.ok) return { ok: false, errors: valid.errors, blockSet: null };
-    // Keep the private-signal view internally for decide(); surface is clean.
-    blockSet._blocks = blocks;
     return { ok: true, errors: [], blockSet };
   }
 
   // decide: run the six grounding checks + the payment/delete hard-redline
   // firewall, then derive an ALLOW_ONCE / REPLAN / HARD_STOP decision.
-  function decide({ frame, blockSet, blockId, intent, grantRef, goalRef, stepRef, effectClass }) {
+  // `nowMs` is required — no ambient clock fallback. `blockSet` integrity is
+  // verified on every call so a mutated or forged block set is always detected.
+  function decide({ frame, blockSet, blockId, intent, grantRef, goalRef, stepRef, effectClass, nowMs }) {
     const errs = [];
     if (!frame || frame.schemaId !== "xw.screen-frame.v1") {
       fail(errs, CODE, "decide requires a frozen frame");
       return { ok: false, errors: errs, decision: null };
     }
-    const internal = (blockSet?._blocks) || [];
-    const block = internal.find((b) => b.blockId === blockId)
-      || blockSet?.blocks?.find((b) => b.blockId === blockId);
+    if (!Number.isFinite(nowMs)) {
+      fail(errs, CODE, "nowMs is required and must be a finite number");
+      return { ok: false, errors: errs, decision: null };
+    }
+    // Re-verify integrity of the supplied block set: it must match its declared
+    // integritySha256 AND bind to the same frameId. A mutated or swapped block
+    // set (e.g. relabeled payment labels) would produce a different hash or
+    // frameId and is rejected here.
+    const recomputed = computeBlockSetIntegritySha256(blockSet);
+    if (recomputed !== blockSet.integritySha256) {
+      fail(errs, CODE, "blockSet integritySha256 mismatch — block set was mutated after creation");
+      return { ok: false, errors: errs, decision: null };
+    }
+    if (blockSet.frameId !== frame.frameId) {
+      fail(errs, CODE, "blockSet frameId does not match the supplied frame");
+      return { ok: false, errors: errs, decision: null };
+    }
+
+    const block = blockSet.blocks.find((b) => b.blockId === blockId);
     if (!block) {
       fail(errs, CODE, "decide could not resolve the requested blockId in the block set");
       return { ok: false, errors: errs, decision: null };
     }
 
+    // Resolve private signals from the evidence store. These are stored by
+    // blockId during segmentation and cannot be resolved for a forged/unknown
+    // blockId (which would produce a different blockId than the one signed by
+    // Resolve private geometry + signals from the bounds blob bound to the
+    // block's boundsRef. The boundsRef is content-addressed and preserved across
+    // category relabeling, so a provider that relabels payment→content cannot
+    // strip the original signals (e.g. ocrText "确认支付") — they still resolve
+    // here and the redline firewall still fires.
+    const bounds = evidence.resolveBounds(block.boundsRef.id);
+    const geometry = bounds?.geometry;
+    const privSignals = bounds?.signals || {};
+
     // 1. freshness — frame must not be expired relative to the caller's clock.
-    const nowMs = Number.isFinite(frame._nowMs) ? frame._nowMs : Date.parse(frame.capturedAt);
     const expiresMs = Date.parse(frame.expiresAt);
     const freshness = nowMs < expiresMs ? "PASS" : "FAIL";
 
@@ -412,12 +470,21 @@ export function createGroundingRuntime({
     const focus = frame.stability.focusFingerprint ? "PASS" : "FAIL";
 
     // 3. ambiguity — no duplicate candidate labels among peers.
-    const sameLabelPeers = internal.filter((b) => b.label === block.label && b.blockId !== block.blockId);
+    const sameLabelPeers = blockSet.blocks.filter((b) => b.label === block.label && b.blockId !== block.blockId);
     const ambiguity = sameLabelPeers.length > 0 ? "FAIL" : "PASS";
 
-    // 4. safe-region — geometry within screen bounds (private evidence only).
-    const boundsEntry = evidence.ref(block.boundsRef.id);
-    const safeRegion = boundsEntry ? "PASS" : "UNKNOWN";
+    // 4. safe-region — geometry within screen bounds (resolved from evidence).
+    let safeRegion = "FAIL";
+    if (geometry) {
+      const { x, y, w, h } = geometry;
+      if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(w) && Number.isFinite(h)
+          && x >= 0 && y >= 0 && w > 0 && h > 0
+          && (x + w) <= frame.width && (y + h) <= frame.height) {
+        safeRegion = "PASS";
+      } else {
+        safeRegion = "FAIL";
+      }
+    }
 
     // 5. sensitive-label — payment/delete category on the target block.
     const sensitiveLabel = (block.category === "payment" || block.category === "delete") ? "FAIL" : "PASS";
@@ -436,9 +503,11 @@ export function createGroundingRuntime({
 
     // Hard-redline firewall: payment/delete via intent, block signals or page
     // fingerprint. Independent of the grant; DSH/grant/live config cannot override.
+    // Private signals come from the evidence store (integrity-covered blockId),
+    // not from the block surface.
     const redline = evaluateHardRedline({
       intent,
-      blockSignals: { ...(block._signals || {}), category: block.category },
+      blockSignals: { ...privSignals, category: block.category },
       pageFingerprint: { pageHash: frame.stability.pageFingerprint },
       policy,
       expectedPolicySha256,
@@ -465,14 +534,17 @@ export function createGroundingRuntime({
     }
 
     const decision = buildDecision({ frame, block, intent, grantRef, goalRef, stepRef, effectClass, checks, result, reason });
-    const valid = validateGroundingDecision(decision, { block: stripPrivate(block) });
+    const valid = validateGroundingDecision(decision, { block });
     if (!valid.ok) return { ok: false, errors: valid.errors, decision: null };
     return { ok: true, errors: [], decision };
   }
 
   // resolveInternalPoint: the one-time private tap-point resolution. Only valid
   // on ALLOW_ONCE; the point is consumed in the same dispatch transaction and
-  // cannot be replayed. Coordinates stay in the evidence store.
+  // cannot be replayed. Every decisionId is resolved at most once — reuse is
+  // always rejected — and the resolved point is cryptographically bound to the
+  // block's boundsRef so a forged point cannot reference a different target.
+  // Coordinates stay in the evidence store.
   function resolveInternalPoint(decision, evidenceStore = evidence) {
     const errs = [];
     if (!decision || decision.schemaId !== "xw.grounding-decision.v1") {
@@ -483,11 +555,41 @@ export function createGroundingRuntime({
       fail(errs, CODE, "resolveInternalPoint is only valid on ALLOW_ONCE decisions");
       return { ok: false, errors: errs, pointRef: null };
     }
+    // Re-validate the decision is well-formed: prevents a forged decision
+    // object (carrying ALLOW_ONCE with a fake groundingDecisionId) from
+    // obtaining a valid pointRef.
+    const valid = validateGroundingDecision(decision);
+    if (!valid.ok) {
+      fail(errs, CODE, "resolveInternalPoint: decision failed validation — forged or malformed", { validationErrors: valid.errors });
+      return { ok: false, errors: errs, pointRef: null };
+    }
+    // One-time consumption: this decisionId cannot be resolved again.
+    if (consumedDecisions.has(decision.groundingDecisionId)) {
+      fail(errs, CODE, "resolveInternalPoint: decision already consumed — replay attack prevented");
+      return { ok: false, errors: errs, pointRef: null };
+    }
+    consumedDecisions.add(decision.groundingDecisionId);
+
+    // Bind the point to the block's boundsRef from the evidence store, so a
+    // forged point cannot reference a different target. We scan the store for
+    // a bounds blob whose parsed blockId matches the decision's blockId.
+    const boundsRefForPoint = (() => {
+      for (const v of evidenceStore.snapshot().values()) {
+        if (v.kind === "bounds") {
+          try {
+            const parsed = JSON.parse(v.bytes.toString("utf8"));
+            if (parsed.blockId === decision.blockId) return { id: v.id, sha256: v.sha256 };
+          } catch { /* skip */ }
+        }
+      }
+      return null;
+    })();
     const payload = stableStringify({
       groundingDecisionId: decision.groundingDecisionId,
       frameId: decision.frameId,
       blockId: decision.blockId,
-      nonce: "once",
+      boundsRef: boundsRefForPoint,
+      nonce: consumedDecisions.size,
     });
     const pointRef = evidenceStore.put("point", payload);
     return { ok: true, errors: [], pointRef };
@@ -533,9 +635,4 @@ export function createGroundingRuntime({
       resolveInternalPoint,
     },
   };
-}
-
-function stripPrivate(block) {
-  const { _signals, ...rest } = block;
-  return rest;
 }

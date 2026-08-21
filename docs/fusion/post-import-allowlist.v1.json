@@ -40,7 +40,10 @@
         "tests/xhs-compose.test.mjs",
         "tests/xw-start.test.mjs",
         "tests/xw-mission-cli.test.mjs",
-        "tests/xw-task-cli.test.mjs"
+        "tests/xw-task-cli.test.mjs",
+        "ops/xw-locator.mjs",
+        "scripts/lib/wechat-balance-extract.mjs",
+        "scripts/lib/xw-balance-shared.mjs"
       ],
       "allowedModeModified": [],
       "allowedExtra": [

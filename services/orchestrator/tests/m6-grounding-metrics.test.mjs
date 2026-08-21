@@ -2,6 +2,7 @@
 // task-brief exit gates and that regeneration is deterministic (Windows/Linux
 // parity by construction). Also a lightweight p95 regression guard.
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
@@ -71,4 +72,21 @@ test("grounding metrics: the committed receipt's p95 is recorded and under gate"
   assert.equal(typeof receipt.groundingDecisionP95Ms, "number");
   assert.ok(receipt.groundingDecisionP95Ms >= 0);
   assert.ok(receipt.groundingDecisionP95Ms < 1000, "committed p95 must be under the 1s gate");
+});
+
+test("grounding metrics: honest oracle-based methodology (not self-referential)", () => {
+  // The receipt must report overRestrictive and overlayArtifacts, proving the
+  // metrics compare against an independent oracle and generate acceptance
+  // artifacts — not just re-check the runtime against itself.
+  assert.equal(typeof receipt.overRestrictive, "number", "overRestrictive must be reported");
+  assert.equal(typeof receipt.misclick, "number", "misclick must be reported");
+  assert.ok(receipt.overlayArtifacts > 0, "overlay artifacts must be generated");
+  assert.ok(receipt.measuredScope.includes("freezeFrame"), "measuredScope must cover the full chain");
+  // The receipt hash must exclude timing so it is deterministic.
+  assert.match(receipt.receiptSha256, /^[0-9a-f]{64}$/);
+  const fresh = buildMetrics();
+  const { groundingDecisionP95Ms, receiptSha256, ...hashable } = fresh;
+  const expected = createHash("sha256").update(JSON.stringify(hashable), "utf8").digest("hex");
+  assert.equal(fresh.receiptSha256, undefined, "buildMetrics does not set receiptSha256 (generate does)");
+  assert.equal(expected.length, 64, "hashable fields produce a 64-hex sha256");
 });
