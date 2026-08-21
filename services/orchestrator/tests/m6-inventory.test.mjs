@@ -14,7 +14,9 @@ const REPO_ROOT = path.resolve(import.meta.dirname, "../../..");
 const M6_DIR = path.join(REPO_ROOT, "services/orchestrator/contracts/m6");
 
 const readJson = (rel) => JSON.parse(readFileSync(path.join(REPO_ROOT, rel), "utf8"));
-const sha256File = (rel) => createHash("sha256").update(readFileSync(path.join(REPO_ROOT, rel))).digest("hex");
+// Hash LF-normalized bytes so the same file hashes identically on Windows (CRLF
+// worktree) and Linux/macOS (LF checkout), mirroring tools/fusion sha256Normalized.
+const sha256File = (rel) => createHash("sha256").update(readFileSync(path.join(REPO_ROOT, rel)).toString("utf8").replace(/\r\n/g, "\n").replace(/\r/g, "\n"), "utf8").digest("hex");
 
 const inventory = readJson("services/orchestrator/contracts/m6/vision-inventory.v1.json");
 const assetLock = readJson("services/orchestrator/contracts/m6/visual-assets.lock.v1.json");

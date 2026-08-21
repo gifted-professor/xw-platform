@@ -27,7 +27,7 @@
   "files": [
     {
       "path": "services/orchestrator/ops/xw-locator.mjs",
-      "sha256": "0cef7c7804ebdf6958e4ef0b7e6d323693d32e58394e02e1e9171d49b24ee9f2",
+      "sha256": "0142f81410b6b8a825092c263c803daef29834d44c6160142bf73cbbc348b972",
       "role": "visual block locator CLI（被动入口；blockId-only、tapAuthorized=false、effect=none）",
       "externalPaths": [
         "C:\\Users\\Public\\xhs-registry-visual-tap\\experiments\\visual-tap-resolver",
@@ -46,7 +46,7 @@
     },
     {
       "path": "services/orchestrator/ops/xw-start.mjs",
-      "sha256": "b0feae6e4d25271dfebbe23bd75136575351bc563a15449836b854c30b753bfc",
+      "sha256": "26007e14e0ae3ad73e434de3b496361c564cd2135dfab850949aafa8777e5e8d",
       "role": "/xw start 预检/启动编排；含 vision-pack --ocr 可用性检查",
       "externalPaths": [
         "C:\\Users\\Public\\xw-runtime (XW_RUNTIME_ROOT 默认值)",
@@ -61,7 +61,7 @@
     },
     {
       "path": "services/orchestrator/scripts/lib/wechat-balance-extract.mjs",
-      "sha256": "c64264034b45037eb4fb9ba5fadd2428d02c4f7ec9a8ae5209c7195d4e7a2155",
+      "sha256": "f34607886c7d820a14909c9fdc8a64f49a0b43158077cf75b1a870edcb4ef64a",
       "role": "微信服务页截图余额只读 OCR 提取（fail-closed）",
       "externalPaths": [
         "C:\\Users\\Public\\xhs-registry-visual-tap\\experiments\\visual-tap-resolver\\.venv-ocr\\Scripts\\python.exe (DEFAULT_PADDLE_OCR_PYTHON，可用 XHS_PADDLE_OCR_PYTHON 覆盖)"
@@ -73,7 +73,7 @@
     },
     {
       "path": "services/orchestrator/scripts/lib/wechat-balance-ocr.py",
-      "sha256": "62dffd4c4c52cc6f8b957b6eb3e95d1401583da86efcd81e884c1e18f8ccb671",
+      "sha256": "c5f8a323a11b5b5b5e6d3868f0a0110754ba9e062dad607c6bdb5e3de1b2f110",
       "role": "PaddleOCR 余额提取脚本（stdout 单行 JSON，只读）",
       "externalPaths": [],
       "externalDependencies": ["paddleocr/paddlepaddle (由调用方 venv 提供)"],
@@ -83,7 +83,7 @@
     },
     {
       "path": "services/orchestrator/ops/screenshot-and-analyze.mjs",
-      "sha256": "a17f7b66a55106714a95f3e2e904ac4c00d7e56b70a1223fc45eefa06db0738a",
+      "sha256": "03bcc28b3098769ff7c2ff895a0588b797bdfa48dde272ec30e1b903666a2d1a",
       "role": "截图 + 视觉分析 PoC 包装（VGP analyze.py）",
       "externalPaths": [
         "$HOME/Desktop/Coding/visual-grounding-poc (--vgp 默认值)",
@@ -98,7 +98,7 @@
     },
     {
       "path": "services/orchestrator/ops/recover-main-safe.mjs",
-      "sha256": "a55eb916ba9281b5ece0211a1520ee020238bce88ed54ac7df5990993bf01a30",
+      "sha256": "f809743119ca2e4d98df725460b83d9d4702eb0941f93d12644c9a5193e61695",
       "role": "主界面恢复（视觉回退路径，VGP venv）",
       "externalPaths": [
         "/Volumes/GPFS/Users/a1234/Desktop/Coding/xhs-device-agent-routing-v1-1 (--gpfs 默认值)",
@@ -112,7 +112,7 @@
     },
     {
       "path": "services/orchestrator/ops/douyin-share-friend-harvest.mjs",
-      "sha256": "007e5a761ede8f031c9270e9dfd0cd31a32b3c975e2a662d41f8fb7968cdb865",
+      "sha256": "a6c991d162bf54299a5366294e87d6f6f71f04c059b22125800adaca6d5190cb",
       "role": "抖音分享 harvesting，视觉 tap fallback（visual_tap_demo.py）",
       "externalPaths": [
         "C:/Users/Public/xhs-registry/../xhs-registry-visual-tap/experiments/visual-tap-resolver (VISUAL_TAP_ROOT 由 ROOT 推导)",
@@ -124,7 +124,7 @@
     },
     {
       "path": "services/orchestrator/ops/_win-screencap.mjs",
-      "sha256": "a75bdf7c832556eed8f323e9a2c4576bcd2e2a209b92e30538ee51f9ae75fcf0",
+      "sha256": "734e7d4d01ed57bbd06562c1eada2e4a5bfc651f370945e7c2158e4f16d9707f",
       "role": "Windows 截屏辅助（adb screencap 包装）",
       "externalPaths": [
         "D:\\download\\lvjian\\tools\\adb.exe",
@@ -136,7 +136,7 @@
     },
     {
       "path": "services/control-plane/scripts/vision-safety.mjs",
-      "sha256": "d36e65ae0374aa4616df8bb807a9b999b84a686aabb5be1767fbab0d9f1c1c13",
+      "sha256": "2c3fa5ea868b3737b2fbec233aefc59774f3f532db9bf34bd05b10dbf29429cc",
       "role": "视觉安全规则：敏感标签/区域/歧义/page fingerprint/gateTap（纯函数，无外部路径）",
       "externalPaths": [],
       "externalDependencies": [],
@@ -148,7 +148,7 @@
     },
     {
       "path": "services/control-plane/scripts/cloud-vision.mjs",
-      "sha256": "1a0f724be6f62b8fe6cb2393ec90e274ebc5b7ba83e77c954012793ed3295650",
+      "sha256": "7186cdf4dcb9d87f10064543aa46ba1f27d6dba53d66850998a279bfe2c154b2",
       "role": "云端视觉分类 CLI（VISION_API_URL/VISION_API_KEY/VISION_MODEL env，base64 截图外发；无仓内 import 方）",
       "externalPaths": [],
       "externalDependencies": ["外部多模态 HTTP API（env 配置，无默认端点）"],
@@ -157,7 +157,7 @@
     },
     {
       "path": "services/control-plane/scripts/recovery-page-classifier.mjs",
-      "sha256": "736bf4302158ff11e6b951bec0b0a300fd64e8eec31ec1f12b562b2deb6c4dbc",
+      "sha256": "7b7e99d15bc626674b5abadab22a554022e37657a40d9bb94de2f73c48ab5aad",
       "role": "恢复场景页面分类（launcher/标签规则，纯函数）",
       "externalPaths": [],
       "externalDependencies": [],
@@ -166,7 +166,7 @@
     },
     {
       "path": "services/control-plane/scripts/xianyu-page-classifier.mjs",
-      "sha256": "37ae590a55253049b0b8862c7b7aa2d4c9bacf6cab5367859cbe9f2d90c1a1c9",
+      "sha256": "f9ccf9648b9399fa75ed7c61cd9c88310f00491c8b17ea601efd3fb171a1452b",
       "role": "闲鱼页面分类（文本/标签规则，纯函数）",
       "externalPaths": [],
       "externalDependencies": [],
@@ -178,7 +178,7 @@
     },
     {
       "path": "services/control-plane/control-plane/lib/financial-commit-classifier.mjs",
-      "sha256": "3ecf4d9d3aa508053d80a6c8de03205410a1f3d0e6fc52399356e58683532be6",
+      "sha256": "a6cf38369a868e02f33d1ce3a8e4ce842d862e2226ca954c4f30c95638089af7",
       "role": "金融/提交类动作分类（支付防火墙输入信号，纯函数）",
       "externalPaths": [],
       "externalDependencies": [],
@@ -193,7 +193,7 @@
     },
     {
       "path": "services/control-plane/apps/vision/adapter.mjs",
-      "sha256": "6e0ebab2e237795d5578cb465ab69a1c74a27358b6faaf839bc814e752dc5925",
+      "sha256": "435676f83846ea85be0af4fb61145c2b6983533758e1fd08691028e2e9471106",
       "role": "vision app adapter：语义/视觉 resolve 安全闸 dry-run（默认不 tap）",
       "externalPaths": [],
       "externalDependencies": ["services/control-plane/scripts/vision-safety.mjs"],
@@ -202,7 +202,7 @@
     },
     {
       "path": "services/control-plane/apps/vision/capabilities.json",
-      "sha256": "22a8d229db422709ad89b802964eda32faa1435060c813b9397b049c145541b1",
+      "sha256": "6e1e23d6c6f0020f86c0432dbba600f1f19aeeb786cf2531ba2307c7a64fa3d5",
       "role": "vision.resolve_tap_dry_run capability 声明（risk R0, maturity E2）",
       "externalPaths": [],
       "externalDependencies": [],

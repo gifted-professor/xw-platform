@@ -42,7 +42,7 @@
       "kind": "source-tree",
       "source": "仓内脚本 services/orchestrator/scripts/lib/wechat-balance-ocr.py",
       "version": "repo-commit",
-      "sha256": "62dffd4c4c52cc6f8b957b6eb3e95d1401583da86efcd81e884c1e18f8ccb671",
+      "sha256": "c5f8a323a11b5b5b5e6d3868f0a0110754ba9e062dad607c6bdb5e3de1b2f110",
       "license": { "spdx": null, "status": "repo-internal", "note": "随仓库许可" },
       "provenance": "仓内源码，由 wechat-balance-extract.mjs spawnSync 调用",
       "install": { "mode": "in-repo", "path": "services/orchestrator/scripts/lib/wechat-balance-ocr.py", "packageManager": null },
