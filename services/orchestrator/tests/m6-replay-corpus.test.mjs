@@ -43,6 +43,24 @@ test("replay corpus: covers every required scenario from the task brief", () => 
   }
 });
 
+test("replay corpus: every frame freezes independent block/geometry/decision truth", () => {
+  const frames = manifest.entries.filter((entry) => entry.kind === "frame");
+  for (const frame of frames) {
+    assert.ok(frame.expected, `${frame.entryId} must carry expected truth`);
+    assert.ok(["ACTIONABLE", "REJECT"].includes(frame.expected.frameOutcome));
+    if (frame.expected.frameOutcome === "ACTIONABLE") {
+      assert.ok(frame.expected.blocks.length > 0, `${frame.entryId} expected blocks`);
+      assert.ok(frame.expected.blocks.some((block) => block.stableIndex === frame.expected.targetStableIndex));
+    }
+    for (const block of frame.expected.blocks) {
+      assert.ok(block.label.length > 0);
+      assert.ok(block.category.length > 0);
+      assert.ok(["ALLOW_ONCE", "REPLAN", "HARD_STOP"].includes(block.expectedDecision));
+      assert.ok(block.bounds.w > 0 && block.bounds.h > 0);
+    }
+  }
+});
+
 test("replay corpus: every entry is content-addressed (64-hex sha256, positive bytes) with unique ids", () => {
   const ids = new Set();
   for (const entry of manifest.entries) {

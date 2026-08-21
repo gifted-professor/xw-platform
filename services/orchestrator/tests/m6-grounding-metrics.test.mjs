@@ -2,12 +2,12 @@
 // task-brief exit gates and that regeneration is deterministic (Windows/Linux
 // parity by construction). Also a lightweight p95 regression guard.
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 
-import { buildMetrics, generate, measureDecisionP95Ms } from "../../../tools/m6/grounding-metrics.mjs";
+import { HERMETIC_FIXTURE_PROVIDER } from "../scripts/lib/m6/m6-grounding-runtime.mjs";
+import { buildMetrics, measureDecisionP95Ms, receiptSha256For } from "../../../tools/m6/grounding-metrics.mjs";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "../../..");
 const RECEIPT_PATH = path.join(REPO_ROOT, "services/orchestrator/contracts/m6/grounding-metrics.v1.json");
@@ -39,6 +39,40 @@ test("P1-5: a tampered corpus (corrupted evidence sha256) causes evidenceIntegri
   assert.equal(result.exitGates.evidenceIntegrity, false, "tampered corpus must fail the evidenceIntegrity gate");
 });
 
+test("P1-5: frame hashes and every declared byte length are consumed by the integrity gate", () => {
+  const tampered = structuredClone(manifest);
+  for (const entry of tampered.entries) entry.bytes = 1;
+  for (const entry of tampered.entries.filter((entry) => entry.kind === "frame")) {
+    entry.sha256 = "0".repeat(64);
+  }
+  const result = buildMetrics({ corpus: tampered });
+  assert.ok(result.evidenceMismatches > 0);
+  assert.equal(result.exitGates.evidenceIntegrity, false);
+  assert.equal(result.exitGates.staleEq0, false);
+});
+
+test("P1-5: annotations, not provider output, define block recall and top-1 truth", () => {
+  const tamperedTruth = structuredClone(manifest);
+  for (const frame of tamperedTruth.entries.filter((entry) => entry.kind === "frame" && entry.expected?.frameOutcome === "ACTIONABLE")) {
+    frame.expected.blocks[0].label = `independent-nonexistent-target-${frame.entryId}`;
+  }
+  const result = buildMetrics({ corpus: tamperedTruth });
+  assert.ok(result.blockRecall < 98, `tampered truth must lower recall (got ${result.blockRecall})`);
+  assert.ok(result.top1 < 95, `tampered target must lower top-1 (got ${result.top1})`);
+
+  const degradedProvider = {
+    id: "degraded-fixture-provider",
+    version: "1.0.0",
+    modelSha256: "d".repeat(64),
+    segment(frameArg, evidence) {
+      return HERMETIC_FIXTURE_PROVIDER.segment(frameArg, evidence).slice(1);
+    },
+  };
+  const degraded = buildMetrics({ provider: degradedProvider });
+  assert.ok(degraded.blockRecall < 98, `provider omission must lower recall (got ${degraded.blockRecall})`);
+  assert.ok(degraded.top1 < 95, `provider reorder/omission must lower top-1 (got ${degraded.top1})`);
+});
+
 test("grounding metrics: covers >=200 frames and reports the hermetic provider", () => {
   assert.ok(receipt.framesTotal >= 200, `framesTotal ${receipt.framesTotal}`);
   assert.equal(receipt.provider.id, "fixture-provider");
@@ -55,21 +89,13 @@ test("grounding metrics: decision distribution has non-zero ALLOW_ONCE and HARD_
 });
 
 test("grounding metrics: regeneration is deterministic and matches the committed receipt", () => {
-  const tmp = path.join(REPO_ROOT, "services/orchestrator/contracts/m6/grounding-metrics.v1.json");
   const fresh = buildMetrics();
-  // Timing may vary; compare the structural/deterministic fields only.
-  assert.equal(fresh.framesTotal, receipt.framesTotal);
-  assert.equal(fresh.framesFrozen, receipt.framesFrozen);
-  assert.equal(fresh.blockRecall, receipt.blockRecall);
-  assert.equal(fresh.top1, receipt.top1);
-  assert.equal(fresh.safeRegion, receipt.safeRegion);
-  assert.equal(fresh.forbidden, receipt.forbidden);
-  assert.equal(fresh.misclick, receipt.misclick);
-  assert.equal(fresh.stale, receipt.stale);
-  assert.deepEqual(fresh.decisionDistribution, receipt.decisionDistribution);
-  assert.equal(fresh.determinism.ok, true);
-  // The frozen-frame set is content-addressed and must reproduce identically.
-  assert.equal(fresh.exitGates.deterministic, true);
+  const { groundingDecisionP95Ms: committedTiming, receiptSha256, ...committedHashable } = receipt;
+  const { groundingDecisionP95Ms: freshTiming, ...freshHashable } = fresh;
+  assert.deepEqual(freshHashable, committedHashable, "every deterministic receipt field must reproduce exactly");
+  assert.equal(receiptSha256, receiptSha256For(fresh), "committed receiptSha256 must match current code/data");
+  assert.equal(typeof committedTiming, "number");
+  assert.equal(freshTiming, null);
 });
 
 test("grounding metrics: p95 grounding-decision latency stays <= the frozen SLO (1s)", () => {
@@ -88,10 +114,7 @@ test("grounding metrics: the committed receipt's p95 is recorded and under gate"
   assert.ok(receipt.groundingDecisionP95Ms < 1000, "committed p95 must be under the 1s gate");
 });
 
-test("grounding metrics: honest oracle-based methodology (not self-referential)", () => {
-  // The receipt must report overRestrictive and overlayArtifacts, proving the
-  // metrics compare against an independent oracle and generate acceptance
-  // artifacts — not just re-check the runtime against itself.
+test("grounding metrics: honest annotation-based methodology (not self-referential)", () => {
   assert.equal(typeof receipt.overRestrictive, "number", "overRestrictive must be reported");
   assert.equal(typeof receipt.misclick, "number", "misclick must be reported");
   assert.ok(receipt.overlayArtifacts > 0, "overlay artifacts must be generated");
@@ -99,8 +122,5 @@ test("grounding metrics: honest oracle-based methodology (not self-referential)"
   // The receipt hash must exclude timing so it is deterministic.
   assert.match(receipt.receiptSha256, /^[0-9a-f]{64}$/);
   const fresh = buildMetrics();
-  const { groundingDecisionP95Ms, receiptSha256, ...hashable } = fresh;
-  const expected = createHash("sha256").update(JSON.stringify(hashable), "utf8").digest("hex");
-  assert.equal(fresh.receiptSha256, undefined, "buildMetrics does not set receiptSha256 (generate does)");
-  assert.equal(expected.length, 64, "hashable fields produce a 64-hex sha256");
+  assert.equal(receipt.receiptSha256, receiptSha256For(fresh));
 });

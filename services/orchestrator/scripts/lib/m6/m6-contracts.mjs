@@ -387,5 +387,26 @@ export function validateReplayCorpusManifest(document) {
   const errors = validateAgainstSchema(document, "xw.replay-corpus-manifest.v1", code);
   if (errors.length > 0) return { ok: false, errors };
   scanReplayKeys(document.entries, "$.entries", errors, code);
+  for (const entry of document.entries) {
+    if (entry.kind !== "frame" || !entry.expected) continue;
+    const expected = entry.expected;
+    const indices = new Set();
+    for (const block of expected.blocks || []) {
+      if (indices.has(block.stableIndex)) {
+        fail(errors, code, `duplicate expected stableIndex for ${entry.entryId}: ${block.stableIndex}`);
+      }
+      indices.add(block.stableIndex);
+    }
+    if (expected.frameOutcome === "ACTIONABLE") {
+      if (!Number.isInteger(expected.targetStableIndex) || !indices.has(expected.targetStableIndex)) {
+        fail(errors, code, `actionable frame ${entry.entryId} must target an annotated stableIndex`);
+      }
+      if ((expected.blocks || []).length === 0) {
+        fail(errors, code, `actionable frame ${entry.entryId} must contain expected blocks`);
+      }
+    } else if (expected.frameOutcome === "REJECT" && expected.targetStableIndex !== undefined) {
+      fail(errors, code, `rejected frame ${entry.entryId} cannot declare a targetStableIndex`);
+    }
+  }
   return { ok: errors.length === 0, errors };
 }

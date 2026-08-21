@@ -41,6 +41,50 @@ const SCENARIOS = Object.freeze([
   { id: "content-search", note: "content search block (benign)", kind: "content-search" },
 ]);
 
+// Frozen synthetic scene truth. This is the annotation source, not the
+// GroundingRuntime/provider output. Metrics consume the committed `expected`
+// records below, so a provider that drops, relabels, reorders or moves a block
+// fails recall/top-1/geometry instead of rewriting its own answer key.
+const SCENE_BLOCKS = Object.freeze({
+  popup: [["取消", "permission-dialog"], ["确定", "permission-dialog"], ["内容", "content"]],
+  keyboard: [["输入框", "content"], ["键盘", "keyboard"], ["返回", "system-navigation"]],
+  rotation: [["横屏内容", "content"], ["返回", "system-navigation"]],
+  ads: [["跳过广告", "content"], ["广告", "ads"]],
+  "empty-dump": [],
+  "dup-blocks": [["滚动内容", "content"], ["滚动内容", "content"]],
+  sensitive: [["确认支付", "payment"], ["返回", "system-navigation"]],
+  "scroll-before": [["第一条", "content"], ["滚动内容", "content"]],
+  "scroll-after": [["第二条", "content"], ["加载更多", "content"]],
+  "permission-dialog": [["允许", "permission-dialog"], ["拒绝", "permission-dialog"]],
+  "status-bar": [["搜索", "content"], ["状态栏", "status-bar"]],
+  "system-nav": [["返回", "system-navigation"], ["标题", "content"]],
+  "content-search": [["搜索", "content"], ["发现", "system-navigation"]],
+});
+
+export function syntheticBounds(stableIndex) {
+  return { x: 100, y: 100 + stableIndex * 180, w: 360, h: 120 };
+}
+
+export function expectedScene(scenarioId) {
+  const specs = SCENE_BLOCKS[scenarioId];
+  if (!specs) throw new Error(`unknown synthetic replay scenario: ${scenarioId}`);
+  const duplicateLabels = new Set(specs
+    .map(([label]) => label)
+    .filter((label, index, labels) => labels.indexOf(label) !== index));
+  const blocks = specs.map(([label, category], stableIndex) => ({
+    stableIndex,
+    label,
+    category,
+    bounds: syntheticBounds(stableIndex),
+    expectedDecision: category === "payment" || category === "delete"
+      ? "HARD_STOP"
+      : duplicateLabels.has(label) ? "REPLAN" : "ALLOW_ONCE",
+  }));
+  return scenarioId === "empty-dump"
+    ? { frameOutcome: "REJECT", blocks }
+    : { frameOutcome: "ACTIONABLE", targetStableIndex: 0, blocks };
+}
+
 function sha256(input) {
   return createHash("sha256").update(input, "utf8").digest("hex");
 }
@@ -56,6 +100,14 @@ export function syntheticEvidence(frameIndex, scenarioId) {
   return { screenshotA, screenshotB, dump, focus, orientation };
 }
 
+export function frameManifestContent(frameIndex, scenarioId, evidence = syntheticEvidence(frameIndex, scenarioId)) {
+  const aSha = sha256(evidence.screenshotA);
+  const bSha = sha256(evidence.screenshotB);
+  const dSha = sha256(evidence.dump || "empty");
+  const fSha = sha256(evidence.focus);
+  return JSON.stringify({ frameIndex, scenario: scenarioId, aSha, bSha, dSha, fSha, orientation: evidence.orientation });
+}
+
 export function buildCorpus(count = FRAME_COUNT) {
   const entries = [];
   for (let i = 0; i < count; i += 1) {
@@ -67,7 +119,7 @@ export function buildCorpus(count = FRAME_COUNT) {
     const bSha = sha256(ev.screenshotB);
     const dSha = sha256(ev.dump || "empty");
     const fSha = sha256(ev.focus);
-    const frameContent = JSON.stringify({ frameIndex: i, scenario: scenario.id, aSha, bSha, dSha, fSha, orientation: ev.orientation });
+    const frameContent = frameManifestContent(i, scenario.id, ev);
     const frameSha = sha256(frameContent);
     const frameBytes = Buffer.byteLength(frameContent, "utf8");
 
@@ -81,6 +133,7 @@ export function buildCorpus(count = FRAME_COUNT) {
       deidentified: true,
       origin: "synthetic",
       notes: `scenario=${scenario.id}; ${scenario.note}; orientation=${ev.orientation}`,
+      expected: expectedScene(scenario.id),
     });
     // One evidence entry per capture artifact so the corpus is content-addressed
     // at the artifact level too (screenshot/dump/focus kinds per schema).

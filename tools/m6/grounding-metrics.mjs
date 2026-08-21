@@ -4,9 +4,9 @@
  *
  * Runs the GroundingRuntime over every frame in the replay corpus and emits a
  * deterministic metrics receipt. Crucially, the exit metrics compare the
- * runtime's decide() against an INDEPENDENT reference decision function
- * derived from the block properties (category, label uniqueness, geometry,
- * freshness, confidence) — NOT against the runtime's own decide() output.
+ * runtime's output against INDEPENDENT, committed per-scene annotations
+ * (expected blocks, bounds, top target and decisions) — never against truth
+ * derived from the runtime/provider output under test.
  * This makes recall / top-1 / misclick honest measurements of decision
  * quality, not circular self-consistency checks.
  *
@@ -31,7 +31,7 @@ import {
   createGroundingRuntime,
 } from "../../services/orchestrator/scripts/lib/m6/m6-grounding-runtime.mjs";
 import { computeRedlinePolicySha256 } from "../../services/orchestrator/scripts/lib/m6/m6-contracts.mjs";
-import { syntheticEvidence } from "./generate-replay-corpus.mjs";
+import { frameManifestContent, syntheticEvidence } from "./generate-replay-corpus.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, "..", "..");
@@ -56,69 +56,49 @@ function evidenceWithDims(frameIndex, scenarioId) {
   return { ...ev, ...dims };
 }
 
-// Build a lookup of manifest entries by their entryId prefix (e.g.
-// "frame-0000-popup") and kind, so the per-frame loop can verify evidence
-// hashes against the manifest — detecting stale or tampered corpus data.
-function buildManifestEvidenceIndex(corpus) {
-  const index = new Map(); // entryId → {sha256, bytes}
+// Build a lookup of the actual manifest entries. Metrics verify both declared
+// sha256 and byte length for the frame manifest plus every evidence artifact.
+function buildManifestIndex(corpus) {
+  const index = new Map();
   for (const entry of corpus.entries) {
     const parts = (entry.entryId || "").split(":");
-    if (parts.length >= 2) {
-      // "frame-NNNN-scenario:screenshot" → key = frame-NNNN-scenario, kind = screenshot
-      const key = parts[0];
-      if (!index.has(key)) index.set(key, {});
-      index.get(key)[parts[1]] = { sha256: entry.sha256, bytes: entry.bytes };
-    }
+    const key = parts[0];
+    if (!index.has(key)) index.set(key, {});
+    index.get(key)[parts[1] || "frame"] = entry;
   }
   return index;
 }
 
-/**
- * INDEPENDENT reference decision function. Computes the expected grounding
- * decision from block properties using a simple spec-level function that does
- * NOT call the runtime's decide(). The runtime's decide() is the system under
- * test; this reference is the oracle.
- *
- * @param {object} block - public block (category, label, confidence, boundsRef)
- * @param {object} ctx - { peerBlocks, geometry, frameWidth, frameHeight, nowMs, expiresMs, focusFingerprint }
- * @returns {"ALLOW_ONCE"|"REPLAN"|"HARD_STOP"}
- */
-function referenceDecision(block, ctx) {
-  // Hard-redline: payment/delete category is always HARD_STOP.
-  if (block.category === "payment" || block.category === "delete") return "HARD_STOP";
-
-  // Freshness: expired frame is never ALLOW_ONCE.
-  const fresh = Number.isFinite(ctx.nowMs) && ctx.nowMs < ctx.expiresMs;
-
-  // Ambiguity: duplicate labels among peers.
-  const ambiguous = ctx.peerBlocks.some((b) => b.label === block.label && b.blockId !== block.blockId);
-
-  // Safe-region: geometry within screen bounds.
-  let safeRegion = false;
-  if (ctx.geometry) {
-    const { x, y, w, h } = ctx.geometry;
-    safeRegion = Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(w) && Number.isFinite(h)
-      && x >= 0 && y >= 0 && w > 0 && h > 0
-      && (x + w) <= ctx.frameWidth && (y + h) <= ctx.frameHeight;
-  }
-
-  // Confidence above threshold.
-  const confident = typeof block.confidence === "number" && block.confidence >= 0.8;
-
-  // Focus present.
-  const focused = Boolean(ctx.focusFingerprint);
-
-  if (!fresh || ambiguous || !safeRegion || !confident || !focused) return "REPLAN";
-  return "ALLOW_ONCE";
+function byteLength(value) {
+  return Buffer.byteLength(value, "utf8");
 }
 
-export function buildMetrics({ corpus, policy, expectedPolicySha256 } = {}) {
+function sameBounds(actual, expected) {
+  return actual && expected
+    && actual.x === expected.x && actual.y === expected.y
+    && actual.w === expected.w && actual.h === expected.h;
+}
+
+function matchExpectedBlock(block, expectedBlocks, evidence) {
+  const bounds = evidence.resolveBounds(block.boundsRef?.id)?.geometry;
+  return expectedBlocks.find((expected) => expected.stableIndex === block.stableIndex
+    && expected.label === block.label
+    && expected.category === block.category
+    && sameBounds(bounds, expected.bounds));
+}
+
+export function receiptSha256For(metrics) {
+  const { groundingDecisionP95Ms, receiptSha256, ...hashable } = metrics;
+  return sha256(JSON.stringify(hashable));
+}
+
+export function buildMetrics({ corpus, policy, expectedPolicySha256, provider = HERMETIC_FIXTURE_PROVIDER } = {}) {
   const resolvedCorpus = corpus || JSON.parse(readFileSync(path.join(REPO_ROOT, "services/orchestrator/contracts/m6/replay-corpus.v1.json"), "utf8"));
   const resolvedPolicy = policy || JSON.parse(readFileSync(POLICY_PATH, "utf8"));
   const resolvedSha = expectedPolicySha256 || computeRedlinePolicySha256(resolvedPolicy);
 
   const evidence = createEvidenceStore();
-  const built = createGroundingRuntime({ policy: resolvedPolicy, expectedPolicySha256: resolvedSha, evidence });
+  const built = createGroundingRuntime({ policy: resolvedPolicy, expectedPolicySha256: resolvedSha, evidence, provider });
   if (!built.ok) throw new Error(`runtime construct failed: ${built.errors.map((e) => e.message).join("; ")}`);
   const runtime = built.runtime;
 
@@ -127,7 +107,7 @@ export function buildMetrics({ corpus, policy, expectedPolicySha256 } = {}) {
     const m = /scenario=([^;]+)/.exec(entry.notes || "");
     return m ? m[1] : "unknown";
   };
-  const manifestIndex = buildManifestEvidenceIndex(resolvedCorpus);
+  const manifestIndex = buildManifestIndex(resolvedCorpus);
 
   let frozen = 0;
   let emptyDumpFrames = 0;
@@ -144,10 +124,10 @@ export function buildMetrics({ corpus, policy, expectedPolicySha256 } = {}) {
   let evidenceMismatches = 0; // evidence sha256 does not match the committed manifest
   let safeRegionPass = 0;
   let safeRegionFail = 0;
-  let recallCorrect = 0; // runtime ALLOW_ONCE AND reference ALLOW_ONCE
-  let recallDenom = 0; // reference ALLOW_ONCE total
-  let top1Correct = 0; // first block's runtime decision matches reference
-  let top1Denom = 0; // segmentable frames with at least one block
+  let recallCorrect = 0; // annotated blocks reproduced exactly by the provider
+  let recallDenom = 0; // independently annotated blocks
+  let top1Correct = 0; // provider top block matches the annotated target
+  let top1Denom = 0; // actionable annotated frames
   const decisionDeterminism = [];
   const overlayRefs = [];
 
@@ -155,23 +135,34 @@ export function buildMetrics({ corpus, policy, expectedPolicySha256 } = {}) {
     const idx = Number((entry.entryId.match(/frame-(\d+)/) || [])[1] ?? 0);
     const scenario = scenarioOf(entry);
     const ev = evidenceWithDims(idx, scenario);
-    const isEmptyDump = scenario === "empty-dump";
+    const expected = entry.expected;
+    const expectsReject = expected?.frameOutcome === "REJECT";
 
-    // P1-5: verify evidence sha256 against the committed manifest entries.
-    // Each frame entry has corresponding :screenshot, :dump, :focus sub-entries
-    // whose sha256 must match the re-computed evidence bytes. A mismatch means
-    // the corpus data has been tampered with or is stale.
+    // Verify the frame manifest and every evidence artifact by both content hash
+    // and byte length. The synthetic bytes are the replay assets; the committed
+    // manifest is their immutable address/annotation envelope.
     const manEntry = manifestIndex.get(entry.entryId);
     if (manEntry) {
+      const frameContent = frameManifestContent(idx, scenario, ev);
       const aSha = sha256(ev.screenshotA);
       const bSha = sha256(ev.screenshotB);
       const dSha = sha256(ev.dump || "empty");
       const fSha = sha256(ev.focus);
-      if (manEntry.screenshot && aSha !== manEntry.screenshot.sha256) evidenceMismatches += 1;
-      if (manEntry.screenshot && bSha !== manEntry.screenshot.sha256) evidenceMismatches += 1;
-      if (manEntry.dump && dSha !== manEntry.dump.sha256) evidenceMismatches += 1;
-      if (manEntry.focus && fSha !== manEntry.focus.sha256) evidenceMismatches += 1;
-    }
+      const checks = [
+        [manEntry.frame, sha256(frameContent), byteLength(frameContent)],
+        [manEntry.screenshot, aSha, byteLength(ev.screenshotA)],
+        [manEntry.screenshot, bSha, byteLength(ev.screenshotB)],
+        [manEntry.dump, dSha, byteLength(ev.dump || "empty")],
+        [manEntry.focus, fSha, byteLength(ev.focus)],
+      ];
+      for (const [manifestEntry, actualSha, actualBytes] of checks) {
+        if (!manifestEntry || manifestEntry.sha256 !== actualSha || manifestEntry.bytes !== actualBytes) {
+          evidenceMismatches += 1;
+        }
+      }
+    } else evidenceMismatches += 1;
+    if (!expected || !Array.isArray(expected.blocks)) evidenceMismatches += 1;
+
     const fr = runtime.freezeFrame({
       screenshotA: ev.screenshotA, screenshotB: ev.screenshotB, dump: ev.dump, focus: ev.focus,
       capturedAt: "2026-08-20T10:00:00.000Z",
@@ -179,15 +170,14 @@ export function buildMetrics({ corpus, policy, expectedPolicySha256 } = {}) {
       width: ev.width, height: ev.height, density: 3, orientation: ev.orientation,
     });
     if (!fr.ok) {
-      // Empty-dump frames MUST fail to freeze (conservative fail-closed). Only
-      // unexpected freeze failures on non-empty-dump frames count as pipeline errors.
-      if (!isEmptyDump) pipelineErrors += 1;
+      if (!expectsReject) pipelineErrors += 1;
       else emptyDumpFrames += 1;
       continue;
     }
+    if (expectsReject) { pipelineErrors += 1; continue; }
     frozen += 1;
     const seg = runtime.segmentBlocks(fr.frame);
-    if (!seg.ok) { if (!isEmptyDump) pipelineErrors += 1; continue; }
+    if (!seg.ok) { pipelineErrors += 1; continue; }
     segmentable += 1;
     blocksTotal += seg.blockSet.blocks.length;
 
@@ -195,30 +185,32 @@ export function buildMetrics({ corpus, policy, expectedPolicySha256 } = {}) {
     const overlayRef = evidence.overlay(seg.blockSet);
     overlayRefs.push({ entryId: entry.entryId, overlayRef });
 
+    const expectedBlocks = expected.blocks;
+    recallDenom += expectedBlocks.length;
+    const matches = new Map();
+    for (const block of seg.blockSet.blocks) {
+      const annotated = matchExpectedBlock(block, expectedBlocks, evidence);
+      if (annotated) {
+        matches.set(block.blockId, annotated);
+        recallCorrect += 1;
+      }
+    }
+    const target = expectedBlocks.find((item) => item.stableIndex === expected.targetStableIndex);
+    top1Denom += 1;
+    if (target && seg.blockSet.blocks[0]
+        && matchExpectedBlock(seg.blockSet.blocks[0], [target], evidence)) top1Correct += 1;
     const expiresMs = Date.parse(fr.frame.expiresAt);
-    const focusFingerprint = fr.frame.stability.focusFingerprint;
 
     for (const block of seg.blockSet.blocks) {
-      // Resolve the private geometry from the evidence store for the oracle.
-      const bounds = evidence.resolveBounds(block.boundsRef.id);
-      const geometry = bounds?.geometry;
-      const ctx = {
-        peerBlocks: seg.blockSet.blocks,
-        geometry,
-        frameWidth: fr.frame.width,
-        frameHeight: fr.frame.height,
-        nowMs: REPLAY_NOW_MS,
-        expiresMs,
-        focusFingerprint,
-      };
-      const refResult = referenceDecision(block, ctx);
+      const annotated = matches.get(block.blockId);
+      const expectedDecision = annotated?.expectedDecision || "REPLAN";
 
       const dec = runtime.decide({
         frame: fr.frame, blockSet: seg.blockSet, blockId: block.blockId,
         intent: "tap", grantRef: "grant-bench", goalRef: "goal-bench", stepRef: "step-bench",
         effectClass: "navigation", nowMs: REPLAY_NOW_MS,
       });
-      if (!dec.ok) { if (!isEmptyDump) pipelineErrors += 1; continue; }
+      if (!dec.ok) { pipelineErrors += 1; continue; }
       if (dec.decision.result === "ALLOW_ONCE") allowOnce += 1;
       else if (dec.decision.result === "REPLAN") replan += 1;
       else if (dec.decision.result === "HARD_STOP") hardStop += 1;
@@ -227,29 +219,18 @@ export function buildMetrics({ corpus, policy, expectedPolicySha256 } = {}) {
       if (safeCheck?.result === "PASS") safeRegionPass += 1;
       else if (safeCheck?.result === "FAIL") safeRegionFail += 1;
 
-      // forbidden: ALLOW_ONCE on a payment/delete category block — a redline bypass.
-      if (dec.decision.result === "ALLOW_ONCE" && (block.category === "payment" || block.category === "delete")) forbidden += 1;
+      // forbidden: the runtime allowed a block independently annotated as a
+      // redline, or a payment/delete category surfaced without annotation.
+      if (dec.decision.result === "ALLOW_ONCE"
+          && (expectedDecision === "HARD_STOP" || block.category === "payment" || block.category === "delete")) forbidden += 1;
 
-      // misclick: runtime ALLOW_ONCE when the independent oracle says not ALLOW_ONCE.
-      if (dec.decision.result === "ALLOW_ONCE" && refResult !== "ALLOW_ONCE") misclick += 1;
+      if (dec.decision.result === "ALLOW_ONCE" && expectedDecision !== "ALLOW_ONCE") misclick += 1;
 
-      // over-restrictive: runtime not ALLOW_ONCE when oracle says ALLOW_ONCE (conservative, logged but not dangerous).
-      if (dec.decision.result !== "ALLOW_ONCE" && refResult === "ALLOW_ONCE") overRestrictive += 1;
-
-      // recall: runtime ALLOW_ONCE AND reference ALLOW_ONCE / reference ALLOW_ONCE total.
-      if (refResult === "ALLOW_ONCE") {
-        recallDenom += 1;
-        if (dec.decision.result === "ALLOW_ONCE") recallCorrect += 1;
-      }
+      if (dec.decision.result !== "ALLOW_ONCE" && expectedDecision === "ALLOW_ONCE") overRestrictive += 1;
 
       // stale: frame expired (nowMs >= expiresMs) but runtime gave ALLOW_ONCE.
       if (REPLAY_NOW_MS >= expiresMs && dec.decision.result === "ALLOW_ONCE") staleFrames += 1;
 
-      // top-1: first block's runtime decision matches the oracle.
-      if (block === seg.blockSet.blocks[0]) {
-        top1Denom += 1;
-        if (dec.decision.result === refResult) top1Correct += 1;
-      }
     }
 
     // determinism: re-segment and re-decide the first block; must match.
@@ -266,16 +247,16 @@ export function buildMetrics({ corpus, policy, expectedPolicySha256 } = {}) {
     schemaId: "xw.grounding-metrics.v1",
     schemaVersion: 1,
     corpusId: resolvedCorpus.corpusId,
-    generatedBy: "tools/m6/grounding-metrics.mjs (deterministic, hermetic fixture provider; independent oracle)",
-    provider: { id: HERMETIC_FIXTURE_PROVIDER.id, version: HERMETIC_FIXTURE_PROVIDER.version, modelSha256: HERMETIC_FIXTURE_PROVIDER.modelSha256 },
+    generatedBy: "tools/m6/grounding-metrics.mjs (deterministic; independent committed scene annotations)",
+    provider: { id: provider.id, version: provider.version, modelSha256: provider.modelSha256 },
     framesTotal: frames.length,
     framesFrozen: frozen,
     emptyDumpFrames,
     framesSegmentable: segmentable,
     blocksTotal,
-    // recall: fraction of oracle-ALLOW_ONCE blocks that the runtime also ALLOW_ONCEd.
+    // recall: exact provider block matches / independently annotated blocks.
     blockRecall: Number((recallCorrect / Math.max(recallDenom, 1) * 100).toFixed(2)),
-    // top-1: fraction of frames where the first block's decision matches the oracle.
+    // top-1: fraction of actionable frames where provider rank 1 matches the annotated target.
     top1: Number((top1Correct / Math.max(top1Denom, 1) * 100).toFixed(2)),
     // safe-region: fraction of blocks with safe-region PASS.
     safeRegion: Number((safeRegionPass / Math.max(blocksTotal, 1) * 100).toFixed(2)),
@@ -290,7 +271,7 @@ export function buildMetrics({ corpus, policy, expectedPolicySha256 } = {}) {
     decisionDistribution: { ALLOW_ONCE: allowOnce, REPLAN: replan, HARD_STOP: hardStop },
     determinism: { checked: decisionDeterminism.length, ok: decisionDeterminism.every((d) => d.ok) },
     overlayArtifacts: overlayRefs.length,
-    measuredScope: "freezeFrame + segmentBlocks + decide + evidenceIntegrity (hermetic provider); JSON-RPC bridge / observe-to-dispatch deferred to M6-2",
+    measuredScope: "frame/evidence bytes + independent annotations + freezeFrame + segmentBlocks + decide (hermetic provider); JSON-RPC bridge / observe-to-dispatch deferred to M6-2",
     exitGates: {
       recallGe98: recallCorrect / Math.max(recallDenom, 1) >= 0.98,
       top1Ge95: top1Correct / Math.max(top1Denom, 1) >= 0.95,
@@ -352,8 +333,7 @@ export function generate({ rootDir = REPO_ROOT, out = DEFAULT_OUT } = {}) {
   // receiptSha256 EXCLUDES groundingDecisionP95Ms so the hash is deterministic
   // despite machine-dependent latency. Timing is a regression guard, not a
   // content-addressed contract.
-  const { groundingDecisionP95Ms, ...hashable } = metrics;
-  const receipt = { ...metrics, receiptSha256: sha256(JSON.stringify(hashable)) };
+  const receipt = { ...metrics, receiptSha256: receiptSha256For(metrics) };
   const outPath = path.isAbsolute(out || DEFAULT_OUT) ? (out || DEFAULT_OUT) : path.join(rootDir, out || DEFAULT_OUT);
   mkdirSync(path.dirname(outPath), { recursive: true });
   writeFileSync(outPath, `${JSON.stringify(receipt, null, 2)}\n`, "utf8");

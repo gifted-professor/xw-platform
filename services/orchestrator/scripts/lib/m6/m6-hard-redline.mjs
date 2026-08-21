@@ -33,6 +33,42 @@ function normalize(text) {
   return String(text || "").normalize("NFKC").toLowerCase();
 }
 
+function containsAny(text, terms) {
+  const haystack = normalize(text);
+  return terms.some((term) => {
+    const normalized = normalize(term);
+    return normalized.length > 0 && haystack.includes(normalized);
+  });
+}
+
+// Runtime-owned page-risk classifier. It consumes trusted observation evidence
+// (dump/focus/app id) before a segmentation provider runs, so a provider cannot
+// turn a payment/destructive page into an ordinary page merely by omitting or
+// relabeling target-block signals. This deliberately returns a coarse risk
+// class: target-specific policy still runs later, while uncertain actions on a
+// risky page are forced to REPLAN.
+export function classifyHardRedlinePageRisk({ dump, focus, appId } = {}) {
+  const text = [dump, focus, appId].filter((value) => typeof value === "string").join("\n");
+  const paymentTerms = [
+    ...MINIMUM_REDLINE.payment,
+    ...MINIMUM_REDLINE.purchase,
+    ...MINIMUM_REDLINE.transfer,
+    ...MINIMUM_REDLINE.tip,
+    ...MINIMUM_REDLINE.subscription,
+    ...MINIMUM_REDLINE["credential-submit"],
+    "订单", "收银台", "checkout",
+  ];
+  const destructiveTerms = [
+    ...MINIMUM_REDLINE.delete,
+    ...MINIMUM_REDLINE.uninstall,
+    ...MINIMUM_REDLINE["clear-data"],
+  ];
+  if (containsAny(text, paymentTerms)) return "payment-page";
+  if (containsAny(text, destructiveTerms)) return "destructive-settings";
+  if (containsAny(text, ["确认", "confirm dialog", "confirmation"])) return "confirm-dialog";
+  return null;
+}
+
 function minimumTerms() {
   const terms = [];
   for (const synonyms of Object.values(MINIMUM_REDLINE)) {

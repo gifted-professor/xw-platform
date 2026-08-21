@@ -30,7 +30,7 @@
   "files": [
     {
       "path": "services/orchestrator/ops/xw-locator.mjs",
-      "sha256": "a85d4ea9c30ef3f3b8ad6baed5cfaeb7c2d2c58686985e8a147f27cc1cdda6af",
+      "sha256": "42fe2f25dca3c71668795b8e1f9bd050baaa99ee6dffc1629d01f1c99e222f7d",
       "role": "visual block locator 诊断 CLI（收敛进唯一 GroundingRuntime；blockId-only、tapAuthorized=false、effect=none）；M6-1 已清零机器外引用",
       "externalPaths": [],
       "externalDependencies": [],
@@ -237,7 +237,7 @@
     },
     {
       "path": "services/orchestrator/scripts/lib/m6/m6-grounding-runtime.mjs",
-      "sha256": "fca7dbb43a1957b685ca40e325d17de7ff14f0802452cc05bfa8d50f939e63a1",
+      "sha256": "7da40e4053e566dc9f49505d75a74bd45650f788c0ee16d38a7ef9dd1a28511b",
       "role": "唯一 GroundingRuntime：stable-frame validator、hermetic fixture provider、block-set、decision policy、private point resolver（纯函数、零设备 IO、零第三方依赖）",
       "externalPaths": [],
       "externalDependencies": [],
@@ -250,7 +250,7 @@
     },
     {
       "path": "tools/m6/generate-replay-corpus.mjs",
-      "sha256": "8dc17661a1cbe002b4b5c0ed90ca00cc80a53b82fd9781ff9f909dca821ecf5c",
+      "sha256": "f21fc482718765f18c56f08100cc8c7b26ac97512c0d3cc141a9650fdd36c1c1",
       "role": "M6-1 replay corpus 生成器（确定性、全合成、≥200 去标识 frames，内容寻址 manifest）",
       "externalPaths": [],
       "externalDependencies": [],
@@ -262,7 +262,7 @@
     },
     {
       "path": "tools/m6/grounding-metrics.mjs",
-      "sha256": "23b8e959d9f2ed8e7a717fd5b7006df6db6ccad5a199950466b22685d6205677",
+      "sha256": "d991ded0c530ce0009dfe76b23db492d783dfc46457b621f8d481c4606424597",
       "role": "M6-1 grounding metrics + SLO 校准工具：跑 GroundingRuntime over corpus，产出确定性 metrics receipt（recall/top-1/safe-region/forbidden/misclick/stale/determinism）",
       "externalPaths": [],
       "externalDependencies": [],

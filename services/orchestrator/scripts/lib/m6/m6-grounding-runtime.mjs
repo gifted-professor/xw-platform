@@ -25,7 +25,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { evaluateHardRedline } from "./m6-hard-redline.mjs";
+import { classifyHardRedlinePageRisk, evaluateHardRedline } from "./m6-hard-redline.mjs";
 import {
   GROUNDING_CHECK_NAMES,
   REDLINE_EFFECT_CLASSES,
@@ -92,11 +92,18 @@ export function createEvidenceStore() {
     }
   }
 
+  function readText(id, expectedKind) {
+    const entry = blobs.get(id);
+    if (!entry || (expectedKind && entry.kind !== expectedKind)) return null;
+    return entry.bytes.toString("utf8");
+  }
+
   return {
     put,
     ref,
     bounds,
     resolveBounds,
+    readText,
     size: () => blobs.size,
     snapshot: () => blobs,
     // Deterministic overlay: per-block bounds drawn as a diagnostic artifact.
@@ -136,12 +143,15 @@ export const HERMETIC_FIXTURE_PROVIDER = Object.freeze({
     // blocks, scroll pages, permission dialogs, status bar, system navigation).
     const seed = Buffer.from(frame.manifestSha256, "hex");
     const blocks = [];
-    const count = 3 + (seed[0] % 6); // 3..8 blocks
-    const scenarios = SCENARIO_TABLE[seed[1] % SCENARIO_TABLE.length];
+    const dumpText = evidence.readText(frame.dumpRef?.id, "dump") || "";
+    const replayScenario = /^dump-\d+:(.+)$/.exec(dumpText)?.[1];
+    const replaySpecs = replayScenario ? REPLAY_SCENE_TABLE[replayScenario] : null;
+    const scenarios = replaySpecs || SCENARIO_TABLE[seed[1] % SCENARIO_TABLE.length];
+    const count = replaySpecs ? replaySpecs.length : 3 + (seed[0] % 6); // 3..8 fallback blocks
     for (let index = 0; index < count; index += 1) {
       const s = scenarios[index % scenarios.length];
       const regionHash = regionHashOf(frame.frameId, index, s.label, s.category);
-      const geometry = geometryOf(seed, index, frame.width, frame.height);
+      const geometry = replaySpecs ? replayGeometry(index) : geometryOf(seed, index, frame.width, frame.height);
       const blockId = deriveBlockId({ frameId: frame.frameId, stableIndex: index, regionHash, label: s.label, category: s.category });
       // Private signals (ocrText/iconLabel/...) are stored INSIDE the bounds blob,
       // cryptographically bound to the opaque boundsRef. A provider that relabels
@@ -208,6 +218,24 @@ const SCENARIO_TABLE = [
   ],
 ];
 
+// Fixture-provider detections for the synthetic replay scenes. The committed
+// corpus contains a separate frozen annotation for these scenes; metrics never
+// call this table to construct expected truth.
+const REPLAY_SCENE_TABLE = Object.freeze({
+  popup: [{ label: "取消", category: "permission-dialog", confidence: 0.95, source: "fused" }, { label: "确定", category: "permission-dialog", confidence: 0.95, source: "fused" }, { label: "内容", category: "content", confidence: 0.95, source: "fused" }],
+  keyboard: [{ label: "输入框", category: "content", confidence: 0.96, source: "fused" }, { label: "键盘", category: "keyboard", confidence: 0.93, source: "vision" }, { label: "返回", category: "system-navigation", confidence: 0.95, source: "a11y" }],
+  rotation: [{ label: "横屏内容", category: "content", confidence: 0.96, source: "fused" }, { label: "返回", category: "system-navigation", confidence: 0.95, source: "a11y" }],
+  ads: [{ label: "跳过广告", category: "content", confidence: 0.96, source: "fused" }, { label: "广告", category: "ads", confidence: 0.9, source: "vision" }],
+  "dup-blocks": [{ label: "滚动内容", category: "content", confidence: 0.94, source: "fused" }, { label: "滚动内容", category: "content", confidence: 0.94, source: "fused" }],
+  sensitive: [{ label: "确认支付", category: "payment", confidence: 0.99, source: "fused", signals: { ocrText: "确认支付" } }, { label: "返回", category: "system-navigation", confidence: 0.95, source: "a11y" }],
+  "scroll-before": [{ label: "第一条", category: "content", confidence: 0.96, source: "fused" }, { label: "滚动内容", category: "content", confidence: 0.94, source: "fused" }],
+  "scroll-after": [{ label: "第二条", category: "content", confidence: 0.96, source: "fused" }, { label: "加载更多", category: "content", confidence: 0.9, source: "ocr" }],
+  "permission-dialog": [{ label: "允许", category: "permission-dialog", confidence: 0.91, source: "a11y" }, { label: "拒绝", category: "permission-dialog", confidence: 0.91, source: "a11y" }],
+  "status-bar": [{ label: "搜索", category: "content", confidence: 0.97, source: "fused" }, { label: "状态栏", category: "status-bar", confidence: 0.99, source: "vision" }],
+  "system-nav": [{ label: "返回", category: "system-navigation", confidence: 0.95, source: "a11y" }, { label: "标题", category: "content", confidence: 0.96, source: "fused" }],
+  "content-search": [{ label: "搜索", category: "content", confidence: 0.97, source: "fused" }, { label: "发现", category: "system-navigation", confidence: 0.95, source: "fused" }],
+});
+
 // ---------------------------------------------------------------------------
 // Deterministic helpers — no Math.random, no Date.now.
 // ---------------------------------------------------------------------------
@@ -233,6 +261,10 @@ function geometryOf(seed, index, width, height) {
   const x0 = (index * step + seed[2 % seed.length]) % xMod;
   const y0 = (index * h + seed[3 % seed.length]) % yMod;
   return { x: x0, y: y0, w: step, h };
+}
+
+function replayGeometry(index) {
+  return { x: 100, y: 100 + index * 180, w: 360, h: 120 };
 }
 
 function fingerprintOf(content, salt) {
@@ -274,6 +306,21 @@ export function createGroundingRuntime({
   // registry — a well-formed but never-issued (forged) decision can never obtain
   // a point, and the resolved point is always bound to the registered boundsRef.
   const issuedDecisions = new Map();
+  // Runtime-private observation attestations are derived before segmentation.
+  // A provider can neither supply nor mutate these page/app risk facts.
+  const issuedFrameRisk = new Map();
+  const pinnedProvider = Object.freeze({
+    id: provider?.id,
+    version: provider?.version,
+    modelSha256: provider?.modelSha256,
+    segment: typeof provider?.segment === "function" ? provider.segment.bind(provider) : null,
+  });
+  if (!pinnedProvider.id || !pinnedProvider.version
+      || !/^[0-9a-f]{64}$/.test(pinnedProvider.modelSha256 || "")
+      || !pinnedProvider.segment) {
+    fail(errors, CODE, "provider must be construction-time pinned by id/version/modelSha256 and segment()");
+    return { ok: false, errors, runtime: null };
+  }
 
   // freezeFrame: produce an execution-grade xw.screen-frame.v1 from captured
   // evidence. Unstable / partial / missing evidence must NOT become actionable.
@@ -360,6 +407,10 @@ export function createGroundingRuntime({
       // Fail closed: an invalid or unstable frame is never returned as actionable.
       return { ok: false, errors: valid.errors, frame: null };
     }
+    issuedFrameRisk.set(frame.frameId, Object.freeze({
+      appId: frame.linkage.appId,
+      riskClass: classifyHardRedlinePageRisk({ dump, focus, appId: frame.linkage.appId }),
+    }));
     return { ok: true, errors: [], frame };
   }
 
@@ -368,14 +419,17 @@ export function createGroundingRuntime({
   // Private signals are stored in the evidence store keyed by blockId — never on
   // the block surface — so decide() can only resolve them for blocks whose
   // blockId is integrity-covered.
-  function segmentBlocks(frame, opts = {}) {
+  function segmentBlocks(frame) {
     const errs = [];
     if (!frame || frame.schemaId !== "xw.screen-frame.v1") {
       fail(errs, CODE, "segmentBlocks requires a frozen xw.screen-frame.v1");
       return { ok: false, errors: errs, blockSet: null };
     }
-    const segProvider = opts.provider || provider;
-    const rawBlocks = segProvider.segment(frame, evidence);
+    if (!issuedFrameRisk.has(frame.frameId)) {
+      fail(errs, CODE, "segmentBlocks requires a frame issued by this runtime");
+      return { ok: false, errors: errs, blockSet: null };
+    }
+    const rawBlocks = pinnedProvider.segment(frame, evidence);
     const blocks = rawBlocks.map((raw) => {
       const blockId = deriveBlockId({
         frameId: frame.frameId,
@@ -398,9 +452,9 @@ export function createGroundingRuntime({
       };
     });
     const segmentation = {
-      provider: segProvider.id,
-      version: segProvider.version,
-      modelSha256: segProvider.modelSha256,
+      provider: pinnedProvider.id,
+      version: pinnedProvider.version,
+      modelSha256: pinnedProvider.modelSha256,
     };
     const ordering = "stable-index";
     const integritySha256 = computeBlockSetIntegritySha256({
@@ -489,6 +543,15 @@ export function createGroundingRuntime({
     }
     const geometry = bounds.geometry;
     const privSignals = bounds.signals || {};
+    const trustedPage = issuedFrameRisk.get(frame.frameId);
+    if (!trustedPage) {
+      const reason = "frame has no runtime-issued page/app risk attestation";
+      return {
+        ok: true,
+        errors: [],
+        decision: hardStop({ frame, block, intent, grantRef, goalRef, stepRef, effectClass, checks: [], reason }),
+      };
+    }
 
     // 1. freshness — frame must not be expired relative to the caller's clock.
     const expiresMs = Date.parse(frame.expiresAt);
@@ -535,8 +598,18 @@ export function createGroundingRuntime({
     // not from the block surface.
     const redline = evaluateHardRedline({
       intent,
-      blockSignals: { ...privSignals, category: block.category },
-      pageFingerprint: { pageHash: frame.stability.pageFingerprint },
+      blockSignals: {
+        ...privSignals,
+        category: block.category,
+        // A risky page with provider-only target semantics remains uncertain;
+        // the provider cannot self-certify a payment/destructive target safe.
+        uncertain: Boolean(trustedPage.riskClass),
+      },
+      pageFingerprint: {
+        pageHash: frame.stability.pageFingerprint,
+        riskClass: trustedPage.riskClass,
+        appId: trustedPage.appId,
+      },
       policy,
       expectedPolicySha256,
     });
@@ -677,7 +750,7 @@ export function createGroundingRuntime({
     ok: true,
     errors: [],
     runtime: {
-      provider,
+      provider: pinnedProvider,
       evidence,
       policy,
       expectedPolicySha256,

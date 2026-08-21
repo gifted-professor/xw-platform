@@ -34,7 +34,43 @@
         "license": { "type": "string", "minLength": 1, "description": "Redistribution license or authorization reference." },
         "deidentified": { "const": true, "description": "Schema-level requirement: only deidentified assets may enter the corpus." },
         "origin": { "enum": ["synthetic", "authorized-capture"], "description": "Synthetic or captured under explicit authorization; nothing else is allowed." },
-        "notes": { "type": "string" }
+        "notes": { "type": "string" },
+        "expected": { "$ref": "#/$defs/expectedFrame" }
+      }
+    },
+    "expectedFrame": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["frameOutcome", "blocks"],
+      "properties": {
+        "frameOutcome": { "enum": ["ACTIONABLE", "REJECT"] },
+        "targetStableIndex": { "type": "integer", "minimum": 0 },
+        "blocks": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/expectedBlock" }
+        }
+      }
+    },
+    "expectedBlock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stableIndex", "label", "category", "bounds", "expectedDecision"],
+      "properties": {
+        "stableIndex": { "type": "integer", "minimum": 0 },
+        "label": { "type": "string", "minLength": 1 },
+        "category": { "type": "string", "minLength": 1 },
+        "bounds": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["x", "y", "w", "h"],
+          "properties": {
+            "x": { "type": "integer", "minimum": 0 },
+            "y": { "type": "integer", "minimum": 0 },
+            "w": { "type": "integer", "minimum": 1 },
+            "h": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "expectedDecision": { "enum": ["ALLOW_ONCE", "REPLAN", "HARD_STOP"] }
       }
     }
   }

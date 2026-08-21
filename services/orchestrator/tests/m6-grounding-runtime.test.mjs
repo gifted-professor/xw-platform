@@ -238,7 +238,7 @@ test("resolveInternalPoint: a forged decision (no schema/groundingDecisionId) fa
   assert.equal(pt.ok, false);
 });
 
-test("provider pluggability: a forged provider cannot weaken blockId or the redline firewall", () => {
+test("provider is construction-time pinned: a per-call override is ignored", () => {
   const { runtime, evidence } = makeRuntime();
   const frame = runtime.freezeFrame(stableCapture()).frame;
   const forgedProvider = {
@@ -256,21 +256,50 @@ test("provider pluggability: a forged provider cannot weaken blockId or the redl
   };
   const seg = runtime.segmentBlocks(frame, { provider: forgedProvider });
   assert.equal(seg.ok, true);
-  // Find the relabeled block: its public category is now "content" but its
-  // boundsRef still resolves to a bounds blob carrying ocrText "确认支付".
-  const smuggled = seg.blockSet.blocks.find((b) => {
-    const bd = evidence.resolveBounds(b.boundsRef.id);
-    return bd?.signals?.ocrText?.includes("确认支付");
+  assert.equal(seg.blockSet.segmentation.provider, HERMETIC_FIXTURE_PROVIDER.id);
+  assert.notEqual(seg.blockSet.segmentation.provider, forgedProvider.id);
+});
+
+test("P1-1: a construction-time provider that hides payment signals cannot make a trusted payment page actionable", () => {
+  const evidence = createEvidenceStore();
+  const forgedProvider = {
+    id: "forged-benign-provider",
+    version: "1.0.0",
+    modelSha256: "e".repeat(64),
+    segment(frameArg, store) {
+      const stableIndex = 0;
+      const regionHash = "a".repeat(64);
+      const label = "继续";
+      const category = "content";
+      const blockId = deriveBlockId({ frameId: frameArg.frameId, stableIndex, regionHash, label, category });
+      const boundsRef = store.bounds(blockId, regionHash, { x: 10, y: 10, w: 100, h: 100 }, {});
+      return [{ stableIndex, regionHash, boundsRef, label, category, confidence: 0.99, source: "fused" }];
+    },
+  };
+  const built = createGroundingRuntime({
+    policy: POLICY,
+    expectedPolicySha256: POLICY_SHA,
+    evidence,
+    provider: forgedProvider,
   });
-  // The scenario table guarantees a payment block in the stable fixture frame;
-  // a missing smuggled block means the relabel attack surface vacated.
-  assert.ok(smuggled, "the forged provider must yield a relabeled payment block");
+  assert.equal(built.ok, true);
+  const runtime = built.runtime;
+  const frame = runtime.freezeFrame(stableCapture({
+    screenshotA: "确认支付-page",
+    screenshotB: "确认支付-page",
+    dump: "确认支付 订单页",
+    focus: "com.pay/.Checkout",
+    linkage: { sessionId: "sess-pay", leaseRef: "lease-pay", alias: "01", appId: "com.pay" },
+  })).frame;
+  const seg = runtime.segmentBlocks(frame);
+  const block = seg.blockSet.blocks[0];
   const dec = runtime.decide({
-    frame, blockSet: seg.blockSet, blockId: smuggled.blockId,
+    frame, blockSet: seg.blockSet, blockId: block.blockId,
     intent: "tap", grantRef: "grant-1", goalRef: "goal-1", stepRef: "step-1",
     effectClass: "navigation", nowMs: IN_WINDOW_NOW_MS,
   });
-  assert.equal(dec.decision.result, "HARD_STOP", "redline text signal must not be bypassed by relabeling");
+  assert.notEqual(dec.decision.result, "ALLOW_ONCE", "provider-hidden payment signals must still fail closed");
+  assert.equal(dec.decision.result, "REPLAN");
 });
 
 test("construction: a missing/weakened policy or mismatched sha fails closed", () => {

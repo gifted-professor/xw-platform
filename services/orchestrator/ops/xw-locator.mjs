@@ -82,7 +82,7 @@ function makeRuntime() {
 
 // Convert a prepared/segmented frame into the legacy "vision pack"-shaped JSON
 // callers expect, but populated from the runtime's contract-conformant output.
-function writeArtifacts(outDir, { frame, blockSet, overlayRef, evidence }) {
+function writeArtifacts(outDir, { frame, blockSet, overlayRef, evidence, source }) {
   const frameFile = join(outDir, "screen-frame.json");
   const blocksFile = join(outDir, "blocks.json");
   const packFile = join(outDir, "vision-pack.json");
@@ -94,6 +94,10 @@ function writeArtifacts(outDir, { frame, blockSet, overlayRef, evidence }) {
     manifestId: frame.manifestSha256,
     selectionRequestId: `loc-${frame.frameId.slice(0, 12)}`,
     candidateCount: blockSet.blocks.length,
+    // Diagnostic-only source reference lets a later `verify` invocation
+    // re-freeze the same offline evidence and reconstruct the runtime-private
+    // page/app risk attestation. No live action is authorized by this file.
+    source,
     frame,
     overlayRef,
   }, null, 2)}\n`, "utf8");
@@ -166,7 +170,13 @@ function commandPrepare(args) {
   const seg = runtime.segmentBlocks(frameRes.frame);
   if (!seg.ok) throw new Error(`segmentBlocks failed: ${seg.errors.map((e) => e.message).join("; ")}`);
   const overlayRef = evidence.overlay(seg.blockSet);
-  const { frameFile, blocksFile, packFile } = writeArtifacts(outDir, { frame: frameRes.frame, blockSet: seg.blockSet, overlayRef, evidence });
+  const { frameFile, blocksFile, packFile } = writeArtifacts(outDir, {
+    frame: frameRes.frame,
+    blockSet: seg.blockSet,
+    overlayRef,
+    evidence,
+    source: resolve(args.input),
+  });
   console.log(JSON.stringify({
     ok: true,
     operation: "prepare",
@@ -188,7 +198,26 @@ function commandVerify(args) {
   }
   const dir = resolve(args.dir);
   const { runtime } = makeRuntime();
-  const frame = readJson(join(dir, "screen-frame.json"), "screen frame");
+  const storedFrame = readJson(join(dir, "screen-frame.json"), "screen frame");
+  const pack = readJson(join(dir, "vision-pack.json"), "vision pack");
+  if (!pack.source) throw new Error("vision pack lacks its offline evidence source; rerun prepare");
+  const ev = readEvidenceInput({ input: pack.source });
+  const reissued = runtime.freezeFrame({
+    screenshotA: ev.screenshotA,
+    screenshotB: ev.screenshotB,
+    dump: ev.dump,
+    focus: ev.focus,
+    capturedAt: storedFrame.capturedAt,
+    linkage: storedFrame.linkage,
+    width: storedFrame.width,
+    height: storedFrame.height,
+    density: storedFrame.density,
+    orientation: storedFrame.orientation,
+  });
+  if (!reissued.ok || reissued.frame.frameId !== storedFrame.frameId) {
+    throw new Error("offline evidence no longer reproduces the prepared frameId");
+  }
+  const frame = reissued.frame;
   const decision = readJson(resolve(args.decision), "decision request");
   // Re-derive the block set with private signals so decide() can run the firewall.
   const seg = runtime.segmentBlocks(frame);
