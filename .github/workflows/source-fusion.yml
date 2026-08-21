@@ -66,6 +66,10 @@ jobs:
         timeout-minutes: 4
         run: npm run test:m6
 
+      - name: M6-2 zero-live offline frame capture
+        timeout-minutes: 6
+        run: npm run test:m6-2:offline
+
       - name: Control-plane tests against known-failure allowlist
         timeout-minutes: 8
         continue-on-error: ${{ runner.os == 'Windows' }}

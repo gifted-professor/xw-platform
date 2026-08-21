@@ -1,5 +1,6 @@
 import { ControlPlaneError } from "../../control-plane/lib/errors.mjs";
 import { executeExplorerPrimitive } from "./explorer-primitive.mjs";
+import { readObservation } from "./read-observation.mjs";
 
 const RAW_ALLOWLIST = new Set(["list", "Screen", "imeList"]);
 
@@ -44,6 +45,17 @@ export function createXiaoweiAdapter({ transport = null } = {}) {
           job,
         });
       }
+      if (capability.implementation.action === "observe_frame") {
+        // M6-2 W4 closed read-only observation. The capability input schema is
+        // closed (no params), so nothing a caller sends can name an action,
+        // coordinate, shell text, or URL. Mutating primitives live only in
+        // explorer-primitive.mjs and are unreachable from here.
+        if (!job?.canary) {
+          throw new ControlPlaneError("CANARY_REQUIRED", "observe_frame requires canary session", { status: 403 });
+        }
+        const result = await readObservation({ transport, serial: device.runtimeId });
+        return { vendorCode: result.vendorCode ?? 10000, output: result };
+      }
       const action = capability.implementation.action === "raw" ? params.action : capability.implementation.action;
       if (capability.implementation.action === "raw") {
         if (!job.canary) throw new ControlPlaneError("CANARY_REQUIRED", "raw Xiaowei action requires canary session", { status: 403 });
@@ -61,6 +73,13 @@ export function createXiaoweiAdapter({ transport = null } = {}) {
     async verify({ capability, execution }) {
       if (capability.implementation.action === "explorer_primitive") {
         return { ok: execution.output?.ok === true, mode: capability.verification.mode };
+      }
+      if (capability.implementation.action === "observe_frame") {
+        const out = execution.output || {};
+        return {
+          ok: out.ok === true && Boolean(out.capturedAt) && Boolean(out.observation) && Boolean(out.evidence),
+          mode: capability.verification.mode,
+        };
       }
       if (capability.implementation.action === "list") {
         return { ok: execution.output?.code === 10000 && Array.isArray(execution.output?.data), mode: "state" };

@@ -8,13 +8,17 @@ import {
   computeBlockSetIntegritySha256,
   computeRedlinePolicySha256,
   deriveBlockId,
+  deriveCaptureAttemptReceiptSha256,
   deriveFrameId,
   deriveGroundingDecisionId,
+  deriveM6LiveGateEpochHash,
   sha256Hex,
   validateAgenticExecutor,
+  validateCaptureAttemptReceipt,
   validateGroundedActionReceipt,
   validateGroundingDecision,
   validateHardRedlinePolicy,
+  validateM6LiveGate,
   validateScreenFrame,
   validateVisualBlock,
   validateVisualBlockSet,
@@ -222,4 +226,111 @@ test("valid agentic executor passes; tools outside the M6 surface are rejected",
   const wrongMode = structuredClone(executor);
   wrongMode.autonomyPolicy.authorizationMode = "per_action";
   assert.equal(validateAgenticExecutor(wrongMode, { allowedToolClasses: M6_TOOL_CLASSES }).ok, false);
+});
+
+test("valid capture-attempt receipt passes; status/ref/tamper inconsistencies fail closed", () => {
+  const base = {
+    schemaId: "xw.capture-attempt-receipt.v1",
+    attemptId: "attempt-0001",
+    runId: "run-m6-0001",
+    jobId: "job-m6-0001",
+    sessionId: "sess-m6-0001",
+    leaseRef: "lease-m6-0001",
+    alias: "01",
+    scenarioLabel: "static-page",
+    epochHash: "0".repeat(64),
+    status: "accepted",
+    frameRef: { id: "frame-m6-0001", sha256: "1".repeat(64) },
+    errorCodes: [],
+    evidenceRefs: [{ id: "att-screen-a", sha256: "2".repeat(64) }],
+    skew: { aToBMs: 350, bToFocusBMs: 120 },
+    capturedAt: "2026-08-21T00:00:00.000Z",
+    committedAt: "2026-08-21T00:00:00.600Z",
+    receiptSha256: "",
+  };
+  base.receiptSha256 = deriveCaptureAttemptReceiptSha256(base);
+  assert.equal(validateCaptureAttemptReceipt(base).ok, true);
+
+  const rejected = structuredClone(base);
+  rejected.status = "rejected";
+  rejected.frameRef = null;
+  rejected.errorCodes = ["M6_SCREEN_CHANGED"];
+  rejected.receiptSha256 = deriveCaptureAttemptReceiptSha256(rejected);
+  assert.equal(validateCaptureAttemptReceipt(rejected).ok, true);
+
+  // accepted without a frameRef is invalid
+  const noFrame = structuredClone(base);
+  noFrame.frameRef = null;
+  assert.equal(validateCaptureAttemptReceipt(noFrame).ok, false);
+
+  // rejected without any error code is invalid
+  const emptyErr = structuredClone(rejected);
+  emptyErr.errorCodes = [];
+  assert.equal(validateCaptureAttemptReceipt(emptyErr).ok, false);
+
+  // tampered payload invalidates the derived hash
+  const tampered = structuredClone(base);
+  tampered.scenarioLabel = "different-page";
+  assert.equal(validateCaptureAttemptReceipt(tampered).ok, false);
+
+  // raw device identity is rejected by the schema
+  const withDeviceId = structuredClone(base);
+  withDeviceId.deviceId = "secret-serial";
+  assert.equal(validateCaptureAttemptReceipt(withDeviceId).ok, false);
+});
+
+test("valid live gate epoch passes; CLOSED/closeout and parent-chain invariants hold", () => {
+  const base = {
+    schemaId: "xw.m6-live-gate.v1",
+    gateId: "m6-agentic-live-gate",
+    epochHash: "",
+    mode: "OBSERVE_ONLY",
+    status: "active",
+    releaseId: "xw-20260821-abcdef",
+    sourceCommit: "a".repeat(40),
+    actor: "human:operator-01",
+    lockHashes: {
+      runtimeProfile: "3".repeat(64),
+      hardRedlinePolicy: "4".repeat(64),
+      groundingRuntime: "5".repeat(64),
+    },
+    allowlist: ["xw_wechat_01"],
+    issuedAt: "2026-08-21T00:00:00.000Z",
+    expiresAt: "2026-08-21T02:00:00.000Z",
+    parentEpochHash: null,
+    closeoutRef: null,
+  };
+  base.epochHash = deriveM6LiveGateEpochHash(base);
+  assert.equal(validateM6LiveGate(base).ok, true);
+
+  // parent-bound extension epoch
+  const child = structuredClone(base);
+  child.parentEpochHash = base.epochHash;
+  child.allowlist = ["xw_wechat_01", "xw_wechat_02"];
+  child.epochHash = deriveM6LiveGateEpochHash(child);
+  assert.equal(validateM6LiveGate(child).ok, true);
+
+  // CLOSED epoch must be closed and reference a closeout receipt
+  const closed = structuredClone(base);
+  closed.mode = "CLOSED";
+  closed.status = "closed";
+  closed.expiresAt = "2026-08-21T02:00:00.000Z";
+  closed.closeoutRef = { id: "closeout-0001", sha256: "6".repeat(64) };
+  closed.epochHash = deriveM6LiveGateEpochHash(closed);
+  assert.equal(validateM6LiveGate(closed).ok, true);
+
+  // CLOSED without a closeoutRef is invalid
+  const badClosed = structuredClone(closed);
+  badClosed.closeoutRef = null;
+  assert.equal(validateM6LiveGate(badClosed).ok, false);
+
+  // unknown gate mode fails closed
+  const badMode = structuredClone(base);
+  badMode.mode = "ACT";
+  assert.equal(validateM6LiveGate(badMode).ok, false);
+
+  // tampering invalidates the epoch hash
+  const tampered = structuredClone(base);
+  tampered.allowlist = ["xw_wechat_99"];
+  assert.equal(validateM6LiveGate(tampered).ok, false);
 });

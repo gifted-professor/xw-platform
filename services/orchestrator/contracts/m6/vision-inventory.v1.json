@@ -237,7 +237,7 @@
     },
     {
       "path": "services/orchestrator/scripts/lib/m6/m6-grounding-runtime.mjs",
-      "sha256": "7da40e4053e566dc9f49505d75a74bd45650f788c0ee16d38a7ef9dd1a28511b",
+      "sha256": "b1f0124d31fefd520a89792ffc90c9fb0b8c7880b6813eee3f5ab66b60559af7",
       "role": "唯一 GroundingRuntime：stable-frame validator、hermetic fixture provider、block-set、decision policy、private point resolver（纯函数、零设备 IO、零第三方依赖）",
       "externalPaths": [],
       "externalDependencies": [],
@@ -245,6 +245,18 @@
         "services/orchestrator/ops/xw-locator.mjs (诊断 CLI 代理)",
         "services/orchestrator/tests/m6-grounding-runtime.test.mjs",
         "tools/m6/grounding-metrics.mjs"
+      ],
+      "compatException": false
+    },
+    {
+      "path": "packages/kernel/lib/m6-screen-frame.mjs",
+      "sha256": "2439f17e05d9b6fadf340967488746a77ed2bb4cb5d4c7d0b737397fc4f524e0",
+      "role": "M6-2 single canonical screen-frame assembler: replay + live_strict share one manifest/frameId derivation",
+      "externalPaths": [],
+      "externalDependencies": [],
+      "callers": [
+        "services/orchestrator/scripts/lib/m6/m6-grounding-runtime.mjs (assembleReplayFrame)",
+        "services/orchestrator/tests/m6-screen-frame.test.mjs"
       ],
       "compatException": false
     },

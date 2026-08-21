@@ -25,6 +25,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
+import { assembleReplayFrame } from "../../../../../packages/kernel/lib/m6-screen-frame.mjs";
 import { classifyHardRedlinePageRisk, evaluateHardRedline } from "./m6-hard-redline.mjs";
 import {
   GROUNDING_CHECK_NAMES,
@@ -32,7 +33,6 @@ import {
   computeBlockSetIntegritySha256,
   computeRedlinePolicySha256,
   deriveBlockId,
-  deriveFrameId,
   deriveGroundingDecisionId,
   fail,
   sha256Hex,
@@ -324,6 +324,12 @@ export function createGroundingRuntime({
 
   // freezeFrame: produce an execution-grade xw.screen-frame.v1 from captured
   // evidence. Unstable / partial / missing evidence must NOT become actionable.
+  //
+  // M6-2: manifest/frameId assembly delegates to the single shared canonical
+  // assembler (packages/kernel/lib/m6-screen-frame.mjs, mode "replay") so the
+  // offline and live paths can never drift into two manifest derivations. The
+  // evidence-store puts and field-source defaults stay here (runtime-owned); the
+  // assembler computes the exact same manifest string this module built before.
   function freezeFrame(observeInput = {}) {
     const errs = [];
     const a = observeInput.screenshotA;
@@ -347,60 +353,39 @@ export function createGroundingRuntime({
       capturedAt: observeInput.capturedAt,
     }));
 
-    // Stability: A and B must hash equally (no animation/transition in flight).
-    const screenshotASha256 = screenshotARef.sha256;
-    const screenshotBSha256 = screenshotBRef.sha256;
-    const stable = screenshotASha256 === screenshotBSha256;
+    // Stability: A and B must hash equal (no animation/transition in flight).
     const pageFingerprint = fingerprintOf(dump, "page");
     const focusFingerprint = fingerprintOf(focus, "focus");
-    const partial = observeInput.flags?.partial === true;
-    const missing = !a || !b || !dump || !focus || observeInput.flags?.missing === true;
-
     const linkage = observeInput.linkage || {};
     const width = Number(observeInput.width) || 1080;
     const height = Number(observeInput.height) || 2400;
     const orientation = observeInput.orientation === "landscape" ? "landscape" : "portrait";
     const density = Number(observeInput.density) || 3;
 
-    const manifestSha256 = sha256Hex(`xw.screen-frame.v1:manifest:${stableStringify({
-      observationRef, screenshotARef, screenshotBRef, dumpRef, focusRef,
-      screenshotASha256, screenshotBSha256, width, height, orientation, density,
-      capturedAt: observeInput.capturedAt, linkage, pageFingerprint, focusFingerprint,
-    })}`);
-    const frameId = deriveFrameId(manifestSha256);
-    const capturedMs = Date.parse(observeInput.capturedAt);
-    const expiresAt = new Date(capturedMs + frameTtlMs).toISOString().replace(/\.\d{3}/, ".000");
-
-    const frame = {
-      schemaId: "xw.screen-frame.v1",
-      frameId,
-      manifestSha256,
-      observationRef,
-      screenshotARef,
-      screenshotBRef,
-      dumpRef,
-      focusRef,
-      screenshotASha256,
-      screenshotBSha256,
+    const result = assembleReplayFrame({
+      evidence: {
+        screenshotA: screenshotARef,
+        screenshotB: screenshotBRef,
+        dump: dumpRef,
+        focus: focusRef,
+        observation: observationRef,
+      },
+      screenshotASha256: screenshotARef.sha256,
+      screenshotBSha256: screenshotBRef.sha256,
       width,
       height,
       orientation,
       density,
       capturedAt: observeInput.capturedAt,
-      expiresAt,
-      linkage: {
-        sessionId: linkage.sessionId || "sess-unknown",
-        leaseRef: linkage.leaseRef || "lease-unknown",
-        alias: linkage.alias || "00",
-        appId: linkage.appId || "app-unknown",
-      },
-      stability: {
-        verdict: stable ? "stable" : "unstable",
-        pageFingerprint,
-        focusFingerprint,
-      },
-      flags: { partial: Boolean(partial), missing: Boolean(missing) },
-    };
+      linkage,
+      pageFingerprint,
+      focusFingerprint,
+      stable: screenshotARef.sha256 === screenshotBRef.sha256,
+      flags: observeInput.flags,
+      frameTtlMs,
+    });
+    if (!result.ok) return { ok: false, errors: result.errors, frame: null };
+    const frame = result.frame;
 
     const valid = validateScreenFrame(frame);
     if (!valid.ok) {

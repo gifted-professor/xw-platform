@@ -1,0 +1,1 @@
+  mCurrentRotation=0 (ROTATION_0)

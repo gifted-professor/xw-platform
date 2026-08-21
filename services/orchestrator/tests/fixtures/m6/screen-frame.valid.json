@@ -44,5 +44,6 @@
   "flags": {
     "partial": false,
     "missing": false
-  }
+  },
+  "mode": "live_strict"
 }

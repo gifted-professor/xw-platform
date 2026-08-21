@@ -57,4 +57,25 @@ export class ControlClient {
   release(sessionId, token) {
     return this.#request("POST", `/control/v1/device-sessions/${encodeURIComponent(sessionId)}/release`, { body: {}, token });
   }
+
+  // --- M6-2 closed frame capture namespace --------------------------------
+  // These are the ONLY M6 client methods. The server enforces input closure
+  // (closedM6Input) and gate/profile fail-closed; the client just forwards the
+  // alias + scenarioLabel + idempotencyKey the caller typed. Never a coordinate,
+  // action token, or session token — the receipt carries no device secret.
+  m6Preflight(input = {}) {
+    return this.#request("POST", "/control/v1/m6/frames/preflight", { body: input });
+  }
+
+  m6Capture(input = {}) {
+    return this.#request("POST", "/control/v1/m6/frames/capture", { body: input });
+  }
+
+  m6Status(attemptId) {
+    return this.#request("GET", `/control/v1/m6/frames/status?attemptId=${encodeURIComponent(attemptId)}`);
+  }
+
+  m6Closeout(input = {}) {
+    return this.#request("POST", "/control/v1/m6/frames/closeout", { body: input });
+  }
 }

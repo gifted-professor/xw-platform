@@ -150,7 +150,7 @@ function publicGrantView(grant) {
 }
 
 export class ControlRouter {
-  constructor({ control, state, capabilities, evidence, delegationGrants = null, canaryEvidenceAuthorizer = null, nodeId = "DESKTOP-3I1EVHE" }) {
+  constructor({ control, state, capabilities, evidence, delegationGrants = null, canaryEvidenceAuthorizer = null, nodeId = "DESKTOP-3I1EVHE", m6 = null }) {
     this.control = control;
     this.state = state;
     this.capabilities = capabilities;
@@ -158,7 +158,23 @@ export class ControlRouter {
     this.delegationGrants = delegationGrants;
     this.canaryEvidenceAuthorizer = canaryEvidenceAuthorizer;
     this.nodeId = nodeId;
+    this.m6 = m6;
     this.liveProgressCache = new Map();
+  }
+
+  // M6-2 W5 closed input envelope: the M6 namespace accepts ONLY alias +
+  // scenarioLabel + idempotencyKey (+ optional closeout reason). Any other key —
+  // coordinates, shell text, URLs, device ids, session ids, tokens — is rejected
+  // before it can reach the facade.
+  closedM6Input(body) {
+    const input = requireBody(body);
+    const allowed = new Set(["alias", "scenarioLabel", "idempotencyKey", "reason"]);
+    for (const key of Object.keys(input)) {
+      if (!allowed.has(key)) {
+        throw new ControlPlaneError("M6_INPUT_CLOSED", `M6 requests accept only ${[...allowed].join(", ")}; got '${key}'`, { status: 400 });
+      }
+    }
+    return input;
   }
 
   attachLiveProgress(job, nowMs = Date.now()) {
@@ -537,6 +553,31 @@ export class ControlRouter {
         actorId: input.actorId ?? null,
       });
       return { status: 200, body: { paymentCommit: result } };
+    }
+
+    // M6-2 W5 — the ONLY M6 public surface: closed observe capture. These four
+    // routes accept no coordinates, shell text, URLs, device ids, session ids,
+    // or tokens; the facade resolves the alias server-side and every other
+    // failure is fail-closed. When the facade is not installed, the whole M6
+    // namespace refuses (503) — never a degraded fallback.
+    if (this.m6 && method === "POST" && path === "/control/v1/m6/frames/preflight") {
+      return { status: 200, body: { preflight: this.m6.preflight(this.closedM6Input(body)) } };
+    }
+    if (this.m6 && method === "POST" && path === "/control/v1/m6/frames/capture") {
+      return { status: 200, body: { receipt: await this.m6.capture(this.closedM6Input(body)) } };
+    }
+    if (this.m6 && method === "GET" && path === "/control/v1/m6/frames/status") {
+      return { status: 200, body: this.m6.status({ attemptId: query.get("attemptId") || "" }) };
+    }
+    if (this.m6 && method === "POST" && path === "/control/v1/m6/frames/closeout") {
+      return { status: 200, body: this.m6.closeout(this.closedM6Input(body)) };
+    }
+    if (path.startsWith("/control/v1/m6/")) {
+      throw new ControlPlaneError(
+        this.m6 ? "ROUTE_NOT_FOUND" : "M6_FACADE_UNAVAILABLE",
+        this.m6 ? `${method} ${path} not found` : "M6 frame capture is not installed in this runtime",
+        { status: this.m6 ? 404 : 503 },
+      );
     }
 
     throw new ControlPlaneError("ROUTE_NOT_FOUND", `${method} ${path} not found`, { status: 404 });

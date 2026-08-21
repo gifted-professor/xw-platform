@@ -7,6 +7,7 @@
   "additionalProperties": false,
   "required": [
     "schemaId",
+    "mode",
     "frameId",
     "manifestSha256",
     "observationRef",
@@ -28,6 +29,7 @@
   ],
   "properties": {
     "schemaId": { "const": "xw.screen-frame.v1" },
+    "mode": { "enum": ["replay", "live_strict"], "description": "Required, no default: live_strict is the only execution-grade mode; replay is never used for grounding." },
     "frameId": { "type": "string", "pattern": "^[0-9a-f]{64}$", "description": "Derived from the canonical frame manifest hash; safe to expose to the model." },
     "manifestSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
     "observationRef": { "$ref": "#/$defs/opaqueRef" },

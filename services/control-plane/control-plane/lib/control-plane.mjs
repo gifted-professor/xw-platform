@@ -886,6 +886,25 @@ export class ControlPlane {
     return { status: "running", mission, reused, run, approvalRequired: false };
   }
 
+  // M6-2 W5 — the single closed seam the M6 frame capture facade uses to execute
+  // a server-owned canary observation job inside an existing capability
+  // session/lease. Only xiaowei.m6.* capabilities pass; the seam never accepts
+  // caller coordinates/actions/shell and never returns tokens.
+  async m6RunFrameJob({ job, lease, onVerified = null }) {
+    if (!job?.jobId) throw new ControlPlaneError("M6_JOB_REQUIRED", "m6RunFrameJob requires a job", { status: 400 });
+    const row = this.state.requireJob(job.jobId);
+    const capability = row.capability;
+    if (!capability || !/^xiaowei\.m6\./.test(capability.id)) {
+      throw new ControlPlaneError("M6_JOB_SCOPE_INVALID", "m6RunFrameJob accepts only xiaowei.m6.* capabilities", { status: 403 });
+    }
+    if (row.canary !== true) {
+      throw new ControlPlaneError("M6_JOB_CANARY_REQUIRED", "M6 frame jobs must run under a canary session", { status: 403 });
+    }
+    const device = this.state.requireDevice(row.deviceId, { includeRuntime: true });
+    this.evidence.initializeRun({ job: row, device, ...this.capacityOpts(false) });
+    return this.#runJob(row, { lease, releaseLease: false, onVerified });
+  }
+
   async runStandingGrantCollectCanary({ actor, idempotencyKey, parentGrantId, sourceJobId, adapterReceiptId, controllerAgent = "agent:runner" }) {
     const sourceJob = this.state.getJob(sourceJobId);
     const parent = this.state.getDelegationGrantRecord(parentGrantId);

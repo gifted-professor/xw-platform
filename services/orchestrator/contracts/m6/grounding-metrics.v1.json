@@ -6,7 +6,7 @@
   "provider": {
     "id": "fixture-provider",
     "version": "1.0.0",
-    "modelSha256": "7da40e4053e566dc9f49505d75a74bd45650f788c0ee16d38a7ef9dd1a28511b"
+    "modelSha256": "b1f0124d31fefd520a89792ffc90c9fb0b8c7880b6813eee3f5ab66b60559af7"
   },
   "framesTotal": 208,
   "framesFrozen": 192,
@@ -44,6 +44,6 @@
     "evidenceIntegrity": true,
     "deterministic": true
   },
-  "groundingDecisionP95Ms": 1.09,
-  "receiptSha256": "9650355a97cfc5e7d042818436e270a5ad30ef86a5affc60a5b24a8a660fb6ed"
+  "groundingDecisionP95Ms": 1.213,
+  "receiptSha256": "3a3b9af327faa8b53696c0edfbcc831ed223e12cdfa1759941fd3e7c2980e1f2"
 }

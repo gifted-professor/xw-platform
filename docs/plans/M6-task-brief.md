@@ -263,6 +263,16 @@ replay、observe-only、single-alias、multi-alias 是执行模式/rollout stage
 
 真机退出门：每台至少 20 组稳定/不稳定样本；不稳定、空 dump、截图缺失、焦点变化都不得生成 actionable frame；最终 active lease/running job/pending approval=0。
 
+**M6-A2 离线部分（零 live，已落地 W1–W6，2026-08-21）**：
+
+- W1 契约 + W2 strict frame freezer + W3 fail-closed evidence store + W4 真实只读 Xiaowei adapter + W5 封闭 live gate + frame-capture facade + W6 CLI/CI/docs/release proof。全部并入一个可回滚 merge-commit PR（M6-A2），gate 保持 CLOSED。
+- 事实源：`services/control-plane/control-plane/lib/{m6-live-gate,m6-frame-capture}.mjs`、`packages/kernel/lib/m6-screen-frame.mjs`、`apps/xiaowei/read-observation.mjs`、`packages/cli/xw.mjs`（`xw m6 frame`）。
+- 关键命令（离线，无设备）：
+  - `npm run test:m6-2:offline`（控制平面 M6 5 个文件，94 项全绿）
+  - `npm run test:m6`、`npm run test:orchestrator`、`npm run fusion:verify`、`npm run kernel:check`、`npm run authority`、`npm run test:gate`
+  - `node packages/cli/xw.mjs cutover package --release-id <id>` + `cutover preflight --release <dir>` → 证明 `runtimeProfile=legacy_compat` + `agenticGroundingEnabled=true`（check id：`release:m6-2:runtime-profile` / `release:m6-2:agentic-grounding-enabled`）
+- 零 live 证据：`M6_AGENTIC_LIVE_GATE` 保持 CLOSED；gate/profile 不满足时 transport read count=0；M6 公开面只有 observe capture。
+
 ### M6-3 — 真实 DSH/Cordis 子进程与 replay tools（PR M6-B）
 
 交付：

@@ -14,7 +14,8 @@
       "graphV2Enabled": false,
       "multiAgentEnabled": false,
       "paymentCredentialRequiresHuman": true,
-      "paymentFinalCommitRequiresHuman": true
+      "paymentFinalCommitRequiresHuman": true,
+      "agenticGroundingEnabled": true
     }
   }
 }

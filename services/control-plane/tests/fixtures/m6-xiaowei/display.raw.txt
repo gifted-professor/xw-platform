@@ -1,0 +1,3 @@
+  init=1080x2400 440dpi cur=1080x2400 app=1080x2400 rng=1080x2400-1080x2400
+  mCurrentRotation=0 (ROTATION_0)
+  mBaseDisplayInfo=DisplayInfo{DisplayInfo{uniqueId "local", app 1080 x 2400, real 1080 x 2400, 440dpi, ...
