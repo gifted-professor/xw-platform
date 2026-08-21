@@ -102,6 +102,7 @@
     "control-plane": {
       "allowedBlobModified": [
         ".env.example",
+        ".gitignore",
         "apps/wechat/capabilities.json",
         "apps/xiaowei/adapter.mjs",
         "apps/xiaowei/capabilities.json",
