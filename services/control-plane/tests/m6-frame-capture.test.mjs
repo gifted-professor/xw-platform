@@ -30,6 +30,7 @@ import { StateStore } from "../control-plane/lib/state-store.mjs";
 import { ControlRouter } from "../control-plane/router.mjs";
 
 const tempBase = fileURLToPath(new URL("../control-plane/runtime", import.meta.url));
+mkdirSync(tempBase, { recursive: true });
 const FIX = (name) => readFileSync(join(import.meta.dirname, "fixtures", "m6-xiaowei", name));
 const SCREEN_A = FIX("screen-a.png");
 const SCREEN_B = FIX("screen-b.png");
