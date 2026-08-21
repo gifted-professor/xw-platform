@@ -72,6 +72,7 @@
         "tests/fixtures/m6/hard-redline-policy.valid.json",
         "tests/fixtures/m6/screen-frame.valid.json",
         "tests/fixtures/m6/tool-call.raw-coordinate.invalid.json",
+        "tests/fixtures/m6/visual-block-set.relabeled.invalid.json",
         "tests/fixtures/m6/visual-block-set.valid.json",
         "tests/fixtures/m6/visual-block.cross-frame.invalid.json",
         "tests/fixtures/m6/visual-block.valid.json",

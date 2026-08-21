@@ -4,7 +4,8 @@
   "issuer": {
     "kind": "user",
     "actorId": "user-local",
-    "issuedAt": "2026-08-20T09:59:00.000Z"
+    "issuedAt": "2026-08-20T09:59:00.000Z",
+    "authorizationRef": "authz-local-user-0001"
   },
   "goal": {
     "raw": "在小红书搜索攀岩笔记并打开前两个非广告结果",
@@ -47,6 +48,6 @@
   "notAfter": "2027-08-20T10:30:00.000Z",
   "hardRedlinePolicyRef": {
     "policyVersion": "1.0.0",
-    "policySha256": "2109c9adc6f7ba632872b2bb5e82db4a59dde43d0f754bb783aebbabc6d59f1c"
+    "policySha256": "06e11528195bebfd0a6241f3935523312782b0f3a9090db0b9a83ba0bb0bd42b"
   }
 }

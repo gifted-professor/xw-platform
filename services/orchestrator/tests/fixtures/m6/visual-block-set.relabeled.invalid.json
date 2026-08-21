@@ -37,6 +37,21 @@
       "category": "system-navigation",
       "confidence": 0.97,
       "source": "fused"
+    },
+    {
+      "schemaId": "xw.visual-block.v1",
+      "frameId": "38ea88b2f4c22f1e9703cd12eb79648c416af682debfcf8c39b6955c90d040f8",
+      "blockId": "300dd3ded8c034357fd66be735f6741fb0be6ae08b3fd6e9a99b52cda15f372e",
+      "stableIndex": 2,
+      "regionHash": "f02140bec116bf4e797204470db5c9e0abfddf980fd285be24c7d7f33c36bb8e",
+      "boundsRef": {
+        "id": "att-bounds-2",
+        "sha256": "97d5eaee775b5ddfba00370853d6070d2487571849fcacb834720f2a15b06fd3"
+      },
+      "label": "确认支付",
+      "category": "content",
+      "confidence": 0.97,
+      "source": "fused"
     }
   ],
   "integritySha256": "0821dbb666740c1a4a1d255eb28ccf492be1ce266e3b80e0689c491203cb0c5e"

@@ -6,6 +6,11 @@ import path from "node:path";
 import test from "node:test";
 
 import { evaluateHardRedline } from "../scripts/lib/m6/m6-hard-redline.mjs";
+import {
+  computeRedlinePolicySha256,
+  validateReplayCorpusManifest,
+  validateVisualAssetsLock,
+} from "../scripts/lib/m6/m6-contracts.mjs";
 import { checkDshInventory } from "../../../tools/m6/dsh-inventory-check.mjs";
 import { collectMatches, evaluateMatches, runGuard } from "../../../tools/m6/external-path-guard.mjs";
 import { buildBenchmark } from "../../../tools/m6/generate-autonomy-benchmark.mjs";
@@ -23,6 +28,7 @@ const assetLock = readJson("services/orchestrator/contracts/m6/visual-assets.loc
 const benchmark = readJson("services/orchestrator/contracts/m6/autonomy-benchmark.v1.json");
 const slo = readJson("services/orchestrator/contracts/m6/smoothness-slo.v1.json");
 const POLICY = readJson("services/orchestrator/tests/fixtures/m6/hard-redline-policy.valid.json");
+const POLICY_SHA = computeRedlinePolicySha256(POLICY);
 
 test("vision-inventory: every registered file exists and its sha256 matches", () => {
   assert.ok(inventory.files.length >= 10, "inventory must cover the vision surface");
@@ -123,10 +129,10 @@ test("autonomy-benchmark: >=100 unique non-redline tasks, all expecting autonomy
     assert.equal(task.expectedAutonomous, true, task.id);
     assert.ok(["replay", "authorized_test_account"].includes(task.scenario), task.id);
     // Family name must not be a hard-deny category.
-    assert.notEqual(evaluateHardRedline({ intent: task.actionFamily, policy: POLICY }), "HARD_STOP", task.id);
+    assert.notEqual(evaluateHardRedline({ intent: task.actionFamily, policy: POLICY, expectedPolicySha256: POLICY_SHA }).verdict, "HARD_STOP", task.id);
     // Intent text scanned as a block signal must not trip the redline either.
     assert.notEqual(
-      evaluateHardRedline({ intent: "tap", blockSignals: { ocrText: task.intent }, policy: POLICY }),
+      evaluateHardRedline({ intent: "tap", blockSignals: { ocrText: task.intent }, policy: POLICY, expectedPolicySha256: POLICY_SHA }).verdict,
       "HARD_STOP",
       task.id,
     );
@@ -154,16 +160,76 @@ test("dsh-inventory-check: fixture adapter conforms", () => {
   assert.ok(result.ok);
 });
 
-test("kernel schemas for asset lock and replay corpus exist with the hard requirements", () => {
-  const assetsSchema = readJson("packages/kernel/contracts/orchestration/m6/xw.visual-assets.lock.v1.schema.json");
-  assert.equal(assetsSchema.title, "xw.visual-assets.lock.v1");
-  const corpusSchema = readJson("packages/kernel/contracts/orchestration/m6/xw.replay-corpus-manifest.v1.schema.json");
-  assert.equal(corpusSchema.title, "xw.replay-corpus-manifest.v1");
-  const entry = corpusSchema.$defs.entry;
-  assert.equal(entry.properties.deidentified.const, true);
-  assert.deepEqual(entry.properties.origin.enum, ["synthetic", "authorized-capture"]);
-  assert.ok(entry.propertyNames.not.pattern.includes("token"));
-  assert.ok(entry.propertyNames.not.pattern.includes("balance"));
-  assert.ok(entry.propertyNames.not.pattern.includes("account"));
-  assert.ok(entry.propertyNames.not.pattern.includes("device"));
+test("visual-assets.lock: the real lock document passes its canonical schema", () => {
+  const result = validateVisualAssetsLock(assetLock);
+  assert.deepEqual(result.errors, []);
+  assert.equal(result.ok, true);
+});
+
+test("visual-assets.lock: tampered documents are invalid", () => {
+  const extra = structuredClone(assetLock);
+  extra.generatedBy = "unknown-process";
+  assert.equal(validateVisualAssetsLock(extra).ok, false);
+
+  // An unverified-license asset can never be marked as committed to the repo.
+  const committed = structuredClone(assetLock);
+  const external = committed.assets.find((asset) => asset.license.status === "unverified");
+  external.committedToRepo = true;
+  assert.equal(validateVisualAssetsLock(committed).ok, false);
+
+  // An in-repo asset without a real content hash is invalid.
+  const noHash = structuredClone(assetLock);
+  const inRepo = noHash.assets.find((asset) => asset.install.mode === "in-repo");
+  inRepo.sha256 = null;
+  assert.equal(validateVisualAssetsLock(noHash).ok, false);
+});
+
+function corpusManifest(entries) {
+  return {
+    schemaId: "xw.replay-corpus-manifest.v1",
+    schemaVersion: 1,
+    corpusId: "corpus-fixture",
+    createdAt: "2026-08-20T10:00:00.000Z",
+    entries,
+  };
+}
+
+function corpusEntry(overrides = {}) {
+  return {
+    entryId: "entry-0001",
+    kind: "frame",
+    sha256: "ab".repeat(32),
+    bytes: 1024,
+    source: "synthetic-generator",
+    license: "repo-internal",
+    deidentified: true,
+    origin: "synthetic",
+    ...overrides,
+  };
+}
+
+test("replay corpus manifest: valid documents pass the canonical schema and privacy scan", () => {
+  const result = validateReplayCorpusManifest(corpusManifest([corpusEntry()]));
+  assert.deepEqual(result.errors, []);
+  assert.equal(result.ok, true);
+});
+
+test("replay corpus manifest: deidentified/origin are hard requirements", () => {
+  const notDeidentified = corpusManifest([corpusEntry({ deidentified: false })]);
+  assert.equal(validateReplayCorpusManifest(notDeidentified).ok, false);
+
+  const wrongOrigin = corpusManifest([corpusEntry({ origin: "production-capture" })]);
+  assert.equal(validateReplayCorpusManifest(wrongOrigin).ok, false);
+});
+
+test("replay corpus manifest: sensitive fields are rejected wherever they appear", () => {
+  for (const key of ["accountId", "deviceId", "deviceSerial", "token", "balance", "cookie", "credential", "account_id"]) {
+    const doc = corpusManifest([corpusEntry({ [key]: "x" })]);
+    assert.equal(validateReplayCorpusManifest(doc).ok, false, key);
+  }
+  // Forbidden keys nested inside an allowed field are caught by the recursive scan.
+  const nested = corpusManifest([corpusEntry({ notes: "ok" })]);
+  nested.entries[0].notes = "ok";
+  nested.entries[0] = { ...nested.entries[0], detail: { device_serial: "emulator-5554" } };
+  assert.equal(validateReplayCorpusManifest(nested).ok, false);
 });

@@ -1,9 +1,11 @@
 // Static tool-call surface validation for the M6 model-facing tool bridge.
-// The model may only call the fixed M6 tool allowlist with opaque refs and structured
-// blocks; raw coordinates, ADB transport, shell, URLs, tokens, lease mutation, DB
-// access, payment values/credentials and raw screenshot base64 are rejected at both
-// the schema layer (unknown arg keys) and by a recursive field/value scan (unknown
-// nesting). Pure functions only: no device IO, no network, deterministic.
+// Every tool has a closed parameter spec: exact required keys, no additional keys,
+// and per-value type/format checks (opaque refs, 64-hex ids, bounded text/arrays).
+// On top of that, a recursive forbidden scan rejects raw coordinates, ADB transport,
+// shell, URLs, tokens, lease mutation, DB access, payment values/credentials and raw
+// screenshot base64 — key names are normalized (NFKC, lowercase, separators stripped)
+// before matching so snake_case/camelCase/kebab variants like payment_value, adbPort
+// or adb-port cannot slip through. Pure functions only: deterministic, no IO.
 import { fail } from "./m6-contracts.mjs";
 
 // The eight tool classes from the M6 task brief §6. Tests must import this constant
@@ -19,38 +21,101 @@ export const M6_TOOL_CLASSES = Object.freeze([
   "worker_lifecycle",
 ]);
 
-export const M6_TOOL_SURFACE = Object.freeze({
-  phone_observe: Object.freeze(["sessionRef"]),
-  phone_ground: Object.freeze(["frameRef", "blockId", "intent"]),
-  phone_act: Object.freeze(["groundingDecisionRef", "operationKey"]),
-  phone_verify: Object.freeze(["actionReceiptRef", "expectation"]),
-  checkpoint_save: Object.freeze(["stateRefs"]),
-  trace_query: Object.freeze(["traceId"]),
-  wait_human: Object.freeze(["reason", "evidenceRefs"]),
-  worker_start: Object.freeze(["workerRunRef"]),
-  worker_continue: Object.freeze(["workerRunRef", "checkpointRef"]),
-  worker_complete: Object.freeze(["workerRunRef", "outcome"]),
+const OPAQUE_REF_PATTERN = /^[a-z0-9][a-z0-9:_-]{7,127}$/;
+const HASH64_PATTERN = /^[0-9a-f]{64}$/;
+const INTENT_PATTERN = /^[a-z][a-z0-9_-]{1,63}$/;
+const OUTCOMES = Object.freeze(["SUCCEEDED", "FAILED", "AMBIGUOUS"]);
+
+function checkField(kind, value, path, errors, code) {
+  switch (kind) {
+    case "opaqueRef":
+      if (typeof value !== "string" || !OPAQUE_REF_PATTERN.test(value)) {
+        fail(errors, code, `${path} must be an opaque ref matching ${OPAQUE_REF_PATTERN}`);
+      }
+      break;
+    case "hash64":
+      if (typeof value !== "string" || !HASH64_PATTERN.test(value)) {
+        fail(errors, code, `${path} must be a 64-char lowercase hex hash`);
+      }
+      break;
+    case "intent":
+      if (typeof value !== "string" || !INTENT_PATTERN.test(value)) {
+        fail(errors, code, `${path} must be an intent token matching ${INTENT_PATTERN}`);
+      }
+      break;
+    case "text":
+      if (typeof value !== "string" || value.length < 1 || value.length > 500) {
+        fail(errors, code, `${path} must be a string of 1..500 chars`);
+      }
+      break;
+    case "refArray":
+      if (!Array.isArray(value) || value.length < 1 || value.length > 100) {
+        fail(errors, code, `${path} must be an array of 1..100 opaque refs`);
+        break;
+      }
+      value.forEach((item, index) => checkField("opaqueRef", item, `${path}[${index}]`, errors, code));
+      break;
+    case "outcome":
+      if (!OUTCOMES.includes(value)) {
+        fail(errors, code, `${path} must be one of ${OUTCOMES.join("|")}`);
+      }
+      break;
+    default:
+      fail(errors, code, `${path}: unknown field kind ${kind}`);
+  }
+}
+
+// Closed per-tool parameter specs: every listed key is required, no others allowed.
+const TOOL_ARG_SPECS = Object.freeze({
+  phone_observe: Object.freeze({ sessionRef: "opaqueRef" }),
+  phone_ground: Object.freeze({ frameRef: "hash64", blockId: "hash64", intent: "intent" }),
+  phone_act: Object.freeze({ groundingDecisionRef: "hash64", operationKey: "opaqueRef" }),
+  phone_verify: Object.freeze({ actionReceiptRef: "opaqueRef", expectation: "text" }),
+  checkpoint_save: Object.freeze({ stateRefs: "refArray" }),
+  trace_query: Object.freeze({ traceId: "opaqueRef" }),
+  wait_human: Object.freeze({ reason: "text", evidenceRefs: "refArray" }),
+  worker_start: Object.freeze({ workerRunRef: "opaqueRef" }),
+  worker_continue: Object.freeze({ workerRunRef: "opaqueRef", checkpointRef: "opaqueRef" }),
+  worker_complete: Object.freeze({ workerRunRef: "opaqueRef", outcome: "outcome" }),
 });
 
-export const M6_TOOL_NAMES = Object.freeze(Object.keys(M6_TOOL_SURFACE));
+export const M6_TOOL_SURFACE = Object.freeze(
+  Object.fromEntries(Object.entries(TOOL_ARG_SPECS).map(([tool, spec]) => [tool, Object.freeze(Object.keys(spec))])),
+);
 
-const FORBIDDEN_FIELD_NAMES = new Set([
-  "x", "y", "px", "py",
-  "normalizedx", "normalizedy", "normalizedcoordinate", "normalizedcoordinates",
-  "bounds", "rect", "rectangle", "coordinate", "coordinates",
-  "adbserial", "adbserver", "adbport", "serial", "server", "port",
+export const M6_TOOL_NAMES = Object.freeze(Object.keys(TOOL_ARG_SPECS));
+
+// Forbidden key detection after normalization (NFKC → lowercase → strip -/_):
+// exact matches catch bare coordinate keys, the pattern catches x1/y2-style pairs,
+// and substring terms catch every separator/casing variant (payment_value, adbPort…).
+const FORBIDDEN_EXACT_KEYS = new Set(["x", "y", "px", "py"]);
+const FORBIDDEN_COORD_KEY = /^[xy]\d*([xy]\d*)?$/;
+const FORBIDDEN_KEY_PARTS = Object.freeze([
+  "coordinate", "normalized", "bounds", "rect",
+  "adb", "serial", "server", "port",
   "shell", "cmd", "command", "exec",
-  "url", "httpurl", "httpsurl", "endpoint",
-  "token", "accesstoken", "secret", "password", "credential", "credentials",
-  "leasemutation", "mutatelease", "revokelease", "releaselease", "acquirelease",
-  "dbpath", "databasepath", "database", "query", "sql",
-  "paymentvalue", "amount", "price", "cardnumber", "paymentcredential",
-  "screenshotbase64", "imagebase64", "base64", "rawscreenshot",
+  "url", "http", "endpoint",
+  "token", "secret", "password", "credential", "cookie",
+  "lease",
+  "db", "sql", "database", "query",
+  "payment", "amount", "price", "cardnumber",
+  "base64", "screenshot",
 ]);
 
 const HTTP_URL_PATTERN = /^https?:\/\//i;
 const ADB_SERIAL_PATTERN = /^\d{1,3}(\.\d{1,3}){3}:\d{2,5}$/;
 const BASE64_BLOB_PATTERN = /^[A-Za-z0-9+/=]{512,}$/;
+
+function normalizeKey(key) {
+  return String(key).normalize("NFKC").toLowerCase().replace(/[-_]/g, "");
+}
+
+function isForbiddenKey(key) {
+  const normalized = normalizeKey(key);
+  if (FORBIDDEN_EXACT_KEYS.has(normalized)) return true;
+  if (FORBIDDEN_COORD_KEY.test(normalized)) return true;
+  return FORBIDDEN_KEY_PARTS.some((part) => normalized.includes(part));
+}
 
 function scanForbidden(value, path, errors, code) {
   if (Array.isArray(value)) {
@@ -59,7 +124,7 @@ function scanForbidden(value, path, errors, code) {
   }
   if (value && typeof value === "object") {
     for (const [key, child] of Object.entries(value)) {
-      if (FORBIDDEN_FIELD_NAMES.has(key.toLowerCase())) {
+      if (isForbiddenKey(key)) {
         fail(errors, code, `forbidden field at ${path}: ${key}`);
         continue;
       }
@@ -81,16 +146,21 @@ export function validateToolCall({ tool, args } = {}) {
     fail(errors, code, `tool is not in the M6 tool allowlist: ${tool}`);
     return { ok: false, errors };
   }
-  const allowedArgs = M6_TOOL_SURFACE[tool];
+  const spec = TOOL_ARG_SPECS[tool];
   const actualArgs = args === undefined ? {} : args;
   if (!actualArgs || typeof actualArgs !== "object" || Array.isArray(actualArgs)) {
     fail(errors, code, "args must be an object");
     return { ok: false, errors };
   }
+  for (const key of Object.keys(spec)) {
+    if (actualArgs[key] === undefined) fail(errors, code, `missing required argument for ${tool}: ${key}`);
+  }
   for (const key of Object.keys(actualArgs)) {
-    if (!allowedArgs.includes(key)) {
+    if (!Object.hasOwn(spec, key)) {
       fail(errors, code, `argument not allowed for ${tool}: ${key}`);
+      continue;
     }
+    checkField(spec[key], actualArgs[key], `$.args.${key}`, errors, code);
   }
   scanForbidden(actualArgs, "$.args", errors, code);
   return { ok: errors.length === 0, errors };

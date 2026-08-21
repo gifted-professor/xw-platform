@@ -22,6 +22,8 @@ export const M6_SCHEMA_FILES = Object.freeze({
   "xw.hard-redline-policy.v1": "xw.hard-redline-policy.v1.schema.json",
   "xw.grounded-action.receipt.v1": "xw.grounded-action.receipt.v1.schema.json",
   "xw.agentic-executor.v1": "xw.agentic-executor.v1.schema.json",
+  "xw.visual-assets.lock.v1": "xw.visual-assets.lock.v1.schema.json",
+  "xw.replay-corpus-manifest.v1": "xw.replay-corpus-manifest.v1.schema.json",
 });
 
 export const GROUNDING_CHECK_NAMES = Object.freeze([
@@ -91,16 +93,58 @@ export function deriveFrameId(manifestSha256) {
   return sha256Hex(`xw.screen-frame.v1:${manifestSha256}`);
 }
 
-export function deriveBlockId({ frameId, stableIndex, regionHash }) {
-  return sha256Hex(`xw.visual-block.v1:${frameId}:${stableIndex}:${regionHash}`);
+// Ids and integrity hashes bind the full canonical safety metadata, not just the
+// identifiers: relabeling a block or editing decision checks/policy invalidates them.
+export function deriveBlockId(block) {
+  return sha256Hex(`xw.visual-block.v1:${stableStringify({
+    frameId: block.frameId,
+    stableIndex: block.stableIndex,
+    regionHash: block.regionHash,
+    label: block.label,
+    category: block.category,
+  })}`);
 }
 
-export function computeBlockSetIntegritySha256(blocks) {
-  return sha256Hex(`xw.visual-block-set.v1:${blocks.map((block) => block.blockId).join(",")}`);
+export function computeBlockSetIntegritySha256(blockSet) {
+  return sha256Hex(`xw.visual-block-set.v1:${stableStringify({
+    frameId: blockSet.frameId,
+    segmentation: blockSet.segmentation,
+    ordering: blockSet.ordering,
+    blocks: (blockSet.blocks || []).map((block) => ({
+      frameId: block.frameId,
+      blockId: block.blockId,
+      stableIndex: block.stableIndex,
+      regionHash: block.regionHash,
+      boundsRef: block.boundsRef,
+      label: block.label,
+      category: block.category,
+      confidence: block.confidence,
+      source: block.source,
+    })),
+  })}`);
 }
 
-export function deriveGroundingDecisionId({ frameId, blockId, grantRef, intent, effectClass }) {
-  return sha256Hex(`xw.grounding-decision.v1:${frameId}:${blockId}:${grantRef}:${intent}:${effectClass}`);
+export function deriveGroundingDecisionId(decision) {
+  return sha256Hex(`xw.grounding-decision.v1:${stableStringify({
+    goalRef: decision.goalRef,
+    stepRef: decision.stepRef,
+    grantRef: decision.grantRef,
+    frameId: decision.frameId,
+    blockId: decision.blockId,
+    intent: decision.intent,
+    effectClass: decision.effectClass,
+    policyVersion: decision.policyVersion,
+    policySha256: decision.policySha256,
+    checks: decision.checks,
+  })}`);
+}
+
+// Canonical hash of a hard-redline policy document, excluding its self-referential
+// policySha256 field. Callers pin this value; a weakened policy with a stale hash
+// no longer matches.
+export function computeRedlinePolicySha256(policy) {
+  const { policySha256, ...rest } = policy || {};
+  return sha256Hex(`xw.hard-redline-policy.v1:${stableStringify(rest)}`);
 }
 
 function validateAgainstSchema(document, schemaId, code) {
@@ -176,8 +220,8 @@ export function validateVisualBlockSet(blockSet) {
     blockIds.add(block.blockId);
     stableIndexes.add(block.stableIndex);
   }
-  if (blockSet.integritySha256 !== computeBlockSetIntegritySha256(blockSet.blocks)) {
-    fail(errors, code, "integritySha256 does not match the block id list");
+  if (blockSet.integritySha256 !== computeBlockSetIntegritySha256(blockSet)) {
+    fail(errors, code, "integritySha256 does not match the canonical block metadata and segmentation provenance");
   }
   return { ok: errors.length === 0, errors };
 }
@@ -291,5 +335,57 @@ export function validateAgenticExecutor(executor, { allowedToolClasses } = {}) {
       }
     }
   }
+  return { ok: errors.length === 0, errors };
+}
+
+export function validateVisualAssetsLock(document) {
+  const code = "INVALID_M6_VISUAL_ASSETS_LOCK";
+  const errors = validateAgainstSchema(document, "xw.visual-assets.lock.v1", code);
+  return { ok: errors.length === 0, errors };
+}
+
+// Privacy guard for the replay corpus: the schema fixes the shape; sensitive keys
+// (account/device/serial/token/cookie/secret/password/balance/credential, in any
+// separator/casing variant) are rejected here by a recursive normalized key scan,
+// because the shared JSON Schema subset cannot express propertyNames patterns.
+const REPLAY_FORBIDDEN_KEY_PARTS = Object.freeze([
+  "account",
+  "device",
+  "serial",
+  "token",
+  "cookie",
+  "secret",
+  "password",
+  "balance",
+  "credential",
+]);
+
+function normalizeKey(key) {
+  return String(key).normalize("NFKC").toLowerCase().replace(/[-_]/g, "");
+}
+
+function scanReplayKeys(value, path, errors, code) {
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => scanReplayKeys(item, `${path}[${index}]`, errors, code));
+    return;
+  }
+  if (!value || typeof value !== "object") return;
+  for (const [key, child] of Object.entries(value)) {
+    const normalized = normalizeKey(key);
+    for (const part of REPLAY_FORBIDDEN_KEY_PARTS) {
+      if (normalized.includes(part)) {
+        fail(errors, code, `sensitive field is forbidden in the replay corpus at ${path}: ${key}`);
+        break;
+      }
+    }
+    scanReplayKeys(child, `${path}.${key}`, errors, code);
+  }
+}
+
+export function validateReplayCorpusManifest(document) {
+  const code = "INVALID_M6_REPLAY_CORPUS_MANIFEST";
+  const errors = validateAgainstSchema(document, "xw.replay-corpus-manifest.v1", code);
+  if (errors.length > 0) return { ok: false, errors };
+  scanReplayKeys(document.entries, "$.entries", errors, code);
   return { ok: errors.length === 0, errors };
 }

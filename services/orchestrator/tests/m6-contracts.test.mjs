@@ -6,6 +6,7 @@ import test from "node:test";
 import {
   checkReceiptLinkage,
   computeBlockSetIntegritySha256,
+  computeRedlinePolicySha256,
   deriveBlockId,
   deriveFrameId,
   deriveGroundingDecisionId,
@@ -52,7 +53,7 @@ test("valid screen frame passes; tampered, unstable, partial and expired frames 
   assert.equal(validateScreenFrame(missing).ok, false);
 });
 
-test("valid visual block passes; cross-frame reuse and raw coordinates are rejected", () => {
+test("valid visual block passes; cross-frame reuse, relabeling and raw coordinates are rejected", () => {
   const block = readFixture("visual-block.valid.json");
   assert.equal(validateVisualBlock(block).ok, true);
 
@@ -61,6 +62,14 @@ test("valid visual block passes; cross-frame reuse and raw coordinates are rejec
   assert.equal(result.ok, false);
   assert.match(result.errors.map((e) => e.message).join(";"), /derived|frame/i);
 
+  // Metadata tampering invalidates the derived block id.
+  const relabeled = structuredClone(block);
+  relabeled.category = "payment";
+  assert.equal(validateVisualBlock(relabeled).ok, false);
+  const renamed = structuredClone(block);
+  renamed.label = "确认支付";
+  assert.equal(validateVisualBlock(renamed).ok, false);
+
   for (const key of ["x", "y", "bounds", "normalizedX"]) {
     const leaked = structuredClone(block);
     leaked[key] = 0.5;
@@ -68,10 +77,24 @@ test("valid visual block passes; cross-frame reuse and raw coordinates are rejec
   }
 });
 
-test("valid block set passes; forged integrity hash, mixed frames and duplicate ids fail", () => {
+test("block set integrity covers full block metadata and segmentation provenance", () => {
   const blockSet = readFixture("visual-block-set.valid.json");
   assert.equal(validateVisualBlockSet(blockSet).ok, true);
-  assert.equal(blockSet.integritySha256, computeBlockSetIntegritySha256(blockSet.blocks));
+  assert.equal(blockSet.integritySha256, computeBlockSetIntegritySha256(blockSet));
+
+  // A payment block relabeled as content breaks the derived id and set integrity.
+  const relabeled = readFixture("visual-block-set.relabeled.invalid.json");
+  assert.equal(validateVisualBlockSet(relabeled).ok, false);
+
+  // Confidence/source edits without re-derivation are caught by the integrity hash.
+  const retouched = structuredClone(blockSet);
+  retouched.blocks[0] = { ...retouched.blocks[0], confidence: 0.1 };
+  assert.equal(validateVisualBlockSet(retouched).ok, false);
+
+  // Provider/version/model provenance is bound too.
+  const reprovidered = structuredClone(blockSet);
+  reprovidered.segmentation = { ...reprovidered.segmentation, provider: "other-provider" };
+  assert.equal(validateVisualBlockSet(reprovidered).ok, false);
 
   const forged = structuredClone(blockSet);
   forged.integritySha256 = sha256Hex("forged");
@@ -114,9 +137,23 @@ test("valid ALLOW_ONCE decision passes; forged results, ids and block bindings a
   stolen.intent = "scroll";
   assert.equal(validateGroundingDecision(stolen).ok, false);
 
+  // Policy or check edits invalidate the one-time id.
+  const swappedPolicy = structuredClone(decision);
+  swappedPolicy.policySha256 = sha256Hex("weakened-policy");
+  assert.equal(validateGroundingDecision(swappedPolicy).ok, false);
+  const editedChecks = structuredClone(decision);
+  editedChecks.checks = editedChecks.checks.map((c) => (c.name === "confidence" ? { ...c, result: "UNKNOWN" } : c));
+  editedChecks.result = "REPLAN";
+  delete editedChecks.groundingDecisionId;
+  assert.equal(validateGroundingDecision(editedChecks).ok, true);
+  const editedChecksAllow = structuredClone(editedChecks);
+  editedChecksAllow.result = "ALLOW_ONCE";
+  editedChecksAllow.groundingDecisionId = deriveGroundingDecisionId(editedChecksAllow);
+  assert.equal(validateGroundingDecision(editedChecksAllow).ok, false);
+
   // Forged block binding.
   const wrongBlock = structuredClone(block);
-  wrongBlock.blockId = deriveBlockId({ frameId: block.frameId, stableIndex: 99, regionHash: sha256Hex("r99") });
+  wrongBlock.blockId = deriveBlockId({ ...block, stableIndex: 99 });
   assert.equal(validateGroundingDecision(decision, { block: wrongBlock }).ok, false);
 
   // HARD_STOP decisions must not carry a reusable id.
@@ -126,9 +163,10 @@ test("valid ALLOW_ONCE decision passes; forged results, ids and block bindings a
   assert.equal(validateGroundingDecision(stopWithId).ok, false);
 });
 
-test("valid hard-redline policy passes; a policy missing a hard-deny category fails", () => {
+test("valid hard-redline policy passes and is self-pinned by its canonical hash", () => {
   const policy = readFixture("hard-redline-policy.valid.json");
   assert.equal(validateHardRedlinePolicy(policy).ok, true);
+  assert.equal(policy.policySha256, computeRedlinePolicySha256(policy));
 
   const weakened = structuredClone(policy);
   weakened.categories = weakened.categories.filter((category) => category.name !== "delete");

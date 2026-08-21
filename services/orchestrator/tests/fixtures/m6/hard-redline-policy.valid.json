@@ -1,7 +1,7 @@
 {
   "schemaId": "xw.hard-redline-policy.v1",
   "policyVersion": "1.0.0",
-  "policySha256": "2109c9adc6f7ba632872b2bb5e82db4a59dde43d0f754bb783aebbabc6d59f1c",
+  "policySha256": "06e11528195bebfd0a6241f3935523312782b0f3a9090db0b9a83ba0bb0bd42b",
   "categories": [
     {
       "name": "payment",

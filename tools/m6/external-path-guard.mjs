@@ -3,7 +3,7 @@
  * M6-0 static external-path guard.
  *
  * Scans source files under services/orchestrator, packages and integrations
- * (.mjs/.js/.ts/.json; node_modules, tests, fixtures and docs skipped) for
+ * (.mjs/.js/.ts/.json/.py/.ps1; node_modules, tests, fixtures and docs skipped) for
  * machine-external absolute paths: Windows drive paths (C:\, D:\), POSIX
  * /Users|/home|/Volumes roots, Python venv markers (.venv*) and site-packages.
  *
@@ -28,7 +28,7 @@ export const SCAN_ROOTS = Object.freeze([
 ]);
 export const DEFAULT_INVENTORY = "services/orchestrator/contracts/m6/vision-inventory.v1.json";
 
-const EXTENSIONS = new Set([".mjs", ".js", ".ts", ".json"]);
+const EXTENSIONS = new Set([".mjs", ".js", ".ts", ".json", ".py", ".ps1"]);
 const SKIP_SEGMENTS = new Set(["node_modules", "tests", "test", "fixtures", "docs", ".git"]);
 // The M6-0 contract data files literally register every baseline path; they are data, not source.
 const EXEMPT_PREFIXES = ["services/orchestrator/contracts/m6/"];

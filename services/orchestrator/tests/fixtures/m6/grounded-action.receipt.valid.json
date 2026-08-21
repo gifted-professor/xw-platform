@@ -12,14 +12,14 @@
   "operationKey": "opkey-0001",
   "grantRef": "grant_b748d507292b9be82619061f26f241b3",
   "beforeFrameRef": "38ea88b2f4c22f1e9703cd12eb79648c416af682debfcf8c39b6955c90d040f8",
-  "groundingDecisionRef": "7eb6a6946481599cc3ddbdc9e7d7078a8c6bd1e560d3ca152b72908996a87e68",
+  "groundingDecisionRef": "b8a0d501f4d6187c0a5e37ba312e7628ec8d76a87c780305be1ca4b4991f221d",
   "controlPlaneActionRef": "cp-action-0001",
   "ledgerRef": "ledger-0001",
   "afterFrameRef": "38ea88b2f4c22f1e9703cd12eb79648c416af682debfcf8c39b6955c90d040f8",
   "verificationRef": "verify-0001",
   "status": "VERIFIED",
   "policyVersion": "1.0.0",
-  "policySha256": "2109c9adc6f7ba632872b2bb5e82db4a59dde43d0f754bb783aebbabc6d59f1c",
-  "grantPolicySha256": "2109c9adc6f7ba632872b2bb5e82db4a59dde43d0f754bb783aebbabc6d59f1c",
+  "policySha256": "06e11528195bebfd0a6241f3935523312782b0f3a9090db0b9a83ba0bb0bd42b",
+  "grantPolicySha256": "06e11528195bebfd0a6241f3935523312782b0f3a9090db0b9a83ba0bb0bd42b",
   "implementationClosureSha256": "7279874b327a39d75a924639559d476baa3bafdc0b93ce47d524f3562b302311"
 }
