@@ -179,6 +179,6 @@ test("computeEffectiveScope fails closed when the intersection is empty or unbud
     limits: {},
     hardRedlineSet: [],
   });
-  assert.equal(redlineOnly.ok, true);
-  assert.deepEqual(redlineOnly.scope.intents, []);
+  assert.equal(redlineOnly.ok, false);
+  assert.match(redlineOnly.errors.map((e) => e.message || e).join(" "), /empty after intersection and hard-redline subtraction/);
 });

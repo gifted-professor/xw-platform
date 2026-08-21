@@ -157,6 +157,7 @@ export function computeEffectiveScope({ skillSpec, taskIntentSet, limits = {}, h
   });
   const dropped = taskIntentSet.filter((intent) => !intents.includes(intent));
 
+  if (intents.length === 0) fail(errors, code, "effective intent scope is empty after intersection and hard-redline subtraction");
   let apps = [...specApps];
   if (limitApps) apps = apps.filter((app) => limitApps.has(app));
   if (apps.length === 0) fail(errors, code, "effective app scope is empty after intersection");
