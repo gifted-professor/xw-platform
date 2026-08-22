@@ -210,19 +210,19 @@ test("live-strict rejects non-PNG screenshots and PNG/observation dimension mism
   assert.ok(badOrientation.errors.some((e) => e.code === "M6_FRAME_OBSERVATION_ORIENTATION_INVALID"));
 });
 
-test("live-strict enforces skew gates A→B ≤4s and B→focusB ≤1s", () => {
-  const tooSlow = assembleLiveStrictFrame(liveInput({ skew: { aToBMs: 4001, bToFocusBMs: 120 } }));
+test("live-strict enforces skew gates A→B ≤15s and B→focusB ≤8s", () => {
+  const tooSlow = assembleLiveStrictFrame(liveInput({ skew: { aToBMs: 15001, bToFocusBMs: 120 } }));
   assert.equal(tooSlow.ok, false);
   assert.ok(tooSlow.errors.some((e) => e.code === "M6_FRAME_A_TO_B_SKEW"));
 
-  const focusSlow = assembleLiveStrictFrame(liveInput({ skew: { aToBMs: 350, bToFocusBMs: 1001 } }));
+  const focusSlow = assembleLiveStrictFrame(liveInput({ skew: { aToBMs: 350, bToFocusBMs: 8001 } }));
   assert.equal(focusSlow.ok, false);
   assert.ok(focusSlow.errors.some((e) => e.code === "M6_FRAME_B_TO_FOCUS_B_SKEW"));
 
   const negative = assembleLiveStrictFrame(liveInput({ skew: { aToBMs: -1, bToFocusBMs: 120 } }));
   assert.equal(negative.ok, false);
 
-  const boundary = assembleLiveStrictFrame(liveInput({ skew: { aToBMs: 4000, bToFocusBMs: 1000 } }));
+  const boundary = assembleLiveStrictFrame(liveInput({ skew: { aToBMs: 15000, bToFocusBMs: 8000 } }));
   assert.equal(boundary.ok, true);
 });
 

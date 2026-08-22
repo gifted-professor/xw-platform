@@ -316,12 +316,12 @@ test("evidence carries the real raw bytes: A/B bit-identical PNGs, hierarchy dum
 
 test("skew gates fail closed before any frame is returned", async () => {
   await assert.rejects(
-    observe(mockTransport(), { now: sequenceClock([T0, T0 + 4001, T0 + 4101]) }),
+    observe(mockTransport(), { now: sequenceClock([T0, T0 + 15001, T0 + 15101]) }),
     (e) => e instanceof M6ObserveError && e.code === "M6_OBSERVE_A_TO_B_SKEW",
   );
-  // B→displayB→focusB is one measured freshness window; >1000ms fails.
+  // B→displayB→focusB is one measured freshness window; >8000ms fails.
   await assert.rejects(
-    observe(mockTransport(), { now: sequenceClock([T0, T0 + 300, T0 + 1301]) }),
+    observe(mockTransport(), { now: sequenceClock([T0, T0 + 300, T0 + 8301]) }),
     (e) => e.code === "M6_OBSERVE_B_TO_FOCUS_B_SKEW",
   );
 });

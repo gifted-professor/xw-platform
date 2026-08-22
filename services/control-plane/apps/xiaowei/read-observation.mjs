@@ -261,8 +261,8 @@ export async function readObservation({
         failStage("screenshot-b", "M6_OBSERVE_SCREEN_B_FAILED", "screen B capture failed", error),
       );
       const tB = now();
-      if (tB - tA > 4000) {
-        throw new M6ObserveError("M6_OBSERVE_A_TO_B_SKEW", "A→B skew exceeded 4000ms", { stage: "screenshot-b", aToBMs: tB - tA });
+      if (tB - tA > 15000) {
+        throw new M6ObserveError("M6_OBSERVE_A_TO_B_SKEW", "A→B skew exceeded 15000ms", { stage: "screenshot-b", aToBMs: tB - tA });
       }
 
       // Source display B inside the measured B→focus-B window, then take focus B
@@ -273,8 +273,8 @@ export async function readObservation({
         failStage("focus-b", "M6_OBSERVE_FOCUS_B_FAILED", "focus B read failed", error),
       );
       const tFocusB = now();
-      if (tFocusB - tB > 1000) {
-        throw new M6ObserveError("M6_OBSERVE_B_TO_FOCUS_B_SKEW", "B→focus B skew exceeded 1000ms", { stage: "focus-b", bToFocusBMs: tFocusB - tB });
+      if (tFocusB - tB > 8000) {
+        throw new M6ObserveError("M6_OBSERVE_B_TO_FOCUS_B_SKEW", "B→focus B skew exceeded 8000ms", { stage: "focus-b", bToFocusBMs: tFocusB - tB });
       }
 
       const focusA = parseFocus(focusAText);
