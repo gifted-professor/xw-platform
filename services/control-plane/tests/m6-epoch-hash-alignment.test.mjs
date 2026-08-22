@@ -46,6 +46,8 @@ function rawEpoch(overrides = {}) {
     expiresAt: "2026-08-23T00:00:00.000Z",
     parentEpochHash: null,
     closeoutRef: null,
+    aggregateSealRef: null,
+    rollbackTargetEpochHash: null,
     ...overrides,
   };
 }

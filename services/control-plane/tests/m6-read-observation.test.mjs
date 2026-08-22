@@ -189,6 +189,10 @@ test("field parsers read the raw fixtures (source of truth is device text)", () 
   assert.equal(parseInputShown("  mInputShown=true\n"), true);
   assert.equal(parseInputShown(""), null);
   assert.equal(parseRotation("  mCurrentRotation=1 (ROTATION_90)\n"), 1);
+  assert.equal(orientationFromRotation(0), "portrait");
+  assert.equal(orientationFromRotation(1), "landscape");
+  assert.equal(orientationFromRotation(2), "portrait");
+  assert.equal(orientationFromRotation(3), "landscape");
   assert.equal(parseRotation("garbage"), null);
   const metrics = parseDisplayMetrics(DISPLAY.toString("utf8"));
   assert.deepEqual(metrics, { width: 1080, height: 2400, density: 440, rotation: 0, orientation: "portrait" });
@@ -288,9 +292,9 @@ test("skew gates fail closed before any frame is returned", async () => {
     observe(mockTransport(), { now: sequenceClock([T0, T0 + 4001, T0 + 4101]) }),
     (e) => e instanceof M6ObserveError && e.code === "M6_OBSERVE_A_TO_B_SKEW",
   );
-  // B→focusB >= 1000ms fails (strict boundary is 1000ms exclusive).
+  // B→displayB→focusB is one measured freshness window; >1000ms fails.
   await assert.rejects(
-    observe(mockTransport(), { now: sequenceClock([T0, T0 + 300, T0 + 1300]) }),
+    observe(mockTransport(), { now: sequenceClock([T0, T0 + 300, T0 + 1301]) }),
     (e) => e.code === "M6_OBSERVE_B_TO_FOCUS_B_SKEW",
   );
 });

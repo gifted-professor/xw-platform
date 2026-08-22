@@ -7,6 +7,7 @@
 // No ambient clock — the caller injects nowMs. Nothing here reads a device, a
 // session, a lease, or the filesystem.
 import { canonicalJson, sha256 } from "./canonical.mjs";
+import { deriveM6AggregateSealHash } from "../../../../packages/kernel/lib/m6-aggregate-closeout.mjs";
 
 export const M6_GATE_MODES = Object.freeze(["CLOSED", "OBSERVE_ONLY"]);
 export const M6_GATE_MODE_FAIL_CLOSED = "CLOSED";
@@ -60,8 +61,23 @@ export function resolveM6Closeout(closeoutRef, closeouts = {}) {
   if (!record || typeof record !== "object") return { ok: false, reason: "M6_GATE_CLOSEOUT_MISSING" };
   const stored = typeof record.closeoutHash === "string" ? record.closeoutHash : record.sha256 || null;
   const derived = deriveM6CloseoutHash(record);
-  if (!stored || stored !== derived) return { ok: false, reason: "M6_GATE_CLOSEOUT_FORGED" };
+  const referencedSha = closeoutRef && typeof closeoutRef === "object" && !("closeoutHash" in closeoutRef)
+    ? closeoutRef.sha256
+    : null;
+  if (!stored || stored !== derived || (referencedSha != null && referencedSha !== derived)) {
+    return { ok: false, reason: "M6_GATE_CLOSEOUT_FORGED" };
+  }
   return { ok: true, closeout: record };
+}
+
+export function resolveM6AggregateSeal(aggregateSealRef, aggregates = {}) {
+  const id = typeof aggregateSealRef === "string" ? aggregateSealRef : aggregateSealRef?.id;
+  const record = (aggregates && typeof aggregates === "object" && aggregates[id]) || null;
+  if (!record || typeof record !== "object") return { ok: false, reason: "M6_GATE_AGGREGATE_MISSING" };
+  const derived = deriveM6AggregateSealHash(record.sealPayload);
+  if (!/^[0-9a-f]{64}$/.test(record.sealHash ?? "")) return { ok: false, reason: "M6_GATE_AGGREGATE_FORGED" };
+  if (record.sealHash !== derived || aggregateSealRef?.sha256 !== derived) return { ok: false, reason: "M6_GATE_AGGREGATE_FORGED" };
+  return { ok: true, aggregate: record };
 }
 
 // Deterministic, fail-closed evaluation of the epoch chain. The tail epoch is the
@@ -69,6 +85,7 @@ export function resolveM6Closeout(closeoutRef, closeouts = {}) {
 export function evaluateM6Gate({
   chain = [],
   closeouts = {},
+  aggregates = {},
   nowMs,
   expectedRelease = null, // { releaseId, sourceCommit } — drift fails closed
   lockHashes = null,      // { runtimeProfile, hardRedlinePolicy, groundingRuntime }
@@ -117,6 +134,20 @@ export function evaluateM6Gate({
     if (epoch.mode === "CLOSED" && !epoch.closeoutRef) {
       return reject("M6_GATE_CLOSEOUT_FORGED", `epoch ${i} CLOSED mode must reference a closeout receipt`);
     }
+    if (epoch.mode === "CLOSED" && !epoch.aggregateSealRef) {
+      return reject("M6_GATE_AGGREGATE_FORGED", `epoch ${i} CLOSED mode must reference an aggregate seal`);
+    }
+    if (epoch.mode === "OBSERVE_ONLY" && (epoch.closeoutRef || epoch.aggregateSealRef || epoch.rollbackTargetEpochHash)) {
+      return reject("M6_GATE_EPOCH_FORGED", `epoch ${i} OBSERVE_ONLY mode carries CLOSED-only bindings`);
+    }
+    if (epoch.mode === "CLOSED") {
+      const closeout = resolveM6Closeout(epoch.closeoutRef, closeouts);
+      const aggregate = resolveM6AggregateSeal(epoch.aggregateSealRef, aggregates);
+      if (!closeout.ok) return reject("M6_GATE_CLOSEOUT_FORGED", `epoch ${i} closeout is missing or forged`);
+      if (!aggregate.ok || aggregate.aggregate.epochHash !== closeout.closeout.epochHash) {
+        return reject("M6_GATE_AGGREGATE_FORGED", `epoch ${i} aggregate seal is missing, forged, or bound to another observe epoch`);
+      }
+    }
     // Expiry is a required security-relevant field: a missing/invalid/expired
     // expiresAt fails closed. Absent expiry is NOT treated as "never expires".
     if (typeof epoch.expiresAt !== "string" || epoch.expiresAt === "") {
@@ -160,16 +191,8 @@ export function evaluateM6Gate({
     previousHash = epoch.epochHash;
   }
   const activeEpoch = chain[chain.length - 1];
-  // A sealed epoch (valid closeout) is closed regardless of its declared mode.
+  // A CLOSED tail is already fully resolved above and therefore remains closed.
   if (activeEpoch.closeoutRef) {
-    const seal = resolveM6Closeout(activeEpoch.closeoutRef, closeouts);
-    if (!seal.ok) {
-      return gateResult({
-        activeEpochHash: activeEpoch.epochHash,
-        activeEpoch,
-        errors: [{ code: "M6_GATE_CLOSEOUT_FORGED", message: "active epoch closeout is missing or forged" }],
-      });
-    }
     return gateResult({ activeEpochHash: activeEpoch.epochHash, activeEpoch });
   }
   const mode = activeEpoch.mode === "OBSERVE_ONLY" ? "OBSERVE_ONLY" : M6_GATE_MODE_FAIL_CLOSED;

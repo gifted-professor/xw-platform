@@ -353,6 +353,8 @@ test("valid live gate epoch passes; CLOSED/closeout and parent-chain invariants 
     expiresAt: "2026-08-21T02:00:00.000Z",
     parentEpochHash: null,
     closeoutRef: null,
+    aggregateSealRef: null,
+    rollbackTargetEpochHash: null,
   };
   base.epochHash = deriveM6LiveGateEpochHash(base);
   assert.equal(validateM6LiveGate(base).ok, true);
@@ -370,6 +372,7 @@ test("valid live gate epoch passes; CLOSED/closeout and parent-chain invariants 
   closed.status = "closed";
   closed.expiresAt = "2026-08-21T02:00:00.000Z";
   closed.closeoutRef = { id: "closeout-0001", sha256: "6".repeat(64) };
+  closed.aggregateSealRef = { id: "aggregate-0001", sha256: "7".repeat(64) };
   closed.epochHash = deriveM6LiveGateEpochHash(closed);
   assert.equal(validateM6LiveGate(closed).ok, true);
 

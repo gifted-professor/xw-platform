@@ -233,11 +233,13 @@ export function createControlPlaneRuntime({
     // gateId (test/inline path) the caller-supplied gate + lockHashes are used
     // as-is. Either way the facade requires non-null lockHashes (fail closed).
     let gate = m6Gate;
+    let gateProvider = null;
     let resolvedLockHashes = m6LockHashes;
     if (m6GateId) {
       const issuerAllowlist = m6IssuerAllowlistPath || join(m6RootPath, "m6-gate", "issuer-keys.json");
-      const loaded = loadM6Gate({ m6Root: m6RootPath, gateId: m6GateId, issuerAllowlistPath: issuerAllowlist });
-      gate = { chain: loaded.chain, closeouts: loaded.closeouts };
+      gateProvider = () => loadM6Gate({ m6Root: m6RootPath, gateId: m6GateId, issuerAllowlistPath: issuerAllowlist });
+      const loaded = gateProvider();
+      gate = { chain: loaded.chain, closeouts: loaded.closeouts, aggregates: loaded.aggregates };
       resolvedLockHashes = loaded.lockHashes;
     }
     m6 = createM6FrameCapture({
@@ -247,6 +249,7 @@ export function createControlPlaneRuntime({
       evidence: m6Evidence,
       auditRoot: join(m6RootPath, "m6-audit"),
       gate,
+      gateProvider,
       release: { releaseId: releaseIdentity.releaseId, sourceCommit: releaseIdentity.sourceCommit },
       profile,
       devices: { findByAlias: (alias) => runtimeState.listDevices().find((d) => d.alias === alias) || null },

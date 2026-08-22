@@ -17,11 +17,11 @@ The nine prerequisite items and where each closed:
 | 2 | fail-open on missing release/source/lock/expiry | `m6-frame-capture.mjs` requires non-null `lockHashes` when enabled; loader fails closed (`M6_LOCKS_MISSING`) |
 | 3 | production config loader, canonical evidence root, health/preflight proof | `control-plane/lib/m6-gate-loader.mjs`; `/control/v1/health` carries the `m6` block; `xw m6 frame preflight` |
 | 4 | `xw m6 frame` route + public closeout inputs | `packages/cli/xw.mjs` (`frame` namespace), `m6-frame-capture.mjs` closeout |
-| 5 | schema-valid capture receipt + four-machine aggregate closeout verifier | `packages/kernel/lib/m6-aggregate-closeout.mjs` + `xw m6 epoch aggregate-closeout` |
-| 6 | manifest-commit gate-drift re-check | capture re-verifies the frame against its own manifest before accept (see #8) |
-| 7 | job/session/lease cleanup failure fails capture/closeout | `M6_CLEANUP_FAILED` / `M6_CLOSEOUT_CONVERGENCE_FAILED` (`state-store.sessionExists/leaseExists`) |
-| 8 | ScreenFrame manifest integrity + independent A/B observation | `kernel/lib/m6-screen-frame.mjs` `verifyFrameManifest`; slot-swap/forgery/focus-stability/page-fingerprint re-derivation |
-| 9 | epoch mint/activate/close with dry-run, immutability, signature/hash verify, rollback | `control-plane/lib/m6-epoch.mjs` + `xw m6 epoch *` CLI |
+| 5 | schema-valid capture receipt + frozen 4×20 aggregate closeout oracle | `packages/kernel/lib/m6-aggregate-closeout.mjs` + `xw m6 epoch aggregate-closeout` |
+| 6 | live gate reload + commit-time drift re-check | preflight/capture/commit/health reload the signed disk state; a close or rollback is visible without restart |
+| 7 | cleanup is part of the accepted-frame transaction | cleanup failure emits a rejected tombstone and no consumable frame; accepted TTL/receipt time is recomputed after convergence |
+| 8 | ScreenFrame manifest integrity + independent A/B observation | manifest binds mode/expiry/stability/flags and all evidence refs; quarter-turn rotation and B-time display freshness are verified |
+| 9 | epoch mint/activate/close with dry-run, aggregate binding, signature/hash verify, append-only rollback | `control-plane/lib/m6-epoch.mjs` + `xw m6 epoch *` CLI |
 
 ## Key layout (runtime root)
 
@@ -31,7 +31,7 @@ The nine prerequisite items and where each closed:
     issuer-keys.json          ed25519 issuer allowlist (public keys only)
     locks.v1.json             release-pinned lock hashes (written by release pipeline)
     <gate-id>/epochs/<hash>.json      immutable epoch chain
-    <gate-id>/state.json              active pointer (activate = atomic swap)
+    <gate-id>/current.json            active append-only chain pointer (activate = atomic swap)
     <gate-id>/aggregate/<sealHash>.json   aggregate closeout seal
   m6-audit/<attemptId>.json           { receipt, frame } per attempt
   m6-audit/<attemptId>.closeout.json  { closeout } per attempt
@@ -102,33 +102,43 @@ job/session/lease has not converged (`M6_CLOSEOUT_CONVERGENCE_FAILED`).
 
 ```bash
 node packages/cli/xw.mjs m6 epoch aggregate-closeout \
-  --gate-id m6-gate --audit-root <XW_RUNTIME_ROOT>/m6-audit
+  --gate-id m6-gate --audit-root <XW_RUNTIME_ROOT>/m6-audit \
+  --scenario-manifest <prewritten-scenarios.json> \
+  --resource-snapshot <independent-resources.json>
 ```
 
-Runs the pure four-alias verifier over `{receipt, closeout}` pairs:
-every allowlist alias exactly once accepted (`M6_AGGREGATE_ALIAS_MISSING` /
-`_DUPLICATE`), every hash re-derived (`M6_AGGREGATE_CLOSEOUT_FORGED`),
-run/job uniqueness (`_RUN_DUPLICATE` / `_JOB_DUPLICATE`), no unsealed attempt
-(`M6_AGGREGATE_UNSEALED`), no orphan closeouts (`_CLOSEOUT_ORPHAN`). With
-`--yes` it writes the immutable aggregate seal
+Runs the pure verifier over the complete pre-written matrix: exactly four
+allowlisted aliases, exactly 20 unique scenarios per alias (80 total), frozen
+stable→accepted and unstable→rejected expectations, unique attempt/run/job
+attribution, a closeout for every attempt, and no unplanned attempt. Each
+scenario must declare `zeroAction:true`. The separately captured resource proof
+must bind the same epoch, hash cleanly, record `actionCount=0`, and show
+`activeJobs/activeSessions/activeLeases=0` both before and after. Stable receipts
+must carry complete stable frames; unstable receipts must carry a recognized
+instability rejection code. With `--yes` the command writes the immutable seal
 `m6-gate/<gate-id>/aggregate/<sealHash>.json`.
 
 ### 6. Close the epoch / rollback
 
 ```bash
 node packages/cli/xw.mjs m6 epoch close --gate-id m6-gate --reason R \
-  --key-file priv.pem --key-id K --yes
-node packages/cli/xw.mjs m6 epoch rollback --gate-id m6-gate --to H --promoted-at ISO --yes
+  --aggregate-seal H --key-file priv.pem --key-id K --yes
+node packages/cli/xw.mjs m6 epoch rollback --gate-id m6-gate --to CLOSED_H \
+  --key-file priv.pem --key-id K --promoted-at ISO --yes
 ```
 
-Rollback appends a new active epoch whose parent is the target — history is
-never rewritten.
+`close` refuses zero/partial matrices: the referenced seal must re-derive, bind
+the active OBSERVE_ONLY epoch and contain all 80 attempts. The resulting signed
+CLOSED epoch hashes both its per-epoch closeout and aggregate seal references.
+Rollback may target only a prior CLOSED epoch and appends a newly signed CLOSED
+epoch with `rollbackTargetEpochHash`; it never restores an old pointer or
+re-activates an OBSERVE_ONLY tail.
 
 ## Tests / CI
 
 ```bash
-npm run test:m6-2:offline   # W1-W7 surface (105 tests)
-npm run test:m6-2:epoch     # W8 epoch/loader/aggregate/manifest/CLI (64+ tests)
+npm run test:m6-2:offline   # W1-W7 surface (106 tests)
+npm run test:m6-2:epoch     # W8 epoch/loader/aggregate/manifest/CLI (60+ tests)
 npm run check               # node --check over all touched files
 npm run fusion:verify       # tree-integrity gate (allowlist covers new files)
 ```

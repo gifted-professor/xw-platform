@@ -24,7 +24,12 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { assembleLiveStrictFrame, focusStableFieldsHash, verifyFrameManifest } from "../../../../packages/kernel/lib/m6-screen-frame.mjs";
+import {
+  assembleLiveStrictFrame,
+  focusStableFieldsHash,
+  M6_FRAME_CONSTANTS,
+  verifyFrameManifest,
+} from "../../../../packages/kernel/lib/m6-screen-frame.mjs";
 import { canonicalJson, newId, sha256 } from "./canonical.mjs";
 import { ControlPlaneError } from "./errors.mjs";
 import { validateJsonSchema } from "./json-schema-validator.mjs";
@@ -37,6 +42,7 @@ export const M6_SERVER_ACTOR = "agent:m6-facade";
 export const M6_SCENARIO_LABELS = Object.freeze(["observe"]);
 export const M6_ALIAS_PATTERN = /^[A-Za-z0-9._-]{1,64}$/;
 export const M6_IDEMPOTENCY_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
+export const M6_SCENARIO_PATTERN = /^observe(?:[._-][A-Za-z0-9._-]{1,56})?$/;
 
 export class M6FrameCaptureError extends ControlPlaneError {
   constructor(code, message, extra = {}) {
@@ -165,6 +171,7 @@ export function createM6FrameCapture({
   evidence,          // M6FrameEvidenceStore (CAS frame blobs)
   auditRoot,         // directory for attempt/closeout records
   gate = { chain: [], closeouts: {} },
+  gateProvider = null, // production: reloads signed gate + locks from disk per decision
   release = null,    // { releaseId, sourceCommit } — gate drift check
   profile = null,    // { runtimeProfile, agenticGroundingEnabled } — immutable release profile
   devices = null,    // { findByAlias(alias) } — server-side alias resolution
@@ -191,10 +198,34 @@ export function createM6FrameCapture({
     ? (alias) => devices.findByAlias(alias) || null
     : (alias) => state.listDevices().find((d) => d.alias === alias) ?? null;
 
+  function currentGateSnapshot() {
+    const loaded = typeof gateProvider === "function" ? gateProvider() : null;
+    const snapshot = loaded
+      ? { chain: loaded.chain, closeouts: loaded.closeouts, aggregates: loaded.aggregates ?? {}, lockHashes: loaded.lockHashes }
+      : { chain: gate.chain, closeouts: gate.closeouts, aggregates: gate.aggregates ?? {}, lockHashes };
+    if (!snapshot.lockHashes || typeof snapshot.lockHashes !== "object") {
+      throw new M6FrameCaptureError("M6_LOCK_HASHES_REQUIRED", "fresh M6 gate snapshot has no pinned lock hashes", { status: 503 });
+    }
+    for (const kind of M6_GATE_LOCK_KINDS) {
+      if (typeof snapshot.lockHashes[kind] !== "string" || !/^[0-9a-f]{64}$/.test(snapshot.lockHashes[kind])) {
+        throw new M6FrameCaptureError("M6_LOCK_HASHES_REQUIRED", `fresh M6 gate snapshot lockHashes.${kind} is invalid`, { status: 503 });
+      }
+    }
+    return snapshot;
+  }
+
   // Fail-closed gate + profile evaluation. Called BEFORE any lease/session/read
   // resource exists; nothing here touches a device or the transport.
   function resolveGate(alias, nowMs) {
-    const result = evaluateM6Gate({ chain: gate.chain, closeouts: gate.closeouts, nowMs, expectedRelease: release, lockHashes });
+    const snapshot = currentGateSnapshot();
+    const result = evaluateM6Gate({
+      chain: snapshot.chain,
+      closeouts: snapshot.closeouts,
+      aggregates: snapshot.aggregates,
+      nowMs,
+      expectedRelease: release,
+      lockHashes: snapshot.lockHashes,
+    });
     if (result.errors.length > 0) {
       throw new M6FrameCaptureError(result.errors[0].code, `M6 live gate failed closed: ${result.errors[0].message}`, {
         status: 409,
@@ -216,7 +247,7 @@ export function createM6FrameCapture({
     if (!m6AliasAllowed(alias, result.activeEpoch)) {
       throw new M6FrameCaptureError("M6_ALIAS_NOT_ALLOWED", `alias '${alias}' is not in the active epoch allowlist`, { status: 403 });
     }
-    return { mode: result.mode, epochHash: result.activeEpochHash, epoch: result.activeEpoch };
+    return { mode: result.mode, epochHash: result.activeEpochHash, epoch: result.activeEpoch, lockHashes: snapshot.lockHashes };
   }
 
   // The M6 observe capability must be the closed contract: empty params, R0,
@@ -239,10 +270,7 @@ export function createM6FrameCapture({
   // first.
   function preflight({ alias, scenarioLabel } = {}) {
     const a = requireString(alias, "alias", "M6_ALIAS_INVALID", M6_ALIAS_PATTERN);
-    const s = requireString(scenarioLabel ?? "observe", "scenarioLabel", "M6_SCENARIO_LABEL_INVALID", /^[A-Za-z0-9._-]{0,64}$/);
-    if (!M6_SCENARIO_LABELS.includes(s)) {
-      throw new M6FrameCaptureError("M6_SCENARIO_LABEL_INVALID", `scenarioLabel must be one of ${M6_SCENARIO_LABELS.join(", ")}`, { status: 400 });
-    }
+    const s = requireString(scenarioLabel ?? "observe", "scenarioLabel", "M6_SCENARIO_LABEL_INVALID", M6_SCENARIO_PATTERN);
     const gateState = resolveGate(a, now());
     requireObserveCapability();
     const device = resolveDevice(a);
@@ -275,26 +303,46 @@ export function createM6FrameCapture({
       auditRootWritable,
       releaseLoaded,
       epochActive: gateState.mode === "OBSERVE_ONLY",
-      locksPinned: Boolean(lockHashes),
+      locksPinned: Boolean(gateState.lockHashes),
     };
   }
 
   // #3: a read-only M6 health snapshot for /control/v1/health. No device I/O.
   function health(nowMs) {
     const t = Number.isFinite(nowMs) ? nowMs : now();
-    const result = evaluateM6Gate({ chain: gate.chain, closeouts: gate.closeouts, nowMs: t, expectedRelease: release, lockHashes });
+    let snapshot;
+    let result;
+    try {
+      snapshot = currentGateSnapshot();
+      result = evaluateM6Gate({ chain: snapshot.chain, closeouts: snapshot.closeouts, aggregates: snapshot.aggregates, nowMs: t, expectedRelease: release, lockHashes: snapshot.lockHashes });
+    } catch (error) {
+      return {
+        enabled: true,
+        gateMode: "CLOSED",
+        activeEpochHash: null,
+        epochCount: 0,
+        allowlist: [],
+        evidenceRootWritable: probeWritable(evidence.root),
+        auditRootWritable: probeWritable(auditRoot),
+        releaseId: release?.releaseId ?? null,
+        sourceCommit: release?.sourceCommit ?? null,
+        locksPinned: false,
+        profile: profile?.runtimeProfile ?? null,
+        gateErrors: [error?.code ?? "M6_GATE_RELOAD_FAILED"],
+      };
+    }
     const active = result.activeEpoch || null;
     return {
       enabled: true,
       gateMode: result.mode,
       activeEpochHash: result.activeEpochHash,
-      epochCount: Array.isArray(gate.chain) ? gate.chain.length : 0,
+      epochCount: Array.isArray(snapshot.chain) ? snapshot.chain.length : 0,
       allowlist: active?.allowlist ?? [],
       evidenceRootWritable: probeWritable(evidence.root),
       auditRootWritable: probeWritable(auditRoot),
       releaseId: release?.releaseId ?? null,
       sourceCommit: release?.sourceCommit ?? null,
-      locksPinned: Boolean(lockHashes && typeof lockHashes === "object"),
+      locksPinned: Boolean(snapshot.lockHashes && typeof snapshot.lockHashes === "object"),
       profile: profile?.runtimeProfile ?? null,
       gateErrors: result.errors.map((e) => e.code),
     };
@@ -302,11 +350,8 @@ export function createM6FrameCapture({
 
   async function capture({ alias, scenarioLabel = "observe", idempotencyKey, nowMs } = {}) {
     const a = requireString(alias, "alias", "M6_ALIAS_INVALID", M6_ALIAS_PATTERN);
-    const s = requireString(scenarioLabel, "scenarioLabel", "M6_SCENARIO_LABEL_INVALID", /^[A-Za-z0-9._-]{0,64}$/);
+    const s = requireString(scenarioLabel, "scenarioLabel", "M6_SCENARIO_LABEL_INVALID", M6_SCENARIO_PATTERN);
     const ik = requireString(idempotencyKey, "idempotencyKey", "M6_IDEMPOTENCY_REQUIRED", M6_IDEMPOTENCY_PATTERN);
-    if (!M6_SCENARIO_LABELS.includes(s)) {
-      throw new M6FrameCaptureError("M6_SCENARIO_LABEL_INVALID", `scenarioLabel must be one of ${M6_SCENARIO_LABELS.join(", ")}`, { status: 400 });
-    }
     const at = Number.isFinite(nowMs) ? nowMs : now();
     const gateState = resolveGate(a, at);
     const capability = requireObserveCapability();
@@ -340,6 +385,8 @@ export function createM6FrameCapture({
     };
     let session = null;
     let jobRow = null;
+    let acceptedRecord = null;
+    let captureError = null;
     try {
       try {
         // Server-owned capability session: policy is re-evaluated by the control
@@ -524,63 +571,104 @@ export function createM6FrameCapture({
           details: { errors: acceptedValidation.errors },
         });
       }
-      writeAuditJson(auditRoot, attemptId, { receipt, frame });
-      return receipt;
+      // Do not persist or return accepted state yet. Cleanup is part of the
+      // transaction: a frame becomes consumable only after job/session/lease
+      // convergence succeeds.
+      acceptedRecord = { receipt, frame };
     } catch (error) {
-      audit.errorCodes = [error.code || "M6_CAPTURE_FAILED"];
-      audit.committedAt = iso(now());
-      audit.status = "rejected";
-      // Build a contract-valid rejected receipt (with receiptSha256 + capturedAt
-      // + nullable attribution ids for pre-session failures) rather than writing
-      // the bare audit object, which carried no receiptSha256.
-      const rejectedReceipt = buildReceipt({
-        attemptId,
-        runId: audit.runId,
-        jobId: audit.jobId,
-        sessionId: audit.sessionId,
-        leaseRef: audit.leaseRef,
-        alias: a,
-        scenarioLabel: s,
-        epochHash: gateState.epochHash,
-        status: "rejected",
-        frameRef: null,
-        gateMode: gateState.mode,
-        errorCodes: audit.errorCodes,
-        evidenceRefs: audit.evidenceRefs,
-        skew: null,
-        remainingTtlMs: null,
-        capturedAt: audit.capturedAt,
-        committedAt: audit.committedAt,
-      });
-      const rejectedValidation = validateCaptureAttemptReceipt(rejectedReceipt);
+      captureError = error;
+    }
+
+    const cleanupErrors = [];
+    if (session) {
       try {
-        writeAuditJson(auditRoot, attemptId, rejectedValidation.ok ? { receipt: rejectedReceipt } : { receipt: rejectedReceipt, receiptValidationErrors: rejectedValidation.errors });
-      } catch { /* audit persistence is best-effort; the capture error still propagates */ }
-      throw error;
-    } finally {
-      // Fail-closed cleanup: session/lease/job convergence failures are NOT
-      // swallowed. A capture that leaked a lease/session is not a clean outcome
-      // even when the frame was accepted, so a cleanup failure is surfaced. If
-      // the capture already threw, that error still propagates unless cleanup
-      // itself failed (in which case the convergence failure takes precedence).
-      if (session) {
-        const cleanupErrors = [];
-        try {
-          if (jobRow) {
-            const current = state.getJob(jobRow.jobId);
-            if (current && ["queued", "waiting_approval", "running"].includes(current.status)) state.cancelJob(jobRow.jobId);
-          }
-        } catch (e) { cleanupErrors.push({ phase: "cancelJob", code: e?.code ?? null, message: e?.message ?? String(e) }); }
-        try { control.releaseSession(session.sessionId, session.token); }
-        catch (e) { cleanupErrors.push({ phase: "releaseSession", code: e?.code ?? null, message: e?.message ?? String(e) }); }
-        if (cleanupErrors.length > 0) {
-          throw new M6FrameCaptureError("M6_CLEANUP_FAILED", "session/lease/job cleanup failed after capture convergence", {
-            status: 500,
-            details: { cleanupErrors },
+        if (jobRow) {
+          const current = state.getJob(jobRow.jobId);
+          if (current && ["queued", "waiting_approval", "running"].includes(current.status)) state.cancelJob(jobRow.jobId);
+        }
+      } catch (e) { cleanupErrors.push({ phase: "cancelJob", code: e?.code ?? null, message: e?.message ?? String(e) }); }
+      try { control.releaseSession(session.sessionId, session.token); }
+      catch (e) { cleanupErrors.push({ phase: "releaseSession", code: e?.code ?? null, message: e?.message ?? String(e) }); }
+    }
+    if (cleanupErrors.length > 0) {
+      captureError = new M6FrameCaptureError("M6_CLEANUP_FAILED", "session/lease/job cleanup failed after capture convergence", {
+        status: 500,
+        details: { cleanupErrors },
+      });
+      acceptedRecord = null;
+    }
+
+    // The final commit decision happens after cleanup and reloads the signed
+    // gate from its trusted source. A close/rollback that lands while cleanup
+    // is running therefore prevents an accepted receipt from being committed.
+    if (!captureError && acceptedRecord) {
+      try {
+        const commitGate = resolveGate(a, now());
+        if (commitGate.epochHash !== gateState.epochHash) {
+          throw new M6FrameCaptureError("M6_GATE_DRIFT", "active epoch changed before accepted receipt commit", {
+            status: 409,
+            details: { startEpochHash: gateState.epochHash, commitEpochHash: commitGate.epochHash },
           });
         }
+        const committedAt = iso(now());
+        const remainingTtlMs = Math.max(0, Date.parse(acceptedRecord.frame.expiresAt) - Date.parse(committedAt));
+        if (remainingTtlMs < M6_FRAME_CONSTANTS.minTtlOnReturnMs) {
+          throw new M6FrameCaptureError(
+            "M6_FRAME_TTL_EXPIRING",
+            `fewer than ${M6_FRAME_CONSTANTS.minTtlOnReturnMs}ms of TTL remain after cleanup`,
+            { status: 409, details: { remainingTtlMs } },
+          );
+        }
+        acceptedRecord.receipt = buildReceipt({
+          ...acceptedRecord.receipt,
+          remainingTtlMs,
+          committedAt,
+        });
+        const finalReceiptValidation = validateCaptureAttemptReceipt(acceptedRecord.receipt);
+        if (!finalReceiptValidation.ok) {
+          throw new M6FrameCaptureError(
+            "M6_RECEIPT_INVALID",
+            `post-cleanup receipt failed contract validation: ${finalReceiptValidation.errors.join("; ")}`,
+            { status: 500, details: { errors: finalReceiptValidation.errors } },
+          );
+        }
+        writeAuditJson(auditRoot, attemptId, acceptedRecord);
+        return acceptedRecord.receipt;
+      } catch (error) {
+        captureError = error;
+        acceptedRecord = null;
       }
     }
+
+    audit.errorCodes = [captureError?.code || "M6_CAPTURE_FAILED"];
+    audit.committedAt = iso(now());
+    audit.status = "rejected";
+    const rejectedReceipt = buildReceipt({
+      attemptId,
+      runId: audit.runId,
+      jobId: audit.jobId,
+      sessionId: audit.sessionId,
+      leaseRef: audit.leaseRef,
+      alias: a,
+      scenarioLabel: s,
+      epochHash: gateState.epochHash,
+      status: "rejected",
+      frameRef: null,
+      gateMode: gateState.mode,
+      errorCodes: audit.errorCodes,
+      evidenceRefs: audit.evidenceRefs,
+      skew: null,
+      remainingTtlMs: null,
+      capturedAt: audit.capturedAt,
+      committedAt: audit.committedAt,
+    });
+    const rejectedValidation = validateCaptureAttemptReceipt(rejectedReceipt);
+    try {
+      writeAuditJson(auditRoot, attemptId, rejectedValidation.ok
+        ? { receipt: rejectedReceipt, tombstone: { acceptedFrameCommitted: false, reason: audit.errorCodes[0] } }
+        : { receipt: rejectedReceipt, receiptValidationErrors: rejectedValidation.errors, tombstone: { acceptedFrameCommitted: false, reason: audit.errorCodes[0] } });
+    } catch { /* audit persistence is best-effort; the capture error still propagates */ }
+    throw captureError;
   }
 
   // status: read-only replay of the durable attempt trail. Returns only opaque

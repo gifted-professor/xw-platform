@@ -16,6 +16,7 @@ import {
   M6_GATE_MODES,
   resolveM6Closeout,
 } from "../control-plane/lib/m6-live-gate.mjs";
+import { deriveM6AggregateSealHash } from "../../../packages/kernel/lib/m6-aggregate-closeout.mjs";
 
 const RELEASE = { releaseId: "release-1", sourceCommit: "abc123" };
 const NOW = Date.parse("2026-08-22T00:00:00Z");
@@ -60,13 +61,20 @@ test("successfully produced modes are only CLOSED and OBSERVE_ONLY", () => {
   assert.equal(ro.errors.length, 0);
   // CLOSED: sealed — status=closed plus a self-hashing closeout receipt that
   // binds to the epoch. Status is coupled to mode per the frozen contract.
+  const observeEpoch = epoch();
+  const rec = closeout({ epochHash: observeEpoch.epochHash, closeoutId: "closeout-closed" });
   const closedEpoch = epoch({
     mode: "CLOSED",
     status: "closed",
-    closeoutRef: { id: "closeout-closed", sha256: "0".repeat(64) },
+    parentEpochHash: observeEpoch.epochHash,
+    closeoutRef: { id: "closeout-closed", sha256: rec.closeoutHash },
+    aggregateSealRef: (() => {
+      const hash = deriveM6AggregateSealHash({ probe: "closed" });
+      return { id: hash, sha256: hash };
+    })(),
   });
-  const rec = closeout({ epochHash: closedEpoch.epochHash, closeoutId: "closeout-closed" });
-  const rc = evaluateM6Gate({ chain: [closedEpoch], closeouts: { "closeout-closed": rec }, nowMs: NOW });
+  const aggregate = { epochHash: rec.epochHash, sealPayload: { probe: "closed" }, sealHash: closedEpoch.aggregateSealRef.sha256 };
+  const rc = evaluateM6Gate({ chain: [observeEpoch, closedEpoch], closeouts: { "closeout-closed": rec }, aggregates: { [aggregate.sealHash]: aggregate }, nowMs: NOW });
   assert.equal(rc.mode, "CLOSED");
   assert.equal(rc.errors.length, 0);
 });
@@ -219,18 +227,53 @@ test("an issuedAt that is not a date-time fails closed", () => {
   assert.equal(r.errors[0].code, "M6_GATE_ISSUED_AT_INVALID");
 });
 
-test("a valid closeout seals the epoch closed regardless of declared mode", () => {
+test("OBSERVE_ONLY cannot smuggle CLOSED bindings", () => {
   const sealed = epoch({ closeoutRef: { id: "closeout-1", sha256: "0".repeat(64) } });
   const rec = closeout({ epochHash: sealed.epochHash, closeoutId: "closeout-1" });
   const r = evaluateM6Gate({ chain: [sealed], closeouts: { "closeout-1": rec }, nowMs: NOW });
   assert.equal(r.mode, "CLOSED");
-  assert.equal(r.errors.length, 0);
-  assert.equal(r.activeEpochHash, sealed.epochHash);
+  assert.equal(r.errors[0].code, "M6_GATE_EPOCH_FORGED");
 });
 
 test("a forged/missing closeout seal fails closed", () => {
-  const sealed = epoch({ closeoutRef: { id: "closeout-missing", sha256: "0".repeat(64) } });
+  const aggregateHash = deriveM6AggregateSealHash({ probe: "missing-closeout" });
+  const sealed = epoch({
+    mode: "CLOSED",
+    status: "closed",
+    closeoutRef: { id: "closeout-missing", sha256: "0".repeat(64) },
+    aggregateSealRef: { id: aggregateHash, sha256: aggregateHash },
+  });
   assert.equal(evaluateM6Gate({ chain: [sealed], nowMs: NOW }).errors[0].code, "M6_GATE_CLOSEOUT_FORGED");
+});
+
+test("CLOSED history resolves every closeout/aggregate and binds the closeout ref sha", () => {
+  const aggregatePayload = { probe: "history" };
+  const aggregateHash = deriveM6AggregateSealHash(aggregatePayload);
+  const root = epoch();
+  const rec = closeout({ epochHash: root.epochHash, closeoutId: "closeout-history" });
+  const closed = epoch({
+    mode: "CLOSED",
+    status: "closed",
+    parentEpochHash: root.epochHash,
+    closeoutRef: { id: "closeout-history", sha256: "0".repeat(64) },
+    aggregateSealRef: { id: aggregateHash, sha256: aggregateHash },
+  });
+  const tail = epoch({ parentEpochHash: closed.epochHash });
+  const aggregate = { epochHash: rec.epochHash, sealPayload: aggregatePayload, sealHash: aggregateHash };
+  const badRef = evaluateM6Gate({ chain: [root, closed, tail], closeouts: { "closeout-history": rec }, aggregates: { [aggregateHash]: aggregate }, nowMs: NOW });
+  assert.equal(badRef.errors[0].code, "M6_GATE_CLOSEOUT_FORGED");
+
+  const boundClosed = epoch({
+    mode: "CLOSED",
+    status: "closed",
+    parentEpochHash: root.epochHash,
+    closeoutRef: { id: "closeout-history", sha256: rec.closeoutHash },
+    aggregateSealRef: { id: aggregateHash, sha256: aggregateHash },
+  });
+  const boundTail = epoch({ parentEpochHash: boundClosed.epochHash });
+  const missingHistory = evaluateM6Gate({ chain: [root, boundClosed, boundTail], closeouts: { "closeout-history": rec }, nowMs: NOW });
+  assert.equal(missingHistory.errors[0].code, "M6_GATE_AGGREGATE_FORGED");
+  assert.equal(evaluateM6Gate({ chain: [root, boundClosed, boundTail], closeouts: { "closeout-history": rec }, aggregates: { [aggregateHash]: aggregate }, nowMs: NOW }).mode, "OBSERVE_ONLY");
 });
 
 test("resolveM6Closeout: a bare self-hashing record or a registry record both resolve; a forged one does not", () => {

@@ -135,3 +135,22 @@ test("xw m6 epoch verify on an empty gate reports ok:false (closed)", () => {
     rmSync(gate.m6Root, { recursive: true, force: true });
   }
 });
+
+test("xw m6 epoch close cannot mint CLOSED without an explicit aggregate seal", () => {
+  const gate = makeGateRoot();
+  try {
+    const common = ["--m6-root", gate.m6Root, "--gate-id", "gate-cli", "--issuer-keys", gate.issuerKeysPath, "--json"];
+    const minted = run(["m6", "epoch", "mint", ...common,
+      "--release-id", "release-cli", "--source-commit", HEX40, "--allowlist", "01,02,03,04",
+      "--expires-at", "2099-01-01T00:00:00.000Z", "--key-file", gate.keyFile, "--key-id", "key-1", "--yes"]);
+    assert.equal(minted.code, 0, minted.stderr);
+    const activated = run(["m6", "epoch", "activate", ...common, "--epoch-hash", minted.json.epoch.epochHash, "--yes"]);
+    assert.equal(activated.code, 0, activated.stderr);
+    const closed = run(["m6", "epoch", "close", ...common, "--reason", "probe", "--key-file", gate.keyFile, "--key-id", "key-1", "--yes"]);
+    assert.equal(closed.code, 2);
+    assert.match(closed.stderr, /--aggregate-seal is required/);
+    assert.equal(existsSync(join(gate.m6Root, "m6-gate", "gate-cli", "closeouts")), false);
+  } finally {
+    rmSync(gate.m6Root, { recursive: true, force: true });
+  }
+});

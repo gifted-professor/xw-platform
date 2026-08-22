@@ -237,7 +237,7 @@
     },
     {
       "path": "services/orchestrator/scripts/lib/m6/m6-grounding-runtime.mjs",
-      "sha256": "b1f0124d31fefd520a89792ffc90c9fb0b8c7880b6813eee3f5ab66b60559af7",
+      "sha256": "9f6a02f76d64454ad8897662647bc9c2132aafdb9bc23a66842f719cbf6f09d7",
       "role": "唯一 GroundingRuntime：stable-frame validator、hermetic fixture provider、block-set、decision policy、private point resolver（纯函数、零设备 IO、零第三方依赖）",
       "externalPaths": [],
       "externalDependencies": [],
@@ -250,7 +250,7 @@
     },
     {
       "path": "packages/kernel/lib/m6-screen-frame.mjs",
-      "sha256": "60a92c13691ea8ead3ed11de1f6dfc601f8adce5b29adebb344e4d4d4e78c10c",
+      "sha256": "39eb64ff581c49e6bf677e43a557d0d19c8afde54fe8d618d8b2e2a567eb293d",
       "role": "M6-2 single canonical screen-frame assembler: replay + live_strict share one manifest/frameId derivation; W8 adds verifyFrameManifest for capture-time integrity re-check",
       "externalPaths": [],
       "externalDependencies": [],

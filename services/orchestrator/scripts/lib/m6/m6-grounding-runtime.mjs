@@ -137,17 +137,20 @@ export const HERMETIC_FIXTURE_PROVIDER = Object.freeze({
     return HERMETIC_FIXTURE_PROVIDER_MODEL_SHA256;
   },
   segment(frame, evidence) {
-    // Deterministic synthetic segmentation keyed on the frame manifest hash:
-    // the same frame always yields the same block layout. Covers the task-brief
+    // Deterministic synthetic segmentation keyed on the screenshot evidence hash.
+    // Security-only manifest evolution (TTL/mode/flags) must not silently
+    // reshuffle the same visual scene's fixture detections.
     // corpus scenarios (popups, keyboard, ads, sensitive labels, repeated
     // blocks, scroll pages, permission dialogs, status bar, system navigation).
-    const seed = Buffer.from(frame.manifestSha256, "hex");
+    const seed = Buffer.from(frame.screenshotARef.sha256, "hex");
     const blocks = [];
     const dumpText = evidence.readText(frame.dumpRef?.id, "dump") || "";
     const replayScenario = /^dump-\d+:(.+)$/.exec(dumpText)?.[1];
     const replaySpecs = replayScenario ? REPLAY_SCENE_TABLE[replayScenario] : null;
     const scenarios = replaySpecs || SCENARIO_TABLE[seed[1] % SCENARIO_TABLE.length];
-    const count = replaySpecs ? replaySpecs.length : 3 + (seed[0] % 6); // 3..8 fallback blocks
+    // Never repeat a fallback label: repetition would manufacture ambiguity
+    // unrelated to the scene. Replay fixtures explicitly declare duplicates.
+    const count = replaySpecs ? replaySpecs.length : Math.min(scenarios.length, 3 + (seed[0] % 6));
     for (let index = 0; index < count; index += 1) {
       const s = scenarios[index % scenarios.length];
       const regionHash = regionHashOf(frame.frameId, index, s.label, s.category);

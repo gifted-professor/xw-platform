@@ -502,6 +502,12 @@ export function validateM6LiveGate(gate) {
   if (gate.mode === "CLOSED" && !gate.closeoutRef) {
     fail(errors, code, "CLOSED epochs must reference a closeout receipt");
   }
+  if (gate.mode === "CLOSED" && !gate.aggregateSealRef) {
+    fail(errors, code, "CLOSED epochs must reference a complete aggregate seal");
+  }
+  if (gate.mode === "OBSERVE_ONLY" && (gate.closeoutRef || gate.aggregateSealRef || gate.rollbackTargetEpochHash)) {
+    fail(errors, code, "OBSERVE_ONLY epochs must not carry CLOSED/rollback bindings");
+  }
   if (gate.status === "active" && Date.parse(gate.expiresAt) <= Date.parse(gate.issuedAt)) {
     fail(errors, code, "expiresAt must be after issuedAt for an active epoch");
   }

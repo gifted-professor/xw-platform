@@ -34,6 +34,7 @@ import { ControlPlaneError } from "./errors.mjs";
 import { validateJsonSchema } from "./json-schema-validator.mjs";
 import { deriveM6CloseoutHash, deriveM6EpochHash } from "./m6-live-gate.mjs";
 import { loadGateIssuerAllowlist, verifyEpochProof } from "./m6-issuer-allowlist.mjs";
+import { deriveM6AggregateSealHash } from "../../../../packages/kernel/lib/m6-aggregate-closeout.mjs";
 
 export const M6_LOCKS_SCHEMA_ID = "xw.m6-locks.v1";
 const HEX64 = /^[0-9a-f]{64}$/;
@@ -138,6 +139,25 @@ function loadCloseouts(gateDirPath) {
   return closeouts;
 }
 
+function loadAggregates(gateDirPath) {
+  const dir = join(gateDirPath, "aggregate");
+  const aggregates = {};
+  if (!existsSync(dir)) return aggregates;
+  for (const name of readdirSync(dir)) {
+    if (!name.endsWith(".json")) continue;
+    const record = readRegularJson(join(dir, name));
+    const id = name.slice(0, -5);
+    if (!record || record.schemaId !== "xw.m6-aggregate-closeout.v1"
+      || record.sealHash !== id || deriveM6AggregateSealHash(record.sealPayload) !== record.sealHash
+      || record.attemptCount !== record.sealPayload?.attempts?.length
+      || record.aliases?.join(",") !== record.sealPayload?.allowlist?.join(",")) {
+      fail("M6_GATE_AGGREGATE_FORGED", `aggregate seal ${id} is malformed or forged`);
+    }
+    aggregates[id] = record;
+  }
+  return aggregates;
+}
+
 // Load the active gate from disk: current pointer → ordered chain → per-epoch
 // validation + signature verification → closeout registry → pinned locks.
 // Returns { chain, closeouts, lockHashes, gateId, tailEpochHash }.
@@ -152,13 +172,13 @@ export function loadM6Gate({
   const dir = gateDir(m6Root, gateId);
   if (!existsSync(dir)) {
     // No gate installed → empty chain (gate evaluates to M6_GATE_EMPTY, CLOSED).
-    return { chain: [], closeouts: {}, lockHashes: loadM6Locks(m6Root, { requireLocks }), gateId, tailEpochHash: null };
+    return { chain: [], closeouts: {}, aggregates: {}, lockHashes: loadM6Locks(m6Root, { requireLocks }), gateId, tailEpochHash: null };
   }
   const allowlist = loadGateIssuerAllowlist(issuerAllowlistPath);
   const currentPath = join(dir, "current.json");
   const current = readRegularJson(currentPath);
   if (!current || !Array.isArray(current.chain) || current.chain.length === 0) {
-    return { chain: [], closeouts: {}, lockHashes: loadM6Locks(m6Root, { requireLocks }), gateId, tailEpochHash: null };
+    return { chain: [], closeouts: {}, aggregates: {}, lockHashes: loadM6Locks(m6Root, { requireLocks }), gateId, tailEpochHash: null };
   }
   const chain = [];
   for (const epochHash of current.chain) {
@@ -166,7 +186,8 @@ export function loadM6Gate({
     chain.push(epoch);
   }
   const closeouts = loadCloseouts(dir);
-  return { chain, closeouts, lockHashes: loadM6Locks(m6Root, { requireLocks }), gateId, tailEpochHash: current.tailEpochHash ?? current.chain[current.chain.length - 1] };
+  const aggregates = loadAggregates(dir);
+  return { chain, closeouts, aggregates, lockHashes: loadM6Locks(m6Root, { requireLocks }), gateId, tailEpochHash: current.tailEpochHash ?? current.chain[current.chain.length - 1] };
 }
 
 // Probe that a directory is writable (mkdir + temp write + fsync + unlink).

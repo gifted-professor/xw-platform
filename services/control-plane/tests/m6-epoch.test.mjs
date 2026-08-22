@@ -32,6 +32,7 @@ import {
   signEpochProof,
   evaluateM6Gate,
 } from "../control-plane/lib/m6-epoch.mjs";
+import { deriveM6AggregateSealHash } from "../../../packages/kernel/lib/m6-aggregate-closeout.mjs";
 import {
   loadGateIssuerAllowlist,
   verifyEpochProof,
@@ -103,6 +104,21 @@ function setupGate(key) {
   writeLocks(m6Root);
   writeAllowlist(m6Root, [{ keyId: KEY_ID, subject: ACTOR, publicKey: key.publicKeyPem, status: "active" }]);
   return m6Root;
+}
+
+function writeAggregate(m6Root, gateId, epochHash) {
+  const sealPayload = { epochHash, allowlist: ["01", "02"], attempts: Array.from({ length: 80 }, (_, index) => ({ scenarioId: `probe-${index + 1}` })) };
+  const sealHash = deriveM6AggregateSealHash(sealPayload);
+  writeImmutableJson(join(m6Root, "m6-gate", gateId, "aggregate", `${sealHash}.json`), {
+    schemaId: "xw.m6-aggregate-closeout.v1",
+    gateId,
+    epochHash,
+    sealHash,
+    sealPayload,
+    aliases: ["01", "02"],
+    attemptCount: 80,
+  });
+  return { id: sealHash, sha256: sealHash };
 }
 
 function clean(...roots) {
@@ -201,11 +217,13 @@ test("close: a closeout-bound CLOSED epoch seals the gate CLOSED", () => {
     activateGate({ m6Root, gateId: GATE_ID, chain: [epoch.epochHash], tailEpochHash: epoch.epochHash, promotedAt: ISSUED });
 
     const closeout = buildCloseoutRecord({ epochHash: epoch.epochHash, actor: ACTOR, reason: "release", committedAt: "2026-08-22T06:00:00.000Z" });
+    const aggregateSealRef = writeAggregate(m6Root, GATE_ID, epoch.epochHash);
     const closedEpoch = baseEpoch({
       mode: "CLOSED",
       issuedAt: "2026-08-22T06:00:00.000Z",
       parentEpochHash: epoch.epochHash,
       closeoutRef: { id: closeout.closeoutId, sha256: closeout.closeoutHash },
+      aggregateSealRef,
     });
     const closedProof = signEpochProof(closedEpoch, key.privateKeyPem, { keyId: KEY_ID, subject: ACTOR, allowlistVersion: 1 });
     writeCloseout({ m6Root, gateId: GATE_ID, closeout });
@@ -216,7 +234,7 @@ test("close: a closeout-bound CLOSED epoch seals the gate CLOSED", () => {
     assert.equal(active.chain.length, 2);
     // The closeout registry holds the sealed closeout keyed by id.
     assert.ok(active.closeouts[closeout.closeoutId], "closeout registry holds the seal");
-    const result = evaluateM6Gate({ chain: active.epochs, closeouts: active.closeouts, nowMs: NOW, lockHashes: active.lockHashes });
+    const result = evaluateM6Gate({ chain: active.epochs, closeouts: active.closeouts, aggregates: active.aggregates, nowMs: NOW, lockHashes: active.lockHashes });
     assert.equal(result.mode, "CLOSED");
     assert.deepEqual(result.errors, []);
     // The seal resolves and its sha256 binding matches the closeout's hash.
@@ -245,7 +263,7 @@ test("resolveLatestEpoch finds the unactivated epoch binding to the current tail
   } finally { clean(m6Root); }
 });
 
-test("rollback: restoring a tombstoned pointer returns the chain to the prior tail", () => {
+test("rollback appends a newly signed CLOSED epoch and never rewrites history", () => {
   const key = newKey();
   const m6Root = setupGate(key);
   try {
@@ -254,22 +272,59 @@ test("rollback: restoring a tombstoned pointer returns the chain to the prior ta
     mintEpoch({ m6Root, gateId: GATE_ID, epoch: e1, proof: p1 });
     activateGate({ m6Root, gateId: GATE_ID, chain: [e1.epochHash], tailEpochHash: e1.epochHash, promotedAt: ISSUED });
 
-    const e2 = baseEpoch({ parentEpochHash: e1.epochHash, issuedAt: "2026-08-22T01:00:00.000Z" });
+    const closeout = buildCloseoutRecord({ epochHash: e1.epochHash, actor: ACTOR, reason: "close", committedAt: "2026-08-22T01:00:00.000Z" });
+    const aggregateSealRef = writeAggregate(m6Root, GATE_ID, e1.epochHash);
+    writeCloseout({ m6Root, gateId: GATE_ID, closeout });
+    const e2 = baseEpoch({
+      mode: "CLOSED",
+      parentEpochHash: e1.epochHash,
+      issuedAt: "2026-08-22T01:00:00.000Z",
+      closeoutRef: { id: closeout.closeoutId, sha256: closeout.closeoutHash },
+      aggregateSealRef,
+    });
     const p2 = signEpochProof(e2, key.privateKeyPem, { keyId: KEY_ID, subject: ACTOR, allowlistVersion: 1 });
     mintEpoch({ m6Root, gateId: GATE_ID, epoch: e2, proof: p2 });
     activateGate({ m6Root, gateId: GATE_ID, chain: [e1.epochHash, e2.epochHash], tailEpochHash: e2.epochHash, promotedAt: "2026-08-22T01:00:00.000Z" });
-    // Activating e2 tombstoned the e1 pointer.
+    // Append another observe epoch, then roll back to the prior CLOSED policy.
+    const e3 = baseEpoch({ parentEpochHash: e2.epochHash, issuedAt: "2026-08-22T02:00:00.000Z" });
+    const p3 = signEpochProof(e3, key.privateKeyPem, { keyId: KEY_ID, subject: ACTOR, allowlistVersion: 1 });
+    mintEpoch({ m6Root, gateId: GATE_ID, epoch: e3, proof: p3 });
+    activateGate({ m6Root, gateId: GATE_ID, chain: [e1.epochHash, e2.epochHash, e3.epochHash], tailEpochHash: e3.epochHash, promotedAt: "2026-08-22T02:00:00.000Z" });
     let active = readActiveGate({ m6Root, gateId: GATE_ID, issuerAllowlistPath: issuerKeysPath(m6Root) });
-    assert.equal(active.tailEpochHash, e2.epochHash);
-
-    rollbackGate({ m6Root, gateId: GATE_ID, toTailEpochHash: e1.epochHash, promotedAt: "2026-08-22T02:00:00.000Z" });
+    assert.equal(active.tailEpochHash, e3.epochHash);
+    const rollbackEpoch = baseEpoch({
+      mode: "CLOSED",
+      parentEpochHash: e3.epochHash,
+      issuedAt: "2026-08-22T03:00:00.000Z",
+      closeoutRef: e2.closeoutRef,
+      aggregateSealRef: e2.aggregateSealRef,
+      rollbackTargetEpochHash: e2.epochHash,
+    });
+    const driftedRollback = baseEpoch({
+      mode: "CLOSED",
+      parentEpochHash: e3.epochHash,
+      issuedAt: "2026-08-22T03:00:00.000Z",
+      allowlist: ["other"],
+      closeoutRef: e2.closeoutRef,
+      aggregateSealRef: e2.aggregateSealRef,
+      rollbackTargetEpochHash: e2.epochHash,
+    });
+    const driftedProof = signEpochProof(driftedRollback, key.privateKeyPem, { keyId: KEY_ID, subject: ACTOR, allowlistVersion: 1 });
+    assert.throws(
+      () => rollbackGate({ m6Root, gateId: GATE_ID, epoch: driftedRollback, proof: driftedProof, promotedAt: "2026-08-22T03:00:00.000Z", issuerAllowlistPath: issuerKeysPath(m6Root) }),
+      { code: "M6_EPOCH_ROLLBACK_TARGET_MISMATCH" },
+    );
+    const rollbackProof = signEpochProof(rollbackEpoch, key.privateKeyPem, { keyId: KEY_ID, subject: ACTOR, allowlistVersion: 1 });
+    rollbackGate({ m6Root, gateId: GATE_ID, epoch: rollbackEpoch, proof: rollbackProof, promotedAt: "2026-08-22T03:00:00.000Z", issuerAllowlistPath: issuerKeysPath(m6Root) });
     active = readActiveGate({ m6Root, gateId: GATE_ID, issuerAllowlistPath: issuerKeysPath(m6Root) });
-    assert.equal(active.tailEpochHash, e1.epochHash);
-    assert.deepEqual(active.chain, [e1.epochHash]);
+    assert.equal(active.tailEpochHash, rollbackEpoch.epochHash);
+    assert.deepEqual(active.chain, [e1.epochHash, e2.epochHash, e3.epochHash, rollbackEpoch.epochHash]);
+    assert.equal(active.epochs.at(-1).mode, "CLOSED");
+    assert.equal(active.epochs.at(-1).rollbackTargetEpochHash, e2.epochHash);
   } finally { clean(m6Root); }
 });
 
-test("rollback to a nonexistent tail fails closed (M6_EPOCH_ROLLBACK_NO_TARGET)", () => {
+test("rollback cannot target an OBSERVE_ONLY epoch", () => {
   const key = newKey();
   const m6Root = setupGate(key);
   try {
@@ -277,10 +332,11 @@ test("rollback to a nonexistent tail fails closed (M6_EPOCH_ROLLBACK_NO_TARGET)"
     const proof = signEpochProof(epoch, key.privateKeyPem, { keyId: KEY_ID, subject: ACTOR, allowlistVersion: 1 });
     mintEpoch({ m6Root, gateId: GATE_ID, epoch, proof });
     activateGate({ m6Root, gateId: GATE_ID, chain: [epoch.epochHash], tailEpochHash: epoch.epochHash, promotedAt: ISSUED });
-    assert.throws(
-      () => rollbackGate({ m6Root, gateId: GATE_ID, toTailEpochHash: "ff".repeat(32), promotedAt: ISSUED }),
-      { code: "M6_EPOCH_ROLLBACK_NO_TARGET" },
-    );
+    const aggregateSealRef = { id: "ee".repeat(32), sha256: "ee".repeat(32) };
+    const closeoutRef = { id: "rollback-closeout", sha256: "dd".repeat(32) };
+    const rollbackEpoch = baseEpoch({ mode: "CLOSED", parentEpochHash: epoch.epochHash, issuedAt: "2026-08-22T01:00:00.000Z", closeoutRef, aggregateSealRef, rollbackTargetEpochHash: epoch.epochHash });
+    const rollbackProof = signEpochProof(rollbackEpoch, key.privateKeyPem, { keyId: KEY_ID, subject: ACTOR, allowlistVersion: 1 });
+    assert.throws(() => rollbackGate({ m6Root, gateId: GATE_ID, epoch: rollbackEpoch, proof: rollbackProof, promotedAt: "2026-08-22T01:00:00.000Z", issuerAllowlistPath: issuerKeysPath(m6Root) }), { code: "M6_EPOCH_ROLLBACK_NO_TARGET" });
   } finally { clean(m6Root); }
 });
 
