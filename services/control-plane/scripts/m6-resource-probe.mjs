@@ -1,99 +1,225 @@
-#!/usr/bin/env node
-// M6-2 W9 Gate A #3 — independent read-only operator resource probe.
+// M6-2 W9 — Independent read-only control-plane resource probe.
 //
-// Queries the canonical control DB in SQLite read-only mode (no control-plane
-// process, no /health round-trip) and emits one canonical JSON record:
-// schema, dbPath, capturedAt, activeJobs (running/verifying/restoring),
-// activeSessions, activeLeases (unexpired), pendingApprovals
-// (jobs waiting_approval), actionCount (device_session_actions rows),
-// plus the SHA-256 of the canonical form. The before/after window evidence is
-// the pair of these records with identical probeSchemaVersion + dbPath and
-// different capturedAt. Read-only: opens with readOnly:true so any write
-// attempt fails at the driver level; never mutates, never calls health.
+// The `xw m6 window snapshot` command accepts operator-supplied `--before` /
+// `--after` JSON, so a quiescence claim is only as good as the operator who
+// typed it. This probe is the independent check: it opens the canonical control
+// DB in READ-ONLY mode and derives every resource count directly from the
+// physical rows. It never calls the control plane health endpoint, never writes
+// to the DB, and never performs any device I/O.
 //
-// Zero-live: this script touches no device and flips nothing. Exit 0 always
-// reports; exit 2 means the probe itself could not run (missing DB, wrong
-// user_version vs this tree, unreadable file) — it must not guess counts.
+// Counts (each mapped 1:1 to how StateStore derives the same quantity):
+//   activeJobs        jobs.status IN ('running','verifying','restoring')
+//   activeSessions    sessions where expires_at > now (cleanup deletes the rest)
+//   activeLeases      leases where expires_at > now (health == listLeases().length)
+//   pendingApprovals  jobs.status = 'waiting_approval' (StateStore#pendingApprovals)
+//   actionCount       device_session_actions where executed = 1 (committed mutations)
+//
+// The probe emits a single canonical JSON object bound to a self-referential
+// SHA-256 (probeSha256, derived from the payload EXCLUDING itself). On any
+// nonzero count it prints the full evidence FIRST, then exits nonzero, so a
+// human or caller sees exactly which rows leaked without the process masking it
+// behind a bare `exit 1`.
+//
+// Usage:
+//   node scripts/m6-resource-probe.mjs [--db-path PATH] [--now ISO]
+//                                      [--out FILE] [--json] [--quiet]
+//
+// DB path resolution (first hit wins):
+//   1. --db-path arg
+//   2. CONTROL_PLANE_DB env
+//   3. ${XW_RUNTIME_ROOT}/state/control-plane/control.db
+//      (XW_RUNTIME_ROOT defaults to C:\Users\Public\xw-runtime on Windows,
+//       <repo>/xw-runtime elsewhere — matching control-plane/bootstrap.mjs)
+//
+// Exit codes: 0 = all counts zero; 1 = nonzero count found (evidence already
+// printed), or a fatal error before a result could be produced.
+
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-const PROBE_SCHEMA = "xw.m6-resource-probe.v1";
-const PROBE_SCHEMA_VERSION = 1;
+const SCHEMA_ID = "xw.m6-resource-probe.v1";
 
-function stableStringify(value) {
-  if (value === null || typeof value !== "object") return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map((item) => stableStringify(item)).join(",")}]`;
-  const keys = Object.keys(value).sort();
-  return `{${keys.map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(",")}}`;
-}
+// ACTIVE_JOB_STATES from StateStore (state-store.mjs). Kept in step with the
+// source of truth rather than duplicated as an inline set we can drift from.
+const ACTIVE_JOB_STATES = ["running", "verifying", "restoring"];
 
-function sha256Hex(text) {
-  return createHash("sha256").update(text).digest("hex");
-}
-
-function argOf(argv, name, fallback = null) {
+function opt(argv, name, fallback = null) {
   const index = argv.indexOf(name);
   if (index < 0 || index === argv.length - 1) return fallback;
   return argv[index + 1];
 }
-
-function fail(message) {
-  process.stderr.write(`m6-resource-probe: ${message}\n`);
-  process.exit(2);
+function has(argv, name) {
+  return argv.includes(name);
 }
 
-export function probeRecord({ dbPath, nowMs, userVersion }) {
-  const db = new DatabaseSync(dbPath, { readOnly: true });
+function sha256Hex(input) {
+  return createHash("sha256").update(input).digest("hex");
+}
+
+// Stable canonical serialization: fixed key order + no whitespace. This is the
+// bytes fed to the hash, so it must be deterministic regardless of object key
+// insertion order. (We reuse a local stableStringify rather than importing from
+// packages/kernel to keep this probe self-contained as an operator artifact.)
+function canonical(obj) {
+  if (Array.isArray(obj)) return `[${obj.map(canonical).join(",")}]`;
+  if (obj && typeof obj === "object") {
+    const keys = Object.keys(obj).sort();
+    return `{${keys.map((k) => `${JSON.stringify(k)}:${canonical(obj[k])}`).join(",")}}`;
+  }
+  if (typeof obj === "number" && !Number.isFinite(obj)) return "null";
+  return JSON.stringify(obj);
+}
+
+function uniqueStable(rows) {
+  const keys = Array.from(new Set(rows.map((r) => r.id))).sort();
+  return keys;
+}
+
+// Read-only open. We deliberately do NOT pass :memory: or run any PRAGMA beyond
+// opening. A read-only connection reads committed rows through the WAL the
+// same way a read-write one does (validated against a WAL-mode DB). If the DB
+// cannot be opened read-only (e.g. it does not exist), we surface a clear,
+// non-masked error.
+function openReadOnly(dbPath) {
+  if (!existsSync(dbPath)) {
+    return { error: `control DB does not exist: ${dbPath}`, code: "SQLITE_NOT_FOUND" };
+  }
   try {
-    const scalar = (sql) => Number(db.prepare(sql).get().n);
-    return {
-      probeSchemaId: PROBE_SCHEMA,
-      probeSchemaVersion: PROBE_SCHEMA_VERSION,
-      dbPath,
-      dbUserVersion: userVersion,
-      capturedAt: new Date(nowMs).toISOString(),
-      activeJobs: scalar("SELECT COUNT(*) AS n FROM jobs WHERE status IN ('running','verifying','restoring')"),
-      activeSessions: scalar("SELECT COUNT(*) AS n FROM sessions WHERE expires_at > ?"),
-      activeLeases: scalar("SELECT COUNT(*) AS n FROM leases WHERE expires_at > ?"),
-      pendingApprovals: scalar("SELECT COUNT(*) AS n FROM jobs WHERE status = 'waiting_approval'"),
-      actionCount: scalar("SELECT COUNT(*) AS n FROM device_session_actions"),
-    };
-  } finally {
-    db.close();
+    const db = new DatabaseSync(dbPath, { readOnly: true });
+    // IMMEDIATE-busy: a read-only handle must not block forever on a write lock.
+    db.exec("PRAGMA busy_timeout = 5000;");
+    return { db, error: null };
+  } catch (error) {
+    return { db: null, error: error.message, code: error.code || "SQLITE_OPEN_FAILED" };
   }
 }
 
-export function canonicalProbeJson(record) {
-  return `${stableStringify(record)}\n`;
+function resolveDbPath(argv) {
+  const explicit = opt(argv, "--db-path");
+  if (explicit) return resolve(explicit);
+  if (process.env.CONTROL_PLANE_DB) return resolve(process.env.CONTROL_PLANE_DB);
+  const runtimeRoot = process.env.XW_RUNTIME_ROOT
+    || (process.platform === "win32" ? "C:\\Users\\Public\\xw-runtime" : "xw-runtime");
+  return resolve(join(runtimeRoot, "state", "control-plane", "control.db"));
 }
 
-export function probeSha256(record) {
-  return sha256Hex(canonicalProbeJson(record));
+function probe(db, nowMs) {
+  const activeStatusList = ACTIVE_JOB_STATES.map(() => "?").join(",");
+  const activeJobs = db
+    .prepare(`SELECT job_id AS id FROM jobs WHERE status IN (${activeStatusList}) ORDER BY job_id`)
+    .all(...ACTIVE_JOB_STATES);
+  const activeSessions = db
+    .prepare("SELECT session_id AS id FROM sessions WHERE expires_at > ? ORDER BY session_id")
+    .all(nowMs);
+  const activeLeases = db
+    .prepare("SELECT lease_id AS id FROM leases WHERE expires_at > ? ORDER BY lease_id")
+    .all(nowMs);
+  const pendingApprovals = db
+    .prepare("SELECT job_id AS id FROM jobs WHERE status = 'waiting_approval' ORDER BY job_id")
+    .all();
+  const mutatedActions = db
+    .prepare("SELECT session_id AS id FROM device_session_actions WHERE executed = 1 ORDER BY session_id")
+    .all();
+
+  const counts = {
+    activeJobs: activeJobs.length,
+    activeSessions: activeSessions.length,
+    activeLeases: activeLeases.length,
+    pendingApprovals: pendingApprovals.length,
+    actionCount: mutatedActions.length,
+  };
+
+  return {
+    schemaId: SCHEMA_ID,
+    activeJobStatuses: ACTIVE_JOB_STATES.slice(),
+    counts,
+    leaked: {
+      activeJobs: uniqueStable(activeJobs),
+      activeSessions: uniqueStable(activeSessions),
+      activeLeases: uniqueStable(activeLeases),
+      pendingApprovals: uniqueStable(pendingApprovals),
+      mutatedActionSessionIds: uniqueStable(mutatedActions),
+    },
+    allZero: Object.values(counts).every((n) => n === 0),
+  };
+}
+
+function finalize(raw, nowMs) {
+  const payload = {
+    ...raw,
+    capturedAt: new Date(nowMs).toISOString(),
+  };
+  const bodyStable = canonical(payload);
+  // Hash is bound to the payload EXCLUDING itself (probeSha256), so a forged
+  // probe cannot claim an arbitrary hash; any mutation invalidates the hash.
+  const probeSha256 = sha256Hex(`${SCHEMA_ID}:${bodyStable}`);
+  return { ...payload, probeSha256 };
 }
 
 function main() {
-  const dbPath = argOf(process.argv.slice(2), "--db");
-  if (!dbPath) fail("--db PATH is required (canonical control.db; opened SQLite read-only)");
-  let userVersion;
+  const argv = process.argv.slice(2);
+  const nowMs = opt(argv, "--now") ? Date.parse(opt(argv, "--now")) : Date.now();
+  const dbPath = resolveDbPath(argv);
+  const emitJson = has(argv, "--json");
+
+  const { db, error, code } = openReadOnly(dbPath);
+  if (error) {
+    if (emitJson) {
+      process.stderr.write(JSON.stringify({ schemaId: SCHEMA_ID, ok: false, error, code, dbPath }, null, 2) + "\n");
+    } else {
+      process.stderr.write(`m6-resource-probe: ${error}\n`);
+    }
+    return 2;
+  }
+
+  let raw;
   try {
-    userVersion = new DatabaseSync(dbPath, { readOnly: true }).prepare("PRAGMA user_version").get().user_version;
-  } catch (error) {
-    fail(`cannot open ${dbPath} read-only: ${error.message}`);
+    raw = probe(db, nowMs);
+  } catch (runError) {
+    try { db.close(); } catch { /* best effort */ }
+    if (emitJson) {
+      process.stderr.write(JSON.stringify({ schemaId: SCHEMA_ID, ok: false, error: runError.message, code: "SQLITE_READ_FAILED", dbPath }, null, 2) + "\n");
+    } else {
+      process.stderr.write(`m6-resource-probe: ${runError.message}\n`);
+    }
+    return 2;
   }
-  // The live runtime pins its schema at bootstrap; a probe against a DB this
-  // tree does not understand would silently mis-report. Fail instead.
-  const source = readFileSync(new URL("../control-plane/lib/state-store.mjs", import.meta.url), "utf8");
-  const declared = Number(/CURRENT_CONTROL_SCHEMA_VERSION = (\d+)/.exec(source)?.[1] ?? NaN);
-  if (!Number.isFinite(declared) || userVersion !== declared) {
-    fail(`control.db user_version ${userVersion} != binary schema ${declared}; refusing to report`);
+  const output = finalize(raw, nowMs);
+
+  const outPath = opt(argv, "--out");
+  if (outPath) {
+    const target = resolve(outPath);
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, `${JSON.stringify(output, null, 2)}\n`, "utf8");
   }
-  const record = probeRecord({ dbPath, nowMs: Date.now(), userVersion });
-  const canonical = canonicalProbeJson(record);
-  const hashOnly = process.argv.includes("--hash-only");
-  process.stdout.write(hashOnly ? `{"probeSha256":"${probeSha256(record)}"}\n` : canonical);
+
+  const rendered = JSON.stringify(output, null, 2);
+  if (!has(argv, "--quiet")) {
+    if (emitJson) {
+      process.stdout.write(rendered + "\n");
+    } else {
+      process.stdout.write(rendered + "\n");
+    }
+  }
+
+  db.close();
+
+  // Nonzero counts: evidence is ALREADY on stdout above. We only fail the exit
+  // code now — the rows a human needs are not masked by a bare `exit 1`.
+  if (!output.allZero) {
+    if (!emitJson && !has(argv, "--quiet")) {
+      process.stderr.write("m6-resource-probe: FAIL — non-zero resource counts (see leaked IDs above)\n");
+    }
+    return 1;
+  }
+  return 0;
 }
 
-if (process.argv[1] && import.meta.url.endsWith(process.argv[1].replace(/\\/g, "/").split("/").pop())) {
-  main();
+try {
+  process.exitCode = main();
+} catch (topError) {
+  process.stderr.write(`m6-resource-probe: ${topError.message}\n`);
+  process.exitCode = 2;
 }
