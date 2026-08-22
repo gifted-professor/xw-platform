@@ -119,7 +119,8 @@
         "tests/discovery-session-state.test.mjs",
         "tests/discovery-session.test.mjs",
         "tests/fast-operator-serve-lifecycle.test.mjs",
-        "tests/foundation-pr3-transport-boundary.test.mjs"
+        "tests/foundation-pr3-transport-boundary.test.mjs",
+        "tests/explorer-primitive.test.mjs"
       ],
       "allowedModeModified": [],
       "allowedExtra": [
@@ -133,10 +134,13 @@
         "control-plane/lib/open-action-executor.mjs",
         "control-plane/lib/open-action-session.mjs",
         "control-plane/lib/payment-firewall.mjs",
+        "scripts/lib/m6-window-preflight.mjs",
+        "scripts/m6-resource-probe.mjs",
         "scripts/xw-control-plane-runtime.ps1",
         "scripts/xw-fast-operator-runtime.ps1",
         "tests/control-plane-open-action-executor.test.mjs",
         "tests/control-plane-payment-firewall.test.mjs",
+        "tests/fixtures/m6-xiaowei/display-multidisplay.raw.txt",
         "tests/fixtures/m6-xiaowei/display.raw.txt",
         "tests/fixtures/m6-xiaowei/dump-ui.raw.xml",
         "tests/fixtures/m6-xiaowei/input-method.raw.txt",
@@ -144,6 +148,7 @@
         "tests/fixtures/m6-xiaowei/screen-a.png",
         "tests/fixtures/m6-xiaowei/screen-b.png",
         "tests/fixtures/m6-xiaowei/window-focus.raw.txt",
+        "tests/fixtures/m6-xiaowei/window-rotation-enum.raw.txt",
         "tests/fixtures/m6-xiaowei/window-rotation.raw.txt",
         "tests/fixtures/m6-gate/issuer-keys.example.json",
         "tests/fixtures/m6-gate/issuer-keys.example.json",
@@ -158,6 +163,8 @@
         "tests/m6-gate-loader.test.mjs",
         "tests/m6-live-gate.test.mjs",
         "tests/m6-read-observation.test.mjs",
+        "tests/m6-resource-probe.test.mjs",
+        "tests/m6-window-preflight.test.mjs",
         "tests/open-action-device-session.test.mjs"
       ]
     }

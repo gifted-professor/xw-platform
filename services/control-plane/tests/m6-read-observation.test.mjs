@@ -29,9 +29,11 @@ const SCREEN_B = FIX("screen-b.png");
 const DUMP_XML = FIX("dump-ui.raw.xml");
 const WINDOW_FOCUS = FIX("window-focus.raw.txt");
 const WINDOW_ROTATION = FIX("window-rotation.raw.txt");
+const WINDOW_ROTATION_ENUM = FIX("window-rotation-enum.raw.txt");
 const POWER = FIX("power.raw.txt");
 const INPUT_METHOD = FIX("input-method.raw.txt");
 const DISPLAY = FIX("display.raw.txt");
+const DISPLAY_MULTI = FIX("display-multidisplay.raw.txt");
 
 // --- Real PNG generator for mismatch fixtures (valid structure, odd dims) ----
 const CRC_TABLE = (() => {
@@ -189,6 +191,7 @@ test("field parsers read the raw fixtures (source of truth is device text)", () 
   assert.equal(parseInputShown("  mInputShown=true\n"), true);
   assert.equal(parseInputShown(""), null);
   assert.equal(parseRotation("  mCurrentRotation=1 (ROTATION_90)\n"), 1);
+  assert.equal(parseRotation("  mCurrentRotation=0\n"), 0);
   assert.equal(orientationFromRotation(0), "portrait");
   assert.equal(orientationFromRotation(1), "landscape");
   assert.equal(orientationFromRotation(2), "portrait");
@@ -198,6 +201,30 @@ test("field parsers read the raw fixtures (source of truth is device text)", () 
   assert.deepEqual(metrics, { width: 1080, height: 2400, density: 440, rotation: 0, orientation: "portrait" });
   assert.equal(pngDimensions(SCREEN_A).width, 1080);
   assert.equal(pngDimensions(SCREEN_A).height, 2400);
+});
+
+test("real Xiaowei hardware format: enum-only rotation + multi-display metrics", async () => {
+  // Physical devices emit "mCurrentRotation=ROTATION_0" (no digit) and list a
+  // virtual display first (1dpi placeholder); the parser must read the enum and
+  // pick the physical panel's density.
+  assert.equal(parseRotation(WINDOW_ROTATION_ENUM.toString("utf8")), 0);
+  assert.equal(parseRotation("  mCurrentRotation=ROTATION_90\n"), 1);
+  assert.equal(parseRotation("  mCurrentRotation=ROTATION_270\n"), 3);
+  const metrics = parseDisplayMetrics(DISPLAY_MULTI.toString("utf8"));
+  assert.deepEqual(metrics, { width: 1080, height: 2400, density: 440, rotation: 0, orientation: "portrait" });
+
+  // End to end: a full observation sourced ONLY from real-hardware-format text
+  // must succeed and carry the physical panel's density (not the 1dpi virtual).
+  const result = await observe(
+    mockTransport({ rotationText: WINDOW_ROTATION_ENUM.toString("utf8"), displayText: DISPLAY_MULTI.toString("utf8") }),
+    { now: sequenceClock([T0, T0 + 350, T0 + 500]) },
+  );
+  assert.equal(result.ok, true);
+  assert.equal(result.observation.rotation, 0);
+  assert.equal(result.observation.orientation, "portrait");
+  assert.equal(result.observation.density, 440);
+  assert.equal(result.observation.width, 1080);
+  assert.equal(result.observation.height, 2400);
 });
 
 test("readObservation follows the frozen A→focusA→dump→B→focusB order in ONE critical section", async () => {
@@ -289,12 +316,12 @@ test("evidence carries the real raw bytes: A/B bit-identical PNGs, hierarchy dum
 
 test("skew gates fail closed before any frame is returned", async () => {
   await assert.rejects(
-    observe(mockTransport(), { now: sequenceClock([T0, T0 + 4001, T0 + 4101]) }),
+    observe(mockTransport(), { now: sequenceClock([T0, T0 + 15001, T0 + 15101]) }),
     (e) => e instanceof M6ObserveError && e.code === "M6_OBSERVE_A_TO_B_SKEW",
   );
-  // B→displayB→focusB is one measured freshness window; >1000ms fails.
+  // B→displayB→focusB is one measured freshness window; >8000ms fails.
   await assert.rejects(
-    observe(mockTransport(), { now: sequenceClock([T0, T0 + 300, T0 + 1301]) }),
+    observe(mockTransport(), { now: sequenceClock([T0, T0 + 300, T0 + 8301]) }),
     (e) => e.code === "M6_OBSERVE_B_TO_FOCUS_B_SKEW",
   );
 });

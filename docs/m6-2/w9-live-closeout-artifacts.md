@@ -23,12 +23,19 @@ these commands only produce inputs that oracle accepts.
 
 ### 1. Mint the OBSERVE_ONLY epoch (operator, human-confirmed)
 
+`--release-id`/`--source-commit` are **not** hardcoded here. Freeze them from
+the verified release manifest of the release actually installed at the runtime
+root (`<runtime root>/current/release-manifest.v1.json` → `releaseId` +
+`sourceCommit`) AFTER Gate B/C of the closeout plan have confirmed identity:
+manifest ↔ junction ↔ health must agree before anything is minted against it.
+Never copy these values from an old doc, receipt, or shell history.
+
 ```bash
 node packages/cli/xw.mjs m6 epoch mint \
   --m6-root C:\Users\Public\xw-runtime \
   --gate-id m6-gate \
-  --release-id xw-m6-2-w9-fe15f6f \
-  --source-commit fe15f6f2ce1d787b76ac9b58acced0d522366aef \
+  --release-id <FINAL_RELEASE_ID from current release-manifest.v1.json> \
+  --source-commit <FINAL_SOURCE_COMMIT from current release-manifest.v1.json> \
   --actor human:operator-01 \
   --allowlist 01,02,03,04 \
   --expires-at <ISO> \
@@ -38,8 +45,9 @@ node packages/cli/xw.mjs m6 epoch mint \
 
 Dry-run first (prints the signed candidate + path). `--yes` writes the
 immutable epoch. Lock hashes are re-read from the pinned
-`<runtime root>/m6-gate/locks.v1.json` (`xw-m6-2-w9-fe15f6f`); a mismatch
-aborts. Record the returned `epochHash` — it binds everything below.
+`<runtime root>/m6-gate/locks.v1.json`, whose own `releaseId`/`sourceCommit`
+must equal the two values above; a mismatch aborts. Record the returned
+`epochHash` — it binds everything below.
 
 ### 2. Freeze the scenario matrix (offline, before any capture)
 

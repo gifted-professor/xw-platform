@@ -15,7 +15,7 @@
 //   * PNG IHDR dimensions must equal the display observation; orientation and
 //     density come only from the display observation.
 //   * Focus A/B must agree on the stable window/app/screen/rotation fields.
-//   * A→B skew ≤4s and B→focus B skew ≤1s; capturedAt is the focus-B completion
+//   * A→B skew ≤15s and B→focus B skew ≤8s; capturedAt is the focus-B completion
 //     time; the frame is returned only while ≥2s of the 5s TTL remains.
 //
 // Pure functions only: no device IO, no network, no ambient clock (`nowMs` is
@@ -27,8 +27,12 @@ import { stableStringify } from "./skill-runtime.mjs";
 
 export const M6_FRAME_CONSTANTS = Object.freeze({
   frameTtlMs: 5000,
-  maxAToBSkewMs: 4000,
-  maxBToFocusBSkewMs: 1000,
+  // Real-device capture budgets (observed 2026-08-22 on physical Xiaowei):
+  // screencap ~1.6s ×2 + uiautomator dump ~2.3s ⇒ A→B ≈ 5-6s. The byte-identity
+  // A/B screenshot gate (M6_FRAME_A_B_MISMATCH) is the true stability check, so
+  // these skew gates are generous guardrails, not the stability authority.
+  maxAToBSkewMs: 15000,
+  maxBToFocusBSkewMs: 8000,
   minTtlOnReturnMs: 2000,
   maxScreenshotBytes: 16 * 1024 * 1024,
   maxDumpBytes: 4 * 1024 * 1024,

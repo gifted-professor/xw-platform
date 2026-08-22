@@ -155,7 +155,27 @@ export async function readScreenPng({ transport, serial, saveDir }) {
   if (!found) {
     throw new ControlPlaneError("EXPLORER_SCREEN_EMPTY", "screen capture produced no png", { status: 502 });
   }
-  return { path: found, bytes: readFileSync(found), vendorCode: response?.code ?? null };
+  // The vendor writes the PNG asynchronously: the file name appears before the
+  // bytes are flushed, so an immediate read yields a truncated PNG (and the
+  // evidence store's complete-PNG gate rejects it). Wait until the size is
+  // non-zero and stable across two reads before returning the bytes.
+  let bytes = null;
+  for (let i = 0; i < 25; i += 1) {
+    const current = readFileSync(found);
+    if (current.length > 0) {
+      await sleep(300);
+      const settled = readFileSync(found);
+      if (settled.length === current.length) {
+        bytes = settled;
+        break;
+      }
+    }
+    await sleep(200);
+  }
+  if (!bytes) {
+    throw new ControlPlaneError("EXPLORER_SCREEN_STALLED", "screen capture produced an unreadable png", { status: 502 });
+  }
+  return { path: found, bytes, vendorCode: response?.code ?? null };
 }
 
 // Captures the uiautomator hierarchy as well-formed XML text via a bounded

@@ -314,3 +314,48 @@ test("screen primitive records png artifact path", async () => {
   rmSync(evidenceDirectory, { recursive: true, force: true });
   await f.close();
 });
+
+test("screen primitive waits for the vendor's async PNG flush (no truncated read)", async () => {
+  // The vendor writes the PNG asynchronously: the file appears before its bytes
+  // are flushed. readScreenPng must wait for a non-zero stable size; an
+  // immediate read would yield a truncated PNG and the evidence complete-PNG
+  // gate would reject it.
+  const full = Buffer.from([
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, // signature
+    0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52, // IHDR len+type
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, // 1x1
+    0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4, // bitdepth etc
+    0x89, 0x00, 0x00, 0x00, 0x00, 0x49, 0x44, 0x41, // IDAT (placeholder len)
+    0x54, 0x08, 0x1d, 0x63, 0x60, 0x00, 0x00, 0x00, // ...
+    0x02, 0x00, 0x01, 0xe2, 0x21, 0xbc, 0x33, 0x00, // ...
+    0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, // IEND
+    0x42, 0x60, 0x82, 0x00, 0x00, 0x00, 0x00, 0x00,
+  ]);
+  const f = fixture({
+    transport: {
+      async invoke(input) {
+        if (input.action !== "Screen") return { code: 10000, data: {} };
+        const savePath = input.data.savePath;
+        mkdirSync(savePath, { recursive: true });
+        const target = join(savePath, "shot.png");
+        // Simulate async flush: tiny partial write, then the full bytes shortly after.
+        writeFileSync(target, Buffer.from([0x89, 0x50]));
+        setTimeout(() => writeFileSync(target, full), 80);
+        return { code: 10000 };
+      },
+    },
+  });
+  const evidenceDirectory = mkdtempSync(join(tempBase, "evidence-async-flush-"));
+  const execution = await f.adapter.execute({
+    capability,
+    device: deviceView(f),
+    params: { primitive: "screen" },
+    evidenceDirectory,
+    leaseAuthorization: leaseFor(f),
+    job: { canary: true },
+  });
+  assert.equal(execution.output.ok, true);
+  assert.equal(execution.output.bytes, full.length);
+  rmSync(evidenceDirectory, { recursive: true, force: true });
+  await f.close();
+});
