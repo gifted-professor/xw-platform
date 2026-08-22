@@ -146,9 +146,10 @@ function probe(db, nowMs) {
   };
 }
 
-function finalize(raw, nowMs) {
+function finalize(raw, nowMs, dbPath) {
   const payload = {
     ...raw,
+    dbPath: resolve(dbPath),
     capturedAt: new Date(nowMs).toISOString(),
   };
   const bodyStable = canonical(payload);
@@ -186,7 +187,7 @@ function main() {
     }
     return 2;
   }
-  const output = finalize(raw, nowMs);
+  const output = finalize(raw, nowMs, dbPath);
 
   const outPath = opt(argv, "--out");
   if (outPath) {
