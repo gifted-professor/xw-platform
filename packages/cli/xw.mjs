@@ -711,6 +711,13 @@ async function m6EpochActivate(argv) {
   const explicitHash = argOf(argv, "--epoch-hash");
   if (!useLatest && !explicitHash) return epochErr("activate requires --epoch-hash or --latest");
   if (useLatest && explicitHash) return epochErr("activate: use --epoch-hash OR --latest, not both");
+  if (explicitHash && !/^[0-9a-f]{64}$/.test(explicitHash)) return epochErr("activate: --epoch-hash must be 64 lowercase hex characters");
+  if (explicitHash) {
+    const activeEpochPath = join(m6Root, "m6-gate", gateId, "epochs", `${explicitHash}.json`);
+    if (!existsSync(activeEpochPath)) {
+      return epochErr(`epoch ${explicitHash} is not present in the active epochs directory (missing or tombstoned)`);
+    }
+  }
   const active = readActiveGate({ m6Root, gateId, issuerAllowlistPath: issuerKeysPath });
   const epochHash = explicitHash || (useLatest ? resolveLatestEpoch({ m6Root, gateId, issuerAllowlistPath: issuerKeysPath }) : null);
   if (!epochHash) return epochErr("--latest found no unactivated epoch binding to the current tail");

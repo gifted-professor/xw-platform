@@ -8,7 +8,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { generateKeyPairSync } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -127,6 +127,30 @@ test("xw m6 epoch mint --yes writes the immutable epoch file", () => {
     assert.equal(json.dryRun, false);
     assert.equal(json.written !== null, true);
     assert.equal(existsSync(join(gate.m6Root, "m6-gate", "gate-cli", "epochs", `${json.epoch.epochHash}.json`)), true);
+  } finally {
+    rmSync(gate.m6Root, { recursive: true, force: true });
+  }
+});
+
+test("xw m6 epoch activate refuses an explicitly tombstoned epoch before writing current", () => {
+  const gate = makeGateRoot();
+  try {
+    const common = ["--m6-root", gate.m6Root, "--gate-id", "gate-cli", "--issuer-keys", gate.issuerKeysPath, "--json"];
+    const minted = run(["m6", "epoch", "mint", ...common,
+      "--release-id", "release-cli", "--source-commit", HEX40, "--allowlist", "01,02",
+      "--expires-at", "2099-01-01T00:00:00.000Z", "--key-file", gate.keyFile, "--key-id", "key-1", "--yes"]);
+    assert.equal(minted.code, 0, minted.stderr);
+    const epochHash = minted.json.epoch.epochHash;
+    const gateRoot = join(gate.m6Root, "m6-gate", "gate-cli");
+    const activePath = join(gateRoot, "epochs", `${epochHash}.json`);
+    const tombstoneDir = join(gateRoot, "tombstones");
+    mkdirSync(tombstoneDir, { recursive: true });
+    renameSync(activePath, join(tombstoneDir, `${epochHash}.json`));
+
+    const activated = run(["m6", "epoch", "activate", ...common, "--epoch-hash", epochHash]);
+    assert.equal(activated.code, 2);
+    assert.match(activated.stderr, /not present in the active epochs directory.*tombstoned/);
+    assert.equal(existsSync(join(gateRoot, "current.json")), false);
   } finally {
     rmSync(gate.m6Root, { recursive: true, force: true });
   }

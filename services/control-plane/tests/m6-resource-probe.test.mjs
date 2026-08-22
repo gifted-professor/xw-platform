@@ -75,6 +75,7 @@ test("clean DB reports all five counts zero and exits 0", (t) => {
     actionCount: 0,
   });
   assert.equal(r.parsed.allZero, true);
+  assert.equal(r.parsed.dbPath, resolve(dbPath));
   assert.equal(r.parsed.capturedAt.length, 24); // ISO
 });
 
