@@ -35,7 +35,12 @@ import {
   loadM6Gate,
   evaluateM6Gate,
 } from "../../services/control-plane/control-plane/lib/m6-epoch.mjs";
-import { deriveM6AggregateSealHash, verifyAggregateCloseout } from "../kernel/lib/m6-aggregate-closeout.mjs";
+import {
+  deriveM6AggregateSealHash,
+  deriveM6ResourceSnapshotSha256,
+  deriveM6ScenarioManifestSha256,
+  verifyAggregateCloseout,
+} from "../kernel/lib/m6-aggregate-closeout.mjs";
 import { writeImmutableJson } from "../../services/control-plane/control-plane/lib/m6-gate-loader.mjs";
 
 const cliRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -45,6 +50,7 @@ function usage() {
 Token is read from XW_CONTROL_TOKEN or --token-file. Never pass tokens on argv, query, or stdout.
 xw m6 frame preflight|capture|status|closeout — closed M6-2 observe-capture (see: xw m6 frame --help)
 xw m6 epoch mint|activate|close|status|verify|rollback|aggregate-closeout — M6-2 offline gate operator tools (see: xw m6 epoch --help)
+xw m6 window manifest|snapshot — M6-2 W8/W9 live closeout offline inputs (see: xw m6 window --help)
 xw cutover collect|package|verify|preflight — offline release tools, see: xw cutover --help`;
 }
 
@@ -459,6 +465,7 @@ async function main(argv = process.argv.slice(2)) {
   if (argv[0] === "m6") {
     const sub = argv.slice(1);
     if (sub[0] === "epoch") return m6EpochMain(sub.slice(1));
+    if (sub[0] === "window") return m6WindowMain(sub.slice(1));
     return m6FrameMain(sub);
   }
   if (argv[0] !== "phone" || !argv[1] || argv.includes("--help")) {
@@ -952,6 +959,142 @@ async function m6EpochAggregateCloseout(argv) {
   });
   emit(argv, { ...plan, dryRun: false, sealPath, written });
   return 0;
+}
+
+// M6-2 W8/W9 — `xw m6 window`. Builds the two independently persisted inputs
+// the aggregate-closeout oracle consumes, so the live observe window is turnkey:
+// the scenario manifest is frozen BEFORE capture (bound to the minted epoch
+// hash) and the before/after resource snapshot is assembled from quiescent
+// control-plane state. Both are zero-live, deterministic, and dry-run by
+// default (--yes writes through the immutable writer; nothing is ever
+// overwritten). The oracle itself (verifyAggregateCloseout) is the contract —
+// these commands only help produce inputs it will accept.
+function m6WindowUsage() {
+  return `xw m6 window — M6-2 W8/W9 live closeout offline inputs (zero-live, dry-run first)
+
+  xw m6 window manifest --epoch-hash H
+                        [--aliases 01,02,03,04]
+                        [--unstable 01:20,02:20,03:20,04:20]
+                        [--runs-per-alias 20] [--out FILE] [--yes]
+  xw m6 window snapshot --epoch-hash H
+                        [--before '{"activeJobs":0,"activeSessions":0,"activeLeases":0}']
+                        [--after  '{"activeJobs":0,"activeSessions":0,"activeLeases":0}']
+                        [--out FILE] [--yes]
+
+manifest freezes the 4-alias x runs-per-alias scenario matrix (stable->accepted,
+unstable->rejected, every scenario zeroAction:true) and binds the minted epoch
+hash. --unstable maps alias->ordinal for the deliberately-unstable scenario each
+alias must declare; default freezes ordinal 20 of every alias as unstable.
+snapshot binds the same epoch hash to quiescent before/after control-plane
+resource state — every field must be exactly zero, otherwise it fails closed.
+Both print the candidate + would-write path; --yes performs the immutable write.
+The aggregate oracle accepts exactly the shapes these two commands emit.`;
+}
+
+function m6WindowManifest(argv) {
+  const epochHash = argOf(argv, "--epoch-hash");
+  if (!/^[0-9a-f]{64}$/.test(epochHash ?? "")) return epochErr("--epoch-hash is required (64-hex, from xw m6 epoch mint)");
+  const aliases = (argOf(argv, "--aliases", "01,02,03,04") || "").split(",").map((s) => s.trim()).filter(Boolean);
+  const runsPerAlias = Number(argOf(argv, "--runs-per-alias", "20"));
+  if (!Number.isInteger(runsPerAlias) || runsPerAlias < 1 || runsPerAlias > 99) return epochErr("--runs-per-alias must be an integer 1..99");
+  const unstable = new Set();
+  for (const spec of (argOf(argv, "--unstable", "") || "").split(",").map((s) => s.trim()).filter(Boolean)) {
+    const [alias, ordinal] = spec.split(":");
+    if (!aliases.includes(alias) || !Number.isInteger(Number(ordinal)) || Number(ordinal) < 1 || Number(ordinal) > runsPerAlias) {
+      return epochErr(`--unstable entry '${spec}' must be 'alias:ordinal' within the alias matrix`);
+    }
+    unstable.add(`${alias}:${Number(ordinal)}`);
+  }
+  // The oracle requires every alias to freeze at least one stable and one
+  // unstable scenario; if the caller froze none, default to the last ordinal.
+  for (const alias of aliases) {
+    if (![...unstable].some((key) => key.startsWith(`${alias}:`))) unstable.add(`${alias}:${runsPerAlias}`);
+  }
+  const scenarios = [];
+  for (const alias of aliases) {
+    for (let ordinal = 1; ordinal <= runsPerAlias; ordinal += 1) {
+      const unstableFlag = unstable.has(`${alias}:${ordinal}`);
+      scenarios.push({
+        scenarioId: `observe-${alias}-${String(ordinal).padStart(2, "0")}`,
+        alias,
+        ordinal,
+        expectedStatus: unstableFlag ? "rejected" : "accepted",
+        expectedStability: unstableFlag ? "unstable" : "stable",
+        zeroAction: true,
+      });
+    }
+  }
+  const raw = { schemaId: "xw.m6-scenario-manifest.v1", epochHash, runsPerAlias, scenarios };
+  const manifest = { ...raw, manifestSha256: deriveM6ScenarioManifestSha256(raw) };
+  const path = resolve(argOf(argv, "--out", "m6-window-scenario-manifest.json"));
+  const plan = {
+    dryRun: !has(argv, "--yes"),
+    schemaId: raw.schemaId,
+    epochHash,
+    aliases,
+    runsPerAlias,
+    scenarioCount: scenarios.length,
+    stableCount: scenarios.filter((s) => s.expectedStability === "stable").length,
+    unstableCount: scenarios.filter((s) => s.expectedStability === "unstable").length,
+    manifestSha256: manifest.manifestSha256,
+    path,
+  };
+  if (plan.dryRun) { emit(argv, plan); return 0; }
+  const written = writeImmutableJson(path, manifest);
+  emit(argv, { ...plan, dryRun: false, written });
+  return 0;
+}
+
+function windowSnapshot(argv) {
+  const epochHash = argOf(argv, "--epoch-hash");
+  if (!/^[0-9a-f]{64}$/.test(epochHash ?? "")) return epochErr("--epoch-hash is required (64-hex, from xw m6 epoch mint)");
+  const zero = { activeJobs: 0, activeSessions: 0, activeLeases: 0 };
+  const parsePoint = (label, fallback) => {
+    const raw = argOf(argv, `--${label}`, JSON.stringify(fallback));
+    let value;
+    try { value = JSON.parse(raw); } catch { return { error: `--${label} is not valid JSON` }; }
+    if (!value || typeof value !== "object") return { error: `--${label} must be an object` };
+    for (const field of ["activeJobs", "activeSessions", "activeLeases"]) {
+      if (!Number.isInteger(value[field]) || value[field] !== 0) {
+        return { error: `${label}.${field} must be exactly 0 (the oracle fails closed on any resource leak)` };
+      }
+    }
+    return { value };
+  };
+  const before = parsePoint("before", zero);
+  if (before.error) return epochErr(before.error);
+  const after = parsePoint("after", zero);
+  if (after.error) return epochErr(after.error);
+  const raw = { schemaId: "xw.m6-resource-snapshot.v1", epochHash, before: before.value, after: after.value, actionCount: 0 };
+  const snapshot = { ...raw, snapshotSha256: deriveM6ResourceSnapshotSha256(raw) };
+  const path = resolve(argOf(argv, "--out", "m6-window-resource-snapshot.json"));
+  const dryRun = !has(argv, "--yes");
+  const plan = {
+    dryRun,
+    schemaId: raw.schemaId,
+    epochHash,
+    before: before.value,
+    after: after.value,
+    actionCount: 0,
+    snapshotSha256: snapshot.snapshotSha256,
+    path,
+  };
+  if (dryRun) { emit(argv, plan); return 0; }
+  const written = writeImmutableJson(path, snapshot);
+  emit(argv, { ...plan, dryRun: false, written });
+  return 0;
+}
+
+async function m6WindowMain(argv) {
+  const command = argv[0];
+  if (!command || has(argv, "--help")) {
+    process.stderr.write(`${m6WindowUsage()}\n`);
+    return has(argv, "--help") ? 0 : 2;
+  }
+  if (command === "manifest") return m6WindowManifest(argv);
+  if (command === "snapshot") return windowSnapshot(argv);
+  process.stderr.write(`${m6WindowUsage()}\n`);
+  return 2;
 }
 
 async function m6EpochMain(argv) {
