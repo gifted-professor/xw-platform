@@ -250,7 +250,7 @@
     },
     {
       "path": "packages/kernel/lib/m6-screen-frame.mjs",
-      "sha256": "39eb64ff581c49e6bf677e43a557d0d19c8afde54fe8d618d8b2e2a567eb293d",
+      "sha256": "dd78db613495f1368b805d9d28fdd2ee83e4b97abeb96320e348c45e7cfe8830",
       "role": "M6-2 single canonical screen-frame assembler: replay + live_strict share one manifest/frameId derivation; W8 adds verifyFrameManifest for capture-time integrity re-check",
       "externalPaths": [],
       "externalDependencies": [],
