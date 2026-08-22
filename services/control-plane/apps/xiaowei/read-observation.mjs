@@ -78,9 +78,19 @@ export function parseInputShown(text) {
 }
 
 export function parseRotation(text) {
-  const m = /mCurrentRotation=(\d+)/.exec(String(text ?? ""));
-  if (!m) return null;
-  const rotation = Number(m[1]);
+  const s = String(text ?? "");
+  // Physical Xiaowei devices emit the enum only: "mCurrentRotation=ROTATION_0".
+  // Other builds emit a digit, sometimes followed by the enum in parens:
+  // "mCurrentRotation=0 (ROTATION_90)". The enum is named after the Surface
+  // degree constant (ROTATION_0/90/180/270) but holds a quarter-turn VALUE
+  // (0..3), so map names explicitly. Unknown enums fall through to the digit
+  // form; a bare digit remains accepted for the numeric dumpsys format.
+  const ENUM_QUARTER = { ROTATION_0: 0, ROTATION_90: 1, ROTATION_180: 2, ROTATION_270: 3 };
+  const enumMatch = /mCurrentRotation=(ROTATION_\d+)/.exec(s);
+  if (enumMatch && enumMatch[1] in ENUM_QUARTER) return ENUM_QUARTER[enumMatch[1]];
+  const digitMatch = /mCurrentRotation=(\d+)/.exec(s);
+  if (!digitMatch) return null;
+  const rotation = Number(digitMatch[1]);
   return rotation >= 0 && rotation <= 3 ? rotation : null;
 }
 
@@ -97,16 +107,22 @@ export function parseDisplayMetrics(text) {
   // dumpsys window displays:
   //   init=1080x2400 440dpi cur=1080x2400 app=1080x2400 ...
   //   mCurrentRotation=1 (ROTATION_90)
+  // Real devices list EVERY display; the first init= can be a virtual display
+  // with a placeholder density (e.g. 1dpi). Pick the highest-density init line
+  // (the physical panel) rather than the first match.
   const s = String(text ?? "");
   let width = null;
   let height = null;
   let density = null;
-  const init = /init=(\d+)x(\d+)\s+(\d+)dpi/.exec(s);
-  if (init) {
-    width = Number(init[1]);
-    height = Number(init[2]);
-    density = Number(init[3]);
-  } else {
+  for (const init of s.matchAll(/init=(\d+)x(\d+)\s+(\d+)dpi/g)) {
+    const d = Number(init[3]);
+    if (density === null || d > density) {
+      width = Number(init[1]);
+      height = Number(init[2]);
+      density = d;
+    }
+  }
+  if (width === null || height === null) {
     const size = /init=(\d+)x(\d+)/.exec(s);
     if (size) {
       width = Number(size[1]);
