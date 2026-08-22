@@ -1,7 +1,7 @@
 {
   "schemaId": "xw.dsh-inventory.v1",
-  "schemaVersion": 1,
-  "generatedAt": "2026-08-21T00:00:00Z",
+  "schemaVersion": 2,
+  "generatedAt": "2026-08-22T00:00:00Z",
   "subject": "integrations/dsh-xw",
   "lock": {
     "schemaId": "xw.dsh.lock.v1",
@@ -12,6 +12,36 @@
     "packageManager": "pnpm@11.7.0",
     "follow": "exact-commit",
     "copiedFrom": "packages/harness-protocol/locks/dsh.lock.v1.json"
+  },
+  "pinVerification": {
+    "status": "verified",
+    "date": "2026-08-22",
+    "commitExists": "https://api.github.com/repos/deepseek-ai/deepseek-harness/git/commits/99f6f02fecdb7dff40c3fbc9470f5907c29f74ca — 'Merge pull request #2620 from deepseek-harness/release/dsh-0.1.0-rc.7' (2026-08-17)",
+    "treeMatch": true,
+    "treeSha": "3bc8f89fe494a4755c188be354add4e8b1e7b188",
+    "packageManagerMatch": true,
+    "packageManagerFound": "pnpm@11.7.0 (root package.json)",
+    "versionMatch": true,
+    "npmPinned": {
+      "@deepseek-ai/dsh": "0.1.0-rc.7 published (MIT; bin dsh -> lib/bin.js)",
+      "@deepseek-ai/dsh-sdk-client": "0.1.0-rc.7 published (MIT)",
+      "@deepseek-ai/dsh-sdk-protocol": "0.1.0-rc.7 published (MIT)",
+      "@deepseek-ai/dsh-sdk-jsonrpc-server": "0.1.0-rc.7 published (MIT)"
+    },
+    "defaultBranch": "master",
+    "note": "pin 与上游仓库 git commit/tree/packageManager/version 逐一核验一致；commit 存在且为 rc.7 发布合入。禁止跟随 master/latest。"
+  },
+  "license": {
+    "spdx": "MIT",
+    "status": "verified",
+    "evidence": [
+      "仓库根 LICENSE 文件 = MIT License, Copyright (c) 2026 DeepSeek",
+      "仓库根 package.json license: MIT",
+      "packages/sdk/protocol|client|server 三个 package.json license: MIT",
+      "npm registry @deepseek-ai/dsh@0.1.0-rc.7 / dsh-sdk-client@0.1.0-rc.7 license: MIT",
+      "THIRD_PARTY_NOTICES.md: 依赖均为 MIT 系（cordis/cosmokit/schemastery 等 vendored MIT）；无传染性许可"
+    ],
+    "note": "注意：npm dist-tag 'latest' 指向 0.0.1-rc.1 的过期条目标注 BSD-3-Clause，是早期未使用的 tag 残留，与 pinned 0.1.0-rc.7 无关（该版本各包均为 MIT）。"
   },
   "apiShape": {
     "allowedTools": [
@@ -25,22 +55,55 @@
       "xw_trace_query"
     ],
     "forbiddenTools": ["control.db", "registry.db", "ADB", "22222", "lease_mutation", "payment_override", "policy_override"],
-    "adapterMethods": ["createSession", "restoreSession", "submitGoal", "continueSkill", "checkpoint", "queryTrace", "interrupt", "close", "invokeTool", "serialize"]
+    "real": {
+    "wire": {
+      "transport": "newline-delimited JSON-RPC 2.0 over stdio（JsonRpcLineTransport）：一行一个紧凑 JSON frame；id+method=request、id alone=response、method alone=notification；畸形 JSON 行被忽略；请求 handler 缺失答 -32601，handler 拒绝答 -32603",
+      "stdoutPurity": "stdout 只承载 JSON-RPC frame；日志必须走 stderr（deployment-enforced）",
+      "clientToServer": [
+        "initialize: {cwd, provider, model, maxTokens?} -> {serverInfo:{name:'deepseek-harness-sdk-runtime', version}}",
+        "session/prompt: {sessionId, contentBlocks} -> {messageId}（messageId 仅入站回执，不标识后续 assistant 消息/turn 结束）",
+        "shutdown: {} -> {}（flush 响应后 dispose root context 并 exit 0）"
+      ],
+      "serverToClient": [
+        "notification session.event: {sessionId, event: SessionEvent}",
+        "notification session.status: {sessionId, status:'idle'|'running'}",
+        "notification subagent.started: {parentSessionId, childSessionId}",
+        "notification subagent.finished: {provider, agentId, parentSessionId, childSessionId, status:'ok'|'error', stopReason, lastAssistantMessage?}"
+      ],
+      "limits": [
+        "无 protocol-version 协商（serverInfo.version='0.0.1' 未校验）",
+        "无 per-session close / prompt-cancel 方法——放弃一个 turn = close 运行时",
+        "无 per-prompt result（messageId 只是入站回执）",
+        "server 从不向 client 发起 request（approval 流未来才做）"
+      ]
+    },
+    "launch": {
+      "runtime": "@deepseek-ai/dsh CLI（bin: lib/bin.js），由调用方显式 spawn：{command:'node', args:['lib/bin.js','<cordis.yml>']}",
+      "composition": "cordis.yml 决定工具面与插件（官方例子 jsonrpc-agent 挂 sdk-jsonrpc-server + llm-deepseek + subprocess-local + bash-local + agent-spine + session-persistence-jsonl + session-checkpoint-policy + subagent）",
+      "harnessClient": "DeepSeekHarness（owned-run: run()/close()）+ HarnessClient（显式 start/initialize/prompt/request/close + subscribe）；close() 走 shutdown->stdin EOF->SIGTERM->SIGKILL 梯子（shutdownTimeoutMs 1000, disposeEofGraceMs 6000, disposeGraceMs 3000）",
+      "errors": "JsonRpcResponseError / RequestTimeoutError / SdkProtocolError / TransportClosedError（含 exit code + bounded stderr tail）",
+      "env": "HarnessClientOptions.env 完全替换 child 环境；缺省继承 parent"
+    },
+    "toolSurface": {
+      "shipped": "基础 runtime 自带工具为编码 agent 工具（bash/read/write/edit/subagent/todo_write 等，由 corda.yml 决定挂载）；另有 sandbox/sandbox-policy/guard/timeout-policy 等过程沙箱/策略插件",
+      "shippedAbsent": "DSH 内置工具面不包含 ADB / raw coordinate / lease / control.db / registry.db / payment / policy override 等设备侧能力；这些只可能由部署方自建插件引入",
+      "xwSurface": "XW 侧 allowed/forbidden 工具面（xw_skill_start/…/xw_trace_query 等）由 XW 自建 cordis 插件声明，不在 DSH 内置；必须双侧校验（dsh-sdk-protocol 类型 + cordis 插件 schema）",
+      "forbidden": ["control.db", "registry.db", "ADB", "22222", "lease_mutation", "payment_override", "policy_override"]
+    }
+    }
   },
   "fixture": {
     "isFixture": true,
-    "marker": "README.md 声明 'Source-only' 且 'DSH_LIVE_GATE = CLOSED'；plugin.mjs 仅通过 packages/harness-protocol 的内存 HarnessRuntime 实现协议，不 spawn 真实 DSH/Cordis 进程（无 node:child_process 引用）",
-    "consequence": "当前 adapter 不证明真实 DSH SDK/JSON-RPC 形状；未验证前不得进入 M6-3"
-  },
-  "license": {
-    "spdx": null,
-    "status": "unverified",
-    "note": "deepseek-harness 许可证未在仓内核实；任务书 §11 将其列为阻断条件：DSH 实际 SDK/JSON-RPC/许可证无法验证即停止后续波次"
+    "marker": "integrations/dsh-xw/plugin.mjs 仅通过 packages/harness-protocol 的内存 HarnessRuntime 实现协议，不 spawn 真实 DSH/Cordis 进程（无 node:child_process 引用）；README.md 声明 'Source-only' 且 'DSH_LIVE_GATE = CLOSED'",
+    "consequence": "当前 adapter 为内存 fixture，不冒充真实进程；M6-3 须按上方真实 wire/launch 形状实现 out-of-process plugin。fixture 的 adapterMethods（createSession/restoreSession/submitGoal/continueSkill/checkpoint/queryTrace/interrupt/close/invokeTool/serialize）是 XW 侧协议抽象，不是 DSH SDK 的 wire 方法——真实 wire 只有 initialize/session/prompt/shutdown + 4 个 notification。"
   },
   "conclusions": [
     "lock.json 与 packages/harness-protocol/locks/dsh.lock.v1.json 一致（plugin.mjs 构造时强制校验，漂移抛 DSH_LOCK_DRIFT）",
-    "pinned version/commit/tree/packageManager 字段齐全；禁止跟随 master/latest",
-    "当前 adapter 为内存 fixture，不冒充真实进程",
-    "未编写任何伪造的 src/index.ts 接口"
+    "pin 完整性核验通过：commit 99f6f02f（merge of release/dsh-0.1.0-rc.7）、tree 3bc8f89f… 与上游完全一致；packageManager pnpm@11.7.0 与 root package.json 一致",
+    "license 核验通过：MIT（SPDX: MIT），仓库 LICENSE + 各 package.json + npm rc.7 一致；dist-tag latest 上的 BSD-3-Clause 为早期 0.0.1-rc.1 残留，与 pin 无关",
+    "真实 API 形状已取证：stdlib newline JSON-RPC 2.0 + initialize/session/prompt/shutdown + session.event/status + subagent 通知；stdout 纯净、close 梯级、无 cancel/无 per-prompt result",
+    "真实 wire 与 fixture 的 adapterMethods 不同——M6-3 必须实现真实协议，不能复用 fixture 方法名",
+    "DSH 内置工具面无 ADB/坐标/lease/db/payment——禁止项由我们的 cordis 插件面承担",
+    "未编写任何伪造的 src/index.ts 接口；未跟随 master/latest"
   ]
 }
