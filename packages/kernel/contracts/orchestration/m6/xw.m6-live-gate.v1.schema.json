@@ -19,7 +19,9 @@
     "issuedAt",
     "expiresAt",
     "parentEpochHash",
-    "closeoutRef"
+    "closeoutRef",
+    "aggregateSealRef",
+    "rollbackTargetEpochHash"
   ],
   "properties": {
     "schemaId": { "const": "xw.m6-live-gate.v1" },
@@ -48,7 +50,9 @@
     "issuedAt": { "$ref": "#/$defs/dateTime" },
     "expiresAt": { "$ref": "#/$defs/dateTime" },
     "parentEpochHash": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" },
-    "closeoutRef": { "$ref": "#/$defs/opaqueRefOrNull" }
+    "closeoutRef": { "$ref": "#/$defs/opaqueRefOrNull" },
+    "aggregateSealRef": { "$ref": "#/$defs/opaqueRefOrNull" },
+    "rollbackTargetEpochHash": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" }
   },
   "$defs": {
     "dateTime": {

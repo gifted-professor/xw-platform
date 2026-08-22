@@ -68,6 +68,8 @@ export function buildEpochRecord({
   expiresAt,
   parentEpochHash = null,
   closeoutRef = null,
+  aggregateSealRef = null,
+  rollbackTargetEpochHash = null,
 } = {}) {
   if (typeof gateId !== "string" || !GATE_ID_RE.test(gateId)) fail("M6_EPOCH_INPUT_INVALID", "gateId must match /^[A-Za-z0-9._-]{1,128}$/");
   if (!M6_GATE_MODES.includes(mode)) fail("M6_EPOCH_INPUT_INVALID", `mode must be one of ${M6_GATE_MODES.join(", ")}`);
@@ -91,6 +93,9 @@ export function buildEpochRecord({
   if (parentEpochHash !== null && (typeof parentEpochHash !== "string" || !HEX64.test(parentEpochHash))) {
     fail("M6_EPOCH_INPUT_INVALID", "parentEpochHash must be a 64-hex sha256 or null");
   }
+  if (rollbackTargetEpochHash !== null && (typeof rollbackTargetEpochHash !== "string" || !HEX64.test(rollbackTargetEpochHash))) {
+    fail("M6_EPOCH_INPUT_INVALID", "rollbackTargetEpochHash must be a 64-hex sha256 or null");
+  }
 
   const status = mode === "CLOSED" ? "closed" : "active";
   let resolvedCloseoutRef = null;
@@ -101,8 +106,17 @@ export function buildEpochRecord({
       fail("M6_EPOCH_INPUT_INVALID", "CLOSED mode requires closeoutRef {id, sha256(64-hex)}");
     }
     resolvedCloseoutRef = { id: closeoutRef.id, sha256: closeoutRef.sha256 };
+    if (!aggregateSealRef || typeof aggregateSealRef !== "object"
+      || typeof aggregateSealRef.id !== "string" || aggregateSealRef.id === ""
+      || typeof aggregateSealRef.sha256 !== "string" || !HEX64.test(aggregateSealRef.sha256)) {
+      fail("M6_EPOCH_INPUT_INVALID", "CLOSED mode requires aggregateSealRef {id, sha256(64-hex)}");
+    }
   } else if (closeoutRef !== null && closeoutRef !== undefined) {
     fail("M6_EPOCH_INPUT_INVALID", "OBSERVE_ONLY mode must not carry a closeoutRef");
+  } else if (aggregateSealRef !== null && aggregateSealRef !== undefined) {
+    fail("M6_EPOCH_INPUT_INVALID", "OBSERVE_ONLY mode must not carry an aggregateSealRef");
+  } else if (rollbackTargetEpochHash !== null) {
+    fail("M6_EPOCH_INPUT_INVALID", "OBSERVE_ONLY mode must not carry rollbackTargetEpochHash");
   }
 
   const raw = {
@@ -119,6 +133,8 @@ export function buildEpochRecord({
     expiresAt,
     parentEpochHash,
     closeoutRef: resolvedCloseoutRef,
+    aggregateSealRef: mode === "CLOSED" ? { id: aggregateSealRef.id, sha256: aggregateSealRef.sha256 } : null,
+    rollbackTargetEpochHash,
   };
   const epochHash = deriveM6EpochHash(raw);
   const epoch = { ...raw, epochHash };
@@ -228,6 +244,7 @@ export function readActiveGate({ m6Root, gateId, issuerAllowlistPath, nowMs }) {
     tailEpochHash: loaded.tailEpochHash,
     epochs: loaded.chain,
     closeouts: loaded.closeouts,
+    aggregates: loaded.aggregates,
     lockHashes: loaded.lockHashes,
   };
 }
@@ -257,28 +274,36 @@ export function resolveLatestEpoch({ m6Root, gateId, issuerAllowlistPath }) {
   return candidates[0].hash;
 }
 
-// Restore a prior current.json pointer from a tombstone (rollback). The active
-// pointer is tombstoned first; the matching tombstone (by tailEpochHash) is
-// re-installed. Never hard-deletes. Returns the restored pointer path.
-export function rollbackGate({ m6Root, gateId, toTailEpochHash, promotedAt }) {
-  if (typeof toTailEpochHash !== "string" || !HEX64.test(toTailEpochHash)) fail("M6_EPOCH_INPUT_INVALID", "toTailEpochHash must be a 64-hex sha256");
-  if (!isIsoDateTime(promotedAt)) fail("M6_EPOCH_INPUT_INVALID", "promotedAt must be an ISO 8601 date-time");
-  const tombDir = join(gateRoot(m6Root, gateId), "tombstones");
-  if (!existsSync(tombDir)) fail("M6_EPOCH_ROLLBACK_NO_TARGET", "no tombstones to roll back to");
-  let found = null;
-  for (const name of readdirSync(tombDir)) {
-    if (!name.endsWith(".json")) continue;
-    let record;
-    try { record = JSON.parse(readFileSync(join(tombDir, name), "utf8")); } catch { continue; }
-    if (record && record.tailEpochHash === toTailEpochHash) {
-      found = { record: { chain: record.chain, tailEpochHash: record.tailEpochHash, promotedAt } };
-      break;
-    }
+// Append a newly signed CLOSED epoch that restores a prior CLOSED policy.
+// History and the active pointer only move forward; tombstones are never read
+// as authorization and an OBSERVE_ONLY epoch can never be a rollback target.
+export function rollbackGate({ m6Root, gateId, epoch, proof, promotedAt, issuerAllowlistPath = join(m6Root, "m6-gate", "issuer-keys.json") }) {
+  if (!epoch || epoch.mode !== "CLOSED" || !HEX64.test(epoch.rollbackTargetEpochHash ?? "")) {
+    fail("M6_EPOCH_INPUT_INVALID", "rollback requires a signed CLOSED epoch with rollbackTargetEpochHash");
   }
-  if (!found) fail("M6_EPOCH_ROLLBACK_NO_TARGET", `no tombstone with tailEpochHash ${toTailEpochHash}`);
-  const currentPath = join(gateRoot(m6Root, gateId), "current.json");
-  tombstoneAndWrite(currentPath, found.record);
-  return currentPath;
+  if (!isIsoDateTime(promotedAt)) fail("M6_EPOCH_INPUT_INVALID", "promotedAt must be an ISO 8601 date-time");
+  const active = loadM6Gate({ m6Root, gateId, issuerAllowlistPath, requireLocks: true });
+  const targetIndex = active.chain.findIndex((candidate) => candidate.epochHash === epoch.rollbackTargetEpochHash && candidate.mode === "CLOSED");
+  if (targetIndex < 0 || targetIndex >= active.chain.length - 1) {
+    fail("M6_EPOCH_ROLLBACK_NO_TARGET", "rollback target must be a prior CLOSED epoch in the active append-only chain");
+  }
+  const target = active.chain[targetIndex];
+  const sameJson = (left, right) => JSON.stringify(left) === JSON.stringify(right);
+  if (epoch.gateId !== target.gateId || epoch.releaseId !== target.releaseId || epoch.sourceCommit !== target.sourceCommit
+    || epoch.expiresAt !== target.expiresAt || !sameJson(epoch.allowlist, target.allowlist)
+    || !sameJson(epoch.lockHashes, target.lockHashes) || !sameJson(epoch.closeoutRef, target.closeoutRef)
+    || !sameJson(epoch.aggregateSealRef, target.aggregateSealRef)) {
+    fail("M6_EPOCH_ROLLBACK_TARGET_MISMATCH", "rollback epoch must reproduce the target CLOSED policy and seal bindings exactly");
+  }
+  if (epoch.parentEpochHash !== active.tailEpochHash) fail("M6_EPOCH_INPUT_INVALID", "rollback epoch must append to the current tail");
+  mintEpoch({ m6Root, gateId, epoch, proof });
+  return activateGate({
+    m6Root,
+    gateId,
+    chain: [...active.chain.map((candidate) => candidate.epochHash), epoch.epochHash],
+    tailEpochHash: epoch.epochHash,
+    promotedAt,
+  });
 }
 
 export { loadM6Gate, loadM6Locks, loadGateIssuerAllowlist, evaluateM6Gate, M6_GATE_MODES };

@@ -29,6 +29,7 @@ import {
 } from "../control-plane/lib/m6-live-gate.mjs";
 import { StateStore } from "../control-plane/lib/state-store.mjs";
 import { ControlRouter } from "../control-plane/router.mjs";
+import { deriveM6AggregateSealHash } from "../../../packages/kernel/lib/m6-aggregate-closeout.mjs";
 
 const tempBase = fileURLToPath(new URL("../control-plane/runtime", import.meta.url));
 mkdirSync(tempBase, { recursive: true });
@@ -134,6 +135,7 @@ function mockTransport(overrides = {}) {
 // --- harness: real stores + real control plane + real facade --------------
 function harness({
   gate = { chain: [epoch()] },
+  gateProvider = null,
   profile = PROFILE,
   release = RELEASE,
   devices = ["alpha"],
@@ -167,6 +169,7 @@ function harness({
     evidence: m6Evidence,
     auditRoot: join(root, "audit"),
     gate,
+    gateProvider,
     release,
     profile,
     lockHashes: LOCKS,
@@ -210,10 +213,20 @@ test("gate unit: deterministic hashes, chain evaluation, allowlist", () => {
   // Forged closeout: seal points at a missing record.
   const sealed = epoch({ closeoutRef: { id: "closeout-missing", sha256: "0".repeat(64) } });
   const r5 = evaluateM6Gate({ chain: [sealed], nowMs: Date.parse("2026-08-21T00:00:00Z") });
-  assert.equal(r5.errors[0].code, "M6_GATE_CLOSEOUT_FORGED");
-  // Valid closeout seals the epoch closed (registry keyed by the ref id).
-  const closeoutRec = closeout({ epochHash: sealed.epochHash, closeoutId: "closeout-missing" });
-  const r6 = evaluateM6Gate({ chain: [sealed], closeouts: { "closeout-missing": closeoutRec }, nowMs: Date.parse("2026-08-21T00:00:00Z") });
+  assert.equal(r5.errors[0].code, "M6_GATE_EPOCH_FORGED");
+  // A valid CLOSED child binds the root observe epoch's closeout + aggregate.
+  const closeoutRec = closeout({ epochHash: e.epochHash, closeoutId: "closeout-valid" });
+  const sealPayload = { probe: "gate-unit" };
+  const sealHash = deriveM6AggregateSealHash(sealPayload);
+  const closed = epoch({
+    mode: "CLOSED",
+    status: "closed",
+    parentEpochHash: e.epochHash,
+    closeoutRef: { id: closeoutRec.closeoutId, sha256: closeoutRec.closeoutHash },
+    aggregateSealRef: { id: sealHash, sha256: sealHash },
+  });
+  const aggregate = { epochHash: e.epochHash, sealPayload, sealHash };
+  const r6 = evaluateM6Gate({ chain: [e, closed], closeouts: { [closeoutRec.closeoutId]: closeoutRec }, aggregates: { [sealHash]: aggregate }, nowMs: Date.parse("2026-08-21T00:00:00Z") });
   assert.equal(r6.mode, "CLOSED");
   assert.equal(r6.errors.length, 0);
   // Allowlist membership.
@@ -225,12 +238,34 @@ test("gate unit: deterministic hashes, chain evaluation, allowlist", () => {
 test("gate CLOSED → capture fails closed with zero transport reads", async () => {
   // A contract-valid CLOSED epoch: status=closed + a self-hashing closeout that
   // resolves, so the gate evaluates to CLOSED (not an invalid-epoch rejection).
-  const closedEpoch = epoch({ mode: "CLOSED", status: "closed", closeoutRef: { id: "closeout-closed", sha256: "0".repeat(64) } });
-  const closedRec = closeout({ epochHash: closedEpoch.epochHash, closeoutId: "closeout-closed" });
-  const { root, state, facade, transport } = harness({ gate: { chain: [closedEpoch], closeouts: { "closeout-closed": closedRec } } });
+  const sealPayload = { probe: "closed" };
+  const sealHash = deriveM6AggregateSealHash(sealPayload);
+  const observeEpoch = epoch();
+  const closedRec = closeout({ epochHash: observeEpoch.epochHash, closeoutId: "closeout-closed" });
+  const closedEpoch = epoch({
+    mode: "CLOSED",
+    status: "closed",
+    parentEpochHash: observeEpoch.epochHash,
+    closeoutRef: { id: "closeout-closed", sha256: closedRec.closeoutHash },
+    aggregateSealRef: { id: sealHash, sha256: sealHash },
+  });
+  const aggregate = { schemaId: "xw.m6-aggregate-closeout.v1", epochHash: closedRec.epochHash, sealHash, sealPayload };
+  const { root, state, facade, transport } = harness({ gate: { chain: [observeEpoch, closedEpoch], closeouts: { "closeout-closed": closedRec }, aggregates: { [sealHash]: aggregate } } });
   try {
     await assert.rejects(facade.capture({ alias: "alpha", scenarioLabel: "observe", idempotencyKey: "ik-1" }), (e) => e.code === "M6_GATE_CLOSED");
     assert.equal(transport.readCount(), 0);
+  } finally { cleanup(root, state); }
+});
+
+test("running facade reloads the gate for preflight and health", () => {
+  let snapshot = { chain: [epoch()], closeouts: {}, aggregates: {}, lockHashes: LOCKS };
+  const { root, state, facade } = harness({ gateProvider: () => snapshot });
+  try {
+    assert.equal(facade.preflight({ alias: "alpha", scenarioLabel: "observe-01-01" }).gateMode, "OBSERVE_ONLY");
+    snapshot = { chain: [], closeouts: {}, aggregates: {}, lockHashes: LOCKS };
+    assert.throws(() => facade.preflight({ alias: "alpha", scenarioLabel: "observe-01-01" }), { code: "M6_GATE_EMPTY" });
+    assert.equal(facade.health().gateMode, "CLOSED");
+    assert.deepEqual(facade.health().gateErrors, ["M6_GATE_EMPTY"]);
   } finally { cleanup(root, state); }
 });
 
@@ -488,13 +523,20 @@ test("cleanup failure after an accepted capture is surfaced (M6_CLEANUP_FAILED),
       (e) => e.code === "M6_CLEANUP_FAILED",
     );
     assert.ok(releaseCalls >= 1, "releaseSession must have been attempted (not swallowed)");
+    const attemptFile = readdirSync(join(root, "audit")).find((file) => file.endsWith(".json") && !file.endsWith(".closeout.json"));
+    const record = JSON.parse(readFileSync(join(root, "audit", attemptFile), "utf8"));
+    assert.equal(record.receipt.status, "rejected");
+    assert.equal(record.receipt.frameRef, null);
+    assert.deepEqual(record.receipt.errorCodes, ["M6_CLEANUP_FAILED"]);
+    assert.deepEqual(record.tombstone, { acceptedFrameCommitted: false, reason: "M6_CLEANUP_FAILED" });
+    assert.equal(Object.hasOwn(record, "frame"), false);
   } finally { cleanup(root, state); }
 });
 
 test("closeout convergence: a leaked session/lease refuses to seal (M6_CLOSEOUT_CONVERGENCE_FAILED)", async () => {
   const { root, state, control, facade } = harness();
-  // Sabotage releaseSession: the capture accepts (accepted receipt written) but
-  // its finally throws M6_CLEANUP_FAILED, leaving the session + lease leaked.
+  // Sabotage releaseSession: cleanup failure must tombstone the candidate frame
+  // as rejected while preserving enough attribution for convergence checks.
   control.releaseSession = () => { throw new Error("release boom"); };
   try {
     await assert.rejects(
@@ -502,9 +544,11 @@ test("closeout convergence: a leaked session/lease refuses to seal (M6_CLOSEOUT_
       (e) => e.code === "M6_CLEANUP_FAILED",
     );
     const attemptFile = readdirSync(join(root, "audit")).find((f) => f.endsWith(".json") && !f.endsWith(".closeout.json"));
-    assert.ok(attemptFile, "accepted receipt written before the finally failed");
+    assert.ok(attemptFile, "rejected tombstone is written after cleanup failed");
     const receipt = JSON.parse(readFileSync(join(root, "audit", attemptFile), "utf8")).receipt;
-    assert.equal(receipt.status, "accepted");
+    assert.equal(receipt.status, "rejected");
+    assert.equal(receipt.frameRef, null);
+    assert.deepEqual(receipt.errorCodes, ["M6_CLEANUP_FAILED"]);
     // The window is leaked: session + lease survived (job already terminal).
     assert.equal(state.getJob(receipt.jobId).status, "succeeded");
     assert.equal(state.sessionExists(receipt.sessionId), true);

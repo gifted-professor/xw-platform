@@ -133,6 +133,20 @@ test("a forged frameId fails (M6_FRAME_MANIFEST_FORGED)", () => {
   assert.ok(result.errors.some((e) => e.code === "M6_FRAME_MANIFEST_FORGED" && e.message.includes("frameId")));
 });
 
+for (const [label, mutate] of [
+  ["mode", (frame) => ({ ...frame, mode: "replay" })],
+  ["expiresAt", (frame) => ({ ...frame, expiresAt: "2099-01-01T00:00:00.000Z" })],
+  ["stability.verdict", (frame) => ({ ...frame, stability: { ...frame.stability, verdict: "unstable" } })],
+  ["flags", (frame) => ({ ...frame, flags: { partial: true, missing: true } })],
+]) {
+  test(`manifest binds safety field ${label}`, () => {
+    const { frame, resolve } = makeFrame();
+    const result = verifyFrameManifest(mutate(frame), resolve);
+    assert.equal(result.ok, false);
+    assert.ok(result.errors.some((error) => error.code === "M6_FRAME_MANIFEST_FORGED"));
+  });
+}
+
 test("focus A/B disagreement fails (M6_FRAME_FOCUS_PAIR_UNSTABLE)", () => {
   const { frame, resolve } = makeFrame({
     focusAText: "mCurrentFocus=Window{a u0 com.tencent.mm/com.tencent.mm.ui.LauncherUI}",

@@ -85,8 +85,11 @@ export function parseRotation(text) {
 }
 
 export function orientationFromRotation(rotation) {
-  if (rotation === 90 || rotation === 270) return "landscape";
-  if (rotation === 0 || rotation === 180) return "portrait";
+  // Android dumpsys reports Surface.ROTATION_* as quarter turns (0..3), not
+  // degrees. Keep degree values for replay/backward compatibility, but the live
+  // parser's 1/2/3 must map to 90/180/270 rather than fail as unknown.
+  if (rotation === 1 || rotation === 3 || rotation === 90 || rotation === 270) return "landscape";
+  if (rotation === 0 || rotation === 2 || rotation === 180) return "portrait";
   return null;
 }
 
@@ -246,15 +249,17 @@ export async function readObservation({
         throw new M6ObserveError("M6_OBSERVE_A_TO_B_SKEW", "A→B skew exceeded 4000ms", { stage: "screenshot-b", aToBMs: tB - tA });
       }
 
+      // Source display B inside the measured B→focus-B window, then take focus B
+      // last. capturedAt therefore covers every B-time safety field instead of
+      // timestamping the frame before the display reads have completed.
+      const displayB = await readDisplayState(channel, serial);
       const focusBText = await readWindowFocusText({ transport: channel, serial }).catch((error) =>
         failStage("focus-b", "M6_OBSERVE_FOCUS_B_FAILED", "focus B read failed", error),
       );
       const tFocusB = now();
-      if (tFocusB - tB >= 1000) {
+      if (tFocusB - tB > 1000) {
         throw new M6ObserveError("M6_OBSERVE_B_TO_FOCUS_B_SKEW", "B→focus B skew exceeded 1000ms", { stage: "focus-b", bToFocusBMs: tFocusB - tB });
       }
-      // Display state sourced at focus-B time; the second independent observation.
-      const displayB = await readDisplayState(channel, serial);
 
       const focusA = parseFocus(focusAText);
       const focusB = parseFocus(focusBText);

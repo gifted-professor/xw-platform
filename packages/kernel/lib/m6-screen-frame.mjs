@@ -125,6 +125,7 @@ export function derivePageFingerprint(observation) {
 // verifier re-derives it from a frame's recorded fields and detects tampering.
 export function deriveFrameManifestSha256(fields) {
   return sha256Hex(`xw.screen-frame.v1:manifest:${stableStringify({
+    mode: fields.mode,
     observationRef: fields.observationRef,
     screenshotARef: fields.screenshotARef,
     screenshotBRef: fields.screenshotBRef,
@@ -137,9 +138,10 @@ export function deriveFrameManifestSha256(fields) {
     orientation: fields.orientation,
     density: fields.density,
     capturedAt: fields.capturedAt,
+    expiresAt: fields.expiresAt,
     linkage: fields.linkage,
-    pageFingerprint: fields.pageFingerprint,
-    focusFingerprint: fields.focusFingerprint,
+    stability: fields.stability,
+    flags: fields.flags,
   })}`);
 }
 
@@ -200,6 +202,7 @@ export function verifyFrameManifest(frame, resolve) {
 
   // Manifest + frame id re-derivation from the recorded fields.
   const manifestSha256 = deriveFrameManifestSha256({
+    mode: frame.mode,
     observationRef: frame.observationRef,
     screenshotARef: frame.screenshotARef,
     screenshotBRef: frame.screenshotBRef,
@@ -212,9 +215,10 @@ export function verifyFrameManifest(frame, resolve) {
     orientation: frame.orientation,
     density: frame.density,
     capturedAt: frame.capturedAt,
+    expiresAt: frame.expiresAt,
     linkage: frame.linkage,
-    pageFingerprint: frame.stability?.pageFingerprint ?? null,
-    focusFingerprint: frame.stability?.focusFingerprint ?? null,
+    stability: frame.stability,
+    flags: frame.flags,
   });
   if (manifestSha256 !== frame.manifestSha256) {
     fail(errors, "M6_FRAME_MANIFEST_FORGED", "manifestSha256 does not re-derive from the frame's recorded fields");
@@ -295,7 +299,26 @@ export function buildCanonicalFrame({
   }
   if (errors.length > 0) return { ok: false, frame: null, errors };
   const { screenshotA, screenshotB, dump, focus, observation } = evidence;
+  const capturedMs = Date.parse(capturedAt);
+  if (!Number.isFinite(capturedMs)) {
+    fail(errors, "M6_FRAME_CAPTURED_AT_INVALID", "capturedAt must be a valid date-time string");
+    return { ok: false, frame: null, errors };
+  }
+  const expiresAt = new Date(capturedMs + frameTtlMs).toISOString().replace(/\.\d{3}/, ".000");
+  const normalizedLinkage = {
+    sessionId: linkage?.sessionId || "sess-unknown",
+    leaseRef: linkage?.leaseRef || "lease-unknown",
+    alias: linkage?.alias || "00",
+    appId: linkage?.appId || "app-unknown",
+  };
+  const stability = {
+    verdict: stabilityVerdict === "stable" ? "stable" : "unstable",
+    pageFingerprint,
+    focusFingerprint,
+  };
+  const flags = { partial: Boolean(flagsPartial), missing: Boolean(flagsMissing) };
   const manifestSha256 = deriveFrameManifestSha256({
+    mode,
     observationRef: observation,
     screenshotARef: screenshotA,
     screenshotBRef: screenshotB,
@@ -308,17 +331,12 @@ export function buildCanonicalFrame({
     orientation,
     density,
     capturedAt,
-    linkage,
-    pageFingerprint,
-    focusFingerprint,
+    expiresAt,
+    linkage: normalizedLinkage,
+    stability,
+    flags,
   });
   const frameId = deriveFrameId(manifestSha256);
-  const capturedMs = Date.parse(capturedAt);
-  if (!Number.isFinite(capturedMs)) {
-    fail(errors, "M6_FRAME_CAPTURED_AT_INVALID", "capturedAt must be a valid date-time string");
-    return { ok: false, frame: null, errors };
-  }
-  const expiresAt = new Date(capturedMs + frameTtlMs).toISOString().replace(/\.\d{3}/, ".000");
   return {
     ok: true,
     frame: {
@@ -339,18 +357,9 @@ export function buildCanonicalFrame({
       density,
       capturedAt,
       expiresAt,
-      linkage: {
-        sessionId: linkage.sessionId || "sess-unknown",
-        leaseRef: linkage.leaseRef || "lease-unknown",
-        alias: linkage.alias || "00",
-        appId: linkage.appId || "app-unknown",
-      },
-      stability: {
-        verdict: stabilityVerdict === "stable" ? "stable" : "unstable",
-        pageFingerprint,
-        focusFingerprint,
-      },
-      flags: { partial: Boolean(flagsPartial), missing: Boolean(flagsMissing) },
+      linkage: normalizedLinkage,
+      stability,
+      flags,
     },
     errors,
   };
