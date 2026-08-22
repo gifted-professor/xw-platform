@@ -97,6 +97,12 @@ function mockTransport(overrides = {}) {
   const events = [];
   let exclusiveCalls = 0;
   let screenCalls = 0;
+  // windowRotation is the FIRST command of each display read (Promise.all order
+  // is windowRotation, powerState, inputState, displayMetrics, and the mock
+  // invoke bodies run synchronously in that order). Counting it marks each
+  // display read, so an override can return DIFFERENT display state for read A
+  // vs read B — the basis of the A/B display-independence test.
+  let displayRead = 0;
   const transport = {
     events,
     exclusiveCalls: () => exclusiveCalls,
@@ -135,9 +141,28 @@ function mockTransport(overrides = {}) {
         if (/rm -f/.test(cmd)) return fixture("");
         if (cmd.includes("init=")) return fixture(overrides.displayText ?? DISPLAY); // displayMetrics also greps mCurrentRotation — match init= first
         if (cmd.includes("mCurrentFocus")) return fixture(overrides.windowFocus ?? WINDOW_FOCUS);
-        if (cmd.includes("mCurrentRotation")) return fixture(overrides.rotationText ?? WINDOW_ROTATION);
-        if (cmd.includes("mWakefulness=")) return fixture(overrides.powerText ?? POWER);
-        if (cmd.includes("mInputShown")) return fixture(overrides.inputText ?? INPUT_METHOD);
+        if (cmd.includes("mCurrentRotation")) {
+          // windowRotation fires once per display read (displayA then displayB).
+          // Counting it lets an override return DIFFERENT rotation for the two
+          // reads — the basis of the A/B display-independence test.
+          displayRead += 1;
+          const text = displayRead <= 1
+            ? overrides.rotationTextA ?? overrides.rotationText ?? WINDOW_ROTATION
+            : overrides.rotationTextB ?? overrides.rotationText ?? WINDOW_ROTATION;
+          return fixture(text);
+        }
+        if (cmd.includes("mWakefulness=")) {
+          const text = displayRead <= 1
+            ? overrides.powerTextA ?? overrides.powerText ?? POWER
+            : overrides.powerTextB ?? overrides.powerText ?? POWER;
+          return fixture(text);
+        }
+        if (cmd.includes("mInputShown")) {
+          const text = displayRead <= 1
+            ? overrides.inputTextA ?? overrides.inputText ?? INPUT_METHOD
+            : overrides.inputTextB ?? overrides.inputText ?? INPUT_METHOD;
+          return fixture(text);
+        }
         throw new Error(`unmatched adb_shell command: ${cmd}`);
       }
       throw new Error(`unexpected transport action: ${action}`);
@@ -180,10 +205,14 @@ test("readObservation follows the frozen A→focusA→dump→B→focusB order in
   assert.equal(transport.exclusiveCalls(), 1);
   assert.deepEqual(result.order, M6_OBSERVE_ORDER);
 
+  // Frozen sequence with TWO independent display observations (one at focus-A
+  // time, one at focus-B time), so each focus carries its own A/B-moment display
+  // state and the stability gate is real:
+  //   screenA → focusA(1) → displayA(4) → dump(3) → screenB → focusB(1) → displayB(4)
   const kinds = transport.events.map((e) => (e.action === "Screen" ? "Screen" : "shell"));
   assert.deepEqual(
     kinds,
-    ["Screen", "shell", "shell", "shell", "shell", "Screen", "shell", "shell", "shell", "shell", "shell"],
+    ["Screen", "shell", "shell", "shell", "shell", "shell", "shell", "shell", "shell", "Screen", "shell", "shell", "shell", "shell", "shell"],
   );
   const screenActions = transport.events.filter((e) => e.action === "Screen");
   assert.equal(screenActions.length, 2);
@@ -192,7 +221,7 @@ test("readObservation follows the frozen A→focusA→dump→B→focusB order in
   const displayCmds = transport.events.filter(
     (e) => e.command && /mCurrentRotation|mWakefulness=|mInputShown|init=/.test(e.command),
   );
-  assert.equal(displayCmds.length, 4); // rotation + power + input + display metrics
+  assert.equal(displayCmds.length, 8); // displayA (rotation+power+input+metrics) + displayB (same 4)
 });
 
 test("field-source matrix: observation binds ONLY from raw fixture text", async () => {
@@ -217,6 +246,31 @@ test("field-source matrix: observation binds ONLY from raw fixture text", async 
   assert.deepEqual(result.focusA.activity, "com.tencent.mm.ui.LauncherUI");
   assert.equal(result.focusA.screenOn, true);
   assert.equal(result.focusB.package, "com.tencent.mm");
+});
+
+test("A/B display independence: focusA carries the A-time display state, focusB the B-time state, observation follows B", async () => {
+  // Fix #6: the display state is sourced TWICE — once at focus-A time, once at
+  // focus-B time — so focusA and focusB each carry their OWN moment's state.
+  // The keyboard visibility changes between A (IME hidden) and B (IME shown).
+  const result = await observe(
+    mockTransport({ inputTextA: "mInputShown=false", inputTextB: "mInputShown=true" }),
+    { now: sequenceClock([T0, T0 + 350, T0 + 500]) },
+  );
+  // focusA carries the A-time state (IME hidden)...
+  assert.equal(result.focusA.keyboardVisible, false);
+  // ...focusB carries the B-time state (IME shown) — NOT a shared B-time value
+  // copied into focusA, and NOT the A-time value copied into focusB.
+  assert.equal(result.focusB.keyboardVisible, true);
+  // The frame's display observation is the FINAL (focus-B) state.
+  assert.equal(result.observation.keyboardVisible, true);
+  // package/activity remain the focused app recorded at focus A.
+  assert.equal(result.observation.package, result.focusA.package);
+  assert.equal(result.observation.activity, result.focusA.activity);
+  // The two display reads are independent: focusA and focusB disagree on the
+  // stable field. (A real frame assembler's focusStableFieldsHash gate would
+  // reject this pair as M6_FRAME_FOCUS_PAIR_UNSTABLE; readObservation itself
+  // just returns both so the assembler can make that call.)
+  assert.notEqual(result.focusA.keyboardVisible, result.focusB.keyboardVisible);
 });
 
 test("evidence carries the real raw bytes: A/B bit-identical PNGs, hierarchy dump, focus text", async () => {

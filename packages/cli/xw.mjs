@@ -20,6 +20,23 @@ import { runRollbackDrill } from "../cutover/lib/rollback.mjs";
 import { baselineFromRehearsalReceipt, deviceCountFromInventory, runShadow } from "../cutover/lib/shadow.mjs";
 import { buildTasksProposedReceipt, buildProposedTasks, RUNTIME_ROOT_DEFAULT } from "../cutover/lib/tasks.mjs";
 import { buildCanaryProfile, runCanaryDryRun } from "../cutover/lib/canary.mjs";
+import {
+  buildEpochRecord,
+  buildCloseoutRecord,
+  signEpochProof,
+  mintEpoch,
+  writeCloseout,
+  activateGate,
+  readActiveGate,
+  resolveLatestEpoch,
+  rollbackGate,
+  loadM6Locks,
+  loadGateIssuerAllowlist,
+  loadM6Gate,
+  evaluateM6Gate,
+} from "../../services/control-plane/control-plane/lib/m6-epoch.mjs";
+import { verifyAggregateCloseout } from "../kernel/lib/m6-aggregate-closeout.mjs";
+import { writeImmutableJson } from "../../services/control-plane/control-plane/lib/m6-gate-loader.mjs";
 
 const cliRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -27,6 +44,7 @@ function usage() {
   return `xw phone attach|observe|act|trace|replay|release [--json] [--jsonl] [--non-interactive] [--context-file PATH] [--trace-id ID]
 Token is read from XW_CONTROL_TOKEN or --token-file. Never pass tokens on argv, query, or stdout.
 xw m6 frame preflight|capture|status|closeout — closed M6-2 observe-capture (see: xw m6 frame --help)
+xw m6 epoch mint|activate|close|status|verify|rollback|aggregate-closeout — M6-2 offline gate operator tools (see: xw m6 epoch --help)
 xw cutover collect|package|verify|preflight — offline release tools, see: xw cutover --help`;
 }
 
@@ -438,7 +456,11 @@ async function cutoverMain(argv) {
 
 async function main(argv = process.argv.slice(2)) {
   if (argv[0] === "cutover") return cutoverMain(argv.slice(1));
-  if (argv[0] === "m6") return m6FrameMain(argv.slice(1));
+  if (argv[0] === "m6") {
+    const sub = argv.slice(1);
+    if (sub[0] === "epoch") return m6EpochMain(sub.slice(1));
+    return m6FrameMain(sub);
+  }
   if (argv[0] !== "phone" || !argv[1] || argv.includes("--help")) {
     process.stderr.write(`${usage()}\n`);
     return argv.includes("--help") ? 0 : 2;
@@ -516,6 +538,9 @@ if (import.meta.url === `file://${process.argv[1].replaceAll("\\", "/")}` || pro
 // idempotencyKey (closedM6Input on the server rejects anything else). Output is
 // redacted and machine-ready; it never loops and never flips the live gate.
 async function m6FrameMain(argv) {
+  // `xw m6 frame ...` — `frame` is a no-op sub-namespace prefix; strip it so the
+  // command is the next token. (`xw m6 preflight ...` still works without it.)
+  if (argv[0] === "frame") argv = argv.slice(1);
   const command = argv[0];
   if (!command || has(argv, "--help")) {
     process.stderr.write(`${m6FrameUsage()}\n`);
@@ -557,6 +582,349 @@ async function m6FrameMain(argv) {
   }
   process.stderr.write(`${m6FrameUsage()}\n`);
   return 2;
+}
+
+// M6-2 W8 #9 — `xw m6 epoch` offline gate operator tools. All commands are
+// DRY-RUN BY DEFAULT (print the candidate + would-write paths); --yes performs
+// the immutable write. No device I/O; the gate stays CLOSED/OBSERVE_ONLY on
+// disk. The operator private key is OFF-REPO (--key-file); the CLI re-derives
+// every epoch hash and re-signs over the hash bytes — no hand-crafted JSON.
+function m6EpochUsage() {
+  return `xw m6 epoch — M6-2 offline live-gate operator tools (zero-live, dry-run first)
+
+  xw m6 epoch mint --gate-id G --release-id R --source-commit C --actor A
+                   --allowlist 01,02 --expires-at ISO [--mode OBSERVE_ONLY]
+                   --key-file priv.pem --key-id K [--issued-at ISO]
+                   [--parent-hash H] [--m6-root DIR] [--issuer-keys FILE] [--yes]
+  xw m6 epoch activate --gate-id G [--epoch-hash H | --latest]
+                       [--promoted-at ISO] [--yes]
+  xw m6 epoch close --gate-id G --reason R --key-file priv.pem --key-id K
+                    [--epoch-hash H] [--committed-at ISO] [--closeout-id ID] [--yes]
+  xw m6 epoch status --gate-id G
+  xw m6 epoch verify --gate-id G            (re-verify all epochs: hash+signature+chain)
+  xw m6 epoch rollback --gate-id G --to H [--promoted-at ISO] [--yes]
+  xw m6 epoch aggregate-closeout --gate-id G --audit-root DIR [--yes]
+
+--m6-root defaults to XW_RUNTIME_ROOT then the platform canonical root.
+--issuer-keys defaults to <m6-root>/m6-gate/issuer-keys.json. Lock hashes are read
+from the pinned <m6-root>/m6-gate/locks.v1.json (absent -> M6_LOCKS_MISSING).
+Every write is immutable (refuse-overwrite, atomic temp->fsync->rename).`;
+}
+
+function epochErr(msg) {
+  process.stderr.write(`m6 epoch: ${msg}\n`);
+  return 2;
+}
+
+function m6RootOf(argv) {
+  return argOf(argv, "--m6-root") || process.env.XW_RUNTIME_ROOT
+    || (process.platform === "win32" ? "C:\\Users\\Public\\xw-runtime" : join(cliRoot, "xw-runtime"));
+}
+
+function issuerKeysDefault(m6Root) {
+  return join(m6Root, "m6-gate", "issuer-keys.json");
+}
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function resolveSigner(argv, issuerKeysPath) {
+  const keyId = argOf(argv, "--key-id");
+  if (!keyId) return { error: "--key-id is required (the gate issuer allowlist key to sign with)" };
+  const allowlist = loadGateIssuerAllowlist(issuerKeysPath);
+  const key = allowlist.keys.get(keyId);
+  if (!key) return { error: `--key-id ${keyId} is not in the issuer allowlist` };
+  if (key.status !== "active") return { error: `--key-id ${keyId} is revoked in the issuer allowlist` };
+  return { keyId, subject: key.subject, allowlistVersion: allowlist.version, allowlist };
+}
+
+async function m6EpochMint(argv) {
+  const m6Root = m6RootOf(argv);
+  const gateId = argOf(argv, "--gate-id");
+  if (!gateId) return epochErr("--gate-id is required");
+  const issuerKeysPath = argOf(argv, "--issuer-keys", issuerKeysDefault(m6Root));
+  const releaseId = argOf(argv, "--release-id");
+  const sourceCommit = argOf(argv, "--source-commit");
+  const allowlistRaw = argOf(argv, "--allowlist", "");
+  const allowlist = allowlistRaw ? allowlistRaw.split(",").map((s) => s.trim()).filter(Boolean) : [];
+  const expiresAt = argOf(argv, "--expires-at");
+  const mode = argOf(argv, "--mode", "OBSERVE_ONLY");
+  const keyFile = argOf(argv, "--key-file");
+  const issuedAt = argOf(argv, "--issued-at", nowIso());
+  if (!releaseId) return epochErr("--release-id is required");
+  if (!sourceCommit) return epochErr("--source-commit is required (40-hex sha1)");
+  if (allowlist.length === 0) return epochErr("--allowlist is required (comma-separated aliases)");
+  if (!expiresAt) return epochErr("--expires-at is required (ISO date-time, must be in the future)");
+  if (!keyFile) return epochErr("--key-file is required (operator ed25519 private key, off-repo)");
+  const signer = resolveSigner(argv, issuerKeysPath);
+  if (signer.error) return epochErr(signer.error);
+  const lockHashes = loadM6Locks(m6Root); // absent -> M6_LOCKS_MISSING fail-closed
+  // Parent defaults to the active tail (chain continuity); null for the first epoch.
+  let parentHash = argOf(argv, "--parent-hash", null);
+  if (parentHash === null) {
+    const active = readActiveGate({ m6Root, gateId, issuerAllowlistPath: issuerKeysPath });
+    parentHash = active.tailEpochHash; // null when the chain is empty
+  }
+  // The epoch actor MUST equal the signing key's subject (verifyEpochProof binds them).
+  const actor = signer.subject;
+  const epoch = buildEpochRecord({
+    gateId, mode, releaseId, sourceCommit, actor, allowlist, lockHashes,
+    issuedAt, expiresAt, parentEpochHash: parentHash,
+  });
+  const proof = signEpochProof(epoch, keyFile, { keyId: signer.keyId, subject: signer.subject, allowlistVersion: signer.allowlistVersion });
+  const epochPath = join(m6Root, "m6-gate", gateId, "epochs", `${epoch.epochHash}.json`);
+  const plan = {
+    dryRun: !has(argv, "--yes"),
+    gateId,
+    epoch: { epochHash: epoch.epochHash, mode: epoch.mode, actor: epoch.actor, allowlist: epoch.allowlist, parentEpochHash: epoch.parentEpochHash, expiresAt: epoch.expiresAt },
+    lockHashes,
+    proof: { keyId: proof.keyId, subject: proof.subject, allowlistVersion: proof.allowlistVersion, algorithm: proof.algorithm },
+    path: epochPath,
+  };
+  if (plan.dryRun) {
+    emit(argv, plan);
+    return 0;
+  }
+  const written = mintEpoch({ m6Root, gateId, epoch, proof });
+  emit(argv, { ...plan, dryRun: false, written });
+  return 0;
+}
+
+async function m6EpochActivate(argv) {
+  const m6Root = m6RootOf(argv);
+  const gateId = argOf(argv, "--gate-id");
+  if (!gateId) return epochErr("--gate-id is required");
+  const issuerKeysPath = argOf(argv, "--issuer-keys", issuerKeysDefault(m6Root));
+  const promotedAt = argOf(argv, "--promoted-at", nowIso());
+  const useLatest = has(argv, "--latest");
+  const explicitHash = argOf(argv, "--epoch-hash");
+  if (!useLatest && !explicitHash) return epochErr("activate requires --epoch-hash or --latest");
+  if (useLatest && explicitHash) return epochErr("activate: use --epoch-hash OR --latest, not both");
+  const active = readActiveGate({ m6Root, gateId, issuerAllowlistPath: issuerKeysPath });
+  const epochHash = explicitHash || (useLatest ? resolveLatestEpoch({ m6Root, gateId, issuerAllowlistPath: issuerKeysPath }) : null);
+  if (!epochHash) return epochErr("--latest found no unactivated epoch binding to the current tail");
+  if (active.chain.includes(epochHash)) return epochErr(`epoch ${epochHash} is already active`);
+  const newChain = [...active.chain, epochHash];
+  const currentPath = join(m6Root, "m6-gate", gateId, "current.json");
+  const plan = {
+    dryRun: !has(argv, "--yes"),
+    gateId, epochHash, newChain, tailEpochHash: epochHash, currentPath, promotedAt,
+  };
+  if (plan.dryRun) {
+    emit(argv, plan);
+    return 0;
+  }
+  const written = activateGate({ m6Root, gateId, chain: newChain, tailEpochHash: epochHash, promotedAt });
+  emit(argv, { ...plan, dryRun: false, written });
+  return 0;
+}
+
+async function m6EpochClose(argv) {
+  const m6Root = m6RootOf(argv);
+  const gateId = argOf(argv, "--gate-id");
+  if (!gateId) return epochErr("--gate-id is required");
+  const issuerKeysPath = argOf(argv, "--issuer-keys", issuerKeysDefault(m6Root));
+  const reason = argOf(argv, "--reason");
+  const keyFile = argOf(argv, "--key-file");
+  if (!reason) return epochErr("--reason is required");
+  if (!keyFile) return epochErr("--key-file is required (to sign the CLOSED sealing epoch)");
+  const signer = resolveSigner(argv, issuerKeysPath);
+  if (signer.error) return epochErr(signer.error);
+  const committedAt = argOf(argv, "--committed-at", nowIso());
+  const closeoutId = argOf(argv, "--closeout-id");
+  const active = readActiveGate({ m6Root, gateId, issuerAllowlistPath: issuerKeysPath });
+  if (active.chain.length === 0) return epochErr("cannot close a gate with no active epoch");
+  const epochHash = argOf(argv, "--epoch-hash", active.tailEpochHash);
+  if (epochHash !== active.tailEpochHash) return epochErr("--epoch-hash must be the current tail epoch (close seals the active gate)");
+  const target = active.epochs.find((e) => e.epochHash === epochHash);
+  if (!target) return epochErr(`epoch ${epochHash} is not in the active chain`);
+  const actor = signer.subject;
+  const closeout = buildCloseoutRecord({ epochHash, actor, reason, committedAt, closeoutId });
+  const closedEpoch = buildEpochRecord({
+    gateId,
+    mode: "CLOSED",
+    releaseId: target.releaseId,
+    sourceCommit: target.sourceCommit,
+    actor,
+    allowlist: target.allowlist,
+    lockHashes: active.lockHashes,
+    issuedAt: committedAt,
+    expiresAt: target.expiresAt,
+    parentEpochHash: active.tailEpochHash,
+    closeoutRef: { id: closeout.closeoutId, sha256: closeout.closeoutHash },
+  });
+  const proof = signEpochProof(closedEpoch, keyFile, { keyId: signer.keyId, subject: signer.subject, allowlistVersion: signer.allowlistVersion });
+  const newChain = [...active.chain, closedEpoch.epochHash];
+  const promotedAt = argOf(argv, "--promoted-at", committedAt);
+  const plan = {
+    dryRun: !has(argv, "--yes"),
+    gateId,
+    closeout: { closeoutId: closeout.closeoutId, closeoutHash: closeout.closeoutHash, epochHash, path: join(m6Root, "m6-gate", gateId, "closeouts", `${closeout.closeoutId}.json`) },
+    closedEpoch: { epochHash: closedEpoch.epochHash, parentEpochHash: closedEpoch.parentEpochHash, closeoutRef: closedEpoch.closeoutRef, path: join(m6Root, "m6-gate", gateId, "epochs", `${closedEpoch.epochHash}.json`) },
+    newChain, tailEpochHash: closedEpoch.epochHash, currentPath: join(m6Root, "m6-gate", gateId, "current.json"), promotedAt,
+  };
+  if (plan.dryRun) {
+    emit(argv, plan);
+    return 0;
+  }
+  writeCloseout({ m6Root, gateId, closeout });
+  mintEpoch({ m6Root, gateId, epoch: closedEpoch, proof });
+  const written = activateGate({ m6Root, gateId, chain: newChain, tailEpochHash: closedEpoch.epochHash, promotedAt });
+  emit(argv, { ...plan, dryRun: false, written });
+  return 0;
+}
+
+async function m6EpochStatus(argv) {
+  const m6Root = m6RootOf(argv);
+  const gateId = argOf(argv, "--gate-id");
+  if (!gateId) return epochErr("--gate-id is required");
+  const issuerKeysPath = argOf(argv, "--issuer-keys", issuerKeysDefault(m6Root));
+  const active = readActiveGate({ m6Root, gateId, issuerAllowlistPath: issuerKeysPath });
+  const result = evaluateM6Gate({ chain: active.epochs, closeouts: active.closeouts, nowMs: Date.now(), lockHashes: active.lockHashes });
+  emit(argv, {
+    gateId,
+    mode: result.mode,
+    activeEpochHash: result.activeEpochHash,
+    epochCount: active.epochs.length,
+    tailEpochHash: active.tailEpochHash,
+    allowlist: result.activeEpoch?.allowlist ?? [],
+    expiresAt: result.activeEpoch?.expiresAt ?? null,
+    lockHashes: active.lockHashes,
+    errors: result.errors.map((e) => e.code),
+  });
+  return 0;
+}
+
+async function m6EpochVerify(argv) {
+  const m6Root = m6RootOf(argv);
+  const gateId = argOf(argv, "--gate-id");
+  if (!gateId) return epochErr("--gate-id is required");
+  const issuerKeysPath = argOf(argv, "--issuer-keys", issuerKeysDefault(m6Root));
+  const loaded = loadM6Gate({ m6Root, gateId, issuerAllowlistPath: issuerKeysPath });
+  const result = evaluateM6Gate({ chain: loaded.chain, closeouts: loaded.closeouts, nowMs: Date.now(), lockHashes: loaded.lockHashes });
+  const ok = result.errors.length === 0 && loaded.chain.length > 0;
+  emit(argv, { gateId, ok, epochs: loaded.chain.length, mode: result.mode, errors: result.errors.map((e) => e.code) });
+  return ok ? 0 : 1;
+}
+
+async function m6EpochRollback(argv) {
+  const m6Root = m6RootOf(argv);
+  const gateId = argOf(argv, "--gate-id");
+  if (!gateId) return epochErr("--gate-id is required");
+  const to = argOf(argv, "--to");
+  if (!to) return epochErr("--to is required (the tailEpochHash to restore from a tombstone)");
+  const promotedAt = argOf(argv, "--promoted-at", nowIso());
+  const currentPath = join(m6Root, "m6-gate", gateId, "current.json");
+  const plan = { dryRun: !has(argv, "--yes"), gateId, toTailEpochHash: to, currentPath, promotedAt };
+  if (plan.dryRun) {
+    emit(argv, plan);
+    return 0;
+  }
+  const written = rollbackGate({ m6Root, gateId, toTailEpochHash: to, promotedAt });
+  emit(argv, { ...plan, dryRun: false, written });
+  return 0;
+}
+
+// M6-2 W8 #5 — `xw m6 epoch aggregate-closeout`. Loads the active OBSERVE_ONLY
+// epoch + the per-attempt audit records (receipt + closeout) from --audit-root,
+// runs the pure four-alias verifier, and (with --yes) writes the immutable
+// aggregate seal to m6-gate/<gateId>/aggregate/<sealHash>.json. Dry-run default.
+async function m6EpochAggregateCloseout(argv) {
+  const m6Root = m6RootOf(argv);
+  const gateId = argOf(argv, "--gate-id");
+  if (!gateId) return epochErr("--gate-id is required");
+  const auditRoot = argOf(argv, "--audit-root");
+  if (!auditRoot) return epochErr("--audit-root is required (the frame-capture audit root holding <attemptId>.json + <attemptId>.closeout.json)");
+  const issuerKeysPath = argOf(argv, "--issuer-keys", issuerKeysDefault(m6Root));
+  const active = readActiveGate({ m6Root, gateId, issuerAllowlistPath: issuerKeysPath });
+  if (active.chain.length === 0) return epochErr("gate has no active epoch — mint + activate an OBSERVE_ONLY epoch first");
+  const tailEpoch = active.epochs[active.epochs.length - 1];
+  if (tailEpoch.mode !== "OBSERVE_ONLY") return epochErr(`active tail epoch is ${tailEpoch.mode}, not OBSERVE_ONLY — aggregate closeout seals an observe window`);
+
+  // Read the audit trail: <attemptId>.json = { receipt, frame } and
+  // <attemptId>.closeout.json = { closeout }. Pair by attemptId.
+  const root = resolve(auditRoot);
+  if (!existsSync(root)) return epochErr(`--audit-root not found: ${root}`);
+  const closeoutsByAttempt = new Map();
+  const receiptFiles = [];
+  for (const name of readdirSync(root)) {
+    if (!name.endsWith(".json")) continue;
+    if (name.endsWith(".closeout.json")) {
+      const attemptId = name.slice(0, -".closeout.json".length);
+      let record;
+      try { record = JSON.parse(readFileSync(join(root, name), "utf8")); } catch { continue; }
+      closeoutsByAttempt.set(attemptId, record && record.closeout ? record.closeout : null);
+    } else {
+      receiptFiles.push(name);
+    }
+  }
+  const attempts = [];
+  for (const name of receiptFiles) {
+    const attemptId = name.slice(0, -".json".length);
+    let record;
+    try { record = JSON.parse(readFileSync(join(root, name), "utf8")); } catch { continue; }
+    const receipt = record && record.receipt ? record.receipt : null;
+    attempts.push({ receipt, closeout: closeoutsByAttempt.get(attemptId) || null });
+  }
+  // Closeouts with no receipt file are still surfaced (orphan detection).
+  for (const [attemptId, closeout] of closeoutsByAttempt) {
+    if (!receiptFiles.includes(`${attemptId}.json`)) attempts.push({ receipt: null, closeout });
+  }
+
+  const result = verifyAggregateCloseout({ epoch: tailEpoch, attempts });
+  const plan = {
+    dryRun: !has(argv, "--yes"),
+    gateId,
+    epochHash: tailEpoch.epochHash,
+    allowlist: tailEpoch.allowlist,
+    auditRoot: root,
+    ok: result.ok,
+    sealHash: result.sealHash,
+    aliases: result.aliases,
+    errors: result.errors,
+  };
+  if (!result.ok) {
+    emit(argv, plan);
+    return 1;
+  }
+  const sealPath = join(m6Root, "m6-gate", gateId, "aggregate", `${result.sealHash}.json`);
+  if (plan.dryRun) {
+    emit(argv, { ...plan, sealPath });
+    return 0;
+  }
+  const written = writeImmutableJson(sealPath, {
+    schemaId: "xw.m6-aggregate-closeout.v1",
+    gateId,
+    epochHash: tailEpoch.epochHash,
+    sealHash: result.sealHash,
+    aliases: result.aliases,
+    committedAt: nowIso(),
+  });
+  emit(argv, { ...plan, dryRun: false, sealPath, written });
+  return 0;
+}
+
+async function m6EpochMain(argv) {
+  const command = argv[0];
+  if (!command || has(argv, "--help")) {
+    process.stderr.write(`${m6EpochUsage()}\n`);
+    return has(argv, "--help") ? 0 : 2;
+  }
+  try {
+    if (command === "mint") return await m6EpochMint(argv);
+    if (command === "activate") return await m6EpochActivate(argv);
+    if (command === "close") return await m6EpochClose(argv);
+    if (command === "status") return await m6EpochStatus(argv);
+    if (command === "verify") return await m6EpochVerify(argv);
+    if (command === "rollback") return await m6EpochRollback(argv);
+    if (command === "aggregate-closeout") return await m6EpochAggregateCloseout(argv);
+    process.stderr.write(`${m6EpochUsage()}\n`);
+    return 2;
+  } catch (error) {
+    process.stderr.write(`${error.code || "M6_EPOCH_ERROR"}: ${error.message}\n`);
+    return 1;
+  }
 }
 
 export { main, redact };

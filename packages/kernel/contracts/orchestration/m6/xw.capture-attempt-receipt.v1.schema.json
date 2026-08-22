@@ -26,10 +26,10 @@
   "properties": {
     "schemaId": { "const": "xw.capture-attempt-receipt.v1" },
     "attemptId": { "type": "string", "minLength": 1, "maxLength": 128 },
-    "runId": { "type": "string", "minLength": 1 },
-    "jobId": { "type": "string", "minLength": 1 },
-    "sessionId": { "type": "string", "minLength": 1 },
-    "leaseRef": { "type": "string", "minLength": 1 },
+    "runId": { "type": ["string", "null"], "minLength": 1, "description": "A rejected receipt that failed before a run was created carries null; an accepted receipt always carries a non-null run id (enforced by the semantic validator)." },
+    "jobId": { "type": ["string", "null"], "minLength": 1, "description": "Null only for a pre-session rejected receipt; non-null for any attempt that created a capability job." },
+    "sessionId": { "type": ["string", "null"], "minLength": 1, "description": "Null only for a pre-session rejected receipt; non-null once a capability session was created." },
+    "leaseRef": { "type": ["string", "null"], "minLength": 1, "description": "Null only for a pre-session rejected receipt; non-null once a lease was acquired." },
     "alias": { "type": "string", "minLength": 1, "maxLength": 64 },
     "scenarioLabel": { "type": "string", "minLength": 0, "maxLength": 64, "pattern": "^[A-Za-z0-9._-]*$" },
     "epochHash": { "type": "string", "pattern": "^[0-9a-f]{64}$", "description": "Pinned immutable gate epoch hash this capture ran under." },
@@ -47,14 +47,15 @@
       "uniqueItems": true
     },
     "skew": {
-      "type": "object",
+      "type": ["object", "null"],
       "additionalProperties": false,
       "properties": {
         "aToBMs": { "type": "integer", "minimum": 0 },
         "bToFocusBMs": { "type": "integer", "minimum": 0 }
-      }
+      },
+      "description": "Measured A→B / B→focusB timing for an accepted capture; null for a rejected receipt that produced no observation."
     },
-    "remainingTtlMs": { "type": "integer", "minimum": 0 },
+    "remainingTtlMs": { "type": ["integer", "null"], "minimum": 0, "description": "Frame TTL remaining at commit for an accepted capture; null for a rejected receipt with no frame." },
     "capturedAt": { "$ref": "#/$defs/dateTime" },
     "committedAt": { "$ref": "#/$defs/dateTime" },
     "receiptSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }

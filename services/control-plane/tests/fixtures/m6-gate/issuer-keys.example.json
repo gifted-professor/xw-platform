@@ -1,0 +1,14 @@
+{
+  "schemaId": "xw.m6-gate-issuer-allowlist.v1",
+  "version": 1,
+  "note": "EXAMPLE ONLY - replace with the operator allowlist at <XW_RUNTIME_ROOT>/m6-gate/issuer-keys.json. Public keys only; private keys stay off-repo.",
+  "keys": [
+    {
+      "keyId": "example-issuer-1",
+      "subject": "operator-example (fixture; not an authorized production key)",
+      "status": "active",
+      "algorithm": "ed25519",
+      "publicKey": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAc+hSaNrEVv283ZsEkOTdIjMgzAo/6TPhaBBdzuDTLTA=\n-----END PUBLIC KEY-----"
+    }
+  ]
+}

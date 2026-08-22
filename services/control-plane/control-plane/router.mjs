@@ -163,12 +163,13 @@ export class ControlRouter {
   }
 
   // M6-2 W5 closed input envelope: the M6 namespace accepts ONLY alias +
-  // scenarioLabel + idempotencyKey (+ optional closeout reason). Any other key —
-  // coordinates, shell text, URLs, device ids, session ids, tokens — is rejected
-  // before it can reach the facade.
+  // scenarioLabel + idempotencyKey (+ attemptId for status/closeout, + optional
+  // closeout reason). Any other key — coordinates, shell text, URLs, device ids,
+  // session ids, tokens — is rejected before it can reach the facade. attemptId
+  // is an opaque server-issued reference, never a coordinate or device id.
   closedM6Input(body) {
     const input = requireBody(body);
-    const allowed = new Set(["alias", "scenarioLabel", "idempotencyKey", "reason"]);
+    const allowed = new Set(["alias", "scenarioLabel", "idempotencyKey", "attemptId", "reason"]);
     for (const key of Object.keys(input)) {
       if (!allowed.has(key)) {
         throw new ControlPlaneError("M6_INPUT_CLOSED", `M6 requests accept only ${[...allowed].join(", ")}; got '${key}'`, { status: 400 });
@@ -232,6 +233,9 @@ export class ControlRouter {
           sourceCommit: releaseIdentity().sourceCommit,
           runtimeProfile: releaseIdentity().runtimeProfile,
           releaseId: releaseIdentity().releaseId ?? process.env.CONTROL_PLANE_RELEASE_ID ?? null,
+          // M6-2 W8 #3: read-only M6 live-gate snapshot. Omitted entirely when
+          // the facade is not installed (M6 disabled). No device I/O.
+          ...(this.m6 ? { m6: this.m6.health() } : {}),
         },
       };
     }

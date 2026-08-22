@@ -279,6 +279,60 @@ test("valid capture-attempt receipt passes; status/ref/tamper inconsistencies fa
   assert.equal(validateCaptureAttemptReceipt(withDeviceId).ok, false);
 });
 
+test("a pre-session rejected receipt (null run/job/session/lease) validates; accepted with a null id fails", () => {
+  // A capture that fails before any run/job/session/lease exists still produces a
+  // durable rejected receipt — the four attribution ids are null, but it carries
+  // capturedAt/committedAt, errorCodes and a valid receiptSha256.
+  const preSession = {
+    schemaId: "xw.capture-attempt-receipt.v1",
+    attemptId: "attempt-pre-0001",
+    runId: null,
+    jobId: null,
+    sessionId: null,
+    leaseRef: null,
+    alias: "01",
+    scenarioLabel: "static-page",
+    epochHash: "0".repeat(64),
+    status: "rejected",
+    frameRef: null,
+    errorCodes: ["M6_GATE_CLOSED"],
+    evidenceRefs: [],
+    capturedAt: "2026-08-21T00:00:00.000Z",
+    committedAt: "2026-08-21T00:00:00.100Z",
+    receiptSha256: "",
+  };
+  preSession.receiptSha256 = deriveCaptureAttemptReceiptSha256(preSession);
+  assert.equal(validateCaptureAttemptReceipt(preSession).ok, true);
+
+  // An accepted receipt must NOT carry a null attribution id — a capture that
+  // produced a frame ran a real job/session/lease.
+  const accepted = {
+    schemaId: "xw.capture-attempt-receipt.v1",
+    attemptId: "attempt-0001",
+    runId: "run-m6-0001",
+    jobId: "job-m6-0001",
+    sessionId: "sess-m6-0001",
+    leaseRef: "lease-m6-0001",
+    alias: "01",
+    scenarioLabel: "static-page",
+    epochHash: "0".repeat(64),
+    status: "accepted",
+    frameRef: { id: "frame-m6-0001", sha256: "1".repeat(64) },
+    errorCodes: [],
+    evidenceRefs: [{ id: "att-screen-a", sha256: "2".repeat(64) }],
+    skew: { aToBMs: 350, bToFocusBMs: 120 },
+    capturedAt: "2026-08-21T00:00:00.000Z",
+    committedAt: "2026-08-21T00:00:00.600Z",
+    receiptSha256: "",
+  };
+  accepted.receiptSha256 = deriveCaptureAttemptReceiptSha256(accepted);
+  assert.equal(validateCaptureAttemptReceipt(accepted).ok, true);
+  const acceptedNullRun = structuredClone(accepted);
+  acceptedNullRun.runId = null;
+  acceptedNullRun.receiptSha256 = deriveCaptureAttemptReceiptSha256(acceptedNullRun);
+  assert.equal(validateCaptureAttemptReceipt(acceptedNullRun).ok, false);
+});
+
 test("valid live gate epoch passes; CLOSED/closeout and parent-chain invariants hold", () => {
   const base = {
     schemaId: "xw.m6-live-gate.v1",
