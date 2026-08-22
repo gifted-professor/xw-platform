@@ -47,7 +47,7 @@ function setup({
   policyMode = null,
 } = {}) {
   const root = mkdtempSync(join(tmpdir(), "mission-cmd-"));
-  const state = new StateStore({ dbPath: join(root, "control.db") });
+  const state = new StateStore({ dbPath: ":memory:" });
   const registry = new CapabilityRegistry(capabilities);
   state.syncCapabilities(registry);
   state.upsertNode({ nodeId: AUTHORITY, authority: true });

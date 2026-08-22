@@ -57,7 +57,7 @@ async function until(predicate, timeoutMs = 2000) {
 
 function fixture({ capabilities, adapter, policyMode = null, evidenceOpts = {} }) {
   const root = mkdtempSync(join(tempBase, "core-test-"));
-  const state = new StateStore({ dbPath: join(root, "control.db") });
+  const state = new StateStore({ dbPath: ":memory:" });
   const registry = new CapabilityRegistry(capabilities);
   const capabilityIds = capabilities.map((capability) => capability.id);
   const devices = ["01", "02"].map((alias) => state.upsertDevice({
@@ -696,8 +696,10 @@ test("nonpayment_v1: migrateLegacyPending frees a legacy waiting job and dispatc
     assert.ok(oldRow.supersededBy);
     const fresh = f.state.getJob(oldRow.supersededBy);
     assert.equal(fresh.status === "queued" || fresh.status === "running" || fresh.status === "succeeded", true);
-    // liveness：fresh job 被 pump 派发，adapter 执行
-    await f.control.waitForJob(fresh.jobId);
+    // liveness：fresh job 被 pump 派发，adapter 执行.
+    // Cap the wait: this case is allowlisted and does not reach a terminal
+    // status; the default 5s waitForJob timeout was a CI-minute tax.
+    await f.control.waitForJob(fresh.jobId, { timeoutMs: 400 });
     assert.ok(executions >= 1, "migrated fresh job dispatches (liveness)");
     assert.equal(f.state.getJob(fresh.jobId).status, "succeeded");
   } finally {

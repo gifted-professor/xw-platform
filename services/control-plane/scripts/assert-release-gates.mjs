@@ -66,10 +66,11 @@ function fail(message, extra = {}) {
   process.exit(1);
 }
 
-function git(args, { buffer = false, allowFail = false } = {}) {
+function git(args, { buffer = false, allowFail = false, input = undefined } = {}) {
   const result = spawnSync("git", ["-C", repoRoot, ...args], {
     encoding: buffer ? undefined : "utf8",
     maxBuffer: 64 * 1024 * 1024,
+    input,
   });
   if (result.error) {
     if (allowFail) return null;
@@ -82,6 +83,72 @@ function git(args, { buffer = false, allowFail = false } = {}) {
     fail(String(err).trim() || `git ${args.join(" ")} failed`);
   }
   return result.stdout;
+}
+
+/**
+ * Parse `git cat-file --batch` stdout. Order matches the input spec list.
+ * One spawn instead of one git.exe per tracked file — Windows process
+ * creation is the G0 gate's dominant cost (134 files × ~150ms).
+ */
+function parseCatFileBatch(buffer, specCount) {
+  const results = [];
+  let offset = 0;
+  while (offset < buffer.length && results.length < specCount) {
+    const nl = buffer.indexOf(0x0a, offset);
+    if (nl < 0) break;
+    const header = buffer.subarray(offset, nl).toString("utf8");
+    offset = nl + 1;
+    if (header.endsWith(" missing")) {
+      results.push({ missing: true });
+      continue;
+    }
+    const match = /^[0-9a-f]{40} \S+ (\d+)$/.exec(header);
+    if (!match) {
+      fail(`release gates failed: unexpected git cat-file --batch header: ${header}`);
+    }
+    const size = Number(match[1]);
+    if (offset + size > buffer.length) {
+      fail("release gates failed: truncated git cat-file --batch payload");
+    }
+    results.push({ missing: false, blob: buffer.subarray(offset, offset + size) });
+    offset += size;
+    if (buffer[offset] === 0x0a) offset += 1;
+  }
+  if (results.length !== specCount) {
+    fail(`release gates failed: git cat-file --batch returned ${results.length} objects, expected ${specCount}`);
+  }
+  return results;
+}
+
+function catFileBatch(specs) {
+  if (specs.length === 0) return [];
+  const stdout = git(["cat-file", "--batch"], {
+    buffer: true,
+    input: Buffer.from(`${specs.join("\n")}\n`),
+  });
+  return parseCatFileBatch(stdout, specs.length);
+}
+
+function readTrackedBlobs(paths) {
+  const blobs = new Array(paths.length);
+  const indexBatch = catFileBatch(paths.map((path) => `:${path}`));
+  const missing = [];
+  indexBatch.forEach((item, i) => {
+    if (item.missing) missing.push(i);
+    else blobs[i] = item.blob;
+  });
+  if (missing.length === 0) return blobs;
+  const headBatch = catFileBatch(missing.map((i) => `HEAD:${paths[i]}`));
+  const still = [];
+  headBatch.forEach((item, j) => {
+    const i = missing[j];
+    if (item.missing) still.push(i);
+    else blobs[i] = item.blob;
+  });
+  for (const i of still) {
+    blobs[i] = readFileSync(join(repoRoot, paths[i]));
+  }
+  return blobs;
 }
 
 function isTrackedProductionPath(path) {
@@ -113,6 +180,12 @@ const branch = String(git(["branch", "--show-current"])).trim();
 
 let originMain = null;
 if (requireMainOrigin) {
+  // Fail closed on branch before paying for fetch + content hash.
+  if (branch !== "main") {
+    fail(`release gates failed: branch must be main (found ${branch || "(detached)"})`, {
+      dirty, head, branch,
+    });
+  }
   const fetch = spawnSync("git", ["-C", repoRoot, "fetch", "--quiet", "origin", "main"], {
     encoding: "utf8",
     maxBuffer: 16 * 1024 * 1024,
@@ -124,11 +197,6 @@ if (requireMainOrigin) {
     );
   }
   originMain = String(git(["rev-parse", "origin/main"])).trim();
-  if (branch !== "main") {
-    fail(`release gates failed: branch must be main (found ${branch || "(detached)"})`, {
-      dirty, head, branch, originMain,
-    });
-  }
   if (head !== originMain) {
     fail(`release gates failed: HEAD (${head}) != origin/main (${originMain})`, {
       dirty, head, branch, originMain,
@@ -143,28 +211,13 @@ const tracked = git(["ls-files", "-z"])
   .sort();
 
 const hasher = createHash("sha256");
-for (const path of tracked) {
-  let blob;
-  const index = spawnSync("git", ["-C", repoRoot, "cat-file", "blob", `:${path}`], {
-    maxBuffer: 64 * 1024 * 1024,
-  });
-  if (index.status === 0 && index.stdout) {
-    blob = index.stdout;
-  } else {
-    const headBlob = spawnSync("git", ["-C", repoRoot, "cat-file", "blob", `HEAD:${path}`], {
-      maxBuffer: 64 * 1024 * 1024,
-    });
-    if (headBlob.status === 0 && headBlob.stdout) {
-      blob = headBlob.stdout;
-    } else {
-      blob = readFileSync(join(repoRoot, path));
-    }
-  }
+const blobs = readTrackedBlobs(tracked);
+tracked.forEach((path, i) => {
   hasher.update(path);
   hasher.update("\0");
-  hasher.update(blob);
+  hasher.update(blobs[i]);
   hasher.update("\0");
-}
+});
 
 const trackedContentSha256 = hasher.digest("hex");
 const fileCount = tracked.length;

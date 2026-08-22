@@ -25,9 +25,9 @@ function grant(grantId = "grant-discovery-state") {
   };
 }
 
-function setup({ policyEnabled = true } = {}) {
+function setup({ policyEnabled = true, persist = false } = {}) {
   const root = mkdtempSync(join(tmpdir(), "discovery-state-"));
-  const state = new StateStore({ dbPath: join(root, "control.db") });
+  const state = new StateStore({ dbPath: persist ? join(root, "control.db") : ":memory:" });
   state.upsertNode({ nodeId: AUTHORITY, authority: true });
   const device = state.upsertDevice({
     alias: "01", physicalLabel: "rack-01", nodeId: AUTHORITY, runtimeId: "private-01",
@@ -129,7 +129,7 @@ test("injected open fault rolls the one BEGIN IMMEDIATE allocation back to zero 
 });
 
 test("restart converts active DiscoveryRun to recovery_required and releases its tuple", () => {
-  const f = setup();
+  const f = setup({ persist: true });
   const path = join(f.root, "control.db");
   try {
     const run = f.state.openDiscoveryRunStorage(openInput(f));

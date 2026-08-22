@@ -475,7 +475,18 @@ export function center(bounds) {
   return [Math.trunc((bounds[0] + bounds[2]) / 2), Math.trunc((bounds[1] + bounds[3]) / 2)];
 }
 
+let settleImpl = null;
+
+/** Test-only: replace wall-clock settle() without changing production timing. */
+export function setSettleImpl(fn) {
+  settleImpl = typeof fn === "function" ? fn : null;
+}
+
 export async function settle(ms = 1200) {
+  if (settleImpl) {
+    await settleImpl(ms);
+    return;
+  }
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
