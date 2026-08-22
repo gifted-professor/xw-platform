@@ -1730,6 +1730,21 @@ export class StateStore {
     };
   }
 
+  // M6-2 W8 #7 — read-only convergence probes for the facade closeout. A leaked
+  // session/lease is one whose row still exists and has not expired; these are
+  // plain SELECTs (no cleanup side-effect, no re-release, no schema change).
+  sessionExists(sessionId) {
+    if (!sessionId) return false;
+    const row = this.db.prepare("SELECT 1 FROM sessions WHERE session_id=? AND expires_at>?").get(sessionId, this.now());
+    return Boolean(row);
+  }
+
+  leaseExists(leaseId) {
+    if (!leaseId) return false;
+    const row = this.db.prepare("SELECT 1 FROM leases WHERE lease_id=? AND expires_at>?").get(leaseId, this.now());
+    return Boolean(row);
+  }
+
   heartbeatSession(sessionId, token, ttlMs = 60000) {
     const session = this.validateSession(sessionId, token);
     const lease = this.heartbeatLease(session.leaseId, token, ttlMs);

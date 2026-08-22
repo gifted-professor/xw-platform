@@ -15,6 +15,7 @@ import { AdapterRegistry, ControlPlane } from "./lib/control-plane.mjs";
 import { EvidenceStore } from "./lib/evidence-store.mjs";
 import { M6FrameEvidenceStore } from "./lib/m6-frame-evidence-store.mjs";
 import { createM6FrameCapture } from "./lib/m6-frame-capture.mjs";
+import { loadM6Gate } from "./lib/m6-gate-loader.mjs";
 import { loadReleaseIdentity } from "../../../packages/release/lib/release-identity.mjs";
 import { ControlPlaneError } from "./lib/errors.mjs";
 import { DelegationGrantRuntime } from "./lib/delegation-grant-runtime.mjs";
@@ -127,14 +128,22 @@ export function createControlPlaneRuntime({
   standingGrantAdrPath,
   discoveryCapabilityForPrimitive = {},
   policyMode = null,
-  // M6-2 W5: opt-in only. Default off keeps every existing runtime byte-identical;
-  // zero-live is preserved because an empty gate epoch chain fails closed.
-  m6Enabled = false,
+  // M6-2 W5: opt-in only. Default off (M6_ENABLED unset) keeps every existing
+  // runtime byte-identical; zero-live is preserved because an empty gate epoch
+  // chain fails closed. An operator flips the env flag to install the facade.
+  m6Enabled = process.env.M6_ENABLED === "1",
   m6Root = null,
   m6Gate = { chain: [], closeouts: {} },
   m6Release = null,
   m6Profile = null,
   m6LockHashes = null,
+  // Production gate identity. When set, the gate + pinned lock hashes are
+  // materialized from immutable on-disk epoch files (m6-gate-loader.mjs); the
+  // inline m6Gate/m6LockHashes args become a test-only override path. The env
+  // defaults keep zero-live: tests that pass an inline m6Gate do not set
+  // XW_GATE_ID, so they are unaffected by the loader.
+  m6GateId = process.env.XW_GATE_ID || null,
+  m6IssuerAllowlistPath = process.env.XW_GATE_ISSUER_KEYS_PATH || null,
 } = {}) {
   const defaults = defaultRuntimePaths();
   const resolvedDbPath = dbPath || process.env.CONTROL_PLANE_DB || defaults.dbPath;
@@ -208,21 +217,40 @@ export function createControlPlaneRuntime({
   // evidence + audit roots live under the canonical xw-runtime directory.
   let m6 = null;
   if (m6Enabled) {
-    const m6RootPath = m6Root || join(root, "xw-runtime");
+    // The M6 evidence + audit roots live under the canonical xw-runtime directory
+    // (the deployed runtime root), not a repo-local path. Resolution order: an
+    // explicit m6Root arg, then XW_RUNTIME_ROOT, then the platform canonical
+    // default (C:\Users\Public\xw-runtime on Windows; repo-local elsewhere for
+    // non-production dev).
+    const m6RootPath = m6Root || process.env.XW_RUNTIME_ROOT
+      || (process.platform === "win32" ? "C:\\Users\\Public\\xw-runtime" : join(root, "xw-runtime"));
     const m6Evidence = new M6FrameEvidenceStore({ root: join(m6RootPath, "m6-frames") });
     const releaseIdentity = m6Release || loadReleaseIdentity({ startDir: root });
     const profile = m6Profile ?? loadLegacyCompatProfile();
+    // Production: materialize the gate (chain + closeouts) and pinned lock hashes
+    // from immutable on-disk epoch files. When m6GateId is set the loader is the
+    // source of truth; the inline m6Gate/m6LockHashes args are ignored. With no
+    // gateId (test/inline path) the caller-supplied gate + lockHashes are used
+    // as-is. Either way the facade requires non-null lockHashes (fail closed).
+    let gate = m6Gate;
+    let resolvedLockHashes = m6LockHashes;
+    if (m6GateId) {
+      const issuerAllowlist = m6IssuerAllowlistPath || join(m6RootPath, "m6-gate", "issuer-keys.json");
+      const loaded = loadM6Gate({ m6Root: m6RootPath, gateId: m6GateId, issuerAllowlistPath: issuerAllowlist });
+      gate = { chain: loaded.chain, closeouts: loaded.closeouts };
+      resolvedLockHashes = loaded.lockHashes;
+    }
     m6 = createM6FrameCapture({
       control,
       state: runtimeState,
       capabilities: registry,
       evidence: m6Evidence,
       auditRoot: join(m6RootPath, "m6-audit"),
-      gate: m6Gate,
+      gate,
       release: { releaseId: releaseIdentity.releaseId, sourceCommit: releaseIdentity.sourceCommit },
       profile,
       devices: { findByAlias: (alias) => runtimeState.listDevices().find((d) => d.alias === alias) || null },
-      lockHashes: m6LockHashes,
+      lockHashes: resolvedLockHashes,
     });
   }
 

@@ -13,26 +13,21 @@ export const M6_GATE_MODE_FAIL_CLOSED = "CLOSED";
 export const M6_GATE_MAX_EPOCHS = 64;
 export const M6_GATE_LOCK_KINDS = Object.freeze(["runtimeProfile", "hardRedlinePolicy", "groundingRuntime"]);
 
-// Canonical self-hash of one epoch record. `epochHash` and `closeoutRef` are NOT
-// derivation inputs: epochHash is the stored value we verify against the derived
-// hash (a forged epoch fails), and closeoutRef is a seal verified separately.
+// Canonical self-hash of one epoch record. Mirrors the frozen contract
+// `deriveM6LiveGateEpochHash` exactly — including the hash prefix. The runtime
+// previously prefixed `xw.m6-live-gate.v1:epoch:` while the contract used
+// `xw.m6-live-gate.v1:`; the two derivations agreed on the strip (only the
+// self-referential `epochHash` is removed, every other field — INCLUDING
+// `closeoutRef` — is hashed, so the chain binding is total) and on
+// canonicalization (`canonicalJson` ≡ the contract's `stableStringify`), but
+// disagreed on the prefix, so a contract-minted epoch was rejected by the
+// runtime as M6_GATE_EPOCH_FORGED and vice versa. The contract is canonical;
+// the runtime now uses the SAME prefix `xw.m6-live-gate.v1:` so a
+// schema-valid epoch derives the identical hash on both sides.
 export function deriveM6EpochHash(epoch) {
   if (!epoch || typeof epoch !== "object") return null;
-  const payload = {
-    schemaId: epoch.schemaId ?? null,
-    gateId: epoch.gateId ?? null,
-    mode: epoch.mode ?? null,
-    status: epoch.status ?? null,
-    releaseId: epoch.releaseId ?? null,
-    sourceCommit: epoch.sourceCommit ?? null,
-    actor: epoch.actor ?? null,
-    lockHashes: epoch.lockHashes ?? null,
-    allowlist: epoch.allowlist ?? null,
-    issuedAt: epoch.issuedAt ?? null,
-    expiresAt: epoch.expiresAt ?? null,
-    parentEpochHash: epoch.parentEpochHash ?? null,
-  };
-  return sha256(`xw.m6-live-gate.v1:epoch:${canonicalJson(payload)}`);
+  const { epochHash: _ignored, ...payload } = epoch;
+  return sha256(`xw.m6-live-gate.v1:${canonicalJson(payload)}`);
 }
 
 // Canonical self-hash of one closeout record. A closeout seals exactly one epoch;
@@ -106,28 +101,51 @@ export function evaluateM6Gate({
     if (!M6_GATE_MODES.includes(epoch.mode)) {
       return reject("M6_GATE_MODE_INVALID", `epoch ${i} mode '${epoch.mode}' is not a known mode`);
     }
-    if (epoch.status !== "active") {
-      return reject("M6_GATE_EPOCH_NOT_ACTIVE", `epoch ${i} status '${epoch.status}' is not active`);
+    // Status is coupled to mode, matching the frozen contract: a CLOSED epoch is
+    // sealed (status=closed), an OBSERVE_ONLY epoch is active. Any other status
+    // for a known mode fails closed — the runtime no longer requires every epoch
+    // to be active, so a sealed CLOSED epoch may legitimately appear in a chain.
+    if (epoch.mode === "CLOSED" && epoch.status !== "closed") {
+      return reject("M6_GATE_EPOCH_NOT_CLOSED", `epoch ${i} CLOSED mode requires status=closed (got '${epoch.status}')`);
     }
-    if (typeof epoch.expiresAt === "string" && epoch.expiresAt !== "") {
-      const exp = Date.parse(epoch.expiresAt);
-      if (!Number.isFinite(exp) || exp <= nowMs) {
-        return reject("M6_GATE_EXPIRED", `epoch ${i} expired at ${epoch.expiresAt}`);
-      }
+    if (epoch.mode === "OBSERVE_ONLY" && epoch.status !== "active") {
+      return reject("M6_GATE_EPOCH_NOT_ACTIVE", `epoch ${i} OBSERVE_ONLY mode requires status=active (got '${epoch.status}')`);
     }
+    // A CLOSED epoch is sealed and must reference its closeout receipt (the seal
+    // is resolved separately at the tail). An OBSERVE_ONLY epoch carries
+    // closeoutRef=null while active; a seal on it closes the gate at the tail.
+    if (epoch.mode === "CLOSED" && !epoch.closeoutRef) {
+      return reject("M6_GATE_CLOSEOUT_FORGED", `epoch ${i} CLOSED mode must reference a closeout receipt`);
+    }
+    // Expiry is a required security-relevant field: a missing/invalid/expired
+    // expiresAt fails closed. Absent expiry is NOT treated as "never expires".
+    if (typeof epoch.expiresAt !== "string" || epoch.expiresAt === "") {
+      return reject("M6_GATE_EXPIRED", `epoch ${i} expiresAt is missing`);
+    }
+    const exp = Date.parse(epoch.expiresAt);
+    if (!Number.isFinite(exp) || exp <= nowMs) {
+      return reject("M6_GATE_EXPIRED", `epoch ${i} expired at ${epoch.expiresAt}`);
+    }
+    // Release binding is fail-closed: when the runtime pins a release, the epoch
+    // MUST carry matching releaseId + sourceCommit. An absent field is drift,
+    // not a pass — a required field cannot be skipped by omitting it.
     if (expectedRelease && typeof expectedRelease === "object") {
-      if (epoch.releaseId && expectedRelease.releaseId && epoch.releaseId !== expectedRelease.releaseId) {
+      if (epoch.releaseId !== expectedRelease.releaseId) {
         return reject("M6_GATE_RELEASE_MISMATCH", `epoch ${i} releaseId does not match the runtime release`);
       }
-      if (epoch.sourceCommit && expectedRelease.sourceCommit && epoch.sourceCommit !== expectedRelease.sourceCommit) {
+      if (epoch.sourceCommit !== expectedRelease.sourceCommit) {
         return reject("M6_GATE_RELEASE_MISMATCH", `epoch ${i} sourceCommit does not match the runtime release`);
       }
     }
-    if (lockHashes && typeof lockHashes === "object" && epoch.lockHashes && typeof epoch.lockHashes === "object") {
+    // Lock binding is fail-closed: when the runtime supplies lock hashes, the
+    // epoch MUST carry lockHashes and every pinned kind MUST match exactly. A
+    // null/absent epoch lock for a pinned runtime kind is drift, not a pass.
+    if (lockHashes && typeof lockHashes === "object") {
+      if (!epoch.lockHashes || typeof epoch.lockHashes !== "object") {
+        return reject("M6_GATE_LOCK_MISMATCH", `epoch ${i} is missing lockHashes`);
+      }
       for (const kind of M6_GATE_LOCK_KINDS) {
-        const expected = lockHashes[kind];
-        const stored = epoch.lockHashes[kind];
-        if (expected && stored && expected !== stored) {
+        if (lockHashes[kind] !== epoch.lockHashes[kind]) {
           return reject("M6_GATE_LOCK_MISMATCH", `epoch ${i} ${kind} lock hash does not match the runtime`);
         }
       }

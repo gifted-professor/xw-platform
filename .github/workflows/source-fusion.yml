@@ -70,6 +70,10 @@ jobs:
         timeout-minutes: 6
         run: npm run test:m6-2:offline
 
+      - name: M6-2 W8 epoch + aggregate closeout
+        timeout-minutes: 6
+        run: npm run test:m6-2:epoch
+
       - name: Control-plane tests against known-failure allowlist
         timeout-minutes: 8
         continue-on-error: ${{ runner.os == 'Windows' }}

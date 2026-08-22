@@ -105,6 +105,163 @@ export function focusStableFieldsHash(focusA, focusB) {
   return sha256Hex(`xw.focus-pair.stable:${stableStringify(a)}`);
 }
 
+// The frame's page fingerprint: a canonical hash of the focused package/activity
+// + display dimensions. Pure + shared so the verifier can re-derive it from the
+// resolved observation blob and detect a swapped observation that left the
+// stored fingerprint intact. (control-plane's canonicalJson ≡ stableStringify.)
+export function derivePageFingerprint(observation) {
+  return sha256Hex(`xw.page.v1:${stableStringify({
+    package: observation?.package ?? null,
+    activity: observation?.activity ?? null,
+    width: observation?.width ?? null,
+    height: observation?.height ?? null,
+    orientation: observation?.orientation ?? null,
+    density: observation?.density ?? null,
+  })}`);
+}
+
+// The frame manifest hash: covers every ref + the screenshot content hashes +
+// dims + capturedAt + linkage + the two fingerprints. Pure + shared so the
+// verifier re-derives it from a frame's recorded fields and detects tampering.
+export function deriveFrameManifestSha256(fields) {
+  return sha256Hex(`xw.screen-frame.v1:manifest:${stableStringify({
+    observationRef: fields.observationRef,
+    screenshotARef: fields.screenshotARef,
+    screenshotBRef: fields.screenshotBRef,
+    dumpRef: fields.dumpRef,
+    focusRef: fields.focusRef,
+    screenshotASha256: fields.screenshotASha256,
+    screenshotBSha256: fields.screenshotBSha256,
+    width: fields.width,
+    height: fields.height,
+    orientation: fields.orientation,
+    density: fields.density,
+    capturedAt: fields.capturedAt,
+    linkage: fields.linkage,
+    pageFingerprint: fields.pageFingerprint,
+    focusFingerprint: fields.focusFingerprint,
+  })}`);
+}
+
+export function deriveFrameId(manifestSha256) {
+  return sha256Hex(`xw.screen-frame.v1:${manifestSha256}`);
+}
+
+// M6-2 W8 #8 — verify a frozen frame's manifest is complete + untampered.
+// Given a frame + a resolver `(ref) => bytes` (the evidence CAS lookup), this
+// re-resolves every ref, re-derives the screenshot content hashes, re-derives
+// the manifest + frame id, re-confirms the A/B focus-pair agreement, and
+// re-derives the page fingerprint — all from the resolved bytes. Any missing
+// ref, content-hash mismatch, slot swap, or manifest/fingerprint drift fails.
+// Pure; the facade calls it on the accepted frame before commit (defense in
+// depth) and the same verifier is reusable by an offline auditor.
+export function verifyFrameManifest(frame, resolve) {
+  const errors = [];
+  if (!frame || typeof frame !== "object") {
+    return { ok: false, errors: [{ code: "M6_FRAME_MANIFEST_INCOMPLETE", message: "a frozen frame is required" }] };
+  }
+  const REF_KEYS = ["observationRef", "screenshotARef", "screenshotBRef", "dumpRef", "focusRef"];
+  const bytes = {};
+  for (const key of REF_KEYS) {
+    const ref = frame[key];
+    if (!ref || !ref.id || !ref.sha256) {
+      fail(errors, "M6_FRAME_MANIFEST_INCOMPLETE", `frame.${key} is missing a content-addressed ref`);
+      continue;
+    }
+    if (typeof resolve !== "function") {
+      fail(errors, "M6_FRAME_MANIFEST_INCOMPLETE", "a resolver (ref) => bytes is required");
+      continue;
+    }
+    const content = resolve(ref);
+    if (!content) {
+      fail(errors, "M6_FRAME_MANIFEST_INCOMPLETE", `evidence ref ${key} (${ref.id}) could not be resolved`);
+      continue;
+    }
+    const hash = sha256Hex(content);
+    if (hash !== ref.sha256) {
+      fail(errors, "M6_FRAME_MANIFEST_FORGED", `${key} content sha256 does not match its ref.sha256`);
+    }
+    bytes[key] = content;
+  }
+
+  // Slot mapping + screenshot content hashes (A slot -> screenshotASha256).
+  if (bytes.screenshotARef && bytes.screenshotBRef) {
+    const aHash = sha256Hex(bytes.screenshotARef);
+    const bHash = sha256Hex(bytes.screenshotBRef);
+    if (aHash !== frame.screenshotASha256) {
+      if (aHash === frame.screenshotBSha256) fail(errors, "M6_FRAME_SLOT_SWAPPED", "screenshot A slot content hashes to the B sha256 (slots swapped)");
+      else fail(errors, "M6_FRAME_MANIFEST_FORGED", "screenshotASha256 does not re-derive from slot A content");
+    }
+    if (bHash !== frame.screenshotBSha256) {
+      if (bHash === frame.screenshotASha256) fail(errors, "M6_FRAME_SLOT_SWAPPED", "screenshot B slot content hashes to the A sha256 (slots swapped)");
+      else fail(errors, "M6_FRAME_MANIFEST_FORGED", "screenshotBSha256 does not re-derive from slot B content");
+    }
+  }
+
+  // Manifest + frame id re-derivation from the recorded fields.
+  const manifestSha256 = deriveFrameManifestSha256({
+    observationRef: frame.observationRef,
+    screenshotARef: frame.screenshotARef,
+    screenshotBRef: frame.screenshotBRef,
+    dumpRef: frame.dumpRef,
+    focusRef: frame.focusRef,
+    screenshotASha256: frame.screenshotASha256,
+    screenshotBSha256: frame.screenshotBSha256,
+    width: frame.width,
+    height: frame.height,
+    orientation: frame.orientation,
+    density: frame.density,
+    capturedAt: frame.capturedAt,
+    linkage: frame.linkage,
+    pageFingerprint: frame.stability?.pageFingerprint ?? null,
+    focusFingerprint: frame.stability?.focusFingerprint ?? null,
+  });
+  if (manifestSha256 !== frame.manifestSha256) {
+    fail(errors, "M6_FRAME_MANIFEST_FORGED", "manifestSha256 does not re-derive from the frame's recorded fields");
+  }
+  if (deriveFrameId(manifestSha256) !== frame.frameId) {
+    fail(errors, "M6_FRAME_MANIFEST_FORGED", "frameId does not re-derive from manifestSha256");
+  }
+
+  // Re-confirm the focus A/B agreement + page fingerprint from resolved bytes.
+  // The focus blob stores raw focus A + "\n---FOCUS-B---\n" + raw focus B; the
+  // display-state fields (rotation/screenOn/keyboardVisible) live in the
+  // observation blob, and A/B stability guarantees they are equal across A and
+  // B, so the focus-pair fingerprint re-derives faithfully from the two blobs.
+  if (bytes.focusRef && bytes.observationRef) {
+    const text = bytes.focusRef.toString("utf8");
+    const sep = "\n---FOCUS-B---\n";
+    const idx = text.indexOf(sep);
+    if (idx < 0) {
+      fail(errors, "M6_FRAME_MANIFEST_INCOMPLETE", "focus blob is missing the A/B separator");
+    } else {
+      let observation;
+      try { observation = JSON.parse(bytes.observationRef.toString("utf8")); } catch { observation = null; }
+      const display = {
+        screenOn: observation?.screenOn ?? null,
+        keyboardVisible: observation?.keyboardVisible ?? null,
+        rotation: observation?.rotation ?? null,
+      };
+      const focusA = { raw: text.slice(0, idx), ...display };
+      const focusB = { raw: text.slice(idx + sep.length), ...display };
+      const focusHash = focusStableFieldsHash(focusA, focusB);
+      if (!focusHash) {
+        fail(errors, "M6_FRAME_FOCUS_PAIR_UNSTABLE", "focus A/B do not agree on stable package/activity fields");
+      } else if (frame.stability?.focusFingerprint && focusHash !== frame.stability.focusFingerprint) {
+        fail(errors, "M6_FRAME_MANIFEST_FORGED", "focusFingerprint does not re-derive from the resolved focus blob");
+      }
+      if (observation) {
+        const pageHash = derivePageFingerprint(observation);
+        if (frame.stability?.pageFingerprint && pageHash !== frame.stability.pageFingerprint) {
+          fail(errors, "M6_FRAME_MANIFEST_FORGED", "pageFingerprint does not re-derive from the resolved observation");
+        }
+      }
+    }
+  }
+
+  return { ok: errors.length === 0, errors };
+}
+
 // Core canonical assembler. `mode` is required; a missing or unknown mode is a
 // hard error (never a silent fallback). Returns { ok:false, errors } or
 // { ok:true, frame }.
@@ -138,7 +295,7 @@ export function buildCanonicalFrame({
   }
   if (errors.length > 0) return { ok: false, frame: null, errors };
   const { screenshotA, screenshotB, dump, focus, observation } = evidence;
-  const manifestSha256 = sha256Hex(`xw.screen-frame.v1:manifest:${stableStringify({
+  const manifestSha256 = deriveFrameManifestSha256({
     observationRef: observation,
     screenshotARef: screenshotA,
     screenshotBRef: screenshotB,
@@ -154,8 +311,8 @@ export function buildCanonicalFrame({
     linkage,
     pageFingerprint,
     focusFingerprint,
-  })}`);
-  const frameId = sha256Hex(`xw.screen-frame.v1:${manifestSha256}`);
+  });
+  const frameId = deriveFrameId(manifestSha256);
   const capturedMs = Date.parse(capturedAt);
   if (!Number.isFinite(capturedMs)) {
     fail(errors, "M6_FRAME_CAPTURED_AT_INVALID", "capturedAt must be a valid date-time string");

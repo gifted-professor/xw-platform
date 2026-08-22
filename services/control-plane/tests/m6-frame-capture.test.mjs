@@ -5,7 +5,7 @@
 // gate/profile/alias failures must fail closed BEFORE any transport read
 // (transport read count = 0) and before any lease/session exists.
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -19,6 +19,7 @@ import {
   createM6FrameCapture,
   M6_OBSERVE_CAPABILITY_ID,
   redactM6Output,
+  validateCaptureAttemptReceipt,
 } from "../control-plane/lib/m6-frame-capture.mjs";
 import {
   deriveM6CloseoutHash,
@@ -43,6 +44,14 @@ const DISPLAY = FIX("display.raw.txt");
 
 const RELEASE = { releaseId: "release-1", sourceCommit: "abc123" };
 const PROFILE = { runtimeProfile: "legacy_compat", agenticGroundingEnabled: true };
+// Pinned lock hashes (3×64-hex). The facade requires non-null lockHashes when
+// M6 is enabled (fail closed #2); the runtime gate matches these against each
+// epoch's lockHashes. Arbitrary but consistent sha256-length values.
+const LOCKS = Object.freeze({
+  runtimeProfile: "1111111111111111111111111111111111111111111111111111111111111111",
+  hardRedlinePolicy: "2222222222222222222222222222222222222222222222222222222222222222",
+  groundingRuntime: "3333333333333333333333333333333333333333333333333333333333333333",
+});
 
 // --- gate epoch builder (hashes derived, never hand-filled) -----------------
 function epoch(overrides = {}) {
@@ -54,7 +63,7 @@ function epoch(overrides = {}) {
     releaseId: RELEASE.releaseId,
     sourceCommit: RELEASE.sourceCommit,
     actor: "operator",
-    lockHashes: null,
+    lockHashes: LOCKS,
     allowlist: ["alpha"],
     issuedAt: "2026-08-21T00:00:00.000Z",
     expiresAt: "2027-01-01T00:00:00.000Z",
@@ -160,6 +169,7 @@ function harness({
     gate,
     release,
     profile,
+    lockHashes: LOCKS,
     now,
   });
   return { root, state, control, facade, transport, m6Evidence, registry };
@@ -213,7 +223,11 @@ test("gate unit: deterministic hashes, chain evaluation, allowlist", () => {
 });
 
 test("gate CLOSED → capture fails closed with zero transport reads", async () => {
-  const { root, state, facade, transport } = harness({ gate: { chain: [epoch({ mode: "CLOSED" })] } });
+  // A contract-valid CLOSED epoch: status=closed + a self-hashing closeout that
+  // resolves, so the gate evaluates to CLOSED (not an invalid-epoch rejection).
+  const closedEpoch = epoch({ mode: "CLOSED", status: "closed", closeoutRef: { id: "closeout-closed", sha256: "0".repeat(64) } });
+  const closedRec = closeout({ epochHash: closedEpoch.epochHash, closeoutId: "closeout-closed" });
+  const { root, state, facade, transport } = harness({ gate: { chain: [closedEpoch], closeouts: { "closeout-closed": closedRec } } });
   try {
     await assert.rejects(facade.capture({ alias: "alpha", scenarioLabel: "observe", idempotencyKey: "ik-1" }), (e) => e.code === "M6_GATE_CLOSED");
     assert.equal(transport.readCount(), 0);
@@ -318,7 +332,14 @@ test("happy path: closed OBSERVE_ONLY capture produces accepted receipt + frame 
     assert.match(receipt.frameRef.id, /^[0-9a-f]{64}$/);
     assert.match(receipt.frameRef.sha256, /^[0-9a-f]{64}$/);
     assert.equal(receipt.errorCodes.length, 0);
-    assert.equal(receipt.evidenceRefs.length, 5); // screenshotA/B + dump + focus + observation
+    // evidenceRefs are unique CAS blob refs (opaqueRef objects). A/B screenshots
+    // are bit-identical in the fixtures → one shared blob, so the unique count is
+    // 4 (screenshot + dump + focus + observation), not 5. All refs are {id,sha256}.
+    assert.ok(receipt.evidenceRefs.length >= 4);
+    assert.equal(new Set(receipt.evidenceRefs.map((r) => r.id)).size, receipt.evidenceRefs.length);
+    for (const ref of receipt.evidenceRefs) {
+      assert.ok(typeof ref.id === "string" && /^[0-9a-f]{64}$/.test(ref.sha256), "evidenceRef must be an opaqueRef {id,sha256}");
+    }
     assert.ok(receipt.skew.aToBMs >= 0 && receipt.skew.bToFocusBMs >= 0);
     assert.ok(receipt.remainingTtlMs >= 0);
     assert.ok(receipt.receiptSha256.length === 64);
@@ -348,8 +369,9 @@ test("happy path: closed OBSERVE_ONLY capture produces accepted receipt + frame 
     assert.equal(audit.frame.flags.missing, false);
     assert.ok(audit.frame.screenshotASha256 === audit.frame.screenshotBSha256);
 
-    // Transport actually read the closed 11-step observe sequence once.
-    assert.equal(transport.readCount(), 11);
+    // Transport actually read the closed 15-step observe sequence once
+    // (screenA, focusA, displayA×4, dump×3, screenB, focusB, displayB×4).
+    assert.equal(transport.readCount(), 15);
 
     // The session/lease were released by finally: validation now fails.
     assert.throws(() => state.validateSession(receipt.sessionId, "bogus"), { code: "SESSION_NOT_FOUND" });
@@ -393,7 +415,151 @@ test("mid-capture evidence failure converges: session released, job terminal, re
     const record = JSON.parse(readFileSync(join(root, "audit", rejected[0]), "utf8"));
     assert.equal(record.receipt.status, "rejected");
     assert.equal(record.receipt.errorCodes[0], "M6_EVIDENCE_DUMP_NOT_XML");
-    assert.equal(transport.readCount(), 11); // the reads happened, then evidence failed
+    assert.equal(transport.readCount(), 15); // the reads happened, then evidence failed
+  } finally { cleanup(root, state); }
+});
+
+test("pre-session rejected receipt is contract-valid: null attribution ids + receiptSha256 + capturedAt", async () => {
+  // A lease conflict fails AFTER the attempt id is created but BEFORE any
+  // run/job/session/lease exists, so the rejected receipt must carry null
+  // runId/jobId/sessionId/leaseRef and still validate against the contract.
+  const { root, state, control, facade } = harness();
+  try {
+    const holder = control.createSession({ actorId: "agent:other", deviceId: "device-alpha", capabilityId: M6_OBSERVE_CAPABILITY_ID, canary: true });
+    try {
+      await assert.rejects(facade.capture({ alias: "alpha", scenarioLabel: "observe", idempotencyKey: "ik-presess" }), (e) => e.code === "M6_LEASE_CONFLICT");
+    } finally { control.releaseSession(holder.sessionId, holder.token); }
+    const auditFiles = readdirSync(join(root, "audit")).filter((f) => f.endsWith(".json") && !f.endsWith(".closeout.json"));
+    assert.equal(auditFiles.length, 1);
+    const record = JSON.parse(readFileSync(join(root, "audit", auditFiles[0]), "utf8"));
+    const receipt = record.receipt;
+    assert.equal(receipt.status, "rejected");
+    assert.equal(receipt.runId, null);
+    assert.equal(receipt.jobId, null);
+    assert.equal(receipt.sessionId, null);
+    assert.equal(receipt.leaseRef, null);
+    assert.equal(receipt.errorCodes[0], "M6_LEASE_CONFLICT");
+    assert.match(receipt.receiptSha256, /^[0-9a-f]{64}$/);
+    assert.ok(Number.isFinite(Date.parse(receipt.capturedAt)));
+    assert.ok(Number.isFinite(Date.parse(receipt.committedAt)));
+    // The facade-built receipt passes the contract validator (shared schema +
+    // re-derived receiptSha256 + semantic checks).
+    assert.equal(validateCaptureAttemptReceipt(receipt).ok, true);
+  } finally { cleanup(root, state); }
+});
+
+test("gate drift before manifest commit fails closed with M6_GATE_DRIFT", async () => {
+  // The gate is resolved at capture start and re-evaluated immediately before the
+  // manifest commit. If the active epoch hash changed in between, the capture
+  // must NOT commit a frame against the stale epoch.
+  const startEpoch = epoch();
+  const driftedEpoch = epoch({ allowlist: ["alpha", "beta"] }); // valid OBSERVE_ONLY, different epochHash
+  let gateReads = 0;
+  const gate = {
+    get chain() { gateReads += 1; return gateReads === 1 ? [startEpoch] : [driftedEpoch]; },
+    closeouts: {},
+  };
+  const { root, state, facade, transport } = harness({ gate });
+  try {
+    await assert.rejects(
+      facade.capture({ alias: "alpha", scenarioLabel: "observe", idempotencyKey: "ik-drift" }),
+      (e) => e.code === "M6_GATE_DRIFT",
+    );
+    // The observation ran (drift is detected at the pre-commit recheck, after reads).
+    assert.ok(transport.readCount() > 0);
+    const auditFiles = readdirSync(join(root, "audit")).filter((f) => f.endsWith(".json") && !f.endsWith(".closeout.json"));
+    assert.equal(auditFiles.length, 1);
+    const record = JSON.parse(readFileSync(join(root, "audit", auditFiles[0]), "utf8"));
+    assert.equal(record.receipt.status, "rejected");
+    assert.equal(record.receipt.errorCodes[0], "M6_GATE_DRIFT");
+    assert.equal(validateCaptureAttemptReceipt(record.receipt).ok, true);
+  } finally { cleanup(root, state); }
+});
+
+test("cleanup failure after an accepted capture is surfaced (M6_CLEANUP_FAILED), not swallowed", async () => {
+  const { root, state, control, facade } = harness();
+  let releaseCalls = 0;
+  // Force releaseSession to fail after the capture converges, so the finally
+  // block surfaces the convergence failure instead of swallowing it.
+  control.releaseSession = () => { releaseCalls += 1; throw new Error("release boom"); };
+  try {
+    await assert.rejects(
+      facade.capture({ alias: "alpha", scenarioLabel: "observe", idempotencyKey: "ik-clean" }),
+      (e) => e.code === "M6_CLEANUP_FAILED",
+    );
+    assert.ok(releaseCalls >= 1, "releaseSession must have been attempted (not swallowed)");
+  } finally { cleanup(root, state); }
+});
+
+test("closeout convergence: a leaked session/lease refuses to seal (M6_CLOSEOUT_CONVERGENCE_FAILED)", async () => {
+  const { root, state, control, facade } = harness();
+  // Sabotage releaseSession: the capture accepts (accepted receipt written) but
+  // its finally throws M6_CLEANUP_FAILED, leaving the session + lease leaked.
+  control.releaseSession = () => { throw new Error("release boom"); };
+  try {
+    await assert.rejects(
+      facade.capture({ alias: "alpha", scenarioLabel: "observe", idempotencyKey: "ik-leak" }),
+      (e) => e.code === "M6_CLEANUP_FAILED",
+    );
+    const attemptFile = readdirSync(join(root, "audit")).find((f) => f.endsWith(".json") && !f.endsWith(".closeout.json"));
+    assert.ok(attemptFile, "accepted receipt written before the finally failed");
+    const receipt = JSON.parse(readFileSync(join(root, "audit", attemptFile), "utf8")).receipt;
+    assert.equal(receipt.status, "accepted");
+    // The window is leaked: session + lease survived (job already terminal).
+    assert.equal(state.getJob(receipt.jobId).status, "succeeded");
+    assert.equal(state.sessionExists(receipt.sessionId), true);
+    assert.equal(state.leaseExists(receipt.leaseRef), true);
+    // closeout must refuse to seal the leaked window.
+    let err = null;
+    try { facade.closeout({ attemptId: receipt.attemptId, reason: "seal" }); } catch (e) { err = e; }
+    assert.equal(err.code, "M6_CLOSEOUT_CONVERGENCE_FAILED");
+    assert.deepEqual(err.details.convergenceErrors.map((c) => c.ref).sort(), ["lease", "session"]);
+    // No closeout marker was written.
+    assert.equal(existsSync(join(root, "audit", `${receipt.attemptId}.closeout.json`)), false);
+  } finally { cleanup(root, state); }
+});
+
+test("closeout convergence: a non-terminal job refuses to seal (M6_CLOSEOUT_CONVERGENCE_FAILED)", () => {
+  const { root, state, control, facade, registry } = harness();
+  try {
+    // Create a job that is still running (non-terminal) and bind a synthetic
+    // receipt to it. closeout must refuse to seal while the job is not terminal.
+    const cap = registry.get(M6_OBSERVE_CAPABILITY_ID);
+    const created = state.createJob({
+      idempotencyKey: "ik-jobleak", actorId: "agent:m6-facade", authorityNodeId: control.authorityNodeId,
+      deviceId: "device-alpha", placement: {}, capability: cap, params: {}, canary: true, sessionId: "sess-jobleak", status: "queued",
+    });
+    state.transitionJob(created.job.jobId, "running");
+    const attemptId = "m6attempt-jobleak";
+    mkdirSync(join(root, "audit"), { recursive: true });
+    const receipt = {
+      schemaId: "xw.capture-attempt-receipt.v1", attemptId, runId: created.job.runId, jobId: created.job.jobId,
+      sessionId: null, leaseRef: null, alias: "alpha", scenarioLabel: "observe",
+      epochHash: "ff".repeat(32), status: "accepted", frameRef: null, gateMode: "OBSERVE_ONLY",
+      errorCodes: [], evidenceRefs: [], skew: null, remainingTtlMs: null, capturedAt: null,
+      committedAt: "2026-08-22T00:00:00.000Z",
+    };
+    writeFileSync(join(root, "audit", `${attemptId}.json`), `${JSON.stringify({ receipt, frame: null }, null, 2)}\n`);
+    assert.equal(state.getJob(receipt.jobId).status, "running");
+    let err = null;
+    try { facade.closeout({ attemptId, reason: "seal" }); } catch (e) { err = e; }
+    assert.equal(err.code, "M6_CLOSEOUT_CONVERGENCE_FAILED");
+    assert.deepEqual(err.details.convergenceErrors, [{ ref: "job", id: created.job.jobId, status: "running" }]);
+    assert.equal(existsSync(join(root, "audit", `${attemptId}.closeout.json`)), false);
+  } finally { cleanup(root, state); }
+});
+
+test("closeout convergence: a converged window (job terminal, session/lease released) seals", async () => {
+  const { root, state, facade } = harness();
+  try {
+    const receipt = await facade.capture({ alias: "alpha", scenarioLabel: "observe", idempotencyKey: "ik-seal" });
+    // capture's finally converged: job terminal, no active session/lease.
+    assert.equal(state.getJob(receipt.jobId).status, "succeeded");
+    assert.equal(state.sessionExists(receipt.sessionId), false);
+    assert.equal(state.leaseExists(receipt.leaseRef), false);
+    const closed = facade.closeout({ attemptId: receipt.attemptId, reason: "seal" });
+    assert.equal(closed.ok, true);
+    assert.equal(existsSync(join(root, "audit", `${receipt.attemptId}.closeout.json`)), true);
   } finally { cleanup(root, state); }
 });
 
@@ -428,6 +594,9 @@ test("router: the M6 public namespace is closed observe capture only", async () 
     await assert.rejects(router.handle({ method: "POST", path: "/control/v1/m6/actions", body: {} }), (e) => e.code === "ROUTE_NOT_FOUND");
     // status needs an attemptId.
     await assert.rejects(router.handle({ method: "GET", path: "/control/v1/m6/frames/status" }), (e) => e.code === "M6_ATTEMPT_ID_REQUIRED");
+    // closeout sends attemptId; the closed-input envelope accepts it (the facade
+    // then rejects an unknown attempt with M6_ATTEMPT_NOT_FOUND, NOT M6_INPUT_CLOSED).
+    await assert.rejects(router.handle({ method: "POST", path: "/control/v1/m6/frames/closeout", body: { attemptId: "m6attempt_unknown", reason: "test" } }), (e) => e.code === "M6_ATTEMPT_NOT_FOUND");
   } finally { cleanup(root, state); }
 });
 

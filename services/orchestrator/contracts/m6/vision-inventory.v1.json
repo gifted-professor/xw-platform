@@ -250,8 +250,8 @@
     },
     {
       "path": "packages/kernel/lib/m6-screen-frame.mjs",
-      "sha256": "2439f17e05d9b6fadf340967488746a77ed2bb4cb5d4c7d0b737397fc4f524e0",
-      "role": "M6-2 single canonical screen-frame assembler: replay + live_strict share one manifest/frameId derivation",
+      "sha256": "60a92c13691ea8ead3ed11de1f6dfc601f8adce5b29adebb344e4d4d4e78c10c",
+      "role": "M6-2 single canonical screen-frame assembler: replay + live_strict share one manifest/frameId derivation; W8 adds verifyFrameManifest for capture-time integrity re-check",
       "externalPaths": [],
       "externalDependencies": [],
       "callers": [
@@ -494,6 +494,7 @@
     {
       "literal": "C:\\Users\\Public\\xw-runtime",
       "files": [
+        "packages/cli/xw.mjs",
         "packages/cutover/lib/tasks.mjs",
         "services/orchestrator/ops/xw-mission.mjs",
         "services/orchestrator/ops/xw-repair.mjs",

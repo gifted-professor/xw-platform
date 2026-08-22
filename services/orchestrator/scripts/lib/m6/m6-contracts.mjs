@@ -440,6 +440,16 @@ export function validateCaptureAttemptReceipt(receipt) {
   if (receipt.status === "accepted" && !receipt.frameRef) {
     fail(errors, code, "accepted receipts must carry a frameRef");
   }
+  // An accepted capture ran a real job/session/lease, so the four attribution
+  // ids must be non-null. The schema allows null only so a pre-session rejected
+  // receipt (failed before any run/job/session/lease existed) can still validate.
+  if (receipt.status === "accepted") {
+    for (const idField of ["runId", "jobId", "sessionId", "leaseRef"]) {
+      if (typeof receipt[idField] !== "string" || receipt[idField] === "") {
+        fail(errors, code, `accepted receipts must carry a non-null ${idField}`);
+      }
+    }
+  }
   if (receipt.status === "rejected" && receipt.frameRef) {
     fail(errors, code, "rejected receipts must not carry a frameRef");
   }

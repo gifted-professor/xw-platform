@@ -53,20 +53,78 @@ function closeout(overrides = {}) {
 }
 
 test("successfully produced modes are only CLOSED and OBSERVE_ONLY", () => {
-  for (const mode of ["CLOSED", "OBSERVE_ONLY"]) {
-    const r = evaluateM6Gate({ chain: [epoch({ mode })], nowMs: NOW });
-    assert.equal(r.mode, mode);
-    assert.equal(r.errors.length, 0);
-  }
+  // OBSERVE_ONLY: active, unsealed (closeoutRef=null).
+  const observe = epoch({ mode: "OBSERVE_ONLY" });
+  const ro = evaluateM6Gate({ chain: [observe], nowMs: NOW });
+  assert.equal(ro.mode, "OBSERVE_ONLY");
+  assert.equal(ro.errors.length, 0);
+  // CLOSED: sealed — status=closed plus a self-hashing closeout receipt that
+  // binds to the epoch. Status is coupled to mode per the frozen contract.
+  const closedEpoch = epoch({
+    mode: "CLOSED",
+    status: "closed",
+    closeoutRef: { id: "closeout-closed", sha256: "0".repeat(64) },
+  });
+  const rec = closeout({ epochHash: closedEpoch.epochHash, closeoutId: "closeout-closed" });
+  const rc = evaluateM6Gate({ chain: [closedEpoch], closeouts: { "closeout-closed": rec }, nowMs: NOW });
+  assert.equal(rc.mode, "CLOSED");
+  assert.equal(rc.errors.length, 0);
 });
 
-test("deriveM6EpochHash is deterministic and covers the payload", () => {
+test("deriveM6EpochHash is deterministic and covers the payload (incl. closeoutRef)", () => {
   const e = epoch();
   assert.equal(deriveM6EpochHash(e), e.epochHash);
   assert.notEqual(
     deriveM6EpochHash({ ...e, allowlist: ["beta"] }),
     e.epochHash,
     "changing any whitelisted field must change the hash (forgery detection relies on it)",
+  );
+  // closeoutRef is in the hash domain (matches the frozen contract): tampering
+  // with the closeout reference invalidates the epoch self-hash.
+  assert.notEqual(
+    deriveM6EpochHash({ ...e, closeoutRef: { id: "closeout-x", sha256: "0".repeat(64) } }),
+    e.epochHash,
+    "changing closeoutRef must change the epoch hash",
+  );
+});
+
+test("status is coupled to mode: CLOSED requires status=closed + a closeout ref", () => {
+  // CLOSED with the old active status now fails closed.
+  assert.equal(
+    evaluateM6Gate({ chain: [epoch({ mode: "CLOSED", status: "active" })], nowMs: NOW }).errors[0].code,
+    "M6_GATE_EPOCH_NOT_CLOSED",
+  );
+  // CLOSED without a closeout ref fails closed (a CLOSED epoch is sealed).
+  assert.equal(
+    evaluateM6Gate({ chain: [epoch({ mode: "CLOSED", status: "closed" })], nowMs: NOW }).errors[0].code,
+    "M6_GATE_CLOSEOUT_FORGED",
+  );
+});
+
+test("fail-closed comparisons: absent required fields are drift, not a pass", () => {
+  // Absent releaseId / sourceCommit fail when the runtime pins a release.
+  assert.equal(
+    evaluateM6Gate({ chain: [epoch({ releaseId: null })], nowMs: NOW, expectedRelease: RELEASE }).errors[0].code,
+    "M6_GATE_RELEASE_MISMATCH",
+  );
+  assert.equal(
+    evaluateM6Gate({ chain: [epoch({ sourceCommit: null })], nowMs: NOW, expectedRelease: RELEASE }).errors[0].code,
+    "M6_GATE_RELEASE_MISMATCH",
+  );
+  // Absent lockHashes fail when the runtime supplies lock hashes.
+  const pinned = { runtimeProfile: "f0".repeat(64), hardRedlinePolicy: null, groundingRuntime: null };
+  assert.equal(
+    evaluateM6Gate({ chain: [epoch({ lockHashes: null })], nowMs: NOW, lockHashes: pinned }).errors[0].code,
+    "M6_GATE_LOCK_MISMATCH",
+  );
+  // Absent / empty expiresAt fails closed (never treated as "never expires").
+  assert.equal(
+    evaluateM6Gate({ chain: [epoch({ expiresAt: null })], nowMs: NOW }).errors[0].code,
+    "M6_GATE_EXPIRED",
+  );
+  assert.equal(
+    evaluateM6Gate({ chain: [epoch({ expiresAt: "" })], nowMs: NOW }).errors[0].code,
+    "M6_GATE_EXPIRED",
   );
 });
 

@@ -21,12 +21,15 @@
 //     session id, lease ref). The audit trail binds epoch hash + attempt/job/
 //     session/lease refs and is the only persistence of attempt state.
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
-import { assembleLiveStrictFrame, focusStableFieldsHash } from "../../../../packages/kernel/lib/m6-screen-frame.mjs";
+import { assembleLiveStrictFrame, focusStableFieldsHash, verifyFrameManifest } from "../../../../packages/kernel/lib/m6-screen-frame.mjs";
 import { canonicalJson, newId, sha256 } from "./canonical.mjs";
 import { ControlPlaneError } from "./errors.mjs";
-import { evaluateM6Gate, m6AliasAllowed } from "./m6-live-gate.mjs";
+import { validateJsonSchema } from "./json-schema-validator.mjs";
+import { probeWritable } from "./m6-gate-loader.mjs";
+import { evaluateM6Gate, m6AliasAllowed, M6_GATE_LOCK_KINDS } from "./m6-live-gate.mjs";
 
 export const M6_OBSERVE_CAPABILITY_ID = "xiaowei.m6.observe_frame";
 export const M6_PROVIDER_ADAPTER_ID = "xiaowei";
@@ -90,6 +93,57 @@ function buildReceipt(fields) {
   return { ...payload, receiptSha256: sha256(`xw.capture-attempt-receipt.v1:${canonicalJson(payload)}`) };
 }
 
+// The shared kernel receipt schema, loaded once. The facade validates every
+// receipt it emits against this schema + re-derives receiptSha256 + semantic
+// checks, mirroring the orchestrator's frozen validateCaptureAttemptReceipt.
+// The facade does NOT import orchestrator code — the dependency runs orchestrator
+// → control-plane, never the reverse — but both sides validate the same shared
+// schema with byte-identical canonicalization, so a facade-built receipt is
+// accepted by the contract validator and vice versa.
+let RECEIPT_SCHEMA = null;
+function loadReceiptSchema() {
+  if (RECEIPT_SCHEMA) return RECEIPT_SCHEMA;
+  const path = join(
+    dirname(fileURLToPath(import.meta.url)),
+    "../../../../packages/kernel/contracts/orchestration/m6/xw.capture-attempt-receipt.v1.schema.json",
+  );
+  RECEIPT_SCHEMA = JSON.parse(readFileSync(path, "utf8"));
+  return RECEIPT_SCHEMA;
+}
+
+export function validateCaptureAttemptReceipt(receipt) {
+  const errors = [];
+  if (!receipt || typeof receipt !== "object") return { ok: false, errors: ["receipt must be an object"] };
+  errors.push(...validateJsonSchema(receipt, loadReceiptSchema()));
+  const { receiptSha256: _ignored, ...rest } = receipt;
+  if (receipt.receiptSha256 !== sha256(`xw.capture-attempt-receipt.v1:${canonicalJson(rest)}`)) {
+    errors.push("receiptSha256 does not match the canonical receipt payload");
+  }
+  if (receipt.status === "accepted" && !receipt.frameRef) errors.push("accepted receipts must carry a frameRef");
+  if (receipt.status === "accepted") {
+    for (const idField of ["runId", "jobId", "sessionId", "leaseRef"]) {
+      if (typeof receipt[idField] !== "string" || receipt[idField] === "") errors.push(`accepted receipts must carry a non-null ${idField}`);
+    }
+  }
+  if (receipt.status === "rejected" && receipt.frameRef) errors.push("rejected receipts must not carry a frameRef");
+  if (receipt.status === "rejected" && !(Array.isArray(receipt.errorCodes) && receipt.errorCodes.length > 0)) {
+    errors.push("rejected receipts must carry at least one M6_ error code");
+  }
+  if (receipt.status === "accepted" && Array.isArray(receipt.errorCodes) && receipt.errorCodes.length > 0) {
+    errors.push("accepted receipts must not carry error codes");
+  }
+  if (!Number.isFinite(Date.parse(receipt.capturedAt)) || !Number.isFinite(Date.parse(receipt.committedAt))) {
+    errors.push("capturedAt/committedAt must be valid date-time strings");
+  } else if (Date.parse(receipt.committedAt) < Date.parse(receipt.capturedAt)) {
+    errors.push("committedAt must be at or after capturedAt");
+  }
+  if (receipt.skew) {
+    if (!Number.isInteger(receipt.skew.aToBMs) || receipt.skew.aToBMs < 0) errors.push("skew.aToBMs must be a non-negative integer");
+    if (!Number.isInteger(receipt.skew.bToFocusBMs) || receipt.skew.bToFocusBMs < 0) errors.push("skew.bToFocusBMs must be a non-negative integer");
+  }
+  return { ok: errors.length === 0, errors };
+}
+
 function writeAuditJson(auditRoot, attemptId, record) {
   mkdirSync(auditRoot, { recursive: true });
   const target = join(auditRoot, `${attemptId}.json`);
@@ -119,6 +173,19 @@ export function createM6FrameCapture({
 } = {}) {
   if (!control || !state || !capabilities || !evidence) {
     throw new M6FrameCaptureError("M6_FACADE_DEPS_INVALID", "createM6FrameCapture requires control, state, capabilities, and evidence", { status: 503 });
+  }
+  // #2: the live surface MUST refuse a fail-open null lock set. The release
+  // pipeline pins lockHashes; the production loader supplies them from
+  // m6-gate/locks.v1.json. A facade built without pinned locks cannot evaluate
+  // the gate safely (an epoch with forged lockHashes would skip the lock check),
+  // so construction fails closed here rather than at capture time.
+  if (!lockHashes || typeof lockHashes !== "object") {
+    throw new M6FrameCaptureError("M6_LOCK_HASHES_REQUIRED", "M6 requires pinned lockHashes {runtimeProfile, hardRedlinePolicy, groundingRuntime}", { status: 503 });
+  }
+  for (const kind of M6_GATE_LOCK_KINDS) {
+    if (typeof lockHashes[kind] !== "string" || !/^[0-9a-f]{64}$/.test(lockHashes[kind])) {
+      throw new M6FrameCaptureError("M6_LOCK_HASHES_REQUIRED", `M6 lockHashes.${kind} must be a 64-hex sha256`, { status: 503 });
+    }
   }
   const resolveDevice = devices && typeof devices.findByAlias === "function"
     ? (alias) => devices.findByAlias(alias) || null
@@ -182,7 +249,55 @@ export function createM6FrameCapture({
     if (!device || !device.deviceId) {
       throw new M6FrameCaptureError("M6_DEVICE_NOT_FOUND", `no control-plane device is bound to alias '${a}'`, { status: 404 });
     }
-    return { ok: true, gateMode: gateState.mode, epochHash: gateState.epochHash, alias: a, scenarioLabel: s };
+    // #3: preflight PROVES the M6 runtime is live-capable — the canonical
+    // evidence + audit roots are writable, the release identity is loaded, and
+    // the gate holds an active OBSERVE_ONLY epoch. These are proven BEFORE any
+    // capture so a misconfigured runtime fails fast, not mid-capture.
+    const evidenceRootWritable = probeWritable(evidence.root);
+    const auditRootWritable = probeWritable(auditRoot);
+    const releaseLoaded = Boolean(release && release.releaseId && release.sourceCommit);
+    if (!evidenceRootWritable) {
+      throw new M6FrameCaptureError("M6_EVIDENCE_ROOT_NOT_WRITABLE", "M6 frame evidence root is not writable", { status: 503 });
+    }
+    if (!auditRootWritable) {
+      throw new M6FrameCaptureError("M6_AUDIT_ROOT_NOT_WRITABLE", "M6 audit root is not writable", { status: 503 });
+    }
+    if (!releaseLoaded) {
+      throw new M6FrameCaptureError("M6_RELEASE_NOT_LOADED", "M6 release identity (releaseId + sourceCommit) is not loaded", { status: 503 });
+    }
+    return {
+      ok: true,
+      gateMode: gateState.mode,
+      epochHash: gateState.epochHash,
+      alias: a,
+      scenarioLabel: s,
+      evidenceRootWritable,
+      auditRootWritable,
+      releaseLoaded,
+      epochActive: gateState.mode === "OBSERVE_ONLY",
+      locksPinned: Boolean(lockHashes),
+    };
+  }
+
+  // #3: a read-only M6 health snapshot for /control/v1/health. No device I/O.
+  function health(nowMs) {
+    const t = Number.isFinite(nowMs) ? nowMs : now();
+    const result = evaluateM6Gate({ chain: gate.chain, closeouts: gate.closeouts, nowMs: t, expectedRelease: release, lockHashes });
+    const active = result.activeEpoch || null;
+    return {
+      enabled: true,
+      gateMode: result.mode,
+      activeEpochHash: result.activeEpochHash,
+      epochCount: Array.isArray(gate.chain) ? gate.chain.length : 0,
+      allowlist: active?.allowlist ?? [],
+      evidenceRootWritable: probeWritable(evidence.root),
+      auditRootWritable: probeWritable(auditRoot),
+      releaseId: release?.releaseId ?? null,
+      sourceCommit: release?.sourceCommit ?? null,
+      locksPinned: Boolean(lockHashes && typeof lockHashes === "object"),
+      profile: profile?.runtimeProfile ?? null,
+      gateErrors: result.errors.map((e) => e.code),
+    };
   }
 
   async function capture({ alias, scenarioLabel = "observe", idempotencyKey, nowMs } = {}) {
@@ -202,6 +317,7 @@ export function createM6FrameCapture({
     }
 
     const attemptId = newId("m6attempt");
+    const attemptStartedAt = iso(at);
     const audit = {
       schemaId: "xw.capture-attempt-receipt.v1",
       attemptId,
@@ -217,7 +333,9 @@ export function createM6FrameCapture({
       gateMode: gateState.mode,
       errorCodes: [],
       evidenceRefs: [],
-      capturedAt: null,
+      // capturedAt is set at attempt start so even a pre-session rejected receipt
+      // (no observation produced) carries a valid capturedAt, per the receipt schema.
+      capturedAt: attemptStartedAt,
       committedAt: null,
     };
     let session = null;
@@ -292,7 +410,12 @@ export function createM6FrameCapture({
         focus: focusBlob,
         observation: Buffer.from(canonicalJson(observation.observation), "utf8"),
       });
-      audit.evidenceRefs = Object.keys(refs).map((key) => refs[key].id);
+      // Evidence refs are the unique CAS blobs referenced by this attempt. A/B
+      // screenshots that are bit-identical share one blob (same id+sha256); the
+      // receipt lists it once and the frozen frame manifest records the A/B slot
+      // mapping. The receipt schema requires uniqueItems, so dedupe by ref id.
+      const refList = Object.keys(refs).map((key) => refs[key]);
+      audit.evidenceRefs = [...new Map(refList.map((r) => [r.id, r])).values()];
 
       const focusA = {
         raw: String(raw.focusA ?? ""),
@@ -319,6 +442,19 @@ export function createM6FrameCapture({
         density: observation.observation?.density ?? null,
       })}`);
 
+      // Fail-closed drift check: re-evaluate the gate immediately before the
+      // manifest commit. The gate was resolved at capture start; if the active
+      // epoch has since drifted (closed/expired/sealed/replaced) the capture
+      // must NOT commit a frame against a stale epoch hash. resolveGate throws
+      // on any closed/expired state; an epoch-hash change is M6_GATE_DRIFT.
+      const recheck = resolveGate(a, now());
+      if (recheck.epochHash !== gateState.epochHash) {
+        throw new M6FrameCaptureError("M6_GATE_DRIFT", "active epoch changed between gate resolution and manifest commit", {
+          status: 409,
+          details: { startEpochHash: gateState.epochHash, recheckEpochHash: recheck.epochHash },
+        });
+      }
+
       const frozen = assembleLiveStrictFrame({
         screenshotABytes: raw.screenshotA,
         screenshotBBytes: raw.screenshotB,
@@ -339,6 +475,26 @@ export function createM6FrameCapture({
         throw new M6FrameCaptureError(code, `strict frame freeze rejected the capture: ${frozen.errors?.[0]?.message ?? "unknown"}`, { status: 409 });
       }
       const frame = frozen.frame;
+      // #8: defense in depth — re-verify the frozen manifest against the raw
+      // evidence bytes before commit. The frame was just assembled from these
+      // bytes, so this should always pass; it guards against any future drift
+      // between assembly and the durable audit trail.
+      const observationBuffer = Buffer.from(canonicalJson(observation.observation), "utf8");
+      const manifestResolve = (ref) => ({
+        [refs.screenshotA.id]: raw.screenshotA,
+        [refs.screenshotB.id]: raw.screenshotB,
+        [refs.dump.id]: raw.dump,
+        [refs.focus.id]: focusBlob,
+        [refs.observation.id]: observationBuffer,
+      })[ref.id] ?? null;
+      const manifestCheck = verifyFrameManifest(frame, manifestResolve);
+      if (!manifestCheck.ok) {
+        const code = manifestCheck.errors[0].code ?? "M6_FRAME_MANIFEST_INVALID";
+        throw new M6FrameCaptureError(code, `frame manifest verification failed: ${manifestCheck.errors[0].message}`, {
+          status: 409,
+          details: { errors: manifestCheck.errors },
+        });
+      }
       const committedAt = iso(now());
       const remainingTtlMs = Math.max(0, Date.parse(frame.expiresAt) - Date.parse(committedAt));
       const receipt = buildReceipt({
@@ -360,23 +516,69 @@ export function createM6FrameCapture({
         capturedAt: observation.capturedAt,
         committedAt,
       });
+      // The facade never emits a receipt the frozen contract would reject.
+      const acceptedValidation = validateCaptureAttemptReceipt(receipt);
+      if (!acceptedValidation.ok) {
+        throw new M6FrameCaptureError("M6_RECEIPT_INVALID", `accepted receipt failed contract validation: ${acceptedValidation.errors.join("; ")}`, {
+          status: 500,
+          details: { errors: acceptedValidation.errors },
+        });
+      }
       writeAuditJson(auditRoot, attemptId, { receipt, frame });
       return receipt;
     } catch (error) {
       audit.errorCodes = [error.code || "M6_CAPTURE_FAILED"];
       audit.committedAt = iso(now());
       audit.status = "rejected";
-      try { writeAuditJson(auditRoot, attemptId, { receipt: audit }); } catch { /* audit is best-effort */ }
+      // Build a contract-valid rejected receipt (with receiptSha256 + capturedAt
+      // + nullable attribution ids for pre-session failures) rather than writing
+      // the bare audit object, which carried no receiptSha256.
+      const rejectedReceipt = buildReceipt({
+        attemptId,
+        runId: audit.runId,
+        jobId: audit.jobId,
+        sessionId: audit.sessionId,
+        leaseRef: audit.leaseRef,
+        alias: a,
+        scenarioLabel: s,
+        epochHash: gateState.epochHash,
+        status: "rejected",
+        frameRef: null,
+        gateMode: gateState.mode,
+        errorCodes: audit.errorCodes,
+        evidenceRefs: audit.evidenceRefs,
+        skew: null,
+        remainingTtlMs: null,
+        capturedAt: audit.capturedAt,
+        committedAt: audit.committedAt,
+      });
+      const rejectedValidation = validateCaptureAttemptReceipt(rejectedReceipt);
+      try {
+        writeAuditJson(auditRoot, attemptId, rejectedValidation.ok ? { receipt: rejectedReceipt } : { receipt: rejectedReceipt, receiptValidationErrors: rejectedValidation.errors });
+      } catch { /* audit persistence is best-effort; the capture error still propagates */ }
       throw error;
     } finally {
+      // Fail-closed cleanup: session/lease/job convergence failures are NOT
+      // swallowed. A capture that leaked a lease/session is not a clean outcome
+      // even when the frame was accepted, so a cleanup failure is surfaced. If
+      // the capture already threw, that error still propagates unless cleanup
+      // itself failed (in which case the convergence failure takes precedence).
       if (session) {
+        const cleanupErrors = [];
         try {
           if (jobRow) {
             const current = state.getJob(jobRow.jobId);
             if (current && ["queued", "waiting_approval", "running"].includes(current.status)) state.cancelJob(jobRow.jobId);
           }
-        } catch { /* convergence is best-effort */ }
-        try { control.releaseSession(session.sessionId, session.token); } catch { /* convergence is best-effort */ }
+        } catch (e) { cleanupErrors.push({ phase: "cancelJob", code: e?.code ?? null, message: e?.message ?? String(e) }); }
+        try { control.releaseSession(session.sessionId, session.token); }
+        catch (e) { cleanupErrors.push({ phase: "releaseSession", code: e?.code ?? null, message: e?.message ?? String(e) }); }
+        if (cleanupErrors.length > 0) {
+          throw new M6FrameCaptureError("M6_CLEANUP_FAILED", "session/lease/job cleanup failed after capture convergence", {
+            status: 500,
+            details: { cleanupErrors },
+          });
+        }
       }
     }
   }
@@ -392,12 +594,36 @@ export function createM6FrameCapture({
 
   // closeout: writes a content-addressed closeout marker binding epoch hash +
   // attempt/job/session/lease refs. Sessions/leases are already converged by
-  // capture's finally; closeout only seals the audit trail.
+  // capture's finally; closeout re-confirms that convergence before sealing.
   function closeout({ attemptId, reason = "operator" } = {}) {
     const a = requireString(attemptId, "attemptId", "M6_ATTEMPT_ID_REQUIRED", /^[A-Za-z0-9._-]{1,128}$/);
     const record = readAuditJson(auditRoot, a);
     if (!record) throw new M6FrameCaptureError("M6_ATTEMPT_NOT_FOUND", `attempt '${a}' not found`, { status: 404 });
     const base = record.receipt || record;
+    // #7: convergence gate before sealing. capture's finally cancels the job +
+    // releases the session/lease; closeout must refuse to seal a window whose
+    // job is still non-terminal or whose session/lease survived (a leak). Read-
+    // only probes (state.getJob / sessionExists / leaseExists); no re-release.
+    const NON_TERMINAL_JOB = new Set(["queued", "waiting_approval", "running"]);
+    const convergenceErrors = [];
+    if (base.jobId) {
+      const job = typeof state.getJob === "function" ? state.getJob(base.jobId) : null;
+      if (job && NON_TERMINAL_JOB.has(job.status)) {
+        convergenceErrors.push({ ref: "job", id: base.jobId, status: job.status });
+      }
+    }
+    if (base.sessionId && typeof state.sessionExists === "function" && state.sessionExists(base.sessionId)) {
+      convergenceErrors.push({ ref: "session", id: base.sessionId });
+    }
+    if (base.leaseRef && typeof state.leaseExists === "function" && state.leaseExists(base.leaseRef)) {
+      convergenceErrors.push({ ref: "lease", id: base.leaseRef });
+    }
+    if (convergenceErrors.length > 0) {
+      throw new M6FrameCaptureError("M6_CLOSEOUT_CONVERGENCE_FAILED", "closeout refused: job/session/lease not converged (leak detected)", {
+        status: 409,
+        details: { convergenceErrors },
+      });
+    }
     const closeoutId = newId("m6closeout");
     const finalReason = typeof reason === "string" && reason.length > 0 && reason.length <= 128 ? reason : "operator";
     const committedAt = iso(now());
@@ -429,5 +655,5 @@ export function createM6FrameCapture({
     return redactM6Output({ ok: true, closeout });
   }
 
-  return { preflight, capture, status, closeout };
+  return { preflight, capture, status, closeout, health };
 }

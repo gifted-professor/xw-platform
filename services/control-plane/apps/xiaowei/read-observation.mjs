@@ -228,6 +228,11 @@ export async function readObservation({
       const focusAText = await readWindowFocusText({ transport: channel, serial }).catch((error) =>
         failStage("focus-a", "M6_OBSERVE_FOCUS_A_FAILED", "focus A read failed", error),
       );
+      // The display state (rotation/power/input/metrics) is sourced at focus-A time
+      // so focus A is a complete, independently-sourced observation — not the
+      // focus-B-time state reused for both. The A/B stability gate compares the
+      // two; a display change between A and B (rotation, screen-off) fails closed.
+      const displayA = await readDisplayState(channel, serial);
 
       const dump = await readDumpXml({ transport: channel, serial }).catch((error) =>
         failStage("dump", "M6_OBSERVE_DUMP_FAILED", "UI dump failed", error),
@@ -248,8 +253,9 @@ export async function readObservation({
       if (tFocusB - tB >= 1000) {
         throw new M6ObserveError("M6_OBSERVE_B_TO_FOCUS_B_SKEW", "B→focus B skew exceeded 1000ms", { stage: "focus-b", bToFocusBMs: tFocusB - tB });
       }
+      // Display state sourced at focus-B time; the second independent observation.
+      const displayB = await readDisplayState(channel, serial);
 
-      const display = await readDisplayState(channel, serial);
       const focusA = parseFocus(focusAText);
       const focusB = parseFocus(focusBText);
       if (!focusA.package) {
@@ -259,13 +265,16 @@ export async function readObservation({
         throw new M6ObserveError("M6_OBSERVE_FOCUS_B_EMPTY", "focus B produced no focused package/activity", { stage: "focus-b" });
       }
 
+      // Each screenshot's IHDR dims are cross-checked against its OWN display
+      // observation (A against displayA, B against displayB), so a rotation
+      // change between A and B is caught here rather than masked by a shared state.
       const dimsA = pngDimensions(screenA.bytes);
       const dimsB = pngDimensions(screenB.bytes);
-      if (!dimsA || dimsA.width !== display.width || dimsA.height !== display.height) {
-        throw new M6ObserveError("M6_OBSERVE_SCREEN_A_DIMS_MISMATCH", "screen A IHDR dims disagree with display observation", { stage: "screenshot-a" });
+      if (!dimsA || dimsA.width !== displayA.width || dimsA.height !== displayA.height) {
+        throw new M6ObserveError("M6_OBSERVE_SCREEN_A_DIMS_MISMATCH", "screen A IHDR dims disagree with the focus-A display observation", { stage: "screenshot-a" });
       }
-      if (!dimsB || dimsB.width !== display.width || dimsB.height !== display.height) {
-        throw new M6ObserveError("M6_OBSERVE_SCREEN_B_DIMS_MISMATCH", "screen B IHDR dims disagree with display observation", { stage: "screenshot-b" });
+      if (!dimsB || dimsB.width !== displayB.width || dimsB.height !== displayB.height) {
+        throw new M6ObserveError("M6_OBSERVE_SCREEN_B_DIMS_MISMATCH", "screen B IHDR dims disagree with the focus-B display observation", { stage: "screenshot-b" });
       }
 
       return {
@@ -273,13 +282,15 @@ export async function readObservation({
         order: M6_OBSERVE_ORDER,
         capturedAt: new Date(tFocusB).toISOString(),
         skew: { aToBMs: tB - tA, bToFocusBMs: tFocusB - tB },
+        // The frame's display observation is the final (focus-B) state; the
+        // package/activity remain the focused app recorded at focus A.
         observation: {
-          ...display,
+          ...displayB,
           package: focusA.package,
           activity: focusA.activity,
         },
-        focusA: { ...focusA, ...display },
-        focusB: { ...focusB, ...display },
+        focusA: { ...focusA, ...displayA },
+        focusB: { ...focusB, ...displayB },
         evidence: {
           screenshotA: screenA.bytes,
           screenshotB: screenB.bytes,

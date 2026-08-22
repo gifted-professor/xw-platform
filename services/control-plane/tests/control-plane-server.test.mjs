@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { generateKeyPairSync, sign } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -1156,6 +1156,7 @@ test("bootstrap m6Enabled wires the closed facade; routes are observe-capture on
       m6Enabled: true,
       m6Root: join(root, "m6-runtime"),
       m6Gate: gate,
+      m6LockHashes: M6_LOCKS,
       m6Release: { releaseId: "release-1", sourceCommit: "abc123" },
       m6Profile: { runtimeProfile: "legacy_compat", agenticGroundingEnabled: true },
     });
@@ -1188,6 +1189,73 @@ test("bootstrap m6Enabled wires the closed facade; routes are observe-capture on
   } finally { state.close(); rmSync(root, { recursive: true, force: true }); }
 });
 
+test("bootstrap m6Enabled env flag installs the facade without an explicit arg", () => {
+  const root = mkdtempSync(join(tempBase, "m6-env-on-"));
+  const state = new StateStore({ dbPath: join(root, "control.db") });
+  const savedFlag = process.env.M6_ENABLED;
+  process.env.M6_ENABLED = "1";
+  try {
+    const runtime = createControlPlaneRuntime({
+      state,
+      capabilities: new CapabilityRegistry([capability]),
+      adapters: new AdapterRegistry([{ id: "test", async execute() { return {}; }, async verify() { return { ok: true }; }, async restore() { return { ok: true }; } }]),
+      evidence: new EvidenceStore({ runsRoot: join(root, "runs"), state, minFreeBytes: 0, minExternalEffectFreeBytes: 0 }),
+      deviceConfigPath: join(root, "missing-devices.json"),
+      m6Root: join(root, "m6-runtime"),
+      m6Gate: { chain: [epochRecord()] },
+      m6LockHashes: M6_LOCKS,
+      m6Release: { releaseId: "release-1", sourceCommit: "abc123" },
+      m6Profile: { runtimeProfile: "legacy_compat", agenticGroundingEnabled: true },
+    });
+    assert.ok(runtime.m6, "M6_ENABLED=1 installs the facade with no explicit m6Enabled arg");
+  } finally {
+    if (savedFlag === undefined) delete process.env.M6_ENABLED; else process.env.M6_ENABLED = savedFlag;
+    state.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("bootstrap resolves the M6 evidence root from XW_RUNTIME_ROOT (canonical, not repo-local)", () => {
+  const root = mkdtempSync(join(tempBase, "m6-root-env-"));
+  const xwRuntimeRoot = mkdtempSync(join(tempBase, "m6-xwrt-"));
+  const state = new StateStore({ dbPath: join(root, "control.db") });
+  const savedRoot = process.env.XW_RUNTIME_ROOT;
+  process.env.XW_RUNTIME_ROOT = xwRuntimeRoot;
+  try {
+    const runtime = createControlPlaneRuntime({
+      state,
+      capabilities: new CapabilityRegistry([capability]),
+      adapters: new AdapterRegistry([{ id: "test", async execute() { return {}; }, async verify() { return { ok: true }; }, async restore() { return { ok: true }; } }]),
+      evidence: new EvidenceStore({ runsRoot: join(root, "runs"), state, minFreeBytes: 0, minExternalEffectFreeBytes: 0 }),
+      deviceConfigPath: join(root, "missing-devices.json"),
+      m6Enabled: true,
+      // No explicit m6Root: bootstrap must resolve from XW_RUNTIME_ROOT.
+      m6Gate: { chain: [epochRecord()] },
+      m6LockHashes: M6_LOCKS,
+      m6Release: { releaseId: "release-1", sourceCommit: "abc123" },
+      m6Profile: { runtimeProfile: "legacy_compat", agenticGroundingEnabled: true },
+    });
+    assert.ok(runtime.m6, "facade installed");
+    // The M6 frame evidence store created its CAS blob root under the canonical
+    // XW_RUNTIME_ROOT, not a repo-local path.
+    assert.ok(existsSync(join(xwRuntimeRoot, "m6-frames", "blobs")), "evidence root must resolve to XW_RUNTIME_ROOT");
+  } finally {
+    if (savedRoot === undefined) delete process.env.XW_RUNTIME_ROOT; else process.env.XW_RUNTIME_ROOT = savedRoot;
+    state.close();
+    rmSync(root, { recursive: true, force: true });
+    rmSync(xwRuntimeRoot, { recursive: true, force: true });
+  }
+});
+
+// Pinned lock hashes (3×64-hex) — the facade requires non-null lockHashes when
+// M6 is enabled (fail closed #2), and the runtime gate matches these against the
+// epoch's lockHashes. Arbitrary but consistent sha256-length values.
+const M6_LOCKS = Object.freeze({
+  runtimeProfile: "1111111111111111111111111111111111111111111111111111111111111111",
+  hardRedlinePolicy: "2222222222222222222222222222222222222222222222222222222222222222",
+  groundingRuntime: "3333333333333333333333333333333333333333333333333333333333333333",
+});
+
 // A valid OBSERVE_ONLY epoch for the closed bootstrap gate (hash derived, never
 // hand-filled — matches the m6-live-gate derivation exactly).
 function epochRecord() {
@@ -1199,7 +1267,7 @@ function epochRecord() {
     releaseId: "release-1",
     sourceCommit: "abc123",
     actor: "operator",
-    lockHashes: null,
+    lockHashes: M6_LOCKS,
     allowlist: ["alpha"],
     issuedAt: "2026-08-21T00:00:00.000Z",
     expiresAt: "2027-01-01T00:00:00.000Z",
