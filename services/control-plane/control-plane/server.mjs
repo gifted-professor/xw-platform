@@ -1,8 +1,13 @@
 import { createServer } from "node:http";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { assertAuthorityHost, assertPinnedNodeVersion, createControlPlaneRuntime } from "./bootstrap.mjs";
 import { ControlPlaneError, errorBody } from "./lib/errors.mjs";
+import {
+  acquireM6C1RuntimeOwnerLock,
+  assertM6C1ControlDbIdentity,
+} from "./lib/m6-c1-runtime-owner-lock.mjs";
 import { ControlRouter } from "./router.mjs";
 
 const MAX_BODY_BYTES = 1024 * 1024;
@@ -54,7 +59,8 @@ export function createControlServer({ router }) {
   });
 }
 
-export async function shutdownControlServer({ server, runtime }) {
+export async function shutdownControlServer({ server, runtime, m6C1RuntimeOwner = null, finalRuntimeOwner = null }) {
+  const runtimeOwner = m6C1RuntimeOwner ?? finalRuntimeOwner;
   const failures = [];
   const settle = async (operation) => {
     try { await operation(); } catch (error) { failures.push(error); }
@@ -62,14 +68,22 @@ export async function shutdownControlServer({ server, runtime }) {
   // Drain in-flight HTTP work after stopping acceptance, so a concurrent start
   // cannot appear after the live-entry shutdown snapshot. Child/broker cleanup
   // then runs while the scheduler and StateStore are still available.
-  await settle(() => new Promise((resolve, reject) => {
-    server.close((error) => error ? reject(error) : resolve());
-  }));
+  if (typeof server?.close === "function") {
+    await settle(() => new Promise((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve());
+    }));
+  }
   await settle(() => runtime.m6LiveEntry?.shutdown?.() ?? Promise.resolve());
   await settle(() => runtime.control.stop());
   try {
     runtime.state.close();
   } catch (error) { failures.push(error); }
+  // Never make the runtime root available to a new server/bootstrap/stager
+  // when any old owner cleanup is unproven.  A retained crash lock is an
+  // intentional audited-recovery boundary, not a liveness optimization.
+  if (failures.length === 0) {
+    await settle(() => runtimeOwner?.release?.() ?? Promise.resolve());
+  }
   if (failures.length > 0) throw failures[0];
 }
 
@@ -97,6 +111,163 @@ function parseArgs(argv) {
   return options;
 }
 
+function normalizedFsPath(path) {
+  const normalized = resolve(path);
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+function runtimeRootFromControlDb(controlDbPath) {
+  if (typeof controlDbPath !== "string" || controlDbPath.length === 0 || !isAbsolute(controlDbPath)) return null;
+  const dbPath = resolve(controlDbPath);
+  const controlPlaneRoot = dirname(dbPath);
+  const stateRoot = dirname(controlPlaneRoot);
+  if (basename(dbPath).toLowerCase() !== "control.db"
+    || basename(controlPlaneRoot).toLowerCase() !== "control-plane"
+    || basename(stateRoot).toLowerCase() !== "state") {
+    return null;
+  }
+  return dirname(stateRoot);
+}
+
+export function resolveM6C1RuntimeIdentity({ runtimeMode, runtimeRoot = null, controlDbPath = null } = {}) {
+  const explicitRoot = typeof runtimeRoot === "string" && runtimeRoot.length > 0
+    ? runtimeRoot
+    : null;
+  if (explicitRoot && !isAbsolute(explicitRoot)) {
+    throw new ControlPlaneError(
+      "M6_C1_RUNTIME_IDENTITY_INVALID",
+      "M6-C1 runtime root must be absolute",
+      { status: 503 },
+    );
+  }
+  const dbRoot = runtimeRootFromControlDb(controlDbPath);
+  const resolvedRoot = explicitRoot ? resolve(explicitRoot) : dbRoot;
+  const m6Mode = runtimeMode === "QUALIFICATION_ONLY" || runtimeMode === "FINAL";
+  if (m6Mode && !resolvedRoot) {
+    throw new ControlPlaneError(
+      "M6_C1_RUNTIME_IDENTITY_REQUIRED",
+      "M6-C1 runtime mode requires an explicit runtime root or canonical control DB path",
+      { status: 503 },
+    );
+  }
+  if (resolvedRoot && typeof controlDbPath === "string" && controlDbPath.length > 0) {
+    const expectedDbPath = join(resolvedRoot, "state", "control-plane", "control.db");
+    if (!isAbsolute(controlDbPath)
+      || normalizedFsPath(controlDbPath) !== normalizedFsPath(expectedDbPath)) {
+      throw new ControlPlaneError(
+        "M6_C1_RUNTIME_IDENTITY_MISMATCH",
+        "M6-C1 runtime root and control DB do not identify the same runtime",
+        { status: 503 },
+      );
+    }
+  }
+  return Object.freeze({
+    runtimeRoot: resolvedRoot,
+    controlDbPath: resolvedRoot
+      ? join(resolvedRoot, "state", "control-plane", "control.db")
+      : controlDbPath,
+    requiresOwner: Boolean(resolvedRoot),
+  });
+}
+
+export function requiresM6C1RuntimeOwner(runtimeMode, runtimeRoot = null, controlDbPath = null) {
+  // FINAL/QUALIFICATION_ONLY always require the canonical runtime root.  A
+  // STANDARD server explicitly bound by either root or canonical DB identity
+  // must participate too; otherwise an alternate --port could open the shared
+  // StateStore while stage/bootstrap incorrectly proves the default port stopped.
+  return runtimeMode === "QUALIFICATION_ONLY" || runtimeMode === "FINAL"
+    || (typeof runtimeRoot === "string" && runtimeRoot.length > 0)
+    || runtimeRootFromControlDb(controlDbPath) !== null;
+}
+
+const DEFAULT_STARTUP_OPERATIONS = Object.freeze({
+  acquireRuntimeOwner: acquireM6C1RuntimeOwnerLock,
+  createRuntime: createControlPlaneRuntime,
+  createRouter({ runtime, nodeId }) {
+    return new ControlRouter({ ...runtime, nodeId });
+  },
+  createHttpServer: createControlServer,
+  startScheduler: startControlPlaneScheduler,
+});
+
+export async function startControlPlaneServer({
+  options,
+  nodeId,
+  runtimeMode,
+  runtimeRoot,
+  controlDbPath = null,
+  startupOperations = DEFAULT_STARTUP_OPERATIONS,
+} = {}) {
+  const {
+    acquireRuntimeOwner,
+    createRuntime,
+    createRouter,
+    createHttpServer,
+    startScheduler,
+  } = startupOperations;
+  if (!options || options.host !== "127.0.0.1"
+    || !Number.isInteger(options.port) || options.port < 1 || options.port > 65535
+    || typeof nodeId !== "string" || nodeId.length === 0
+    || [acquireRuntimeOwner, createRuntime, createRouter, createHttpServer, startScheduler]
+      .some((operation) => typeof operation !== "function")) {
+    throw new TypeError("invalid control-plane startup inputs");
+  }
+  const runtimeIdentity = resolveM6C1RuntimeIdentity({ runtimeMode, runtimeRoot, controlDbPath });
+  if (runtimeIdentity.requiresOwner) {
+    assertM6C1ControlDbIdentity({
+      runtimeRoot: runtimeIdentity.runtimeRoot,
+      controlDbPath: runtimeIdentity.controlDbPath,
+      allowMissing: true,
+    });
+  }
+  const m6C1RuntimeOwner = runtimeIdentity.requiresOwner
+    ? acquireRuntimeOwner({
+      runtimeRoot: runtimeIdentity.runtimeRoot,
+      ownerKind: "CONTROL_PLANE_M6_C1",
+    })
+    : null;
+  let runtime;
+  let server;
+  let scheduler;
+  try {
+    // M6-C1 ownership is acquired before createRuntime can open or migrate
+    // StateStore. Stage and qualification bootstrap use the same create-only
+    // owner lock while additionally occupying the control-plane port.
+    runtime = createRuntime({
+      nodeId,
+      dbPath: runtimeIdentity.controlDbPath ?? undefined,
+      m6Root: runtimeIdentity.runtimeRoot,
+    });
+    if (runtimeIdentity.requiresOwner) {
+      assertM6C1ControlDbIdentity({
+        runtimeRoot: runtimeIdentity.runtimeRoot,
+        controlDbPath: runtimeIdentity.controlDbPath,
+        allowMissing: false,
+      });
+    }
+    const router = createRouter({ runtime, nodeId });
+    server = createHttpServer({ router });
+    await new Promise((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(options.port, options.host, resolve);
+    });
+    // A stage process first owns this same port and only then attempts the
+    // owner lock. Rechecking the held file identity after listen closes the
+    // remaining pre-listen interleaving before scheduler/resource startup.
+    m6C1RuntimeOwner?.assertOwned();
+    scheduler = startScheduler(runtime);
+  } catch (error) {
+    if (runtime) {
+      try { await shutdownControlServer({ server, runtime, m6C1RuntimeOwner }); } catch {}
+    }
+    // createRuntime opens/migrates StateStore before all later construction
+    // can finish. If it throws without returning cleanup authority, retain the
+    // owner lock as a deliberate audited-recovery boundary.
+    throw error;
+  }
+  return Object.freeze({ runtime, server, scheduler, m6C1RuntimeOwner });
+}
+
 export async function main(argv = process.argv.slice(2)) {
   const options = parseArgs(argv);
   if (options.command !== "serve") {
@@ -106,13 +277,12 @@ export async function main(argv = process.argv.slice(2)) {
   const actualHost = assertAuthorityHost();
   assertPinnedNodeVersion();
   const nodeId = process.env.CONTROL_PLANE_NODE_ID || "DESKTOP-3I1EVHE";
-  const runtime = createControlPlaneRuntime({ nodeId });
-  const router = new ControlRouter({ ...runtime, nodeId });
-  const server = createControlServer({ router });
-  const scheduler = startControlPlaneScheduler(runtime);
-  await new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(options.port, options.host, resolve);
+  const { runtime, server, scheduler, m6C1RuntimeOwner } = await startControlPlaneServer({
+    options,
+    nodeId,
+    runtimeMode: process.env.XW_M6_RUNTIME_MODE,
+    runtimeRoot: process.env.XW_RUNTIME_ROOT,
+    controlDbPath: process.env.CONTROL_PLANE_DB,
   });
   console.log(JSON.stringify({
     ok: true,
@@ -126,7 +296,7 @@ export async function main(argv = process.argv.slice(2)) {
 
   let shutdownTask;
   const shutdown = () => {
-    shutdownTask ??= shutdownControlServer({ server, runtime });
+    shutdownTask ??= shutdownControlServer({ server, runtime, m6C1RuntimeOwner });
     return shutdownTask;
   };
   const onSignal = () => void shutdown().then(

@@ -181,6 +181,17 @@ function safeJson(path, label) {
   }
 }
 
+function candidateJson(bytes, label) {
+  if (!Buffer.isBuffer(bytes) || bytes.length < 2 || bytes.length > MAX_GATE_F_ARTIFACT_BYTES) {
+    fail("M6_GATE_F_ARTIFACT_INVALID", `${label} candidate bytes are invalid`, { status: 503 });
+  }
+  try {
+    return JSON.parse(bytes.toString("utf8"));
+  } catch (cause) {
+    fail("M6_GATE_F_ARTIFACT_INVALID", `${label} candidate bytes are malformed JSON`, { status: 503, cause });
+  }
+}
+
 function pathInside(root, target) {
   const rel = relative(resolve(root), resolve(target));
   return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
@@ -247,11 +258,16 @@ export function deriveM6GateFArtifactInventoryHash(inventory) {
   return sha256(`xw.m6-gate-f-artifact-inventory.v1:${canonicalJson(body)}`);
 }
 
-export function loadM6GateFArtifactInventory({ path, expectedHash } = {}) {
+function loadM6GateFArtifactInventoryInternal({ path, expectedHash, candidateBytes = null } = {}) {
   if (!HASH.test(expectedHash ?? "")) {
     fail("M6_GATE_F_INVENTORY_HASH_REQUIRED", "a content-addressed Gate-F artifact inventory hash is required", { status: 503 });
   }
-  const inventory = safeJson(path, "Gate-F artifact inventory");
+  if (candidateBytes !== null && (typeof path !== "string" || !isAbsolute(path))) {
+    fail("M6_GATE_F_ARTIFACT_PATH_INVALID", "Gate-F artifact inventory candidate path must be absolute", { status: 503 });
+  }
+  const inventory = candidateBytes === null
+    ? safeJson(path, "Gate-F artifact inventory")
+    : candidateJson(candidateBytes, "Gate-F artifact inventory");
   exactObject(inventory, INVENTORY_KEYS, "M6_GATE_F_INVENTORY_INVALID", "Gate-F artifact inventory");
   if (inventory.schemaId !== "xw.m6-gate-f-artifact-inventory.v1"
     || inventory.inventoryHash !== expectedHash
@@ -278,6 +294,23 @@ export function loadM6GateFArtifactInventory({ path, expectedHash } = {}) {
   return Object.freeze(inventory);
 }
 
+export function loadM6GateFArtifactInventory(options = {}) {
+  if (Reflect.has(Object(options), "candidateBytes")) {
+    fail("M6_GATE_F_INVENTORY_CANDIDATE_FORBIDDEN", "runtime Gate-F inventory loading requires the real on-disk artifact", { status: 503 });
+  }
+  return loadM6GateFArtifactInventoryInternal({
+    path: options.path,
+    expectedHash: options.expectedHash,
+  });
+}
+
+export function validateM6GateFArtifactInventoryCandidate({ path, expectedHash, candidateBytes } = {}) {
+  if (!Buffer.isBuffer(candidateBytes)) {
+    fail("M6_GATE_F_INVENTORY_CANDIDATE_REQUIRED", "assembler inventory validation requires explicit candidate bytes", { status: 503 });
+  }
+  return loadM6GateFArtifactInventoryInternal({ path, expectedHash, candidateBytes });
+}
+
 export function deriveM6GateFArtifactCatalogHash(catalog) {
   if (!catalog || typeof catalog !== "object" || Array.isArray(catalog)) return null;
   const { catalogHash: _ignored, ...body } = catalog;
@@ -292,14 +325,20 @@ function canonicalPathKey(path) {
 function loadCatalogEntryInventory(entry, catalogRelease, {
   expectedReleaseRoot,
   expectedReleaseManifestPath,
+  inventoryCandidateBytes = null,
 } = {}) {
-  const bytes = safeRegularBytes(entry.inventoryPath, `Gate-F inventory for ${entry.purpose}`);
+  const candidate = inventoryCandidateBytes?.get(normalizedPath(entry.inventoryPath)) ?? null;
+  if (inventoryCandidateBytes !== null && candidate === null) {
+    fail("M6_GATE_F_CATALOG_INVENTORY_CANDIDATE_MISSING", `candidate bytes for ${entry.purpose} are missing`, { status: 503 });
+  }
+  const bytes = candidate ?? safeRegularBytes(entry.inventoryPath, `Gate-F inventory for ${entry.purpose}`);
   if (sha256(bytes) !== entry.inventorySha256) {
     fail("M6_GATE_F_CATALOG_INVENTORY_RAW_HASH_MISMATCH", `raw inventory bytes for ${entry.purpose} do not match the catalog`, { status: 503 });
   }
-  const inventory = loadM6GateFArtifactInventory({
+  const inventory = loadM6GateFArtifactInventoryInternal({
     path: entry.inventoryPath,
     expectedHash: entry.inventoryHash,
+    ...(candidate === null ? {} : { candidateBytes: candidate }),
   });
   const manifest = safeJson(inventory.lockArtifacts.scenarioManifest.path, `M6-4 cohort manifest for ${entry.purpose}`);
   const validation = validateM64CohortManifest(manifest);
@@ -322,17 +361,19 @@ function loadCatalogEntryInventory(entry, catalogRelease, {
   }
   return Object.freeze({
     inventory,
-    inventoryPathKey: canonicalPathKey(entry.inventoryPath),
+    inventoryPathKey: candidate === null ? canonicalPathKey(entry.inventoryPath) : normalizedPath(entry.inventoryPath),
     releaseManifestPathKey,
     releaseRootPathKey,
   });
 }
 
-export function loadM6GateFArtifactCatalog({
+function loadM6GateFArtifactCatalogInternal({
   path,
   expectedHash,
   expectedReleaseRoot,
   expectedReleaseManifestPath,
+  candidateBytes = null,
+  inventoryCandidateBytes = null,
 } = {}) {
   if (!NONZERO_HASH.test(expectedHash ?? "")) {
     fail("M6_GATE_F_CATALOG_HASH_REQUIRED", "a nonzero content-addressed Gate-F artifact catalog hash is required", { status: 503 });
@@ -342,7 +383,30 @@ export function loadM6GateFArtifactCatalog({
     || !pathInside(expectedReleaseRoot, expectedReleaseManifestPath)) {
     fail("M6_GATE_F_CATALOG_RELEASE_PROVENANCE_REQUIRED", "Gate-F catalog requires the exact launcher-verified release root and manifest", { status: 503 });
   }
-  const catalog = safeJson(path, "Gate-F artifact catalog");
+  if (candidateBytes !== null && (typeof path !== "string" || !isAbsolute(path))) {
+    fail("M6_GATE_F_ARTIFACT_PATH_INVALID", "Gate-F artifact catalog candidate path must be absolute", { status: 503 });
+  }
+  let normalizedInventoryCandidates = null;
+  if (inventoryCandidateBytes !== null) {
+    if (!(inventoryCandidateBytes instanceof Map) || inventoryCandidateBytes.size !== M6_GATE_F_ARTIFACT_CATALOG_PURPOSES.length) {
+      fail("M6_GATE_F_CATALOG_INVENTORY_CANDIDATES_INVALID", "Gate-F catalog candidate mode requires exactly five inventory byte bindings", { status: 503 });
+    }
+    normalizedInventoryCandidates = new Map();
+    for (const [candidatePath, bytes] of inventoryCandidateBytes) {
+      if (typeof candidatePath !== "string" || !isAbsolute(candidatePath)
+        || !Buffer.isBuffer(bytes) || bytes.length < 2 || bytes.length > MAX_GATE_F_ARTIFACT_BYTES) {
+        fail("M6_GATE_F_CATALOG_INVENTORY_CANDIDATES_INVALID", "Gate-F inventory candidate binding is invalid", { status: 503 });
+      }
+      const key = normalizedPath(candidatePath);
+      if (normalizedInventoryCandidates.has(key)) {
+        fail("M6_GATE_F_CATALOG_INVENTORY_CANDIDATES_INVALID", "Gate-F inventory candidate path is duplicated", { status: 503 });
+      }
+      normalizedInventoryCandidates.set(key, bytes);
+    }
+  }
+  const catalog = candidateBytes === null
+    ? safeJson(path, "Gate-F artifact catalog")
+    : candidateJson(candidateBytes, "Gate-F artifact catalog");
   exactObject(catalog, CATALOG_KEYS, "M6_GATE_F_CATALOG_INVALID", "Gate-F artifact catalog");
   exactObject(catalog.release, CATALOG_RELEASE_KEYS, "M6_GATE_F_CATALOG_INVALID", "Gate-F catalog release binding");
   if (catalog.schemaId !== "xw.m6-gate-f-artifact-catalog.v1"
@@ -375,6 +439,7 @@ export function loadM6GateFArtifactCatalog({
     const loaded = loadCatalogEntryInventory(entry, catalog.release, {
       expectedReleaseRoot,
       expectedReleaseManifestPath,
+      inventoryCandidateBytes: normalizedInventoryCandidates,
     });
     if (inventoryHashes.has(entry.inventoryHash) || inventoryPaths.has(loaded.inventoryPathKey)
       || manifestHashes.has(entry.scenarioManifestHash)) {
@@ -390,6 +455,40 @@ export function loadM6GateFArtifactCatalog({
     }
   }
   return Object.freeze(catalog);
+}
+
+export function loadM6GateFArtifactCatalog(options = {}) {
+  if (Reflect.has(Object(options), "candidateBytes")
+    || Reflect.has(Object(options), "inventoryCandidateBytes")) {
+    fail("M6_GATE_F_CATALOG_CANDIDATE_FORBIDDEN", "runtime Gate-F catalog loading requires the real on-disk catalog and inventories", { status: 503 });
+  }
+  return loadM6GateFArtifactCatalogInternal({
+    path: options.path,
+    expectedHash: options.expectedHash,
+    expectedReleaseRoot: options.expectedReleaseRoot,
+    expectedReleaseManifestPath: options.expectedReleaseManifestPath,
+  });
+}
+
+export function validateM6GateFArtifactCatalogCandidate({
+  path,
+  expectedHash,
+  expectedReleaseRoot,
+  expectedReleaseManifestPath,
+  candidateBytes,
+  inventoryCandidateBytes,
+} = {}) {
+  if (!Buffer.isBuffer(candidateBytes) || !(inventoryCandidateBytes instanceof Map)) {
+    fail("M6_GATE_F_CATALOG_CANDIDATE_REQUIRED", "assembler catalog validation requires explicit catalog and inventory candidate bytes", { status: 503 });
+  }
+  return loadM6GateFArtifactCatalogInternal({
+    path,
+    expectedHash,
+    expectedReleaseRoot,
+    expectedReleaseManifestPath,
+    candidateBytes,
+    inventoryCandidateBytes,
+  });
 }
 
 export function selectM6GateFArtifactInventory({
@@ -422,7 +521,7 @@ export function selectM6GateFArtifactInventory({
   }).inventory;
 }
 
-function recomputeArtifact(descriptor, expectedHash, { nowMs } = {}) {
+export function recomputeM6GateFArtifact(descriptor, expectedHash, { nowMs } = {}) {
   if (!HASH.test(expectedHash ?? "")) fail("M6_GATE_F_LOCK_INVALID", "expected artifact hash is not SHA-256", { status: 503 });
   if (descriptor.mode === "RAW_SHA256") return { hash: sha256(safeRegularBytes(descriptor.path, descriptor.path)) };
   if (descriptor.mode === "TREE_SHA256") return { hash: treeSha256(descriptor.path) };
@@ -510,14 +609,14 @@ function verifyActualArtifacts({ inventory, lockSet, epoch, authorization, nowMs
   const computed = {};
   let qualification;
   for (const kind of M6_GATE_V2_LOCK_KINDS) {
-    const result = recomputeArtifact(inventory.lockArtifacts[kind], lockSet.lockHashes?.[kind], { nowMs });
+    const result = recomputeM6GateFArtifact(inventory.lockArtifacts[kind], lockSet.lockHashes?.[kind], { nowMs });
     if (result.hash !== lockSet.lockHashes[kind]) {
       fail("M6_GATE_F_LOCK_MISMATCH", `actual ${kind} artifact does not match locks.v2`, { status: 503 });
     }
     computed[kind] = result;
     if (kind === "environmentQualification") qualification = result.value;
   }
-  const environment = recomputeArtifact(inventory.runtimeArtifacts.environmentAttestation, "0".repeat(64), { nowMs });
+  const environment = recomputeM6GateFArtifact(inventory.runtimeArtifacts.environmentAttestation, "0".repeat(64), { nowMs });
   if (!qualification.qualifiedAttestationHashes.includes(environment.hash)
     || qualification.capturedAt !== environment.value.capturedAt
     || qualification.expiresAt !== environment.value.expiresAt) {
@@ -537,9 +636,9 @@ function verifyActualArtifacts({ inventory, lockSet, epoch, authorization, nowMs
     });
   }
   const release = verifyReleaseBinding(inventory.release, epoch);
-  const operatorHash = recomputeArtifact(inventory.runtimeArtifacts.operator, sha256(safeRegularBytes(inventory.runtimeArtifacts.operator.path, "operator artifact")), { nowMs }).hash;
-  const independentOracleHash = recomputeArtifact(inventory.runtimeArtifacts.independentOracle, sha256(safeRegularBytes(inventory.runtimeArtifacts.independentOracle.path, "independent oracle")), { nowMs }).hash;
-  const resetObligationsHash = recomputeArtifact(inventory.runtimeArtifacts.resetObligations, sha256(safeRegularBytes(inventory.runtimeArtifacts.resetObligations.path, "reset obligations")), { nowMs }).hash;
+  const operatorHash = recomputeM6GateFArtifact(inventory.runtimeArtifacts.operator, sha256(safeRegularBytes(inventory.runtimeArtifacts.operator.path, "operator artifact")), { nowMs }).hash;
+  const independentOracleHash = recomputeM6GateFArtifact(inventory.runtimeArtifacts.independentOracle, sha256(safeRegularBytes(inventory.runtimeArtifacts.independentOracle.path, "independent oracle")), { nowMs }).hash;
+  const resetObligationsHash = recomputeM6GateFArtifact(inventory.runtimeArtifacts.resetObligations, sha256(safeRegularBytes(inventory.runtimeArtifacts.resetObligations.path, "reset obligations")), { nowMs }).hash;
   return Object.freeze({
     computed,
     environmentAttestationHash: environment.hash,

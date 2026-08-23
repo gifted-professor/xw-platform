@@ -203,6 +203,11 @@ function filesystemIdentity(stat) {
     .map((value) => String(value)).join(":");
 }
 
+function filesystemDirectoryIdentity(stat) {
+  // POSIX updates a directory's link count when child directories are created.
+  return [stat.dev, stat.ino].map((value) => String(value)).join(":");
+}
+
 function closeAuditDirectoryGuard(guard) {
   for (const entry of [...(guard?.entries || [])].reverse()) {
     try { closeSync(entry.fd); } catch {}
@@ -225,11 +230,11 @@ function openPlainAuditDirectoryEntry(path, code) {
     const opened = fstatSync(fd, { bigint: true });
     const after = lstatSync(path, { bigint: true });
     if (!opened.isDirectory() || !after.isDirectory() || after.isSymbolicLink()
-      || filesystemIdentity(before) !== filesystemIdentity(opened)
-      || filesystemIdentity(opened) !== filesystemIdentity(after)) {
+      || filesystemDirectoryIdentity(before) !== filesystemDirectoryIdentity(opened)
+      || filesystemDirectoryIdentity(opened) !== filesystemDirectoryIdentity(after)) {
       fail(code, "audit directory identity changed while it was being opened");
     }
-    return Object.freeze({ fd, identity: filesystemIdentity(opened), path });
+    return Object.freeze({ fd, identity: filesystemDirectoryIdentity(opened), path });
   } catch (error) {
     if (fd !== null) try { closeSync(fd); } catch {}
     if (error?.code === code) throw error;
@@ -251,7 +256,8 @@ function revalidateAuditDirectoryGuard(guard) {
     }
     if (!pathStat.isDirectory() || pathStat.isSymbolicLink() || !handleStat.isDirectory()
       || normalizedFilesystemPath(actual) !== normalizedFilesystemPath(entry.path)
-      || filesystemIdentity(pathStat) !== entry.identity || filesystemIdentity(handleStat) !== entry.identity) {
+      || filesystemDirectoryIdentity(pathStat) !== entry.identity
+      || filesystemDirectoryIdentity(handleStat) !== entry.identity) {
       fail(guard.code, "audit directory was replaced or rebound during publication");
     }
   }

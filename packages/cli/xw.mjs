@@ -739,7 +739,8 @@ function m6EpochUsage() {
 
 --m6-root defaults to XW_RUNTIME_ROOT then the platform canonical root.
 --issuer-keys defaults to <m6-root>/m6-gate/issuer-keys.json. Lock hashes are read
-from the pinned <m6-root>/m6-gate/locks.v1.json (absent -> M6_LOCKS_MISSING).
+from <m6-root>/m6-gate/<gate-id>/locks.v1.json, with the historical global
+<m6-root>/m6-gate/locks.v1.json as a legacy fallback (absent -> M6_LOCKS_MISSING).
 Every write is immutable (refuse-overwrite, atomic temp->fsync->rename).`;
 }
 
@@ -791,7 +792,7 @@ async function m6EpochMint(argv) {
   if (!keyFile) return epochErr("--key-file is required (operator ed25519 private key, off-repo)");
   const signer = resolveSigner(argv, issuerKeysPath);
   if (signer.error) return epochErr(signer.error);
-  const lockHashes = loadM6Locks(m6Root); // absent -> M6_LOCKS_MISSING fail-closed
+  const lockHashes = loadM6Locks(m6Root, { gateId }); // gate-local first; legacy global fallback
   // Parent defaults to the active tail (chain continuity); null for the first epoch.
   let parentHash = argOf(argv, "--parent-hash", null);
   if (parentHash === null) {

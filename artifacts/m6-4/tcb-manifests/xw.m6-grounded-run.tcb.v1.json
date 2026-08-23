@@ -2,7 +2,7 @@
   "schemaId": "xhs.tcb.manifest.v1",
   "schemaVersion": 1,
   "manifestId": "xw.m6-grounded-run.tcb.v1",
-  "implementationClosureHash": "a6827c1b5b09b96b7beb57d8cd45fd7a9aa18ee9195110f8a17074229e0fb6d1",
+  "implementationClosureHash": "6980ecdd56e9e2a93fdae6faeaf3512f9fb10ec4cf2c073b307d0781383190cb",
   "contentHashProfile": "xhs.m6-grounded-run-capability-self-binding.v1",
   "paths": [
     "artifacts/m6-4/cohort-manifests/m6_4_action_smoke.json",
@@ -99,6 +99,7 @@
     "services/control-plane/control-plane/lib/generated-overlay.mjs",
     "services/control-plane/control-plane/lib/implementation-closure.mjs",
     "services/control-plane/control-plane/lib/json-schema-validator.mjs",
+    "services/control-plane/control-plane/lib/m6-c1-runtime-owner-lock.mjs",
     "services/control-plane/control-plane/lib/m6-frame-capture.mjs",
     "services/control-plane/control-plane/lib/m6-frame-evidence-store.mjs",
     "services/control-plane/control-plane/lib/m6-gate-f-operations.mjs",
@@ -118,6 +119,7 @@
     "services/control-plane/control-plane/lib/m6-live-production-callbacks.mjs",
     "services/control-plane/control-plane/lib/m6-live-production-dependencies.mjs",
     "services/control-plane/control-plane/lib/m6-live-window-authorization.mjs",
+    "services/control-plane/control-plane/lib/m6-qualification-bootstrap.mjs",
     "services/control-plane/control-plane/lib/m6-typed-transport.mjs",
     "services/control-plane/control-plane/lib/mission-policy.mjs",
     "services/control-plane/control-plane/lib/mission-runtime.mjs",
@@ -265,7 +267,7 @@
       },
       {
         "path": "integrations/dsh-xw/src/live-tools.mjs",
-        "sha256": "a1930bef26188c371d1778c0fe593eee88114c46d39d2458474a91e7b76cc95f"
+        "sha256": "44d340421b9c7150ea27ef826af6b1f4c2e841d71ae1aea8400210a9926c8765"
       },
       {
         "path": "integrations/dsh-xw/src/live-worker-driver.mjs",
@@ -544,6 +546,10 @@
         "sha256": "b2b07e42d6e903d3c46e58ee9bba774d5da35a5096af785dd3f036bc5ec69050"
       },
       {
+        "path": "services/control-plane/control-plane/lib/m6-c1-runtime-owner-lock.mjs",
+        "sha256": "ef40c21fe68979150b3b30fc1f7374eaf8f31075c83020ca96d915350269d710"
+      },
+      {
         "path": "services/control-plane/control-plane/lib/m6-frame-capture.mjs",
         "sha256": "6841a85cdc3e6012607459d5ae72dc70946c82debea945b7a381f36fb5d8ca1c"
       },
@@ -553,11 +559,11 @@
       },
       {
         "path": "services/control-plane/control-plane/lib/m6-gate-f-operations.mjs",
-        "sha256": "f159c155bf52a2927cdd4038cbc801983392627031619b462ffadbfc1cf23681"
+        "sha256": "c3498fb78cf5d8d0f2ff7345ac2342be7719ac91c0d963af3e652365da2c2c18"
       },
       {
         "path": "services/control-plane/control-plane/lib/m6-gate-loader.mjs",
-        "sha256": "a59facff6d8182cbed6662e53990b5c27afc11b6627a96c476852a158156e3c0"
+        "sha256": "c1499c0abf5ac498162307912fe66f0fc4d7b95220a5e7559db06bd099da62dd"
       },
       {
         "path": "services/control-plane/control-plane/lib/m6-gate-promoter.mjs",
@@ -577,7 +583,7 @@
       },
       {
         "path": "services/control-plane/control-plane/lib/m6-grounded-run-capability-seal.mjs",
-        "sha256": "7394cc19e0d1ac923cfd8569494580ff8c58c6927d90612e0703aed329d6f283"
+        "sha256": "4769edb8fcb4e40bec7d52f2d1b7aaa993c35fd2de458e99e09a1e2d75c2bc18"
       },
       {
         "path": "services/control-plane/control-plane/lib/m6-grounded-run-tcb-closure.mjs",
@@ -613,11 +619,15 @@
       },
       {
         "path": "services/control-plane/control-plane/lib/m6-live-production-dependencies.mjs",
-        "sha256": "f729e3285efea5f348947940ec5dc195ffe15a21bd848e60110c23b75fc80dfa"
+        "sha256": "af0faf12c2a9b4fddfe0d26d20ad36565636fa07716d71c7b327f0aaa3193d06"
       },
       {
         "path": "services/control-plane/control-plane/lib/m6-live-window-authorization.mjs",
         "sha256": "f8302d101ac0ae76ca6bd3a8bdcfc45f6a1b5a4bf6d775d7c9e7cad7b4379524"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/m6-qualification-bootstrap.mjs",
+        "sha256": "8087dfbd4ced610b7f9d624e01ddb219dc4d778f0a874ed7e374d89763d43a74"
       },
       {
         "path": "services/control-plane/control-plane/lib/m6-typed-transport.mjs",
@@ -681,7 +691,7 @@
       },
       {
         "path": "services/control-plane/control-plane/lib/state-store.mjs",
-        "sha256": "653425196e9dee1f5c43d784fe647888c8cfad33a48dbaa6b81102be71ab2874"
+        "sha256": "c1c8a35cf4c79c8d257ad53fdab5fd1916e41d24f252604feb217f01eecf8e16"
       },
       {
         "path": "services/control-plane/control-plane/lib/tcb-manifest.mjs",
@@ -721,7 +731,7 @@
       },
       {
         "path": "services/control-plane/control-plane/server.mjs",
-        "sha256": "01fefd23eac26cfba65370d8b94585aad9f89e0a7762e834d1856fd7c65e8ad6"
+        "sha256": "cf98442cc983972e2e2f49020876b9dcbb35ba7bc4724f0e11af22ac93ecb06b"
       },
       {
         "path": "services/control-plane/docs/adr/0008-mission-driven-exploration-authorization.md",

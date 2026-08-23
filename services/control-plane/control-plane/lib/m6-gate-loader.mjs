@@ -88,10 +88,13 @@ function readRegularJson(filePath, expectedSha256 = null) {
   try { return JSON.parse(bytes.toString("utf8")); } catch { fail("M6_GATE_FILE_INVALID", "gate artifact is not valid JSON"); }
 }
 
-// Read the pinned lock hashes. These are PINNED by the release pipeline — never
-// re-derived. Missing locks while M6 is enabled is fail-closed (M6_LOCKS_MISSING).
-export function loadM6Locks(m6Root, { requireLocks = true } = {}) {
-  const path = join(m6Root, "m6-gate", "locks.v1.json");
+// Read the pinned lock hashes. New release-specific gates use a gate-local
+// record so installing their bootstrap cannot overwrite the historical global
+// locks used by an older gate. The global path remains a compatibility fallback
+// for already-issued M6-2 chains.
+export function loadM6Locks(m6Root, { requireLocks = true, gateId = null, expectedRelease = null } = {}) {
+  const localPath = gateId ? join(m6Root, "m6-gate", gateId, "locks.v1.json") : null;
+  const path = localPath && existsSync(localPath) ? localPath : join(m6Root, "m6-gate", "locks.v1.json");
   const raw = readRegularJson(path);
   if (!raw) {
     if (requireLocks) fail("M6_LOCKS_MISSING", "pinned M6 lock hashes (m6-gate/locks.v1.json) are required when M6 is enabled");
@@ -104,6 +107,9 @@ export function loadM6Locks(m6Root, { requireLocks = true } = {}) {
     if (typeof locks[kind] !== "string" || !HEX64.test(locks[kind])) {
       fail("M6_LOCKS_INVALID", `locks.v1.json ${kind} must be a 64-hex sha256`);
     }
+  }
+  if (expectedRelease && (raw.releaseId !== expectedRelease.releaseId || raw.sourceCommit !== expectedRelease.sourceCommit)) {
+    fail("M6_LOCKS_RELEASE_MISMATCH", "locks.v1.json releaseId/sourceCommit does not match the selected gate tail");
   }
   return Object.freeze({ ...locks });
 }
@@ -243,7 +249,7 @@ export function loadM6Gate({
   const dir = gateDir(m6Root, gateId);
   if (!existsSync(dir)) {
     // No gate installed → empty chain (gate evaluates to M6_GATE_EMPTY, CLOSED).
-    return { chain: [], closeouts: {}, aggregates: {}, lockHashes: loadM6Locks(m6Root, { requireLocks }), lockSets: loadV2LockSets(m6Root), emergencyCloseAuthorizations: {}, gateId, tailEpochHash: null, currentPointer: null };
+    return { chain: [], closeouts: {}, aggregates: {}, lockHashes: loadM6Locks(m6Root, { requireLocks, gateId }), lockSets: loadV2LockSets(m6Root), emergencyCloseAuthorizations: {}, gateId, tailEpochHash: null, currentPointer: null };
   }
   // Only a process-local authority minted from an exact durable safety-close
   // arm may bypass current allowlist re-evaluation. The recovery read still
@@ -253,7 +259,7 @@ export function loadM6Gate({
   const currentPath = join(dir, "current.json");
   const current = readRegularJson(currentPath);
   if (!current || !Array.isArray(current.chain) || current.chain.length === 0) {
-    return { chain: [], closeouts: {}, aggregates: {}, lockHashes: loadM6Locks(m6Root, { requireLocks }), lockSets: loadV2LockSets(m6Root), emergencyCloseAuthorizations: {}, gateId, tailEpochHash: null, currentPointer: null };
+    return { chain: [], closeouts: {}, aggregates: {}, lockHashes: loadM6Locks(m6Root, { requireLocks, gateId }), lockSets: loadV2LockSets(m6Root), emergencyCloseAuthorizations: {}, gateId, tailEpochHash: null, currentPointer: null };
   }
   const chain = [];
   for (const epochHash of current.chain) {
@@ -289,7 +295,13 @@ export function loadM6Gate({
     chain,
     closeouts,
     aggregates,
-    lockHashes: loadM6Locks(m6Root, { requireLocks }),
+    lockHashes: loadM6Locks(m6Root, {
+      requireLocks,
+      gateId,
+      expectedRelease: chain.length > 0
+        ? { releaseId: chain.at(-1).releaseId, sourceCommit: chain.at(-1).sourceCommit }
+        : null,
+    }),
     lockSets: loadV2LockSets(m6Root),
     emergencyCloseAuthorizations: loadEmergencyCloseAuthorizations(dir),
     gateId,

@@ -101,6 +101,10 @@ jobs:
         timeout-minutes: 4
         run: npm run test:m6
 
+      - name: Exact DSH dependency install for M6-4
+        working-directory: integrations/dsh-xw
+        run: npm ci --ignore-scripts
+
       - name: M6-4 grounded-action offline hard gate
         timeout-minutes: 6
         run: npm run test:m6-4:offline

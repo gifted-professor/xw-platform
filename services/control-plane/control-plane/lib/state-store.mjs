@@ -163,7 +163,13 @@ export class StateStore {
       this.db.exec("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
       if (dbPath !== ":memory:") this.db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;");
       this.#migrate();
-      this.recoverInterruptedWork();
+      // Qualification bootstrap verifies that migration preserves the exact
+      // pre-migration legacy row set before it seeds the generation-0 fence.
+      // Ordinary restart recovery intentionally rewrites that row set (for
+      // example, it removes expired sessions/leases and marks interrupted
+      // actions ambiguous), so the qualification-only opener must stop after
+      // schema migration. STANDARD and FINAL retain normal startup recovery.
+      if (m6RuntimeMode !== "QUALIFICATION_ONLY") this.recoverInterruptedWork();
     } catch (error) {
       try { this.db.close(); } catch {}
       throw error;
@@ -2821,6 +2827,107 @@ export class StateStore {
       if (existing) {
         if (existing.epochHash !== epoch.epochHash || existing.generation !== 0 || existing.mode !== "CLOSED") {
           throw new ControlPlaneError("M6_GATE_FENCE_ALREADY_SEEDED", "existing M6 fence differs from the seed", { status: 409 });
+        }
+        return existing;
+      }
+      this.db.prepare(`
+        INSERT INTO m6_gate_fence (
+          marker, gate_id, epoch_hash, generation, mode, purpose, allowlist_json,
+          expires_at, release_id, source_commit, locks_hash, updated_at
+        ) VALUES ('M6', ?, ?, 0, 'CLOSED', NULL, ?, ?, ?, ?, ?, ?)
+      `).run(
+        epoch.gateId,
+        epoch.epochHash,
+        canonicalJson(epoch.allowlist),
+        epoch.expiresAt,
+        epoch.releaseId,
+        epoch.sourceCommit,
+        locksHash,
+        this.now(),
+      );
+      return this.getM6GateFence();
+    });
+  }
+
+  // Production qualification bootstrap is the one place that may create the
+  // generation-0 M6 fence.  Keep its zero-resource proof in the same SQLite
+  // transaction as the insert so a caller cannot observe zero, race another
+  // writer, and then seed authority from a stale snapshot.  Unlike the legacy
+  // test/setup helper above, replay compares the complete fence identity and
+  // refuses every durable M6 residue from an earlier attempt/window.
+  seedM6QualificationBootstrapFence({ epoch, locksHash }) {
+    const { epochHash: _ignoredEpochHash, ...epochPayload } = epoch || {};
+    const derivedEpochHash = sha256(`xw.m6-live-gate.v1:${canonicalJson(epochPayload)}`);
+    if (!epoch || epoch.schemaId !== "xw.m6-live-gate.v1" || epoch.mode !== "CLOSED" || epoch.status !== "closed"
+      || !epoch.closeoutRef || !epoch.aggregateSealRef || epoch.epochHash !== derivedEpochHash
+      || canonicalJson(epoch.allowlist) !== canonicalJson(["01"])) {
+      throw new ControlPlaneError(
+        "M6_QUALIFICATION_BOOTSTRAP_FENCE_INVALID",
+        "qualification bootstrap may only seed from the exact verified alias-01 v1 CLOSED tail",
+        { status: 409 },
+      );
+    }
+    if (!/^[0-9a-f]{64}$/.test(locksHash || "")) {
+      throw new ControlPlaneError(
+        "M6_QUALIFICATION_BOOTSTRAP_FENCE_INVALID",
+        "qualification bootstrap fence requires a 64-hex locks hash",
+        { status: 409 },
+      );
+    }
+    return this.transaction(() => {
+      const resources = this.getM6GateFResourceCounts();
+      const durableResidue = Object.freeze({
+        groundedActions: Number(this.db.prepare(
+          "SELECT COUNT(*) AS count FROM device_session_actions WHERE execution_mode='m6-grounded-live-v2'",
+        ).get().count),
+        emergencyCloseConsumptions: Number(this.db.prepare("SELECT COUNT(*) AS count FROM m6_emergency_close_consumptions").get().count),
+        groundingPermits: Number(this.db.prepare("SELECT COUNT(*) AS count FROM m6_grounding_permits").get().count),
+        actionClaims: Number(this.db.prepare("SELECT COUNT(*) AS count FROM m6_action_claims").get().count),
+        groundedActionDetails: Number(this.db.prepare("SELECT COUNT(*) AS count FROM m6_grounded_action_details").get().count),
+        liveWindowAuthorizations: Number(this.db.prepare("SELECT COUNT(*) AS count FROM m6_live_window_authorization_consumptions").get().count),
+        liveScenarioClaims: Number(this.db.prepare("SELECT COUNT(*) AS count FROM m6_live_scenario_claims").get().count),
+        safetyCloseArms: Number(this.db.prepare("SELECT COUNT(*) AS count FROM m6_gate_safety_close_arms").get().count),
+      });
+      if (Object.values(resources).some((count) => !Number.isSafeInteger(count) || count !== 0)
+        || Object.values(durableResidue).some((count) => !Number.isSafeInteger(count) || count !== 0)) {
+        throw new ControlPlaneError(
+          "M6_QUALIFICATION_BOOTSTRAP_RESOURCES_NOT_ZERO",
+          "qualification bootstrap requires one atomic zero-resource and zero-M6-residue database snapshot",
+          { status: 409, details: { resources, durableResidue } },
+        );
+      }
+      const expected = {
+        gateId: epoch.gateId,
+        epochHash: epoch.epochHash,
+        generation: 0,
+        mode: "CLOSED",
+        purpose: null,
+        allowlist: epoch.allowlist,
+        expiresAt: epoch.expiresAt,
+        releaseId: epoch.releaseId,
+        sourceCommit: epoch.sourceCommit,
+        locksHash,
+      };
+      const existing = this.getM6GateFence();
+      if (existing) {
+        const comparable = {
+          gateId: existing.gateId,
+          epochHash: existing.epochHash,
+          generation: existing.generation,
+          mode: existing.mode,
+          purpose: existing.purpose,
+          allowlist: existing.allowlist,
+          expiresAt: existing.expiresAt,
+          releaseId: existing.releaseId,
+          sourceCommit: existing.sourceCommit,
+          locksHash: existing.locksHash,
+        };
+        if (canonicalJson(comparable) !== canonicalJson(expected)) {
+          throw new ControlPlaneError(
+            "M6_QUALIFICATION_BOOTSTRAP_FENCE_DRIFT",
+            "existing M6 fence differs from the exact qualification bootstrap generation",
+            { status: 409 },
+          );
         }
         return existing;
       }

@@ -7,6 +7,7 @@ import {
 import {
   existsSync,
   linkSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -1025,6 +1026,26 @@ test("completion receipt publication atomically reads back exact bytes and is id
     assert.deepEqual(readFileSync(first.path), expectedBytes);
     assert.deepEqual(atomicWriteCompletionReceipt(root, receipt), first);
     assert.deepEqual(readdirSync(join(root, "m6-4-action-canary-completion")), [`${receipt.receiptHash}.json`]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("audit guard accepts the POSIX parent link-count change from its own child directory", (t) => {
+  if (process.platform === "win32") {
+    t.skip("POSIX directory link-count semantics are not available on Windows");
+    return;
+  }
+  const root = mkdtempSync(join(tmpdir(), "m64-audit-posix-nlink-"));
+  try {
+    const before = lstatSync(root, { bigint: true });
+    const receipt = { schemaId: "xw.m6-4-action-canary-completion.test.v1", receiptHash: H("posix-nlink-receipt") };
+    const published = atomicWriteCompletionReceipt(root, receipt);
+    const after = lstatSync(root, { bigint: true });
+    assert.equal(after.dev, before.dev);
+    assert.equal(after.ino, before.ino);
+    assert.ok(after.nlink > before.nlink, "creating the receipt child directory must change the POSIX parent link count");
+    assert.equal(readFileSync(published.path, "utf8"), `${JSON.stringify(receipt, null, 2)}\n`);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

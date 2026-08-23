@@ -37,6 +37,7 @@ export const M6_GROUNDED_RUN_AUTHORITY_ROOTS = Object.freeze([
   "services/control-plane/control-plane/lib/m6-gate-f-operations.mjs",
   "services/control-plane/control-plane/lib/m6-gate-loader.mjs",
   "services/control-plane/control-plane/lib/m6-gate-promoter.mjs",
+  "services/control-plane/control-plane/lib/m6-qualification-bootstrap.mjs",
   "services/control-plane/control-plane/lib/m6-grounded-action-facade.mjs",
   "services/control-plane/control-plane/lib/m6-grounded-action-run-manager.mjs",
   "services/control-plane/control-plane/lib/m6-grounded-run-capability-seal.mjs",

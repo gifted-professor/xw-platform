@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
@@ -102,7 +104,9 @@ function inMemoryAudit() {
   };
 }
 
-test("production callbacks own one formal composite capability job/session/lease and close them after a verified typed action", async () => {
+test("production callbacks own one formal composite capability job/session/lease and close them after a verified typed action", async (t) => {
+  const evidenceDirectoryRoot = mkdtempSync(join(tmpdir(), "m6-live-production-evidence-"));
+  t.after(() => rmSync(evidenceDirectoryRoot, { recursive: true, force: true }));
   const state = new StateStore({ now: () => NOW });
   try {
     const registry = CapabilityRegistry.load(fileURLToPath(new URL("../apps", import.meta.url)));
@@ -210,7 +214,7 @@ test("production callbacks own one formal composite capability job/session/lease
       independentOracle,
       targetSelector: ({ blockSet }) => blockSet.blocks[0].blockId,
       currentStateGuard: ({ expectedState }) => ({ ...expectedState }),
-      evidenceDirectoryRoot: "C:\\m6-test-evidence",
+      evidenceDirectoryRoot,
       auditStore,
       authorityNodeId: "node-1",
       observeDevice: async () => { throw new Error("captureFrame test seam should own observation"); },

@@ -772,8 +772,9 @@ function validateFreshCapture(value, input, policy, nowMs) {
   return cloneFrozen(value.state);
 }
 
-export function loadM64ProductionDependencies({
+function loadM64ProductionDependenciesInternal({
   runtimeBinding,
+  productionDependencyBindingBytes = null,
   readFreshCapture = null,
   now = Date.now,
 } = {}) {
@@ -784,12 +785,28 @@ export function loadM64ProductionDependencies({
   const nowMs = Number(now());
   if (!Number.isFinite(nowMs)) throw new TypeError("M6 production dependency clock must be finite");
   const releaseRoot = assertPlainDirectory(runtimeBinding.sourceReleaseRoot, "source release root");
-  const bindingFile = safeReadBytes(
-    runtimeBinding.productionDependencyBindingPath,
-    runtimeBinding.productionDependencyBindingHash,
-    "production dependency manifest",
-    { outsideReleaseRoot: releaseRoot },
-  );
+  let bindingFile;
+  if (productionDependencyBindingBytes === null) {
+    bindingFile = safeReadBytes(
+      runtimeBinding.productionDependencyBindingPath,
+      runtimeBinding.productionDependencyBindingHash,
+      "production dependency manifest",
+      { outsideReleaseRoot: releaseRoot },
+    );
+  } else {
+    if (!Buffer.isBuffer(productionDependencyBindingBytes)
+      || productionDependencyBindingBytes.length < 2
+      || productionDependencyBindingBytes.length > MAX_ARTIFACT_BYTES
+      || within(releaseRoot, runtimeBinding.productionDependencyBindingPath)
+      || sha256(productionDependencyBindingBytes) !== runtimeBinding.productionDependencyBindingHash) {
+      fail("M6_LIVE_PRODUCTION_DEPENDENCY_BINDING_INVALID", "production dependency candidate bytes are malformed, rebound, or not content addressed");
+    }
+    bindingFile = Object.freeze({
+      bytes: productionDependencyBindingBytes,
+      sha256: runtimeBinding.productionDependencyBindingHash,
+      path: resolve(runtimeBinding.productionDependencyBindingPath),
+    });
+  }
   let dependencyBinding;
   try { dependencyBinding = JSON.parse(bindingFile.bytes.toString("utf8")); } catch (cause) {
     fail("M6_LIVE_PRODUCTION_DEPENDENCY_BINDING_INVALID", "production dependency manifest is not valid JSON", { cause });
@@ -1015,5 +1032,39 @@ export function loadM64ProductionDependencies({
       targetSelectorPolicy: selectorPolicy.policyHash,
       currentStateGuardPolicy: guardPolicy.policyHash,
     }),
+  });
+}
+
+export function loadM64ProductionDependencies(options = {}) {
+  if (Reflect.has(Object(options), "productionDependencyBindingBytes")) {
+    fail(
+      "M6_LIVE_PRODUCTION_DEPENDENCY_CANDIDATE_FORBIDDEN",
+      "production runtime dependency loading requires the real on-disk binding",
+    );
+  }
+  return loadM64ProductionDependenciesInternal({
+    runtimeBinding: options.runtimeBinding,
+    readFreshCapture: options.readFreshCapture,
+    now: options.now,
+  });
+}
+
+export function validateM64ProductionDependencyCandidate({
+  runtimeBinding,
+  productionDependencyBindingBytes,
+  readFreshCapture = null,
+  now = Date.now,
+} = {}) {
+  if (!Buffer.isBuffer(productionDependencyBindingBytes)) {
+    fail(
+      "M6_LIVE_PRODUCTION_DEPENDENCY_CANDIDATE_REQUIRED",
+      "assembler dependency validation requires explicit candidate bytes",
+    );
+  }
+  return loadM64ProductionDependenciesInternal({
+    runtimeBinding,
+    productionDependencyBindingBytes,
+    readFreshCapture,
+    now,
   });
 }

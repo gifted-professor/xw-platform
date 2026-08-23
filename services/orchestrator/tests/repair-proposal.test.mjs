@@ -355,9 +355,21 @@ test("all repair contract schemas are valid JSON with distinct v1 ids", () => {
   assert.ok(ids.every((id) => id.endsWith(":v1")));
 });
 
-test("filesystem and Git verifiers enforce real lock, Mac receipt, replay authorization and completion bindings", () => {
+test("filesystem and Git verifiers enforce real lock, Mac receipt, replay authorization and completion bindings", (t) => {
   const root = mkdtempSync(join(tmpdir(), "repair-authority-"));
   try {
+    const createSymlinkOrSkip = (target, path) => {
+      try {
+        symlinkSync(target, path);
+        return true;
+      } catch (error) {
+        if (process.platform === "win32" && error?.code === "EPERM") {
+          t.skip("Windows symlink privilege is unavailable");
+          return false;
+        }
+        throw error;
+      }
+    };
     const macRepo = join(root, "mac");
     const outboxRoot = join(root, "outbox");
     const completionRoot = join(root, "completion");
@@ -401,7 +413,7 @@ test("filesystem and Git verifiers enforce real lock, Mac receipt, replay author
     const attemptDir = join(attemptRoot, "attempt-1");
     const realAttemptDir = join(attemptRoot, "attempt-real");
     renameSync(attemptDir, realAttemptDir);
-    symlinkSync(realAttemptDir, attemptDir);
+    if (!createSymlinkOrSkip(realAttemptDir, attemptDir)) return;
     assert.equal(verifiers.verifyClaimLock({ proposal, projection, event: claim, lock: claim.payload }), false);
     // Windows 目录 symlink 不能 rmSync（会尝试递归进链接目标），用 unlinkSync 删链接本身。
     unlinkSync(attemptDir);
@@ -411,7 +423,7 @@ test("filesystem and Git verifiers enforce real lock, Mac receipt, replay author
     const outsideLock = join(root, "outside-claim.lock");
     writeFileSync(outsideLock, lockBytes);
     rmSync(lockPath);
-    symlinkSync(outsideLock, lockPath);
+    if (!createSymlinkOrSkip(outsideLock, lockPath)) return;
     assert.equal(verifiers.verifyClaimLock({ proposal, projection: initialRepairProjection(proposal), event: claim, lock: claim.payload }), false);
     projection = applyRepairEvent(proposal, projection, event(proposal, projection, "start_fixing", "windows_consumer", "win-fixer", "2026-08-02T09:02:00.000Z"));
     projection = applyRepairEvent(proposal, projection, event(proposal, projection, "source_checkpoint", "windows_consumer", "win-fixer", "2026-08-02T09:03:00.000Z", { bundleSha256: "e".repeat(64), outboxRef: `${proposal.transport.outboxNamespace}/attempt-1/source-checkpoint.json` }));
