@@ -3,6 +3,8 @@
 
 # 依赖
 node_modules/
+integrations/dsh-xw/.runtime/
+integrations/dsh-xw/.runtime-debug/
 
 # 运行产物
 *.log

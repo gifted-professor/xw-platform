@@ -1,0 +1,27 @@
+{
+  "schemaId": "xw.m6-3-scenario-oracle.v1",
+  "sessionId": "session-replay-0001",
+  "publicResumePath": "ctx.agents.resume",
+  "process1Calls": [
+    "worker_start",
+    "phone_observe",
+    "phone_ground",
+    "phone_act",
+    "phone_verify",
+    "checkpoint_save",
+    "trace_query",
+    "worker_complete"
+  ],
+  "process2Calls": [
+    "worker_continue",
+    "trace_query",
+    "worker_complete"
+  ],
+  "checkpoint": {
+    "journalSeq": 6,
+    "journalHash": "a84cd7f8c94eee3b1362f365da0979563dc54f58c73851cd3e4a9c25bb67e8dd",
+    "stateHash": "dc4abcffdb09c15dbcb937cfadee2cc4e718c780beec2f69cdf890b18ec1c090"
+  },
+  "externalEffect": false,
+  "actionCount": 0
+}

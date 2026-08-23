@@ -45,14 +45,16 @@
   },
   "apiShape": {
     "allowedTools": [
-      "xw_skill_start",
-      "xw_skill_continue",
-      "xw_skill_checkpoint",
-      "xw_skill_complete",
-      "xw_phone_observe",
-      "xw_phone_act",
-      "xw_phone_verify",
-      "xw_trace_query"
+      "phone_observe",
+      "phone_ground",
+      "phone_act",
+      "phone_verify",
+      "checkpoint_save",
+      "trace_query",
+      "wait_human",
+      "worker_start",
+      "worker_continue",
+      "worker_complete"
     ],
     "forbiddenTools": ["control.db", "registry.db", "ADB", "22222", "lease_mutation", "payment_override", "policy_override"],
     "real": {
@@ -96,6 +98,16 @@
     "isFixture": true,
     "marker": "integrations/dsh-xw/plugin.mjs 仅通过 packages/harness-protocol 的内存 HarnessRuntime 实现协议，不 spawn 真实 DSH/Cordis 进程（无 node:child_process 引用）；README.md 声明 'Source-only' 且 'DSH_LIVE_GATE = CLOSED'",
     "consequence": "当前 adapter 为内存 fixture，不冒充真实进程；M6-3 须按上方真实 wire/launch 形状实现 out-of-process plugin。fixture 的 adapterMethods（createSession/restoreSession/submitGoal/continueSkill/checkpoint/queryTrace/interrupt/close/invokeTool/serialize）是 XW 侧协议抽象，不是 DSH SDK 的 wire 方法——真实 wire 只有 initialize/session/prompt/shutdown + 4 个 notification。"
+  },
+  "process": {
+    "adapterKind": "dsh_cordis_process",
+    "traceMarker": "xw.dsh.real-out-of-process.v1",
+    "profile": "integrations/dsh-xw/profiles/replay",
+    "closedBundles": [],
+    "serverInfo": { "name": "xw-dsh-replay-runtime", "version": "1.0.0" },
+    "liveGate": "CLOSED",
+    "externalEffect": false,
+    "actionCount": 0
   },
   "conclusions": [
     "lock.json 与 packages/harness-protocol/locks/dsh.lock.v1.json 一致（plugin.mjs 构造时强制校验，漂移抛 DSH_LOCK_DRIFT）",

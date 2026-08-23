@@ -1,0 +1,5 @@
+# Auditable mirror of profiles/replay/cordis.patch.yml. The real DSH CLI boots
+# the replay profile under DSH_HOME and resolves the same relative runtime plugin.
+- insert:
+    - id: xw-dsh-replay-runtime
+      name: ../../src/runtime-plugin.mjs
