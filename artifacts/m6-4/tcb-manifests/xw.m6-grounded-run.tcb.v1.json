@@ -1,0 +1,794 @@
+{
+  "schemaId": "xhs.tcb.manifest.v1",
+  "schemaVersion": 1,
+  "manifestId": "xw.m6-grounded-run.tcb.v1",
+  "implementationClosureHash": "6980ecdd56e9e2a93fdae6faeaf3512f9fb10ec4cf2c073b307d0781383190cb",
+  "contentHashProfile": "xhs.m6-grounded-run-capability-self-binding.v1",
+  "paths": [
+    "artifacts/m6-4/cohort-manifests/m6_4_action_smoke.json",
+    "artifacts/m6-4/cohort-manifests/m6_4_hot_close.json",
+    "artifacts/m6-4/cohort-manifests/m6_4_reliability.json",
+    "artifacts/m6-4/cohort-manifests/m6_4_shadow.json",
+    "artifacts/m6-4/cohort-manifests/m6_4_smooth.json",
+    "artifacts/m6-4/cohort-manifests/xw.m6-effect-boundary.v1.json",
+    "config/runtime/xw-runtime.v1.json",
+    "integrations/dsh-xw/lock.json",
+    "integrations/dsh-xw/package-lock.json",
+    "integrations/dsh-xw/package.json",
+    "integrations/dsh-xw/profiles/live/cordis.patch.yml",
+    "integrations/dsh-xw/profiles/live/cordis.yml",
+    "integrations/dsh-xw/profiles/live/model-manifest.json",
+    "integrations/dsh-xw/profiles/live/package.json",
+    "integrations/dsh-xw/src/canonical-json.mjs",
+    "integrations/dsh-xw/src/constants.mjs",
+    "integrations/dsh-xw/src/errors.mjs",
+    "integrations/dsh-xw/src/live-model-profile.mjs",
+    "integrations/dsh-xw/src/live-network-guard.mjs",
+    "integrations/dsh-xw/src/live-parent-broker.mjs",
+    "integrations/dsh-xw/src/live-pipe-client.mjs",
+    "integrations/dsh-xw/src/live-process-adapter.mjs",
+    "integrations/dsh-xw/src/live-runtime-dependency-layer.mjs",
+    "integrations/dsh-xw/src/live-runtime-plugin.mjs",
+    "integrations/dsh-xw/src/live-tools.mjs",
+    "integrations/dsh-xw/src/live-worker-driver.mjs",
+    "integrations/dsh-xw/src/stdio-supervisor.mjs",
+    "integrations/dsh-xw/src/xw-protocol-server.mjs",
+    "packages/harness-protocol/locks/dsh.lock.v1.json",
+    "packages/kernel/contracts/open-action/action-request.v1.schema.json",
+    "packages/kernel/contracts/open-action/action-result.v1.schema.json",
+    "packages/kernel/contracts/open-action/observation.v1.schema.json",
+    "packages/kernel/contracts/open-action/primitive-action.v1.schema.json",
+    "packages/kernel/contracts/orchestration/m6/xw.capture-attempt-receipt.v1.schema.json",
+    "packages/kernel/contracts/orchestration/m6/xw.m6-4-cohort-manifest.v1.schema.json",
+    "packages/kernel/contracts/orchestration/m6/xw.m6-4-live-window-authorization.v1.schema.json",
+    "packages/kernel/contracts/orchestration/m6/xw.m6-4-production-dependency-binding.v1.schema.json",
+    "packages/kernel/contracts/orchestration/m6/xw.m6-action-slot-spec.v1.schema.json",
+    "packages/kernel/contracts/orchestration/m6/xw.m6-effect-boundary.v1.schema.json",
+    "packages/kernel/contracts/orchestration/m6/xw.m6-gate-f-artifact-catalog.v1.schema.json",
+    "packages/kernel/contracts/orchestration/m6/xw.m6-live-gate.v1.schema.json",
+    "packages/kernel/contracts/orchestration/m6/xw.m6-live-gate.v2.schema.json",
+    "packages/kernel/contracts/orchestration/m6/xw.m6-locks.v2.schema.json",
+    "packages/kernel/contracts/orchestration/m6/xw.m6-target-environment-attestation.v1.schema.json",
+    "packages/kernel/contracts/runtime-profile.v1.json",
+    "packages/kernel/lib/m6-4-cohort.mjs",
+    "packages/kernel/lib/m6-4-live-window-authorization.mjs",
+    "packages/kernel/lib/m6-action-slot.mjs",
+    "packages/kernel/lib/m6-aggregate-closeout.mjs",
+    "packages/kernel/lib/m6-effect-boundary.mjs",
+    "packages/kernel/lib/m6-live-evidence.mjs",
+    "packages/kernel/lib/m6-live-grounding.mjs",
+    "packages/kernel/lib/m6-screen-frame.mjs",
+    "packages/kernel/lib/open-action.mjs",
+    "packages/kernel/lib/skill-runtime.mjs",
+    "packages/release/lib/release-identity.mjs",
+    "packages/release/lib/release-manifest.mjs",
+    "services/control-plane/apps/douyin/adapter.mjs",
+    "services/control-plane/apps/douyin/capabilities.json",
+    "services/control-plane/apps/vision/adapter.mjs",
+    "services/control-plane/apps/vision/capabilities.json",
+    "services/control-plane/apps/wechat/adapter.mjs",
+    "services/control-plane/apps/wechat/capabilities.json",
+    "services/control-plane/apps/xhs/adapter.mjs",
+    "services/control-plane/apps/xhs/capabilities.json",
+    "services/control-plane/apps/xhs/publish-edit-dry-run.mjs",
+    "services/control-plane/apps/xianyu/adapter.mjs",
+    "services/control-plane/apps/xianyu/capabilities.json",
+    "services/control-plane/apps/xiaowei/adapter.mjs",
+    "services/control-plane/apps/xiaowei/capabilities.json",
+    "services/control-plane/apps/xiaowei/explorer-primitive.mjs",
+    "services/control-plane/apps/xiaowei/m6-grounded-tcb.mjs",
+    "services/control-plane/apps/xiaowei/m6-target-environment-qualification.mjs",
+    "services/control-plane/apps/xiaowei/read-observation.mjs",
+    "services/control-plane/control-plane/bootstrap.mjs",
+    "services/control-plane/control-plane/lib/authorization-decision.mjs",
+    "services/control-plane/control-plane/lib/canonical.mjs",
+    "services/control-plane/control-plane/lib/capability-effect.mjs",
+    "services/control-plane/control-plane/lib/capability-registry.mjs",
+    "services/control-plane/control-plane/lib/command-runner.mjs",
+    "services/control-plane/control-plane/lib/control-plane.mjs",
+    "services/control-plane/control-plane/lib/delegation-grant-policy.mjs",
+    "services/control-plane/control-plane/lib/delegation-grant-runtime.mjs",
+    "services/control-plane/control-plane/lib/device-run.mjs",
+    "services/control-plane/control-plane/lib/discovery-session.mjs",
+    "services/control-plane/control-plane/lib/effect-commit-protocol.mjs",
+    "services/control-plane/control-plane/lib/effect-firewall.mjs",
+    "services/control-plane/control-plane/lib/effect-ledger.mjs",
+    "services/control-plane/control-plane/lib/errors.mjs",
+    "services/control-plane/control-plane/lib/evidence-store.mjs",
+    "services/control-plane/control-plane/lib/financial-commit-classifier.mjs",
+    "services/control-plane/control-plane/lib/generated-overlay.mjs",
+    "services/control-plane/control-plane/lib/implementation-closure.mjs",
+    "services/control-plane/control-plane/lib/json-schema-validator.mjs",
+    "services/control-plane/control-plane/lib/m6-c1-runtime-owner-lock.mjs",
+    "services/control-plane/control-plane/lib/m6-frame-capture.mjs",
+    "services/control-plane/control-plane/lib/m6-frame-evidence-store.mjs",
+    "services/control-plane/control-plane/lib/m6-gate-f-operations.mjs",
+    "services/control-plane/control-plane/lib/m6-gate-loader.mjs",
+    "services/control-plane/control-plane/lib/m6-gate-promoter.mjs",
+    "services/control-plane/control-plane/lib/m6-gate-safety-close-arm.mjs",
+    "services/control-plane/control-plane/lib/m6-grounded-action-facade.mjs",
+    "services/control-plane/control-plane/lib/m6-grounded-action-run-manager.mjs",
+    "services/control-plane/control-plane/lib/m6-grounded-run-capability-seal.mjs",
+    "services/control-plane/control-plane/lib/m6-grounded-run-tcb-closure.mjs",
+    "services/control-plane/control-plane/lib/m6-issuer-allowlist.mjs",
+    "services/control-plane/control-plane/lib/m6-live-broker.mjs",
+    "services/control-plane/control-plane/lib/m6-live-entry.mjs",
+    "services/control-plane/control-plane/lib/m6-live-fresh-state-capture.mjs",
+    "services/control-plane/control-plane/lib/m6-live-gate-v2.mjs",
+    "services/control-plane/control-plane/lib/m6-live-gate.mjs",
+    "services/control-plane/control-plane/lib/m6-live-production-callbacks.mjs",
+    "services/control-plane/control-plane/lib/m6-live-production-dependencies.mjs",
+    "services/control-plane/control-plane/lib/m6-live-window-authorization.mjs",
+    "services/control-plane/control-plane/lib/m6-qualification-bootstrap.mjs",
+    "services/control-plane/control-plane/lib/m6-typed-transport.mjs",
+    "services/control-plane/control-plane/lib/mission-policy.mjs",
+    "services/control-plane/control-plane/lib/mission-runtime.mjs",
+    "services/control-plane/control-plane/lib/nonpayment-autonomy-policy.mjs",
+    "services/control-plane/control-plane/lib/open-action-executor.mjs",
+    "services/control-plane/control-plane/lib/open-action-session.mjs",
+    "services/control-plane/control-plane/lib/payment-firewall.mjs",
+    "services/control-plane/control-plane/lib/placement.mjs",
+    "services/control-plane/control-plane/lib/policy.mjs",
+    "services/control-plane/control-plane/lib/protected-commit-policy.mjs",
+    "services/control-plane/control-plane/lib/protected-human-commit.mjs",
+    "services/control-plane/control-plane/lib/recipe-interpreter.mjs",
+    "services/control-plane/control-plane/lib/recovery-inspection.mjs",
+    "services/control-plane/control-plane/lib/return-home.mjs",
+    "services/control-plane/control-plane/lib/runtime-integrity.mjs",
+    "services/control-plane/control-plane/lib/state-store.mjs",
+    "services/control-plane/control-plane/lib/tcb-manifest.mjs",
+    "services/control-plane/control-plane/lib/transport-action-authorization.mjs",
+    "services/control-plane/control-plane/lib/trusted-human-issuer.mjs",
+    "services/control-plane/control-plane/lib/typed-transport.mjs",
+    "services/control-plane/control-plane/lib/xiaowei-transport.mjs",
+    "services/control-plane/control-plane/router.mjs",
+    "services/control-plane/control-plane/schema/effect-intent.schema.json",
+    "services/control-plane/control-plane/schema/implementation-closure.v1.schema.json",
+    "services/control-plane/control-plane/schema/tcb.manifest.v1.schema.json",
+    "services/control-plane/control-plane/server.mjs",
+    "services/control-plane/docs/adr/0008-mission-driven-exploration-authorization.md",
+    "services/control-plane/docs/adr/0009-standing-grant-delegation.md",
+    "services/control-plane/docs/adr/0010-standing-grant-discovery-session.md",
+    "services/control-plane/scripts/fast-operator.mjs",
+    "services/control-plane/scripts/gateway-operator.mjs",
+    "services/control-plane/scripts/lib/stall-progress.mjs",
+    "services/control-plane/scripts/lib/stall-verdict.mjs",
+    "services/control-plane/scripts/recovery-page-classifier.mjs",
+    "services/control-plane/scripts/vision-safety.mjs",
+    "services/control-plane/scripts/xianyu-operator.mjs",
+    "services/control-plane/scripts/xianyu-page-classifier.mjs",
+    "services/control-plane/scripts/xiaowei-http-adapter.mjs",
+    "services/orchestrator/contracts/tcb.manifest.v1.schema.json",
+    "services/orchestrator/scripts/lib/m6/m6-live-tool-surface.mjs"
+  ],
+  "capabilityIds": [
+    "xiaowei.m6.grounded_run"
+  ],
+  "closure": {
+    "schemaId": "xhs.implementation-closure.v1",
+    "algorithm": "sha256-canonical-json-v1",
+    "contentHashProfile": "xhs.m6-grounded-run-capability-self-binding.v1",
+    "entries": [
+      {
+        "path": "artifacts/m6-4/cohort-manifests/m6_4_action_smoke.json",
+        "sha256": "8c4b023a5053016bbbc9e148d56434a4c2f531f34b16074746f77f03ab473263"
+      },
+      {
+        "path": "artifacts/m6-4/cohort-manifests/m6_4_hot_close.json",
+        "sha256": "d63a21437d7d79a1d08d406008df63ed5ef0bd31798a101f2d51c3f667252467"
+      },
+      {
+        "path": "artifacts/m6-4/cohort-manifests/m6_4_reliability.json",
+        "sha256": "564d0cd5ce8a83e7369e7f436edc1ff659147987ce3ba6d62553b98ced02890d"
+      },
+      {
+        "path": "artifacts/m6-4/cohort-manifests/m6_4_shadow.json",
+        "sha256": "f4b5996c0ac7c139a16698b77376426afbe46a5eab31e4b20ad6bae4b3986f00"
+      },
+      {
+        "path": "artifacts/m6-4/cohort-manifests/m6_4_smooth.json",
+        "sha256": "8922009e542f62d3dd3675e7f30345ff2c4015026da532fa89ee3e30076c7731"
+      },
+      {
+        "path": "artifacts/m6-4/cohort-manifests/xw.m6-effect-boundary.v1.json",
+        "sha256": "9a39d83f6705d52b1f2ea681ca65d28573fba44cfd3c84a88b884a47d93b4d6c"
+      },
+      {
+        "path": "config/runtime/xw-runtime.v1.json",
+        "sha256": "2d50280a78d593d4992efe7019d6c3aed223652de1f1e47ae6abe582bd119946"
+      },
+      {
+        "path": "integrations/dsh-xw/lock.json",
+        "sha256": "4f6cb49ada8a054defac184f9cc8249d67e06cd5ab6e4f0d8f6e3ccae277d731"
+      },
+      {
+        "path": "integrations/dsh-xw/package-lock.json",
+        "sha256": "7909d2a59bd9fd90ad625b5ee83cac5ed83894637d8704e11f7979870bb8487c"
+      },
+      {
+        "path": "integrations/dsh-xw/package.json",
+        "sha256": "a9598953425c8e280850d75e466241ac6a124c5463e9ab6ece9dcdf2827a584a"
+      },
+      {
+        "path": "integrations/dsh-xw/profiles/live/cordis.patch.yml",
+        "sha256": "817d3a9cc9e7c0eccf1e7477366a6bb06cf5d0685b4487110cda614c1c047feb"
+      },
+      {
+        "path": "integrations/dsh-xw/profiles/live/cordis.yml",
+        "sha256": "be61eb252df0ae66ea9cb8cd9823056444b804f52326f8a8cbdaf8d1b54691c5"
+      },
+      {
+        "path": "integrations/dsh-xw/profiles/live/model-manifest.json",
+        "sha256": "2c5137c33f64847668b9b1291afb07121f6eb5f20e463328f44e418d8299c4d5"
+      },
+      {
+        "path": "integrations/dsh-xw/profiles/live/package.json",
+        "sha256": "085631ad900497663b3415b9c8d2c0fead137d4062aeb03ae100e8f5fcf48735"
+      },
+      {
+        "path": "integrations/dsh-xw/src/canonical-json.mjs",
+        "sha256": "39d76c1cc7afb8b4a4235feeda54a70b6f4f30243046efba62906e5fdaffbdf0"
+      },
+      {
+        "path": "integrations/dsh-xw/src/constants.mjs",
+        "sha256": "ed0cc60fdebca9dc47fb2ff80dac731edd44667500f0b5a97c92630d70409993"
+      },
+      {
+        "path": "integrations/dsh-xw/src/errors.mjs",
+        "sha256": "3f0a3e69a21fa57eda5ca7ea0809c3f841d034f6b11c7d59711b488bed95f836"
+      },
+      {
+        "path": "integrations/dsh-xw/src/live-model-profile.mjs",
+        "sha256": "b29c770062a5340e55acad96bd1932cd9551384e1b2d443fbc9c7d2b6f2679f3"
+      },
+      {
+        "path": "integrations/dsh-xw/src/live-network-guard.mjs",
+        "sha256": "5a185e65798584bdf6f4e17234a22ff810c12a6296cef4491525b311f24bafc8"
+      },
+      {
+        "path": "integrations/dsh-xw/src/live-parent-broker.mjs",
+        "sha256": "e7bcbb00d2a43628536ff5dfb59e39ca094dea10aa217add5986065f367a0c06"
+      },
+      {
+        "path": "integrations/dsh-xw/src/live-pipe-client.mjs",
+        "sha256": "997540e3839acf23d703c1ff4d50715869d80862a94df00ed98a1b06f5ff82d8"
+      },
+      {
+        "path": "integrations/dsh-xw/src/live-process-adapter.mjs",
+        "sha256": "9233ec67ae56aa3a6b7c92756350735bf3fde74a95cfae5bc6087694e1fac04f"
+      },
+      {
+        "path": "integrations/dsh-xw/src/live-runtime-dependency-layer.mjs",
+        "sha256": "d0854741779246b645a3be9b3adba7e4325e9f3f7e75bd226fa4cf6a2226d822"
+      },
+      {
+        "path": "integrations/dsh-xw/src/live-runtime-plugin.mjs",
+        "sha256": "f1cd0204456f3fc49b6f29610fd65fd25da03e0d4988e6ae6274c96b426425fc"
+      },
+      {
+        "path": "integrations/dsh-xw/src/live-tools.mjs",
+        "sha256": "44d340421b9c7150ea27ef826af6b1f4c2e841d71ae1aea8400210a9926c8765"
+      },
+      {
+        "path": "integrations/dsh-xw/src/live-worker-driver.mjs",
+        "sha256": "7bd49ffc7e361ff9a45b98fadd62f926aee1c00894d9e7c6f2a728c4c4d7d804"
+      },
+      {
+        "path": "integrations/dsh-xw/src/stdio-supervisor.mjs",
+        "sha256": "63f556e71b3f419f7d3d4fa89755318240e1e812fd150ad277c11b77f981cfc3"
+      },
+      {
+        "path": "integrations/dsh-xw/src/xw-protocol-server.mjs",
+        "sha256": "f2f3eef29b37c620484d8a1ba2c03c31576fd2a1626db183d87d4031b92d708d"
+      },
+      {
+        "path": "packages/harness-protocol/locks/dsh.lock.v1.json",
+        "sha256": "5c2a1bd2fb519a9517325c3cc18ff4c5fcd33266a462cc50d1d41f52d7478cb7"
+      },
+      {
+        "path": "packages/kernel/contracts/open-action/action-request.v1.schema.json",
+        "sha256": "9299262504730e37a4d337eeb5dddb48a4d5b97266973d321b0a06d218846215"
+      },
+      {
+        "path": "packages/kernel/contracts/open-action/action-result.v1.schema.json",
+        "sha256": "8dbf96c2a4e70c113359782ee4b3a6780b4e7cb30c2fea23cb4422b815a1b3fd"
+      },
+      {
+        "path": "packages/kernel/contracts/open-action/observation.v1.schema.json",
+        "sha256": "ad808f19ac13f4e367a3803750471d4919aab6372a4719636f46cacd78890060"
+      },
+      {
+        "path": "packages/kernel/contracts/open-action/primitive-action.v1.schema.json",
+        "sha256": "0c2f8e2586fc8cad0836a2ec24f2bb8c704625deaf8b1919f7e9b68ec22ff0de"
+      },
+      {
+        "path": "packages/kernel/contracts/orchestration/m6/xw.capture-attempt-receipt.v1.schema.json",
+        "sha256": "efbcd9fbefe2fc7170ee3eba7440c9e07aaa48f7635db608bcc29f41f3e77aa3"
+      },
+      {
+        "path": "packages/kernel/contracts/orchestration/m6/xw.m6-4-cohort-manifest.v1.schema.json",
+        "sha256": "2a02039cf00520201e14aff074f8c0bb7f12901895ead1f9afee9a6ed098b8d6"
+      },
+      {
+        "path": "packages/kernel/contracts/orchestration/m6/xw.m6-4-live-window-authorization.v1.schema.json",
+        "sha256": "ed865a9b352df39a6abddd92b271e1240abd26df3800ac763a71071e19f81885"
+      },
+      {
+        "path": "packages/kernel/contracts/orchestration/m6/xw.m6-4-production-dependency-binding.v1.schema.json",
+        "sha256": "63ed26f29565f43d1f92845f19dd9083b8642b4a4516be76062366ced0ccfa78"
+      },
+      {
+        "path": "packages/kernel/contracts/orchestration/m6/xw.m6-action-slot-spec.v1.schema.json",
+        "sha256": "bcbd040c47280ef984b0f00218ed4801218067448919716aeb7f6e2d2d022139"
+      },
+      {
+        "path": "packages/kernel/contracts/orchestration/m6/xw.m6-effect-boundary.v1.schema.json",
+        "sha256": "379d3b10a79ed55df109f0d1b3238c232d50ee27915bd15e44a412b3268d5bb1"
+      },
+      {
+        "path": "packages/kernel/contracts/orchestration/m6/xw.m6-gate-f-artifact-catalog.v1.schema.json",
+        "sha256": "f1e997babc1d0fe959e4e190b2cb8f672386a31d512652007356f59f49c2de87"
+      },
+      {
+        "path": "packages/kernel/contracts/orchestration/m6/xw.m6-live-gate.v1.schema.json",
+        "sha256": "64c2da6d810154bc38e5a5cb2dcec17e3ab1b22326ad18d98e73fddd7cabf1b4"
+      },
+      {
+        "path": "packages/kernel/contracts/orchestration/m6/xw.m6-live-gate.v2.schema.json",
+        "sha256": "448f737e6686296cde251efe81d42d0703e6f48d54b6a8cf3aec5df08afdc256"
+      },
+      {
+        "path": "packages/kernel/contracts/orchestration/m6/xw.m6-locks.v2.schema.json",
+        "sha256": "57a9473652ca99d98f8c19b154aba412ecd1c7010fc119669cc883feada9a71d"
+      },
+      {
+        "path": "packages/kernel/contracts/orchestration/m6/xw.m6-target-environment-attestation.v1.schema.json",
+        "sha256": "c477da04bba2f2fa19ec7ed35a952fb6f9b89153af82c99be3d4881682b008c1"
+      },
+      {
+        "path": "packages/kernel/contracts/runtime-profile.v1.json",
+        "sha256": "c71c576c9617b55c9b1dfb84ff15893a524905c83266665668485fced34157a6"
+      },
+      {
+        "path": "packages/kernel/lib/m6-4-cohort.mjs",
+        "sha256": "a50e3de19a022798c9283c9ddb48a3d2b7093a3d7c7c2ac22838b298792fe017"
+      },
+      {
+        "path": "packages/kernel/lib/m6-4-live-window-authorization.mjs",
+        "sha256": "4f697dc5b3192fdb1bf73e1d4b65d00c965a596b238d8e0c185e516550950bfb"
+      },
+      {
+        "path": "packages/kernel/lib/m6-action-slot.mjs",
+        "sha256": "dd0c1dc2dcd326ce18efbce550c40bc6141ea7d6f07587ddb3b621c25790b687"
+      },
+      {
+        "path": "packages/kernel/lib/m6-aggregate-closeout.mjs",
+        "sha256": "fd31717ca9c24223cf969e631cbf49ebb363151a5b84b6cee1e1898a2d8adc05"
+      },
+      {
+        "path": "packages/kernel/lib/m6-effect-boundary.mjs",
+        "sha256": "bf10ee833695d2b36964337efe5b5c476411551c0d1f971fd04ffaf121e841f7"
+      },
+      {
+        "path": "packages/kernel/lib/m6-live-evidence.mjs",
+        "sha256": "b54d3955931c7e22265dd749f8a448bf391f028b184fd4ebeef9c64fed80af42"
+      },
+      {
+        "path": "packages/kernel/lib/m6-live-grounding.mjs",
+        "sha256": "80a0188cce6ecd26b4ddecb7b5dff6b6cbaf39cccd942587162c603ffaad0e5e"
+      },
+      {
+        "path": "packages/kernel/lib/m6-screen-frame.mjs",
+        "sha256": "dd78db613495f1368b805d9d28fdd2ee83e4b97abeb96320e348c45e7cfe8830"
+      },
+      {
+        "path": "packages/kernel/lib/open-action.mjs",
+        "sha256": "4044a87154f70adab22b6f7c0ad25eb264d2dbc1c7e1d58d5a995e571c3fefd5"
+      },
+      {
+        "path": "packages/kernel/lib/skill-runtime.mjs",
+        "sha256": "54ebbe6ecec44260bfe8ad53a3abc98518b5f9b34b3859ababfe55d327aefad0"
+      },
+      {
+        "path": "packages/release/lib/release-identity.mjs",
+        "sha256": "a53f809701cda9ba8f871b24c64caf992f50497748d5067ff30b973656579e46"
+      },
+      {
+        "path": "packages/release/lib/release-manifest.mjs",
+        "sha256": "eccf42d101afe717984b9c5e7c3b595afc1b84b4be5ebcd3e38dd71f77541ab3"
+      },
+      {
+        "path": "services/control-plane/apps/douyin/adapter.mjs",
+        "sha256": "2ceb6132d570cde214b1fff063cc3c5ca043486aff488d13c74cab6975c8330b"
+      },
+      {
+        "path": "services/control-plane/apps/douyin/capabilities.json",
+        "sha256": "624cdefaef164d2542390ff3ca3ed6740868c38b1ecf539391062cddc5119063"
+      },
+      {
+        "path": "services/control-plane/apps/vision/adapter.mjs",
+        "sha256": "634ea9c55ed6cc3d6c181fc6fd90c083dc5a54e1b9b8af1130070721d5cbdc15"
+      },
+      {
+        "path": "services/control-plane/apps/vision/capabilities.json",
+        "sha256": "6e1e23d6c6f0020f86c0432dbba600f1f19aeeb786cf2531ba2307c7a64fa3d5"
+      },
+      {
+        "path": "services/control-plane/apps/wechat/adapter.mjs",
+        "sha256": "c74080a96dd7ec43e591518f1f2cf36a591d92012b1d48d340b3ed83c2dcaa9d"
+      },
+      {
+        "path": "services/control-plane/apps/wechat/capabilities.json",
+        "sha256": "39bddf5c20b8393f61092670ca1850df86c48c31196ae52cb9bb58986257db6c"
+      },
+      {
+        "path": "services/control-plane/apps/xhs/adapter.mjs",
+        "sha256": "90c249c0f6da829c2be69c8e7c60c7ae4bd2aabc3aa2173d0a736967caddeae6"
+      },
+      {
+        "path": "services/control-plane/apps/xhs/capabilities.json",
+        "sha256": "82d4c663f12a3ce50f007f596cf604030809f17c95b719caee3b50f591d3b084"
+      },
+      {
+        "path": "services/control-plane/apps/xhs/publish-edit-dry-run.mjs",
+        "sha256": "5fb917ff0fa573fca31882ae5bda8332c300989a97eafc4f552e468e473325c4"
+      },
+      {
+        "path": "services/control-plane/apps/xianyu/adapter.mjs",
+        "sha256": "4cf90723806c0c06e484ce3564571cc8bbe2e8f0e8d1ec5e1a40ef346d3203e4"
+      },
+      {
+        "path": "services/control-plane/apps/xianyu/capabilities.json",
+        "sha256": "541fdeeb30225a67e3e6888da15881d16815f6a5ef221c89cf990359af369f0a"
+      },
+      {
+        "path": "services/control-plane/apps/xiaowei/adapter.mjs",
+        "sha256": "a1b568f153ab7b257e47b3cb20f03466f41beb0ca9242e4d29dfa43f7b9742aa"
+      },
+      {
+        "path": "services/control-plane/apps/xiaowei/capabilities.json",
+        "sha256": "c75ffe8b7f17c9807d11945accc3556d45d3cd853aadfd534cba131b3e3b0491"
+      },
+      {
+        "path": "services/control-plane/apps/xiaowei/explorer-primitive.mjs",
+        "sha256": "450bee2cad950402548366418a4c33dcf81e1740be2e9e1e4b435fee0d04c1b0"
+      },
+      {
+        "path": "services/control-plane/apps/xiaowei/m6-grounded-tcb.mjs",
+        "sha256": "71b42c737d3f4cf65612ed3bc600120e25da2cd73e290ae3a181e667604cd92c"
+      },
+      {
+        "path": "services/control-plane/apps/xiaowei/m6-target-environment-qualification.mjs",
+        "sha256": "8caf567eebb62226bb72e5628b2c01e4fc81619e6fb2425b6b5cdbafcbdcbd88"
+      },
+      {
+        "path": "services/control-plane/apps/xiaowei/read-observation.mjs",
+        "sha256": "d5ce9530368d5dd07c0cf1f264b167da8c471bcfedb9772e29282dc49c69625b"
+      },
+      {
+        "path": "services/control-plane/control-plane/bootstrap.mjs",
+        "sha256": "9c3a6b4aadebfbeb4a01888ab0685207e8f0111bcb783445ce1aebcdfa8e83e5"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/authorization-decision.mjs",
+        "sha256": "5337cdd1b37b81c8f2baf9e94685126cfe14a12b6b1f821ae4ac9ac168c54904"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/canonical.mjs",
+        "sha256": "25a4bc75d613b0574f5975472f17b3ab359f4d37b842c301fec1143d5186e7be"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/capability-effect.mjs",
+        "sha256": "0cd2181ef76258f2e069089cbff65e8ad5b9946c7f32e915cc059f9d3dede1eb"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/capability-registry.mjs",
+        "sha256": "f18b02773accfceb10723a03e7ca06c33c12cd29791ff5c112184b026bd0ed16"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/command-runner.mjs",
+        "sha256": "558dfc744f2f8e3eb656bf41abec301c065ef20be54fca92a2d61c48a3323494"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/control-plane.mjs",
+        "sha256": "d9939c621f6f00dc1a8eeaad010a70dc4f6e88dd42ce82359ad5c2789fbd084e"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/delegation-grant-policy.mjs",
+        "sha256": "bfc86025ea49d0e06db9e0c5eb291b3e2f6af9e4a61f5491b7953c06f6025be3"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/delegation-grant-runtime.mjs",
+        "sha256": "bcca805fdef0e5c951a796a7b7b405cdfd5c47d70921b6087d926f42bc855aa8"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/device-run.mjs",
+        "sha256": "1c3a9b4ffcf87d7277b1e898af9629eb67f009e30018d9d187c86b9fc090995a"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/discovery-session.mjs",
+        "sha256": "cb8b27baf70a6ca91b9e893c40e006d7c12ba9bad39e40606ddfde24819ed021"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/effect-commit-protocol.mjs",
+        "sha256": "2b73549ab3c78d3210d78d140015843180543f8a2af8a8bb48ce3beae299b83e"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/effect-firewall.mjs",
+        "sha256": "196cc25baeca521bed6d8b76924bca9d11cac5c40e784e3ad95ba56be339fce4"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/effect-ledger.mjs",
+        "sha256": "7bc17346aaacc010286e170229077e98650511e1a8471d1223cd232f4a853e48"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/errors.mjs",
+        "sha256": "6c5495a2ec31f9606c8b91cd3b2a1c807217212d2bf0b7f6a7202b04be00f645"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/evidence-store.mjs",
+        "sha256": "4aeec6bf340a9d627a55dcb757b728e91e812ecd8d8e3e17700e27fb0acc54b2"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/financial-commit-classifier.mjs",
+        "sha256": "a6cf38369a868e02f33d1ce3a8e4ce842d862e2226ca954c4f30c95638089af7"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/generated-overlay.mjs",
+        "sha256": "2670563b60aff1b1084b9398aa856c64c0204d777930c1127b2fb408e62e1fb2"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/implementation-closure.mjs",
+        "sha256": "ebbca99f737f258d4e870dfc7f2db30acf67055ef7facba1ea037f312f5be905"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/json-schema-validator.mjs",
+        "sha256": "b2b07e42d6e903d3c46e58ee9bba774d5da35a5096af785dd3f036bc5ec69050"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/m6-c1-runtime-owner-lock.mjs",
+        "sha256": "ef40c21fe68979150b3b30fc1f7374eaf8f31075c83020ca96d915350269d710"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/m6-frame-capture.mjs",
+        "sha256": "6841a85cdc3e6012607459d5ae72dc70946c82debea945b7a381f36fb5d8ca1c"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/m6-frame-evidence-store.mjs",
+        "sha256": "a7ba59a262cb94646e1d117022867ad2756719b51f0d7caaa9d3544cdb5b6b8a"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/m6-gate-f-operations.mjs",
+        "sha256": "c3498fb78cf5d8d0f2ff7345ac2342be7719ac91c0d963af3e652365da2c2c18"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/m6-gate-loader.mjs",
+        "sha256": "c1499c0abf5ac498162307912fe66f0fc4d7b95220a5e7559db06bd099da62dd"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/m6-gate-promoter.mjs",
+        "sha256": "8e13556ea57eefb09721c149a898b87b74e661762b533a2ccf7214199edcc918"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/m6-gate-safety-close-arm.mjs",
+        "sha256": "d3e10938c46394d5b1e18b0f4ce0a08a7f734c16282c6217b7a4a4ce465a3be3"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/m6-grounded-action-facade.mjs",
+        "sha256": "dfc4f25ca3b36f3ebfde1a0dab6374fa93215669d799fca91dcf7f883b62276e"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/m6-grounded-action-run-manager.mjs",
+        "sha256": "00359ea4bae959de1f30de18cf41cc94300c09521ee15d4903b6d8e8b512ef5b"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/m6-grounded-run-capability-seal.mjs",
+        "sha256": "4769edb8fcb4e40bec7d52f2d1b7aaa993c35fd2de458e99e09a1e2d75c2bc18"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/m6-grounded-run-tcb-closure.mjs",
+        "sha256": "2e9185832974e2f6e16424d0e3d8d7f924887071b0e31bc3c07f38128d3c71e9"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/m6-issuer-allowlist.mjs",
+        "sha256": "2d66c5d36247487a079f7d9a648af5c568ec736140035a88c2e47259e98eaaa9"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/m6-live-broker.mjs",
+        "sha256": "b9f58fc88edd680d4261c189cc61f60dcc4480911b08812e27dfd0fc5b8811ac"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/m6-live-entry.mjs",
+        "sha256": "9e56f37db030ef8c11a9f09b585729a0e4c27a1bdb7af74e34080f3b0fa0a2ea"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/m6-live-fresh-state-capture.mjs",
+        "sha256": "e29987494e2b4d07fd0154bea451f9bb5f33a574bfcd33da4401787388d63b2e"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/m6-live-gate-v2.mjs",
+        "sha256": "e2902351754a13e7ef1ac44e993ba9fed7c074f15639c60e88906efa954b4fdb"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/m6-live-gate.mjs",
+        "sha256": "a6b070fe49a7fc596e74a3a0bdc735716a9be44ccbb13c58f21ef17b8ff7dd68"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/m6-live-production-callbacks.mjs",
+        "sha256": "3e98e742b2c8cc9aedf7ac124ebf2bd39424d1850232c20c82425ed48d6d3dd2"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/m6-live-production-dependencies.mjs",
+        "sha256": "af0faf12c2a9b4fddfe0d26d20ad36565636fa07716d71c7b327f0aaa3193d06"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/m6-live-window-authorization.mjs",
+        "sha256": "f8302d101ac0ae76ca6bd3a8bdcfc45f6a1b5a4bf6d775d7c9e7cad7b4379524"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/m6-qualification-bootstrap.mjs",
+        "sha256": "8087dfbd4ced610b7f9d624e01ddb219dc4d778f0a874ed7e374d89763d43a74"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/m6-typed-transport.mjs",
+        "sha256": "147c6fe648aaf423b8b9063e767fa77728ff72ee25e470d52a900e9be41e9c8e"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/mission-policy.mjs",
+        "sha256": "f01ce3dd34ee4ba560cb8cfa298c36133191d202a1fb4932fea39d69b515e1e5"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/mission-runtime.mjs",
+        "sha256": "9908ea0b26cc49c93f53a13c762ee0639ad47aae6ba37ef27e93ad58deeb6005"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/nonpayment-autonomy-policy.mjs",
+        "sha256": "d88b070e640e2eba9b655172cc8fab3266752af9a8e8d151cb24dcb6bf277f2d"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/open-action-executor.mjs",
+        "sha256": "c204384cbedec788d87964297f08cd03b6d9fd5e57fd903bedf37f3cdfe2c1f9"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/open-action-session.mjs",
+        "sha256": "53eb5e3e9252386bf9ca49e127ef86b0aa1fdc0dde3a1077c7c517e4f8372599"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/payment-firewall.mjs",
+        "sha256": "9c5a80ea0d449c6d84940dbc9b8022febdecff136c875415926395060779037a"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/placement.mjs",
+        "sha256": "48f46e5815bb94b99d779511dcfed194e1d239451fee71e12363eba613e59358"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/policy.mjs",
+        "sha256": "48fef8758f3a9b0e333833c888a7ea9205c2bbd590f630b72e3d0f842f7b9746"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/protected-commit-policy.mjs",
+        "sha256": "d436a8e1a47c24256ca1f98b2e91ced77a292e77a28b61d265cb8d95d275798b"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/protected-human-commit.mjs",
+        "sha256": "a7b6f95a4eae52eb6caa8701d206b844e2aa0a6b2a15f5d41c4a497dd24ae308"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/recipe-interpreter.mjs",
+        "sha256": "c6431920054f781bab2a41d268ddc24b65268f48c48aa65d449b63db49f837be"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/recovery-inspection.mjs",
+        "sha256": "220ea9d784c38ffb8f01c1270eefb96d7c7407f4a52066f4d5e33729afaee3dc"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/return-home.mjs",
+        "sha256": "507ffdc040212aeb77de0b4502d34fb983605f7415fd96dbf46a8334999e67e4"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/runtime-integrity.mjs",
+        "sha256": "b2bee3c2533908a7c385aba4f25faf2b3f34098aba4bac006dd4748f986cc519"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/state-store.mjs",
+        "sha256": "c1c8a35cf4c79c8d257ad53fdab5fd1916e41d24f252604feb217f01eecf8e16"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/tcb-manifest.mjs",
+        "sha256": "bdc67041bc6c8c87abcdd3f04000e1fee35d411234e688611c9c1c3cf394dde4"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/transport-action-authorization.mjs",
+        "sha256": "97b0ea714c52e106ed2c339202c546389d67ac7fe8123d90f96ed3a54582450a"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/trusted-human-issuer.mjs",
+        "sha256": "83e6165e9704155d888cd7ae65d6fa7c3fdd4b9c56467c3c5a8dbec2d6a467fe"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/typed-transport.mjs",
+        "sha256": "2641ec86c5bed99947df71f1961d9d7b63c085b2566645db7701d040f1261a17"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/xiaowei-transport.mjs",
+        "sha256": "c500c857096a6b7e8445cbdc733387277c6253a9e0375507c4c3ae9ece839623"
+      },
+      {
+        "path": "services/control-plane/control-plane/router.mjs",
+        "sha256": "30756c024993863f6d8a35e9eaa655ca005dcbb8317334b3e21174518ff267e5"
+      },
+      {
+        "path": "services/control-plane/control-plane/schema/effect-intent.schema.json",
+        "sha256": "323104a6807959444725b195a6b3333945cac5448ed8e9686f3aaf7fd548a3af"
+      },
+      {
+        "path": "services/control-plane/control-plane/schema/implementation-closure.v1.schema.json",
+        "sha256": "b6f37fb5608fea6d7bb447c353def05227fcf3aa517e46a851518fa000e320b3"
+      },
+      {
+        "path": "services/control-plane/control-plane/schema/tcb.manifest.v1.schema.json",
+        "sha256": "b11a8b2f712ddc1ce6e63bdbe7f2c5e85b3fe919eade8e6d069174efe3afdae1"
+      },
+      {
+        "path": "services/control-plane/control-plane/server.mjs",
+        "sha256": "cf98442cc983972e2e2f49020876b9dcbb35ba7bc4724f0e11af22ac93ecb06b"
+      },
+      {
+        "path": "services/control-plane/docs/adr/0008-mission-driven-exploration-authorization.md",
+        "sha256": "17d770d6027d0c150db20eb8cc0bfc74edc1a0d1d7db6853aab10ab9575dfcc9"
+      },
+      {
+        "path": "services/control-plane/docs/adr/0009-standing-grant-delegation.md",
+        "sha256": "c9da421b8a782b2ee21c9607601e1903a3525d2b2293cd96ad406c10149c6300"
+      },
+      {
+        "path": "services/control-plane/docs/adr/0010-standing-grant-discovery-session.md",
+        "sha256": "c8847383dafc76ff57e51fe8921559fe9264bc541c87cb4c2a8fe97148cebfb7"
+      },
+      {
+        "path": "services/control-plane/scripts/fast-operator.mjs",
+        "sha256": "98be5096ed6af6f5b9c059a181eb69d798d15e0efaa483e8633f6ecb70d86a03"
+      },
+      {
+        "path": "services/control-plane/scripts/gateway-operator.mjs",
+        "sha256": "3dbe890a80b8034fd7fd00fbd02c8e998b715c2cc3aa30c4dd559000b65f156b"
+      },
+      {
+        "path": "services/control-plane/scripts/lib/stall-progress.mjs",
+        "sha256": "66bb66e5c7e8444c9063824721b4bae51828142b6110626f361ac21edd86e5ba"
+      },
+      {
+        "path": "services/control-plane/scripts/lib/stall-verdict.mjs",
+        "sha256": "70683fd9434fd547f69da5d12a6d6235dad88cb3d42bd27c735edf3e33c770b4"
+      },
+      {
+        "path": "services/control-plane/scripts/recovery-page-classifier.mjs",
+        "sha256": "7b7e99d15bc626674b5abadab22a554022e37657a40d9bb94de2f73c48ab5aad"
+      },
+      {
+        "path": "services/control-plane/scripts/vision-safety.mjs",
+        "sha256": "2c3fa5ea868b3737b2fbec233aefc59774f3f532db9bf34bd05b10dbf29429cc"
+      },
+      {
+        "path": "services/control-plane/scripts/xianyu-operator.mjs",
+        "sha256": "d7932361201dcc10e9ea03250d0402e5ed15e7bc0b51511cc61302285aa8ebcd"
+      },
+      {
+        "path": "services/control-plane/scripts/xianyu-page-classifier.mjs",
+        "sha256": "f9ccf9648b9399fa75ed7c61cd9c88310f00491c8b17ea601efd3fb171a1452b"
+      },
+      {
+        "path": "services/control-plane/scripts/xiaowei-http-adapter.mjs",
+        "sha256": "339e02fff389d2243aff2b22878dcb046ab176013612d9ec670eb7217963f35a"
+      },
+      {
+        "path": "services/orchestrator/contracts/tcb.manifest.v1.schema.json",
+        "sha256": "c767bfcb50f60b69c8a24e3a07990b9c62568b0f5308e9fc11d4fabe28017eaa"
+      },
+      {
+        "path": "services/orchestrator/scripts/lib/m6/m6-live-tool-surface.mjs",
+        "sha256": "85730eae1b80b1c7423cdb1b988614912a3a954f14f040d8902774ec32ee0792"
+      }
+    ]
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:xw:contract:m6:action-slot-spec:v1",
+  "title": "xw.m6-action-slot-spec.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaId", "actionSlotSpecHash", "scenarioManifestHash", "scenarioId", "logicalStepId", "actionSlotOrdinal", "alias", "primitive", "actionFamily", "intentRef", "intentPolicyHash", "targetKind", "targetEligibilityHash", "trustedParameterHash", "allowedStateHash", "effectBoundaryHash", "budgetPolicyHash", "redlinePolicyHash", "resetPolicyHash", "oracleHash", "verificationPolicyHash"],
+  "properties": {
+    "schemaId": { "const": "xw.m6-action-slot-spec.v1" },
+    "actionSlotSpecHash": { "$ref": "#/$defs/hash" },
+    "scenarioManifestHash": { "$ref": "#/$defs/hash" },
+    "scenarioId": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "logicalStepId": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "actionSlotOrdinal": { "type": "integer", "minimum": 0, "maximum": 255 },
+    "alias": { "const": "01" },
+    "primitive": { "enum": ["observe", "open_app", "back", "wait", "tap", "scroll", "type_search_text"] },
+    "actionFamily": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "intentRef": { "$ref": "#/$defs/hash" },
+    "intentPolicyHash": { "$ref": "#/$defs/hash" },
+    "targetKind": { "enum": ["block", "screen", "none"] },
+    "targetEligibilityHash": { "$ref": "#/$defs/hash" },
+    "trustedParameterHash": { "$ref": "#/$defs/hash" },
+    "allowedStateHash": { "$ref": "#/$defs/hash" },
+    "effectBoundaryHash": { "$ref": "#/$defs/hash" },
+    "budgetPolicyHash": { "$ref": "#/$defs/hash" },
+    "redlinePolicyHash": { "$ref": "#/$defs/hash" },
+    "resetPolicyHash": { "$ref": "#/$defs/hash" },
+    "oracleHash": { "$ref": "#/$defs/hash" },
+    "verificationPolicyHash": { "$ref": "#/$defs/hash" }
+  },
+  "$defs": { "hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" } }
+}

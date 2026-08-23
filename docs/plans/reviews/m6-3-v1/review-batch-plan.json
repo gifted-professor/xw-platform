@@ -1,0 +1,247 @@
+{
+  "schema": "multi-model-review-batch.v2",
+  "dry_run": false,
+  "mode": "plan",
+  "snapshot_sha256": "ed734b148f6efb925423c93573fd3e88e7d9f8c068b7ee77de990125f5bd59f8",
+  "review_wave": 1,
+  "max_calls_per_role": 2,
+  "intended_models": {
+    "coverage": "kimi-k3-256k",
+    "adversarial": "grok-4.6"
+  },
+  "selected_models": {
+    "coverage": null,
+    "adversarial": "deepseek-v4-pro:0813"
+  },
+  "selected_providers": {
+    "coverage": null,
+    "adversarial": "ollama"
+  },
+  "promoted_after_preflight": {
+    "coverage": false,
+    "adversarial": true
+  },
+  "fallback_models": {
+    "coverage": "glm-5.2",
+    "adversarial": "glm-5.2"
+  },
+  "provider_fallbacks": {
+    "coverage": {
+      "provider": "ollama",
+      "model": "glm-5.2"
+    },
+    "adversarial": null
+  },
+  "available_fallback_providers": [
+    "ollama",
+    "opencode"
+  ],
+  "health_preflight": {
+    "mode": "auto",
+    "ttl_seconds": 600,
+    "max_new_probes": 6,
+    "new_probes_used": 4,
+    "artifact_free": true,
+    "events": [
+      {
+        "provider": "ollama",
+        "model": "glm-5.2",
+        "checked_at": 1787448709,
+        "ok": true,
+        "failure_kind": null,
+        "http_status": null,
+        "finish_reason": "stop",
+        "final_content_length": null,
+        "latency_ms": 1997,
+        "source": "probe"
+      },
+      {
+        "provider": "ollama",
+        "model": "deepseek-v4-pro:0813",
+        "checked_at": 1787448711,
+        "ok": true,
+        "failure_kind": null,
+        "http_status": null,
+        "finish_reason": "stop",
+        "final_content_length": null,
+        "latency_ms": 2286,
+        "source": "probe"
+      },
+      {
+        "provider": "cpa",
+        "model": "kimi-k3-256k",
+        "checked_at": 1787448713,
+        "ok": false,
+        "failure_kind": "authentication_error",
+        "http_status": 403,
+        "latency_ms": 369,
+        "source": "probe"
+      },
+      {
+        "provider": "cpa",
+        "model": "grok-4.6",
+        "checked_at": 1787448713,
+        "ok": false,
+        "failure_kind": "request_error",
+        "http_status": 402,
+        "latency_ms": 558,
+        "source": "probe"
+      }
+    ]
+  },
+  "reports": [
+    {
+      "role": "coverage",
+      "primary_provider": "none",
+      "primary_model": "kimi-k3-256k",
+      "provider": "none",
+      "model": "kimi-k3-256k",
+      "ok": false,
+      "attempts": 0,
+      "providers_attempted": [],
+      "models_attempted": [],
+      "fallback_used": false,
+      "provider_fallback_used": false,
+      "recovered": false,
+      "report": null,
+      "failure_kind": "no_healthy_review_route",
+      "attempt_log": [],
+      "error": "no_healthy_review_route"
+    },
+    {
+      "role": "adversarial",
+      "primary_provider": "ollama",
+      "primary_model": "deepseek-v4-pro:0813",
+      "provider": "ollama",
+      "model": "deepseek-v4-pro:0813",
+      "ok": true,
+      "attempts": 1,
+      "providers_attempted": [
+        "ollama"
+      ],
+      "models_attempted": [
+        "deepseek-v4-pro:0813"
+      ],
+      "fallback_used": false,
+      "provider_fallback_used": false,
+      "recovered": false,
+      "report": {
+        "verdict": "needs_changes",
+        "findings": [
+          {
+            "id": "F1",
+            "severity": "P1",
+            "claim": "The plan assumes rc.7 DSH supports resuming a durable session by session id in a new process after the old process dies, but no evidence in the plan or review context verifies this API exists.",
+            "evidence": [
+              "Plan D7 requires 'reuse durable DSH session id' and Gate D requires checkpoint/resume with a new DSH process.",
+              "Review context states prompt returns a durable inbox messageId and the high-level SDK waits for inbox receipt and session idle, but lists no session resume/attach API.",
+              "Upstream facts list only initialize, session/prompt, shutdown client requests and session.event, session.status, subagent.started/finished notifications; no resume method is mentioned."
+            ],
+            "impact": "If upstream does not support attaching to an existing durable session id, checkpoint/resume cannot be implemented as specified; Gate D fails or forces an unsafe reimplementation that violates the plan's own limited semantics.",
+            "minimal_change": "Add a Gate A preflight spike that kills a DSH process after prompt and attempts to resume the same session id in a new process; if unsupported, narrow M6-3 checkpoint to XW replay state only and mark DSH session resume as out of scope, or block."
+          },
+          {
+            "id": "F2",
+            "severity": "P1",
+            "claim": "The plan requires runtime proof of model-visible tool inventory from 'request/header.tools' or an equivalent DSH event, but the verified upstream facts list no such tool inventory event.",
+            "evidence": [
+              "Plan Gate C requires '从 request/header.tools 或等价 DSH event 独立取证模型工具集合'.",
+              "Review context states server→client only sends notifications and lists session.event, session.status, subagent.started/finished; no request/header or tool inventory event is evidenced.",
+              "Plan D4 says startup must prove tools from real request/header.tools or equivalent, not just static YAML grep."
+            ],
+            "impact": "Without a real event exposing the tool list, Gate C cannot be satisfied; the plan may fall back to static YAML grep, which it explicitly rejects, or the gate fails and M6-3 is blocked.",
+            "minimal_change": "Identify the actual rc.7 mechanism (e.g., initialize response, session.event payload, or child-side log) that exposes the tool list; if none exists, add a child-side startup handshake that emits tool inventory as a validated notification, or mark Gate C blocked."
+          },
+          {
+            "id": "F3",
+            "severity": "P1",
+            "claim": "Windows process-tree termination primitive is unspecified and may not exist in Node without native modules; the plan requires a 'directly auditable tree termination primitive, not shell:true' but gives no concrete mechanism.",
+            "evidence": [
+              "Gate B requires Windows/POSIX process tree fixture with child+grandchild and zero orphan after normal and forced kill.",
+              "Review context requires Windows/Ubuntu real process E2E and final no orphan DSH/launcher processes.",
+              "Windows lacks POSIX process groups; common solutions are Job Objects (not built into Node) or taskkill /T (shell-based), neither of which is specified as auditable."
+            ],
+            "impact": "If no auditable primitive is available, Gate B fails or the implementation uses an unauditable shell command, violating the plan and risking orphan processes on a required platform.",
+            "minimal_change": "Specify the exact Windows mechanism (e.g., Job Object via a small native helper or documented taskkill /T /F with PID tree verification) and add a preflight spike proving grandchild termination before committing to Gate B."
+          },
+          {
+            "id": "F4",
+            "severity": "P2",
+            "claim": "The supervisor is described as 'transparent' while also required to validate every stdout line before SDK parse; these are contradictory for a line-delimited protocol and may add full-line latency or alter framing.",
+            "evidence": [
+              "Plan D3 says '透明转发真实 JSON-RPC bytes' and 'stdout 每行必须是合法 JSON-RPC 2.0 envelope'.",
+              "To validate a line, the supervisor must buffer until newline before forwarding, so it is not byte-transparent.",
+              "Gate E requires warm prompt-ack p95 ≤100 ms; line-buffering adds time to receive the full line before forwarding."
+            ],
+            "impact": "If the supervisor buffers each line, prompt-ack latency includes full-line receive time and may violate the SLO; if it streams bytes, malformed lines reach the SDK before rejection, defeating the validation gate.",
+            "minimal_change": "Specify a streaming validation mode (e.g., validate incrementally and forward only after newline, with measured overhead) or explicitly accept that the supervisor is not byte-transparent and document the latency budget; add a microbenchmark in Gate E."
+          },
+          {
+            "id": "F5",
+            "severity": "P2",
+            "claim": "Checkpoint/resume 'old process dead' proof relies on PID liveness without process identity (start time/handle), which can be fooled by PID reuse or zombie processes, and the plan does not define how to prove '不可复用'.",
+            "evidence": [
+              "Plan D7 requires '旧 supervisor/DSH PID 已死亡且不可复用'.",
+              "Gate D fault matrix includes 'resume while old PID alive' but no process identity mechanism is specified.",
+              "Review context has no process start time or handle verification requirement."
+            ],
+            "impact": "A stale PID reused by an unrelated process could block resume (safe), but a zombie or handle leak could allow resume while old process resources remain, violating the cleanup invariant and potentially causing duplicate effects.",
+            "minimal_change": "Require process start time or OS handle verification in addition to PID, and add a test for PID reuse/zombie before allowing resume."
+          }
+        ],
+        "missing_evidence": [
+          "Upstream rc.7 API or source proving durable session resume/attach by session id after process death.",
+          "Actual rc.7 event or mechanism that exposes model-visible tool inventory at runtime.",
+          "Concrete Windows process-tree termination primitive available in Node 24 without shell:true.",
+          "Measured overhead of line-buffered supervisor validation on prompt-ack latency.",
+          "Process identity verification mechanism (start time/handle) for old PID death proof."
+        ],
+        "confidence": "high"
+      },
+      "attempt_log": [
+        {
+          "attempt": 1,
+          "provider": "ollama",
+          "model": "deepseek-v4-pro:0813",
+          "max_tokens": 8192,
+          "recovery": false,
+          "action": "primary",
+          "request_option_keys": [
+            "response_format"
+          ],
+          "json_mode": true,
+          "reasoning_effort": null,
+          "finish_reason": "stop",
+          "usage": {
+            "input_tokens": 10027,
+            "output_tokens": 6234
+          },
+          "response_keys": [
+            "choices",
+            "usage"
+          ],
+          "choices_count": 1,
+          "message_keys": [
+            "content",
+            "role"
+          ],
+          "content_length": 6419,
+          "content_sha256": "57a55bd6da0b296dfe2ae359eae1bb5f8bf63a9fa31ce89823bc56cdb5190240",
+          "reasoning_present": false,
+          "reasoning_content_length": 0,
+          "parsed_present": false,
+          "latency_ms": 37640,
+          "ok": true,
+          "failure_kind": null,
+          "error_code": null
+        }
+      ],
+      "error": null
+    }
+  ],
+  "degraded": true,
+  "recovered": false,
+  "recovered_with_fallback": false,
+  "recovered_with_provider_fallback": false,
+  "gpt_fallback_required": false
+}

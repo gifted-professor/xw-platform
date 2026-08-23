@@ -12,6 +12,7 @@ import {
   computeImplementationClosureHash,
   buildImplementationClosureDocument,
   isCanonicalRepoRelativePath,
+  isSupportedImplementationClosureContentHashProfile,
 } from "./implementation-closure.mjs";
 
 export const TCB_MANIFEST_SCHEMA_ID = "xhs.tcb.manifest.v1";
@@ -32,6 +33,9 @@ export function validateTcbManifest(manifest) {
   if (typeof manifest.implementationClosureHash !== "string" || !/^[a-f0-9]{64}$/.test(manifest.implementationClosureHash)) {
     errors.push("implementationClosureHash must be 64 hex");
   }
+  if (!isSupportedImplementationClosureContentHashProfile(manifest.contentHashProfile)) {
+    errors.push(`unknown contentHashProfile: ${String(manifest.contentHashProfile)}`);
+  }
   if (!Array.isArray(manifest.paths) || manifest.paths.length === 0) errors.push("paths must be a non-empty array");
   else {
     for (const p of manifest.paths) {
@@ -48,6 +52,12 @@ export function validateTcbManifest(manifest) {
   if (manifest.closure !== undefined) {
     if (!manifest.closure || manifest.closure.schemaId !== CLOSURE_SCHEMA_ID || manifest.closure.algorithm !== CLOSURE_ALGORITHM) {
       errors.push("embedded closure schema/algorithm mismatch");
+    }
+    if (!isSupportedImplementationClosureContentHashProfile(manifest.closure?.contentHashProfile)) {
+      errors.push(`unknown embedded closure contentHashProfile: ${String(manifest.closure?.contentHashProfile)}`);
+    }
+    if (manifest.closure?.contentHashProfile !== manifest.contentHashProfile) {
+      errors.push("manifest and embedded closure contentHashProfile must match");
     }
   }
   return errors.length ? { ok: false, errors } : { ok: true };
@@ -83,6 +93,7 @@ export function verifyTcbManifestAgainstRoot(manifest, rootDir) {
   const { document, implementationClosureHash } = computeImplementationClosureFromFiles({
     rootDir,
     paths: manifest.paths,
+    contentHashProfile: manifest.contentHashProfile,
   });
   if (implementationClosureHash !== manifest.implementationClosureHash) {
     throw new ControlPlaneError(
@@ -99,7 +110,10 @@ export function verifyTcbManifestAgainstRoot(manifest, rootDir) {
     );
   }
   if (manifest.closure) {
-    const embeddedHash = computeImplementationClosureHash(buildImplementationClosureDocument(manifest.closure.entries));
+    const embeddedHash = computeImplementationClosureHash(buildImplementationClosureDocument(
+      manifest.closure.entries,
+      { contentHashProfile: manifest.closure.contentHashProfile },
+    ));
     if (embeddedHash !== implementationClosureHash) {
       throw new ControlPlaneError(
         "TCB_MANIFEST_CLOSURE_MISMATCH",
@@ -114,13 +128,24 @@ export function verifyTcbManifestAgainstRoot(manifest, rootDir) {
 /**
  * Build a manifest document for a set of paths (helper for fixtures / codegen).
  */
-export function createTcbManifest({ manifestId, rootDir, paths, capabilityIds = [] }) {
-  const { document, implementationClosureHash } = computeImplementationClosureFromFiles({ rootDir, paths });
+export function createTcbManifest({
+  manifestId,
+  rootDir,
+  paths,
+  capabilityIds = [],
+  contentHashProfile,
+}) {
+  const { document, implementationClosureHash } = computeImplementationClosureFromFiles({
+    rootDir,
+    paths,
+    contentHashProfile,
+  });
   return assertTcbManifest({
     schemaId: TCB_MANIFEST_SCHEMA_ID,
     schemaVersion: TCB_MANIFEST_SCHEMA_VERSION,
     manifestId,
     implementationClosureHash,
+    ...(contentHashProfile === undefined ? {} : { contentHashProfile }),
     paths: document.entries.map((e) => e.path),
     capabilityIds,
     closure: document,

@@ -1,0 +1,72 @@
+{
+  "schemaId": "xw.m6-4-offline-test-manifest.v1",
+  "platform": {
+    "os": "win32",
+    "arch": "x64",
+    "node": "v24.11.1"
+  },
+  "tests": [
+    {
+      "command": "npm run check",
+      "status": "PASS"
+    },
+    {
+      "command": "npm run test:m6-4:offline",
+      "status": "PASS",
+      "tests": 32,
+      "passed": 32
+    },
+    {
+      "command": "npm run test:m6",
+      "status": "PASS",
+      "tests": 121,
+      "passed": 121
+    },
+    {
+      "command": "npm run test:m6-2:offline",
+      "status": "PASS",
+      "tests": 108,
+      "passed": 108
+    },
+    {
+      "command": "npm run test:m6-2:epoch",
+      "status": "PASS_WITH_PLATFORM_SKIP",
+      "tests": 68,
+      "passed": 67,
+      "skipped": 1,
+      "exception": "exact Windows symlink-unavailable test only"
+    },
+    {
+      "command": "npm run test:m6-3",
+      "status": "PASS",
+      "gateB": 21,
+      "gateC": 8,
+      "gateD": 22,
+      "gateE": 2
+    },
+    {
+      "command": "npm run test:orchestrator",
+      "status": "PASS_WITH_PLATFORM_EXCEPTION",
+      "tests": 531,
+      "passed": 530,
+      "failed": 1,
+      "exception": "EPERM creating the exact repair-authority symlink fixture on Windows"
+    },
+    {
+      "command": "targeted schema-v19 and M6 version-boundary regressions",
+      "status": "PASS",
+      "tests": 51,
+      "passed": 51
+    },
+    {
+      "command": "npm run test:control-plane",
+      "status": "BASELINE_FAILURES_RECORDED_NOT_CLAIMED_GREEN",
+      "tests": 959,
+      "passed": 924,
+      "failed": 32,
+      "skipped": 3,
+      "note": "M6-specific and schema-v19 targeted suites pass; unrelated Windows/path/legacy failures remain outside this candidate's acceptance claim"
+    }
+  ],
+  "manifestSha256": "3ea9a088c3a2fa62c8c3fdd6e4f8b686f8726689d29f3e08fe304427dbbc9e38"
+}

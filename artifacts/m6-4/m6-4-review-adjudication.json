@@ -1,0 +1,35 @@
+{
+  "schemaId": "xw.m6-4-execution-review-adjudication.v1",
+  "route": "CRITICAL_EXECUTION_REVIEW",
+  "externalReview": {
+    "attempted": true,
+    "completed": false,
+    "status": "SAFETY_REJECTED_BEFORE_DISCLOSURE",
+    "payloadSent": false,
+    "reason": "The 419KB source packet required explicit destination-specific disclosure authorization; no retry or workaround was used.",
+    "fabricatedReport": false
+  },
+  "fallback": {
+    "kind": "PRIMARY_GPT_HAND_ADJUDICATION",
+    "model": "gpt-5.6-sol",
+    "verdict": "READY_CODE_ONLY_GATE_CLOSED",
+    "openP0": 0,
+    "openP1": 0
+  },
+  "acceptedFixes": [
+    "Preserved non-nestable BEGIN IMMEDIATE and added private no-transaction helpers for atomic permit plus typed-authorization consumption.",
+    "Reused device_session_actions as the authoritative Action Ledger and restored ASSESSED, EXECUTING, EXECUTED, VERIFIED and COMPLETED semantics; M6 tables hold only claims, permits and additive detail receipts.",
+    "Bound tx#2 to an existing running capability job whose run, session and device match the typed authorization.",
+    "Recomputed trusted parameter hashes from actual server-trusted parameters and rejected non-write primitives before any action claim or counter.",
+    "Closed live result schemas with valid JSON Schema types and exact effect accounting.",
+    "Made the inherited-pipe child binding exact, alias-01-only and explicitly closeable.",
+    "Added an independent effect-boundary oracle and kept legacy replay grounding byte-pinned and unreachable from live v2."
+  ],
+  "scopeBoundary": {
+    "liveActionExecuted": false,
+    "gateFAuthorized": false,
+    "modelProfileQualified": false,
+    "nextMilestone": "M6-5",
+    "truthfulStatus": "CODE_READY_GATE_CLOSED"
+  }
+}

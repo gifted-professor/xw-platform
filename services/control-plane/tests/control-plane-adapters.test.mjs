@@ -493,3 +493,71 @@ test("Xiaowei raw adapter is canary-only and allowlisted", async () => {
   assert.equal(execution.vendorCode, 10000);
   assert.equal(calls[0].devices, "private-runtime-id");
 });
+
+test("Xiaowei target qualification is a formal alias-01 canary job with a frozen read-only registry", async () => {
+  const transportCalls = [];
+  const authorizationCalls = [];
+  const adapter = createXiaoweiAdapter({
+    transport: {
+      async runExclusive(callback) {
+        return callback({
+          async invoke(input) {
+            transportCalls.push(structuredClone(input));
+            return { data: { [privateDevice.runtimeId]: "stable-qualified-value" } };
+          },
+        });
+      },
+    },
+  });
+  const capability = registry.require("xiaowei.m6.qualify_environment");
+  assert.equal(registry.listPublic().some((entry) => entry.id === capability.id), false);
+  const context = {
+    capability,
+    device: privateDevice,
+    params: { accountIsolationBindingHash: "a".repeat(64) },
+    job: { canary: true },
+    leaseAuthorization,
+    transportToken: "opaque-once-token",
+    typedTransport: {
+      async invoke(input) {
+        authorizationCalls.push(input);
+        return { ok: true, transportCalled: false };
+      },
+    },
+  };
+  const execution = await adapter.execute(context);
+  assert.equal(authorizationCalls.length, 1);
+  assert.equal(authorizationCalls[0].action, "m6_qualify_environment");
+  assert.equal(transportCalls.length, 16);
+  assert.equal(transportCalls.every((input) => input.action === "adb_shell" && input.devices === privateDevice.runtimeId), true);
+  assert.equal(transportCalls.every((input) => Object.keys(input.data).join(",") === "command"), true);
+  assert.equal(execution.output.m6EnvironmentQualification.qualification.actionCount, 0);
+  assert.deepEqual(await adapter.verify({ capability, execution }), { ok: true, mode: "custom" });
+  await assert.rejects(() => adapter.execute({ ...context, job: { canary: false } }), {
+    code: "M6_ENV_QUALIFICATION_JOB_INVALID",
+  });
+});
+
+test("generic Xiaowei adapter cannot dispatch the M6 production-entry-only action", async () => {
+  let calls = 0;
+  const adapter = createXiaoweiAdapter({
+    transport: {
+      async invoke() {
+        calls += 1;
+        return { code: 10000 };
+      },
+    },
+  });
+  const capability = registry.require("xiaowei.m6.grounded_run");
+  await assert.rejects(
+    adapter.execute({
+      capability,
+      device: privateDevice,
+      params: { runPacketRef: "a".repeat(64), grantRef: "b".repeat(64), scenarioManifestRef: "c".repeat(64) },
+      job: { canary: true },
+      leaseAuthorization,
+    }),
+    { code: "M6_PRODUCTION_ENTRY_ONLY" },
+  );
+  assert.equal(calls, 0);
+});

@@ -20,6 +20,14 @@ import { tmpdir } from "node:os";
 
 import { deriveM6EpochHash } from "../control-plane/lib/m6-live-gate.mjs";
 import {
+  deriveM6ActionEpochBindingHash,
+  deriveM6EmergencyCloseAuthorizationHash,
+  deriveM6V2EpochHash,
+  deriveM6V2LockSetHash,
+  evaluateM6MixedGate,
+  M6_GATE_V2_LOCK_KINDS,
+} from "../control-plane/lib/m6-live-gate-v2.mjs";
+import {
   loadM6Gate,
   loadM6Locks,
   writeImmutableJson,
@@ -123,6 +131,74 @@ function canSymlink() {
 function clean(...roots) {
   for (const r of roots) rmSync(r, { recursive: true, force: true });
 }
+
+test("loadM6Gate dispatches a signed v2 epoch and loads content-addressed locks/emergency authorization", () => {
+  const m6Root = newRoot();
+  try {
+    const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+    writeAllowlist(m6Root, [{ keyId: KEY_ID, subject: ACTOR, publicKey: publicKey.export({ type: "spki", format: "pem" }), status: "active" }]);
+    writeLocks(m6Root);
+    const lockRaw = {
+      schemaId: "xw.m6-locks.v2",
+      lockSetId: "locks-v2-test",
+      lockHashes: Object.fromEntries(M6_GATE_V2_LOCK_KINDS.map((kind, index) => [kind, String(index % 10).repeat(64)])),
+    };
+    const lockSet = { ...lockRaw, lockSetHash: deriveM6V2LockSetHash(lockRaw) };
+    writeImmutableJson(join(m6Root, "m6-gate", "locks.v2", `${lockSet.lockSetId}.json`), lockSet);
+    const epochBase = {
+      schemaId: "xw.m6-live-gate.v2",
+      gateId: GATE_ID,
+      mode: "GROUNDED_ACTION",
+      purpose: "M6_4_ACTION_SMOKE",
+      status: "active",
+      releaseId: "release-loader",
+      sourceCommit: HEX40,
+      actor: ACTOR,
+      lockSetRef: { id: lockSet.lockSetId, sha256: lockSet.lockSetHash },
+      allowlist: ["01"],
+      issuedAt: "2026-08-22T00:00:00.000Z",
+      expiresAt: "2026-08-23T01:00:00.000Z",
+      parentEpochHash: null,
+      closeoutRef: null,
+      aggregateSealRef: null,
+      rollbackTargetEpochHash: null,
+    };
+    const authRaw = {
+      schemaId: "xw.m6-emergency-close-authorization.v1",
+      authorizationId: "emergency-v2-test",
+      expectedCurrentEpochHash: null,
+      expectedParentEpochHash: null,
+      actionEpochBindingHash: deriveM6ActionEpochBindingHash(epochBase),
+      releaseId: "release-loader",
+      planHash: "b".repeat(64),
+      contractHash: "c".repeat(64),
+      alias: "01",
+      operator: ACTOR,
+      reasonCodeAllowlist: ["SAFETY_STOP"],
+      nonce: "loader-test-nonce",
+      expiresAt: "2026-08-23T01:31:00.000Z",
+    };
+    const auth = { ...authRaw, authorizationHash: deriveM6EmergencyCloseAuthorizationHash(authRaw) };
+    const epochRaw = {
+      ...epochBase,
+      emergencyCloseAuthorizationRef: { id: auth.authorizationId, sha256: auth.authorizationHash },
+    };
+    const epoch = { ...epochRaw, epochHash: deriveM6V2EpochHash(epochRaw) };
+    writeImmutableJson(join(m6Root, "m6-gate", GATE_ID, "emergency-close", `${auth.authorizationId}.json`), auth);
+    writeGate(m6Root, [{ epoch, proof: signEpoch(epoch, privateKey) }]);
+    const loaded = loadM6Gate({ m6Root, gateId: GATE_ID, issuerAllowlistPath: issuerKeysPath(m6Root) });
+    assert.equal(loaded.chain[0].schemaId, "xw.m6-live-gate.v2");
+    assert.equal(loaded.lockSets[lockSet.lockSetId].lockSetHash, lockSet.lockSetHash);
+    assert.equal(loaded.emergencyCloseAuthorizations[auth.authorizationId].authorizationHash, auth.authorizationHash);
+    const result = evaluateM6MixedGate({
+      ...loaded,
+      v1LockHashes: loaded.lockHashes,
+      nowMs: Date.parse("2026-08-22T12:00:00.000Z"),
+      expectedRelease: { releaseId: "release-loader", sourceCommit: HEX40 },
+    });
+    assert.equal(result.mode, "GROUNDED_ACTION");
+  } finally { clean(m6Root); }
+});
 
 test("loadM6Gate loads a signed valid epoch chain and the pinned locks", () => {
   const m6Root = newRoot();

@@ -1,0 +1,379 @@
+{
+  "schema": "multi-model-execution-contract.v1",
+  "planSha256": "25003ddcb79596c6e4775c59e6a332d72442517db0761daff645e2dcfa5b9e3a",
+  "authorizationMode": "close-accepted-blockers",
+  "budgets": {
+    "externalReviewWaves": 0,
+    "reviewerDrivenFixBatches": 1,
+    "localRepairTails": 1,
+    "targetedVerifications": 2
+  },
+  "execution": {
+    "runtime": "codex-desktop",
+    "primaryModel": "gpt-5.6-sol",
+    "maxModelSwitches": 1,
+    "rehydrateOnContextChange": true
+  },
+  "items": [
+    {
+      "id": "M65-COHORT-PURPOSE",
+      "severity": "P1",
+      "invariant": "Gate F uses only the frozen M6_4_HOT_CLOSE and M6_4_ACTION_SMOKE purpose constants, and the single pre-send HOT_CLOSE scenario has exactly zero transport and zero actions.",
+      "riskClasses": ["trust-boundary", "reproducible-artifact"],
+      "requiredArtifacts": [
+        "packages/kernel/lib/m6-4-cohort.mjs",
+        "artifacts/m6-4/cohort-manifests/m6_4_hot_close.json",
+        "artifacts/m6-4/cohort-manifests/m6_4_action_smoke.json",
+        "services/control-plane/tests/m6-4-cohort.test.mjs"
+      ],
+      "forbiddenDependencies": [
+        "M6_4_SMOKE_CLOSE",
+        "M6_4_SMOKE_ACTION",
+        "generic ZERO_OR_ONE as the sole HOT_CLOSE verifier",
+        "replacement, supplemental or extra scenarios",
+        "counter-one HOT_CLOSE success"
+      ],
+      "probes": [
+        {
+          "id": "M65-COHORT-PURPOSE-adversarial",
+          "kind": "adversarial",
+          "procedure": "Validate exact manifests and aggregates after mutating purpose, cardinality, transportCount, actionCount, scenario ID and failure-closeout linkage.",
+          "preFixExpected": "A wrong purpose or counter-one HOT_CLOSE can pass the generic aggregate.",
+          "postFixExpected": "Only exact purpose/cardinality records pass and HOT_CLOSE requires transportCount=0 and actionCount=0 with the bound failure closeout.",
+          "pathExercise": "The probe invokes the production cohort validator used by the canary closeout, not a test-only duplicate."
+        },
+        {
+          "id": "M65-COHORT-PURPOSE-reproduce",
+          "kind": "reproduction",
+          "procedure": "Regenerate all cohort manifests, compare exact hashes, and re-run the closeout validator over the frozen 5/1/3/20/30 cardinalities.",
+          "preFixExpected": "Purpose or verifier drift changes bytes or accepts the wrong run set.",
+          "postFixExpected": "Manifest hashes reproduce and every purpose has the exact fixed denominator and no extras.",
+          "pathExercise": "The generator and verifier consume the committed artifacts later bound into live authorization."
+        }
+      ]
+    },
+    {
+      "id": "M65-GATEF-AUTH",
+      "severity": "P1",
+      "invariant": "A live window is authorized only by a canonical Ed25519-signed owner envelope bound to exact runtime values and atomically consumed once at the current gate generation.",
+      "riskClasses": ["trust-boundary", "single-use-authorization", "reproducible-artifact"],
+      "requiredArtifacts": [
+        "packages/kernel/contracts/orchestration/m6/xw.m6-4-live-window-authorization.v1.schema.json",
+        "services/control-plane/control-plane/lib/m6-live-window-authorization.mjs",
+        "services/control-plane/control-plane/lib/state-store.mjs",
+        "tools/m6/m6-4-canary-runner.mjs",
+        "docs/plans/M6-4-live-M6-5-owner-execution-authorization.json"
+      ],
+      "forbiddenDependencies": [
+        "actor string as issuer proof",
+        "shape-only authorization validation",
+        "64-hex Git source commit",
+        "reusable nonce",
+        "private signing key in repository, runtime, log, receipt or model packet",
+        "authorization generation before exact release/profile/environment hashes exist"
+      ],
+      "probes": [
+        {
+          "id": "M65-GATEF-AUTH-adversarial",
+          "kind": "adversarial",
+          "procedure": "Change release, 40-hex source commit, epoch, generation, purpose, manifest, model, provider, tool, policy, locks, environment, alias, operator, emergency-close or expiry after signing.",
+          "preFixExpected": "At least one runtime drift is accepted by a shape-only validator.",
+          "postFixExpected": "Every drift rejects before gate activation or action counter increment.",
+          "pathExercise": "Runner, sealed broker and Control Plane verifier each consume the same canonical signed body and current runtime snapshot."
+        },
+        {
+          "id": "M65-GATEF-AUTH-forgery",
+          "kind": "forgery",
+          "procedure": "Submit unsigned, wrong-key, revoked-key, altered-body and self-issued live-window envelopes.",
+          "preFixExpected": "A locally fabricated JSON record can pass.",
+          "postFixExpected": "Only an active allowlisted owner key verifies; no authorization or resource row is created for a forgery.",
+          "pathExercise": "The test uses the production trusted issuer verifier with ephemeral test-only keys."
+        },
+        {
+          "id": "M65-GATEF-AUTH-replay",
+          "kind": "replay",
+          "procedure": "Consume one nonce at one gate generation, then retry it concurrently and after generation change/restart.",
+          "preFixExpected": "The same envelope can activate or authorize twice.",
+          "postFixExpected": "The StateStore unique consumption and generation CAS reject every replay durably.",
+          "pathExercise": "Two processes reopen the same database and race the production atomic-consume API."
+        },
+        {
+          "id": "M65-GATEF-AUTH-reproduce",
+          "kind": "reproduction",
+          "procedure": "Recompute canonical signing bytes, body hash, envelope hash and all referenced runtime hashes from committed/release artifacts.",
+          "preFixExpected": "A hash cannot be independently regenerated or references unresolved values.",
+          "postFixExpected": "All bytes and hashes reproduce exactly without private material.",
+          "pathExercise": "The verifier reads the exact signed envelope, public-key allowlist and sealed release inventory."
+        }
+      ]
+    },
+    {
+      "id": "M65-PRODUCTION-ENTRY",
+      "severity": "P1",
+      "invariant": "The pure M6-C1 main-built release exposes one internal alias-01 live path through a sealed provider and inherited-pipe broker while the child holds exactly ten opaque tools and no raw authority.",
+      "riskClasses": ["trust-boundary", "reproducible-artifact"],
+      "requiredArtifacts": [
+        "integrations/dsh-xw/profiles/live/model-manifest.json",
+        "integrations/dsh-xw/src/live-runtime-plugin.mjs",
+        "integrations/dsh-xw/src/live-pipe-client.mjs",
+        "services/control-plane/control-plane/lib/m6-grounded-action-facade.mjs",
+        "services/control-plane/control-plane/lib/m6-live-broker.mjs",
+        "artifacts/m6-4/m6-4-environment-qualification.json",
+        "artifacts/m6-4/m6-4-live-entry-qualification.json"
+      ],
+      "forbiddenDependencies": [
+        "TCP broker listener",
+        "child broker token",
+        "raw ADB, port, coordinate, DB, lease, payment or delete authority in the child",
+        "fixture or replay provider as live proof",
+        "unsealed model/provider/secret path",
+        "M6-5 code in the M6-C1 canary release"
+      ],
+      "probes": [
+        {
+          "id": "M65-PRODUCTION-ENTRY-adversarial",
+          "kind": "adversarial",
+          "procedure": "Launch the production child path with wrong alias/process/session/run, extra tool, raw field, pipe replay, descendant handle, stale environment and unqualified profile.",
+          "preFixExpected": "An unsealed or rebound child reaches a live tool or retains authority.",
+          "postFixExpected": "Every invalid launch rejects fail-closed with zero action and all processes/pipes/resources close.",
+          "pathExercise": "The probe starts a real DSH child through the same parent broker and bootstrap used by the release."
+        },
+        {
+          "id": "M65-PRODUCTION-ENTRY-reproduce",
+          "kind": "reproduction",
+          "procedure": "Build the pure M6-C1 release from the merged main commit and recompute source, release, locks, model, provider, tool, policy and environment hashes.",
+          "preFixExpected": "The release includes untracked code, M6-5 scope or an unresolved profile/hash.",
+          "postFixExpected": "The release inventory is closed, main-built, M6-C1-only and every referenced hash reproduces.",
+          "pathExercise": "The release builder and runtime loader verify the same manifest installed on the target host."
+        }
+      ]
+    },
+    {
+      "id": "M65-LIVE-EXIT-SEQUENCE",
+      "severity": "P1",
+      "invariant": "M6-4 completes only after exact alias-01 5/1/3/20/30 cohorts close under independent effect oracles, the gate returns CLOSED and all jobs, sessions, leases, approvals, actions and DSH processes are reconciled to zero.",
+      "riskClasses": ["trust-boundary", "independent-oracle", "reproducible-artifact"],
+      "requiredArtifacts": [
+        "artifacts/m6-4/m6-4-action-canary-completion.json",
+        "artifacts/m6-4/m6-4-live-resource-closeout.json",
+        "artifacts/m6-4/cohort-manifests/xw.m6-effect-boundary.v1.json",
+        "C:/Users/Public/xw-runtime/m6-audit/m6-4-action-canary-completion.json"
+      ],
+      "forbiddenDependencies": [
+        "skipped, replacement, supplemental or extra scenario",
+        "SUT-derived expected effects",
+        "public, social, account, security, settings, draft, payment or delete effect",
+        "open or expired gate tail",
+        "nonzero resource or orphan process",
+        "claiming M6_4_CLOSED_COMPLETE before M6-6"
+      ],
+      "probes": [
+        {
+          "id": "M65-LIVE-EXIT-SEQUENCE-adversarial",
+          "kind": "adversarial",
+          "procedure": "Inject wrong query/page/result/ad classification, stale frame, duplicate action, unknown counter-one result, forbidden effect and emergency-close races across the fixed cohorts.",
+          "preFixExpected": "An unsafe or incomplete run can contribute success or leave the gate/resources open.",
+          "postFixExpected": "The entire affected window fails, emergency-closes and produces a truthful failure closeout with no blind retry.",
+          "pathExercise": "The live runner, independent oracle, gate promoter, ledger and resource probe all contribute bound evidence."
+        },
+        {
+          "id": "M65-LIVE-EXIT-SEQUENCE-oracle",
+          "kind": "independent-oracle",
+          "procedure": "Compare each run to pre-window expected query, page, non-ad result, note reference, forbidden/public effect and reset records authored outside the SUT trace.",
+          "preFixExpected": "UI intent or ledger success can stand in for business truth.",
+          "postFixExpected": "Only independently observed expected outcomes count; all forbidden/public deltas are zero and bounded read traces are reset or explicitly retained."
+          ,"pathExercise": "The oracle reads independent account/device/backend sources and verifies their frozen hashes."
+        },
+        {
+          "id": "M65-LIVE-EXIT-SEQUENCE-mutation",
+          "kind": "mutation",
+          "procedure": "Corrupt one expected record, completion receipt, cohort cardinality, resource count and CLOSED epoch reference.",
+          "preFixExpected": "Aggregate success remains green despite corrupted evidence.",
+          "postFixExpected": "Every mutation invalidates the completion receipt.",
+          "pathExercise": "The completion verifier consumes all exact artifacts rather than an aggregate boolean."
+        },
+        {
+          "id": "M65-LIVE-EXIT-SEQUENCE-reproduce",
+          "kind": "reproduction",
+          "procedure": "Recompute every cohort aggregate, receipt, gate chain, resource probe and final action-canary completion hash.",
+          "preFixExpected": "At least one artifact or exact denominator cannot be reproduced.",
+          "postFixExpected": "All hashes and counts reproduce and the terminal claim is exactly M6_4_ACTION_CANARY_CLOSED.",
+          "pathExercise": "The reproduction starts from immutable run/ledger/oracle records and current CLOSED tail."
+        }
+      ]
+    },
+    {
+      "id": "M65-CHECKPOINT-INTEGRITY",
+      "severity": "P1",
+      "invariant": "Live worker checkpoints are opaque-ref-only, crash-consistent, content-addressed records whose journal prefix and profile/tool/policy bindings reproduce; they never become action authority.",
+      "riskClasses": ["trust-boundary", "reproducible-artifact"],
+      "requiredArtifacts": [
+        "packages/kernel/contracts/orchestration/m6/xw.m6-worker-checkpoint.v1.schema.json",
+        "services/control-plane/control-plane/lib/m6-checkpoint-store.mjs",
+        "integrations/dsh-xw/src/live-checkpoint-store.mjs",
+        "services/control-plane/tests/m6-checkpoint-recovery.test.mjs"
+      ],
+      "forbiddenDependencies": [
+        "secret, raw transport, coordinate, ADB, port, token, DB path, payment parameter or screenshot base64",
+        "replay/live checkpoint downgrade",
+        "checkpoint as effect authority",
+        "non-atomic replace",
+        "symlink, junction or path escape"
+      ],
+      "probes": [
+        {
+          "id": "M65-CHECKPOINT-INTEGRITY-adversarial",
+          "kind": "adversarial",
+          "procedure": "Inject truncate, malformed JSON, extra field, journal gap, hash/profile/tool/policy drift, cross-run replay, symlink/junction and crash at every write/fsync/rename boundary.",
+          "preFixExpected": "A corrupt or rebound checkpoint resumes or escapes the canonical root.",
+          "postFixExpected": "Every corruption fails closed and the last fully durable checkpoint remains readable without action dispatch.",
+          "pathExercise": "Tests exercise the production checkpoint store and reopen it in a separate process."
+        },
+        {
+          "id": "M65-CHECKPOINT-INTEGRITY-reproduce",
+          "kind": "reproduction",
+          "procedure": "Regenerate a checkpoint from the durable journal prefix and compare canonical bytes, state hash, journal hash and referenced artifacts.",
+          "preFixExpected": "Checkpoint bytes or bindings cannot be regenerated exactly.",
+          "postFixExpected": "Every byte and hash reproduces and secret/raw scans remain empty.",
+          "pathExercise": "The verifier independently reads the committed schema, journal and content-addressed refs."
+        }
+      ]
+    },
+    {
+      "id": "M65-REARM-ATTEMPT-LEDGER",
+      "severity": "P1",
+      "invariant": "A logical action keeps one global claim and immutable append-only physical attempt generations; only independently PROVEN_NOT_SENT counter-zero evidence can create one fresh generation with new frame, decision, permit and typed authorization.",
+      "riskClasses": ["trust-boundary", "single-use-authorization", "reproducible-artifact"],
+      "requiredArtifacts": [
+        "services/control-plane/control-plane/lib/state-store.mjs",
+        "services/control-plane/control-plane/lib/m6-grounded-action-reconciler.mjs",
+        "packages/kernel/contracts/orchestration/m6/xw.m6-reconcile-decision.v1.schema.json",
+        "services/control-plane/tests/m6-attempt-ledger.test.mjs"
+      ],
+      "forbiddenDependencies": [
+        "second global claim",
+        "changed operationKey, actionId or slot authority",
+        "overwritten or deleted attempt history",
+        "old frame, decision, permit, auth or environment reuse",
+        "counter-one rearm",
+        "cross-generation raw dispatch total above one"
+      ],
+      "probes": [
+        {
+          "id": "M65-REARM-ATTEMPT-LEDGER-adversarial",
+          "kind": "adversarial",
+          "procedure": "Race two reconcilers across crash/restart and mutate generation, slot, evidence, current pointer and cumulative counters.",
+          "preFixExpected": "A second claim, stale authority or two physical dispatches can be created.",
+          "postFixExpected": "CAS selects at most one fresh generation and the independent cumulative raw counter stays at most one.",
+          "pathExercise": "The probe uses two StateStore instances over the same durable database and the production reconciler."
+        },
+        {
+          "id": "M65-REARM-ATTEMPT-LEDGER-forgery",
+          "kind": "forgery",
+          "procedure": "Forge PROVEN_NOT_SENT evidence, broker counter, typed-adapter counter and attempt-history hashes.",
+          "preFixExpected": "A fabricated counter-zero claim re-arms the action.",
+          "postFixExpected": "Cross-bound evidence integrity rejects before a new generation or authorization is created.",
+          "pathExercise": "The reconciler verifies separately persisted ledger, broker and adapter evidence."
+        },
+        {
+          "id": "M65-REARM-ATTEMPT-LEDGER-replay",
+          "kind": "replay",
+          "procedure": "Replay old permit/auth/nonces and a previously finalized generation after restart.",
+          "preFixExpected": "Old authority can reach transport again.",
+          "postFixExpected": "Consumed/expired authority and finalized generations reject durably.",
+          "pathExercise": "The test reopens the database and invokes the same production consume APIs."
+        },
+        {
+          "id": "M65-REARM-ATTEMPT-LEDGER-reproduce",
+          "kind": "reproduction",
+          "procedure": "Recompute all attempt-history rows, generation chain hashes, reconcile decisions and cumulative counter evidence.",
+          "preFixExpected": "A transition or physical attempt is missing from the chain.",
+          "postFixExpected": "The full history reproduces without deleting or rewriting prior generations.",
+          "pathExercise": "The verifier reads append-only rows and independently derives the current generation."
+        }
+      ]
+    },
+    {
+      "id": "M65-COUNTER1-ORACLE",
+      "severity": "P1",
+      "invariant": "A counter-one action is never resent and becomes determinate only through a pre-dispatch, independently authored expected-state artifact and an observer independent of ledger, transport, broker, model and SUT receipts.",
+      "riskClasses": ["independent-oracle", "reproducible-artifact"],
+      "requiredArtifacts": [
+        "packages/kernel/contracts/orchestration/m6/xw.m6-reconcile-evidence.v1.schema.json",
+        "services/control-plane/control-plane/lib/m6-grounded-action-reconciler.mjs",
+        "artifacts/m6-5/m6-5-independent-oracles.json",
+        "services/control-plane/tests/m6-counter-one-reconcile.test.mjs"
+      ],
+      "forbiddenDependencies": [
+        "ledger, transport result, broker ack, model narrative or GroundedActionReceipt as business truth",
+        "expected data derived after dispatch",
+        "counter-one retry",
+        "unknown effect reported as success"
+      ],
+      "probes": [
+        {
+          "id": "M65-COUNTER1-ORACLE-oracle",
+          "kind": "independent-oracle",
+          "procedure": "Compare independently frozen expected state with after-state collected by a separate observer for each fault scenario.",
+          "preFixExpected": "Counter-one transport evidence can self-certify success.",
+          "postFixExpected": "Only independent expected/actual agreement produces RECONCILED_EFFECT or REUSE_VERIFIED; otherwise WAIT_HUMAN_AMBIGUOUS.",
+          "pathExercise": "The observer and expected artifact are separately instantiated and neither consumes the SUT trace."
+        },
+        {
+          "id": "M65-COUNTER1-ORACLE-mutation",
+          "kind": "mutation",
+          "procedure": "Test ledger/transport success with unchanged business state, changed business state with corrupted ledger, and damaged expected/oracle hashes.",
+          "preFixExpected": "At least one circular or inconsistent evidence set passes.",
+          "postFixExpected": "Every inconsistent set fails closed and no dispatch occurs.",
+          "pathExercise": "The production reconciler receives both forward and reverse mutations."
+        },
+        {
+          "id": "M65-COUNTER1-ORACLE-reproduce",
+          "kind": "reproduction",
+          "procedure": "Recompute expected artifact, observation and decision hashes for the complete counter-one fault corpus.",
+          "preFixExpected": "An expected or actual input cannot be independently regenerated.",
+          "postFixExpected": "All decision inputs and resulting hashes reproduce exactly.",
+          "pathExercise": "The verifier reads immutable expected and observed artifacts from separate roots."
+        }
+      ]
+    },
+    {
+      "id": "M65-FAULT-CLEANUP",
+      "severity": "P1",
+      "invariant": "All seven M6-5 fault families yield a determinate or explicitly ambiguous worker outcome without duplicate/out-of-scope action, preserve RepairTriggered/SkillFinished/receipt/ledger consistency, and close every DSH process, broker, job, session and lease.",
+      "riskClasses": ["trust-boundary", "reproducible-artifact"],
+      "requiredArtifacts": [
+        "tools/m6/m6-5-fault-matrix.mjs",
+        "artifacts/m6-5/m6-5-fault-matrix-receipt.json",
+        "artifacts/m6-5/m6-5-resource-closeout.json",
+        "artifacts/m6-5/multi-model-execution-completion-m6-5.json"
+      ],
+      "forbiddenDependencies": [
+        "agentic_session enum/router/binder or fabricated M5 WorkReceipt",
+        "live M6-7 kill drill",
+        "blind retry",
+        "branch failure contaminating another worker",
+        "orphan DSH, pipe, job, session or lease",
+        "generic Windows test exception"
+      ],
+      "probes": [
+        {
+          "id": "M65-FAULT-CLEANUP-adversarial",
+          "kind": "adversarial",
+          "procedure": "Run kill-before-dispatch, kill-after-dispatch-before-result, result-before-checkpoint, empty dump, stale frame, ambiguity/no-progress and serve-unavailable through real DSH processes and the bounded transport/ledger harness.",
+          "preFixExpected": "A fault duplicates an effect, yields an incorrect scheduler projection or leaks a resource.",
+          "postFixExpected": "Every family has its exact expected reconcile/outcome/event path, raw dispatch at most one and all resources zero.",
+          "pathExercise": "The harness uses the production checkpoint, StateStore, reconciler, facade, broker and process supervisor paths."
+        },
+        {
+          "id": "M65-FAULT-CLEANUP-reproduce",
+          "kind": "reproduction",
+          "procedure": "Regenerate the fault receipt, event projection, ledger chain, process-close receipts and resource snapshots, then run all M6/M5/M4/kernel/fusion/authority and cross-platform gates.",
+          "preFixExpected": "A required family, event, receipt, test or resource proof is absent or nondeterministic.",
+          "postFixExpected": "All seven families and required regression suites reproduce, with only the exact historical Windows symlink EPERM recorded where applicable.",
+          "pathExercise": "The completion verifier consumes command output hashes and every required artifact rather than a summary claim."
+        }
+      ]
+    }
+  ]
+}

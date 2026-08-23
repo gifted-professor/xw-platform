@@ -143,6 +143,18 @@ test("authorization: pilot out-of-scope is strict block", () => {
   assert.equal(auth.reasonCode, "AUTONOMY_PILOT_SCOPE_MISS");
 });
 
+test("authorization enforces capability invocationPolicy before internal routing", () => {
+  const cap = attachNormalizedEffect(baseCap({
+    exposure: "internal",
+    invocationPolicy: { allowedModes: ["composite_action"] },
+    effect: { class: "reversible", phase: "na", commitBoundary: "automatic" },
+  }));
+  const session = decideCapabilityPolicy(cap, { invocation: "session", canary: true });
+  assert.equal(session.decision, "block");
+  assert.equal(session.reasonCode, "CAPABILITY_INVOCATION_FORBIDDEN");
+  assert.throws(() => assertAuthorizationAllow(session), { code: "CAPABILITY_INVOCATION_FORBIDDEN" });
+});
+
 test("Mission publish/delete always phc even with allow_within_scope", () => {
   const mission = {
     status: "active",

@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:xw:contract:m6:m6-4-cohort-manifest:v1",
+  "title": "xw.m6-4-cohort-manifest.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaId", "purpose", "alias", "gateFEligible", "liveAuthorizationRef", "scenarios", "manifestHash"],
+  "properties": {
+    "schemaId": { "const": "xw.m6-4-cohort-manifest.v1" },
+    "purpose": { "enum": ["M6_4_SHADOW", "M6_4_HOT_CLOSE", "M6_4_ACTION_SMOKE", "M6_4_RELIABILITY", "M6_4_SMOOTH"] },
+    "alias": { "const": "01" },
+    "gateFEligible": { "const": false },
+    "liveAuthorizationRef": { "type": "null" },
+    "qualification": { "type": "string", "minLength": 1 },
+    "scenarios": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 30,
+      "items": { "$ref": "#/$defs/scenario" }
+    },
+    "manifestHash": { "$ref": "#/$defs/hash" }
+  },
+  "$defs": {
+    "hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "trustedParams": {
+      "oneOf": [
+        { "type": "object", "additionalProperties": false, "maxProperties": 0 },
+        { "type": "object", "additionalProperties": false, "required": ["appRef"], "properties": { "appRef": { "$ref": "#/$defs/hash" } } },
+        { "type": "object", "additionalProperties": false, "required": ["textRef"], "properties": { "textRef": { "$ref": "#/$defs/hash" } } },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["direction", "distanceTier"],
+          "properties": {
+            "direction": { "enum": ["up", "down"] },
+            "distanceTier": { "enum": ["short", "medium"] }
+          }
+        }
+      ]
+    },
+    "slot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaId", "sequenceIndex", "logicalStepId", "actionSlotOrdinal", "primitive", "actionFamily",
+        "intentRef", "intentPolicyHash", "targetKind", "targetEligibilityHash", "trustedParams",
+        "trustedParameterHash", "allowedStateHash", "effectBoundaryHash", "budgetPolicyHash",
+        "redlinePolicyHash", "resetPolicyHash", "oracleHash", "verificationPolicyHash", "slotAuthorityHash"
+      ],
+      "properties": {
+        "schemaId": { "const": "xw.m6-action-slot-authority.v1" },
+        "sequenceIndex": { "type": "integer", "minimum": 0, "maximum": 255 },
+        "logicalStepId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "actionSlotOrdinal": { "type": "integer", "minimum": 0, "maximum": 255 },
+        "primitive": { "enum": ["open_app", "back", "tap", "scroll", "type_search_text"] },
+        "actionFamily": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "intentRef": { "$ref": "#/$defs/hash" },
+        "intentPolicyHash": { "$ref": "#/$defs/hash" },
+        "targetKind": { "enum": ["block", "screen", "none"] },
+        "targetEligibilityHash": { "$ref": "#/$defs/hash" },
+        "trustedParams": { "$ref": "#/$defs/trustedParams" },
+        "trustedParameterHash": { "$ref": "#/$defs/hash" },
+        "allowedStateHash": { "$ref": "#/$defs/hash" },
+        "effectBoundaryHash": { "$ref": "#/$defs/hash" },
+        "budgetPolicyHash": { "$ref": "#/$defs/hash" },
+        "redlinePolicyHash": { "$ref": "#/$defs/hash" },
+        "resetPolicyHash": { "$ref": "#/$defs/hash" },
+        "oracleHash": { "$ref": "#/$defs/hash" },
+        "verificationPolicyHash": { "$ref": "#/$defs/hash" },
+        "slotAuthorityHash": { "$ref": "#/$defs/hash" }
+      }
+    },
+    "actionPlan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaId", "maxActionCount", "slots", "actionPlanHash"],
+      "properties": {
+        "schemaId": { "const": "xw.m6-scenario-action-plan.v1" },
+        "maxActionCount": { "type": "integer", "minimum": 0, "maximum": 255 },
+        "slots": { "type": "array", "maxItems": 255, "items": { "$ref": "#/$defs/slot" } },
+        "actionPlanHash": { "$ref": "#/$defs/hash" }
+      }
+    },
+    "scenario": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scenarioKey", "alias", "primaryFamily", "authorized", "executionStatus", "oracleHash", "effectBoundaryHash", "actionPlan"],
+      "properties": {
+        "scenarioKey": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "alias": { "const": "01" },
+        "primaryFamily": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "authorized": { "const": false },
+        "executionStatus": { "const": "NOT_RUN" },
+        "oracleHash": { "$ref": "#/$defs/hash" },
+        "effectBoundaryHash": { "$ref": "#/$defs/hash" },
+        "actionPlan": { "$ref": "#/$defs/actionPlan" }
+      }
+    }
+  }
+}

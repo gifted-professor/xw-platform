@@ -1,5 +1,5 @@
 // Upper-layer Control Plane client. This is the only package Gateway/CLI may use
-// to talk to device sessions. It never opens the control database, ADB, or the transport port.
+// to talk to device sessions. It never opens durable authority storage or a raw device transport.
 
 export class ControlClient {
   constructor({ baseUrl, token, fetchImpl = fetch } = {}) {
@@ -77,5 +77,28 @@ export class ControlClient {
 
   m6Closeout(input = {}) {
     return this.#request("POST", "/control/v1/m6/frames/closeout", { body: input });
+  }
+
+  // --- M6 Gate-F operator namespace ---------------------------------------
+  // This remains an HTTP-only client. It never opens durable authority storage and never
+  // writes an epoch, fence, or current.json pointer locally.
+  m6GateFStatus() {
+    return this.#request("GET", "/control/v1/internal/m6/gate-f/status");
+  }
+
+  m6GateFPreflight(input = {}) {
+    return this.#request("POST", "/control/v1/internal/m6/gate-f/preflight", { body: input });
+  }
+
+  m6GateFActivate(input = {}) {
+    return this.#request("POST", "/control/v1/internal/m6/gate-f/activate", { body: input });
+  }
+
+  m6GateFClose(input = {}) {
+    return this.#request("POST", "/control/v1/internal/m6/gate-f/close", { body: input });
+  }
+
+  m6GateFReconcile(input = {}) {
+    return this.#request("POST", "/control/v1/internal/m6/gate-f/reconcile", { body: input });
   }
 }

@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "xw.m6-gate-f-artifact-catalog.v1.schema.json",
+  "title": "M6 Gate-F Five-Window Artifact Catalog v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaId", "catalogHash", "release", "entries"],
+  "properties": {
+    "schemaId": { "const": "xw.m6-gate-f-artifact-catalog.v1" },
+    "catalogHash": { "$ref": "#/$defs/hash" },
+    "release": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["releaseId", "sourceCommit"],
+      "properties": {
+        "releaseId": { "type": "string", "pattern": "^[A-Za-z0-9._-]{1,128}$" },
+        "sourceCommit": { "type": "string", "pattern": "^[0-9a-f]{40}$" }
+      }
+    },
+    "entries": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "prefixItems": [
+        { "$ref": "#/$defs/shadow" },
+        { "$ref": "#/$defs/hotClose" },
+        { "$ref": "#/$defs/actionSmoke" },
+        { "$ref": "#/$defs/reliability" },
+        { "$ref": "#/$defs/smooth" }
+      ],
+      "items": false
+    }
+  },
+  "$defs": {
+    "hash": { "type": "string", "pattern": "^(?!0{64}$)[0-9a-f]{64}$" },
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["purpose", "scenarioManifestHash", "inventoryPath", "inventorySha256", "inventoryHash"],
+      "properties": {
+        "purpose": { "type": "string" },
+        "scenarioManifestHash": { "$ref": "#/$defs/hash" },
+        "inventoryPath": { "type": "string", "minLength": 3, "maxLength": 32767 },
+        "inventorySha256": { "$ref": "#/$defs/hash" },
+        "inventoryHash": { "$ref": "#/$defs/hash" }
+      }
+    },
+    "shadow": { "allOf": [{ "$ref": "#/$defs/entry" }, { "properties": { "purpose": { "const": "M6_4_SHADOW" } } }] },
+    "hotClose": { "allOf": [{ "$ref": "#/$defs/entry" }, { "properties": { "purpose": { "const": "M6_4_HOT_CLOSE" } } }] },
+    "actionSmoke": { "allOf": [{ "$ref": "#/$defs/entry" }, { "properties": { "purpose": { "const": "M6_4_ACTION_SMOKE" } } }] },
+    "reliability": { "allOf": [{ "$ref": "#/$defs/entry" }, { "properties": { "purpose": { "const": "M6_4_RELIABILITY" } } }] },
+    "smooth": { "allOf": [{ "$ref": "#/$defs/entry" }, { "properties": { "purpose": { "const": "M6_4_SMOOTH" } } }] }
+  }
+}

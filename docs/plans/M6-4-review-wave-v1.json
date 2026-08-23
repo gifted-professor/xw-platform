@@ -1,0 +1,68 @@
+{
+  "schemaId": "xw.multi-model-plan-review-wave.v1",
+  "mode": "PLAN_REVIEW",
+  "riskTier": "CRITICAL",
+  "packet": {
+    "planSha256": "ec5e7e6959e38d150c468c7f8796f5ecf13fc51d8e552f2258503ecff79fe6e1",
+    "contextSha256": "12118f7d1c9c4881eee6f97ba63e664a7017025b6383d483e16ed73a9d70bfb1",
+    "packetSha256": "cacf63bd61f06dd9962c233146057bcf3e3bec11320280bb1705c08fdc5e4b90"
+  },
+  "route": {
+    "gptModel": "gpt-5.6-sol",
+    "reasoningEffort": "max",
+    "externalRoles": [
+      "coverage",
+      "adversarial"
+    ],
+    "fullReviewWaves": 1,
+    "consolidatedRewrites": 1,
+    "terminalAfterRun": true
+  },
+  "externalBatch": {
+    "status": "BLOCKED_PRE_DISCLOSURE",
+    "reasonCode": "EXPLICIT_EXTERNAL_DISCLOSURE_APPROVAL_REQUIRED",
+    "packetDisclosed": false,
+    "criticCallsStarted": 0,
+    "outputDirectoryCreated": false,
+    "reportsFabricated": false
+  },
+  "fallback": {
+    "status": "COMPLETED",
+    "kind": "LOCAL_ROUTED_GPT_FALLBACK",
+    "model": "gpt-5.6-sol",
+    "reasoningEffort": "max",
+    "networkUsed": false,
+    "filesEdited": false,
+    "packetHashesVerified": true,
+    "verdict": "needs_changes",
+    "confidence": "high",
+    "findings": [
+      {
+        "id": "M64-AUTH-001",
+        "severity": "P1",
+        "claim": "One-shot action authority is not explicitly bound to an exact server primitive and intent-specific target-eligibility predicate.",
+        "minimalChange": "Freeze an exact primitive, intent/policy hash, trusted-parameter hash and deterministic semantic target predicate per action slot, and bind the slot spec through every authority and receipt artifact."
+      },
+      {
+        "id": "M64-FRESH-002",
+        "severity": "P1",
+        "claim": "Frame freshness and UI identity can lapse after the last mandatory check but before raw I/O.",
+        "minimalChange": "Bind a monotonic dispatch deadline and UI generation into tx#2/consumption evidence and run an immediate TCB-side pre-I/O guard."
+      },
+      {
+        "id": "M64-ENV-003",
+        "severity": "P1",
+        "claim": "Provider qualification and canary authority are not locked to the target app/device UI environment.",
+        "minimalChange": "Add a private target-environment attestation and qualification set, bind their hashes into locks and action evidence, and reject runtime drift."
+      },
+      {
+        "id": "M64-EFFECT-004",
+        "severity": "P1",
+        "claim": "The zero persistent/public side-effect requirement lacks an operational boundary and independent oracle.",
+        "minimalChange": "Freeze per-family effect boundaries, independent pre/post sources and reset obligations; unresolved or unobservable state must follow an owner-selected policy rather than UI inference."
+      }
+    ]
+  },
+  "batchStatus": "DEGRADED_GPT_FALLBACK",
+  "additionalReviewWaveAllowed": false
+}

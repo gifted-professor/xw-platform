@@ -607,7 +607,7 @@ test("fresh and v15 databases land on current schema; newer versions fail closed
   writeV15Fixture(v15Path);
   const upgraded = new StateStore({ dbPath: v15Path });
   try {
-    assert.equal(upgraded.db.prepare("PRAGMA user_version").get().user_version, 18);
+    assert.equal(upgraded.db.prepare("PRAGMA user_version").get().user_version, 20);
     assert.ok(upgraded.db.prepare("PRAGMA table_info(sessions)").all().some((column) => column.name === "session_kind"));
     assert.ok(upgraded.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='device_session_observations'").get());
     assert.equal(upgraded.db.prepare("SELECT status FROM jobs WHERE job_id='job_v15'").get().status, "succeeded");

@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:xw:contract:m6:grounding-decision:v2",
+  "title": "xw.grounding-decision.v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaId", "decisionRef", "operationKey", "disposition", "target", "bindings"],
+  "properties": {
+    "schemaId": { "const": "xw.grounding-decision.v2" },
+    "decisionRef": { "$ref": "#/$defs/hash" },
+    "operationKey": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "disposition": { "enum": ["ALLOW_ONCE", "REPLAN", "HARD_STOP"] },
+    "target": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "frameId", "blockId"],
+          "properties": { "kind": { "const": "block" }, "frameId": { "$ref": "#/$defs/hash" }, "blockId": { "$ref": "#/$defs/hash" } }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "frameId", "pageFingerprint", "focusHash"],
+          "properties": { "kind": { "const": "screen" }, "frameId": { "$ref": "#/$defs/hash" }, "pageFingerprint": { "$ref": "#/$defs/hash" }, "focusHash": { "$ref": "#/$defs/hash" } }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind"],
+          "properties": { "kind": { "const": "none" } }
+        }
+      ]
+    },
+    "bindings": {
+      "type": "object", "additionalProperties": false,
+      "required": ["runId", "sessionId", "leaseId", "gateEpochHash", "gateGeneration", "grantHash", "stepId", "environmentAttestationHash"],
+      "properties": {
+        "runId": { "type": "string", "minLength": 1 },
+        "sessionId": { "type": "string", "minLength": 1 },
+        "leaseId": { "type": "string", "minLength": 1 },
+        "gateEpochHash": { "$ref": "#/$defs/hash" },
+        "gateGeneration": { "type": "integer", "minimum": 0 },
+        "grantHash": { "$ref": "#/$defs/hash" },
+        "stepId": { "type": "string", "minLength": 1 },
+        "environmentAttestationHash": { "$ref": "#/$defs/hash" }
+      }
+    }
+  },
+  "$defs": { "hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" } }
+}

@@ -1,0 +1,95 @@
+{
+  "schemaId": "xw.m6-4-baseline-preflight.v1",
+  "generatedAt": "2026-08-23T20:02:54.1471608+08:00",
+  "verdict": "LOCAL_BASELINE_READY_REMOTE_MERGE_PENDING",
+  "plan": {
+    "planV1Sha256": "ec5e7e6959e38d150c468c7f8796f5ecf13fc51d8e552f2258503ecff79fe6e1",
+    "planV2Sha256": "c0cedd7d605c8fffb8b8793c68782af3c455edb2ccb3e44d738cc7501d01d594",
+    "ownerDecisionSha256": "f4fd8f1224b7114c0ac5cffc89b5e576a7f4c5879ab44df156b3f5188902b27e",
+    "executionContractSha256": "1df83f34ac4862e6648e795d10026983c9dba2d233a133c6d7e5cc30442ca743"
+  },
+  "git": {
+    "branch": "codex/m6-4-grounded-action",
+    "localMergeCommit": "df16a0409a0997b01e378933d24ad737fde94e16",
+    "tree": "b91619930acbfaea218a6d3319eb8da38ad04732",
+    "parents": [
+      "80355d341d854212045c6c1ec62daffbaf3de766",
+      "0fa5ae7f366bf40da242bec824882658fc6596d4"
+    ],
+    "originMainObserved": "80355d341d854212045c6c1ec62daffbaf3de766",
+    "m6_3Candidate": "0fa5ae7f366bf40da242bec824882658fc6596d4",
+    "candidateReachable": true,
+    "candidatePreservedWithoutSquash": true,
+    "trackedDiffBeforePlanningArtifacts": false,
+    "stagedDiffBeforePlanningArtifacts": false,
+    "trackedExcludedPaths": [],
+    "remoteMainContainsCandidate": false,
+    "remoteIntegration": {
+      "status": "PENDING_EXPLICIT_DESTINATION_DISCLOSURE_AUTHORIZATION",
+      "pushStarted": false,
+      "contentDisclosed": false,
+      "destination": "https://github.com/gifted-professor/xw-platform.git"
+    }
+  },
+  "evidence": {
+    "m6_2Completion": {
+      "path": "C:/Users/Public/xw-runtime/m6-audit/m6-2-w9-completion-4ea1fa60.json",
+      "sha256": "7d6910c59656ba173869ff6454837c4bd0061eb6e24ebb50e165c01d6964bbbb"
+    },
+    "m6_3Completion": {
+      "path": "C:/Users/Public/xw-runtime/m6-audit/m6-3-completion-receipt.json",
+      "sha256": "fa143729fb6e08cbce9c2082802b840efe4c1488662215b01b58ad9daeda3a3f"
+    },
+    "m6_3ExecutionCompletion": {
+      "path": "C:/Users/Public/xw-runtime/m6-audit/multi-model-execution-completion-m6-3.json",
+      "sha256": "eca21f4c1b9c4c761ecba0871cf8894aef2239827e5a44ee71d88cfc12b40c27"
+    },
+    "m6_3Manifest": {
+      "path": "C:/Users/Public/xw-runtime/m6-audit/m6-3-gate-manifest.json",
+      "sha256": "5812c3608423c3a2665672188629f31dbe57dc74884888d61562c3e78fdbb4d1"
+    },
+    "m6_3Adjudication": {
+      "path": "C:/Users/Public/xw-runtime/m6-audit/m6-3-review-adjudication.json",
+      "sha256": "21001eef1542e12d1741755714234fa40c7690d9fba4ca9b85aed3a34c727839"
+    }
+  },
+  "runtime": {
+    "gate": {
+      "root": "C:/Users/Public/xw-runtime",
+      "gateId": "m6-gate",
+      "currentFileSha256": "597997f42f12f91e8d4d7abbbbb6054fa351e735272c48474f4838bb0065ed80",
+      "tailEpochHash": "481efc38a3f4e349af9dbe82eafc758d621ee04aebfe8d2ef1d0a420acd5fe22",
+      "chainLength": 2,
+      "mode": "CLOSED",
+      "status": "closed",
+      "releaseId": "xw-m6-2-w9-80355d3",
+      "sourceCommit": "80355d341d854212045c6c1ec62daffbaf3de766",
+      "locksFileSha256": "062b51cdc70c793c4191b69b8d8d3aa6d9e67708871153acf33ead28c505f407",
+      "issuerKeysFileSha256": "b98b5c19671f903236db18009dab38cfef4d40215d0443472b4fcad53e779bbb",
+      "lockHashes": {
+        "runtimeProfile": "c71c576c9617b55c9b1dfb84ff15893a524905c83266665668485fced34157a6",
+        "hardRedlinePolicy": "c739f40c00e1b840c87b44b2f02c2529d60f0b8c42743474286e5122d4e76831",
+        "groundingRuntime": "c0f791ce157bc371b0b51c1cdb49051db848a1ab9449593b7f4ba3f0985dec3e"
+      },
+      "liveActionsEnabled": false
+    },
+    "resourceProbe": {
+      "path": "artifacts/m6-4/m6-4-baseline-resource-probe.json",
+      "fileSha256": "15f8d23bd16ba020a26f0abb8efd9114a9928d19c749aa0e080c2ec67373c566",
+      "probeSha256": "90585b997806086df973a77dfbc15a2ad6af725e8808b9985168a80a54f805af",
+      "counts": {
+        "activeJobs": 0,
+        "activeSessions": 0,
+        "activeLeases": 0,
+        "pendingApprovals": 0,
+        "actionCount": 0
+      },
+      "allZero": true
+    }
+  },
+  "entryDecision": {
+    "gateAReadOnlyAndFakeTransportPreparationAllowed": true,
+    "productCodeAllowed": false,
+    "reasonProductCodeNotYetAllowed": "All four Gate A blocker spikes must pass, and remote main integration remains unproven."
+  }
+}

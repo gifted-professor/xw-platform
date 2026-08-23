@@ -1,0 +1,55 @@
+{
+  "schemaId": "xw.multi-model-plan-review-packet.v1",
+  "reviewMode": "PLAN_REVIEW",
+  "status": "FROZEN",
+  "frozenAt": "2026-08-23T19:17:11.0971712+08:00",
+  "riskTierCandidate": "CRITICAL",
+  "authorizationMode": "fix-once",
+  "implementationAuthorized": false,
+  "liveAuthorized": false,
+  "baseline": {
+    "branch": "codex/m6-3-dsh-replay",
+    "commit": "0fa5ae7f366bf40da242bec824882658fc6596d4",
+    "tree": "b91619930acbfaea218a6d3319eb8da38ad04732",
+    "parent": "80355d341d854212045c6c1ec62daffbaf3de766"
+  },
+  "artifact": {
+    "path": "docs/plans/M6-4-single-alias-grounded-action-plan-v1.md",
+    "bytes": 47009,
+    "sha256": "ec5e7e6959e38d150c468c7f8796f5ecf13fc51d8e552f2258503ecff79fe6e1"
+  },
+  "context": {
+    "path": "docs/plans/M6-4-plan-review-context-v1.md",
+    "bytes": 13208,
+    "sha256": "12118f7d1c9c4881eee6f97ba63e664a7017025b6383d483e16ed73a9d70bfb1"
+  },
+  "packetHash": {
+    "algorithm": "sha256(utf8(artifact.sha256 + LF + context.sha256))",
+    "sha256": "cacf63bd61f06dd9962c233146057bcf3e3bec11320280bb1705c08fdc5e4b90"
+  },
+  "reviewers": [
+    "coverage",
+    "adversarial"
+  ],
+  "route": {
+    "riskTier": "CRITICAL",
+    "gptModel": "gpt-5.6-sol",
+    "reasoningEffort": "max",
+    "fullReviewWaves": 1,
+    "consolidatedRewrites": 1,
+    "terminalAfterRun": true
+  },
+  "openPreReviewDecisionRecords": [
+    "M6-4-A01",
+    "M6-4-A02"
+  ],
+  "excluded": [
+    ".m6-3-spike/",
+    "profiles/",
+    "sessions/",
+    "node_modules/",
+    "credentials",
+    "device-private-state",
+    "raw-coordinates"
+  ]
+}

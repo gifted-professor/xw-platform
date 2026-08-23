@@ -4,6 +4,7 @@
   "runtimeRoot": "C:\\Users\\Public\\xw-runtime",
   "runtimeProfile": "legacy_compat",
   "directories": [
+    "config",
     "releases",
     "state/control-plane",
     "state/control-plane/fast-operator",
@@ -31,6 +32,16 @@
     {
       "path": "state/orchestrator/registry.db",
       "kind": "mutable-state",
+      "required": true
+    },
+    {
+      "path": "config/m6-c1-runtime.v1.json",
+      "kind": "non-secret-runtime-binding",
+      "required": true
+    },
+    {
+      "path": "config/m6-c1-qualification-bootstrap.v1.json",
+      "kind": "non-secret-qualification-bootstrap-binding",
       "required": true
     },
     {
@@ -62,6 +73,38 @@
     "02": 17897,
     "03": 17898,
     "04": 17896
+  },
+  "m6C1": {
+    "schemaId": "xw.runtime.m6-c1-launch-contract.v1",
+    "runtimeModes": [
+      "QUALIFICATION_ONLY",
+      "FINAL"
+    ],
+    "bindingPath": "config/m6-c1-runtime.v1.json",
+    "bindingSchemaId": "xw.runtime.m6-c1-runtime.v1",
+    "qualificationBindingPath": "config/m6-c1-qualification-bootstrap.v1.json",
+    "qualificationBindingSchemaId": "xw.runtime.m6-c1-qualification-bootstrap.v1",
+    "providerBaseUrl": "https://api.deepseek.com",
+    "controlPlaneHost": "127.0.0.1",
+    "controlPlanePort": 17920,
+    "healthUrl": "http://127.0.0.1:17920/control/v1/health",
+    "gateStatusUrl": "http://127.0.0.1:17920/control/v1/internal/m6/gate-f/status",
+    "nodeExecutable": "D:\\Program Files\\Node\\node.exe",
+    "nodeVersion": "24.11.1",
+    "requiredSecretEnvironment": [
+      "DEEPSEEK_API_KEY",
+      "XW_M6_GATE_F_OPERATIONS_TOKEN",
+      "XW_M6_LIVE_ENTRY_TOKEN"
+    ],
+    "requiredOpaqueEnvironment": [
+      "XW_M6_ACCOUNT_ISOLATION_BINDING_HASH"
+    ],
+    "qualificationRequiredSecretEnvironment": [
+      "XW_M6_GATE_F_OPERATIONS_TOKEN"
+    ],
+    "qualificationRequiredOpaqueEnvironment": [
+      "XW_M6_ACCOUNT_ISOLATION_BINDING_HASH"
+    ]
   },
   "scheduledTasks": [
     {

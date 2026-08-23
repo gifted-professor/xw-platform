@@ -213,7 +213,7 @@
     },
     {
       "path": "services/control-plane/apps/vision/adapter.mjs",
-      "sha256": "435676f83846ea85be0af4fb61145c2b6983533758e1fd08691028e2e9471106",
+      "sha256": "634ea9c55ed6cc3d6c181fc6fd90c083dc5a54e1b9b8af1130070721d5cbdc15",
       "role": "vision app adapter：语义/视觉 resolve 安全闸 dry-run（默认不 tap）",
       "externalPaths": [],
       "externalDependencies": [

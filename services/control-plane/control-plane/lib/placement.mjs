@@ -73,9 +73,23 @@ export function normalizePlacementRequest({ deviceId = null, placement = {} } = 
 }
 
 export function assertCapabilityRoutable(capability, { invocation = "job", canary = false } = {}) {
+  const invocationMode = invocation === "session_action" ? "session"
+    : invocation === "composite_action_session" ? "composite_action" : invocation;
+  const allowedModes = capability.invocationPolicy?.allowedModes;
+  if (Array.isArray(allowedModes) && !allowedModes.includes(invocationMode)) {
+    throw new ControlPlaneError(
+      "CAPABILITY_INVOCATION_FORBIDDEN",
+      `${capability.id} does not permit ${invocationMode} invocation`,
+      { status: 403, details: { capabilityId: capability.id, invocation: invocationMode } },
+    );
+  }
   const availability = capability.availability ?? "implemented";
+  const formalQualificationJob = capability.id === "xiaowei.m6.qualify_environment"
+    && invocation === "job" && canary === true
+    && Array.isArray(allowedModes) && allowedModes.length === 1 && allowedModes[0] === "job";
   const canaryRoutable = availability === "canary_only"
-    && ["session", "session_action"].includes(invocation)
+    && (formalQualificationJob
+      || ["session", "session_action", "composite_action", "composite_action_session"].includes(invocation))
     && canary;
   if (!ROUTABLE_AVAILABILITY.has(availability) && !canaryRoutable) {
     throw new ControlPlaneError(
@@ -118,7 +132,10 @@ export function selectPlacement({
     if (!requiredTags.every((tag) => profile.tags.includes(tag))) return false;
     return true;
   });
-  const acquiringSession = invocation === "session";
+  // `composite_action` is an internal-only production-entry mode. It owns the
+  // same exclusive device lease as a session, while remaining distinct from
+  // the public `session` invocation policy in the capability contract.
+  const acquiringSession = invocation === "session" || invocation === "composite_action_session";
   const eligible = acquiringSession
     ? matching.filter((candidate) => candidate.effectiveLoad === 0)
     : matching;

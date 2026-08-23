@@ -49,6 +49,23 @@ export function decideCapabilityPolicy(capability, context = {}) {
     });
   }
 
+  const invocationMode = invocation === "session_action"
+    ? "session"
+    : invocation === "qualification_job" ? "job" : invocation;
+  const allowedModes = capability.invocationPolicy?.allowedModes;
+  if (Array.isArray(allowedModes) && !allowedModes.includes(invocationMode)) {
+    return makeDecision({
+      decision: "block",
+      reasonCode: "CAPABILITY_INVOCATION_FORBIDDEN",
+      decisionId,
+      evaluatedAt,
+      subject: baseSubject,
+      effect,
+      policyMode,
+      capability,
+    });
+  }
+
   if (capability.exposure === "internal" && invocation === "job") {
     return makeDecision({
       decision: "block",
@@ -116,7 +133,8 @@ export function decideCapabilityPolicy(capability, context = {}) {
     });
   }
 
-  if ((LOW_MATURITY.has(capability.maturity) || mode === "lab_only") && (!canary || invocation !== "session")) {
+  if ((LOW_MATURITY.has(capability.maturity) || mode === "lab_only")
+    && (!canary || !["session", "qualification_job"].includes(invocation))) {
     return makeDecision({
       decision: "block",
       reasonCode: "CANARY_SESSION_REQUIRED",

@@ -73,6 +73,9 @@ const EFFECT_INTENT_SCHEMA_PATH = join(moduleDir, "..", "schema", "effect-intent
 const DEFAULT_ADR_0008_PATH = join(REPO_ROOT, "docs", "adr", "0008-mission-driven-exploration-authorization.md");
 const DEFAULT_ADR_0009_PATH = join(REPO_ROOT, "docs", "adr", "0009-standing-grant-delegation.md");
 const DEFAULT_ADR_0010_PATH = join(REPO_ROOT, "docs", "adr", "0010-standing-grant-discovery-session.md");
+const M6_QUALIFICATION_CAPABILITY_ID = "xiaowei.m6.qualify_environment";
+const M6_QUALIFICATION_ACTOR_ID = "operator:m6-target-environment-qualification";
+const M6_QUALIFICATION_SUBMIT_AUTHORITY = Symbol("m6-qualification-submit-authority");
 
 // Load the canonical effect-intent envelope schema once at module load so the runtime
 // validation is driven by the schema file (the source of truth), not a parallel copy.
@@ -148,10 +151,45 @@ function boundedQrMaskEvidence(value) {
   return result;
 }
 
+function boundedM6EnvironmentQualification(value) {
+  const attestation = value?.attestation;
+  const qualification = value?.qualification;
+  const exactKeys = (record, keys) => record && typeof record === "object" && !Array.isArray(record)
+    && Object.keys(record).sort().join("\0") === [...keys].sort().join("\0");
+  const hash = (entry) => /^[0-9a-f]{64}$/u.test(entry || "");
+  const attestationKeys = [
+    "accessibilityHash", "accountIsolationHash", "appBuildHash", "appPackageHash",
+    "attestationHash", "capturedAt", "displayHash", "expiresAt", "imeHash",
+    "localeThemeHash", "osBuildHash", "schemaId", "signingHash",
+  ];
+  const qualificationKeys = [
+    "actionCount", "alias", "capturedAt", "commandRegistryHash", "effectBoundary",
+    "expiresAt", "gateFEligible", "qualifiedAttestationHashes", "rawDeviceIdentityPresent",
+    "sampleCount", "schemaId", "secretMaterialPresent", "status",
+  ];
+  if (!exactKeys(value, ["attestation", "qualification"])
+    || !exactKeys(attestation, attestationKeys) || !exactKeys(qualification, qualificationKeys)
+    || attestation.schemaId !== "xw.m6-target-environment-attestation.v1"
+    || qualification.schemaId !== "xw.m6-environment-qualification.v1"
+    || qualification.status !== "QUALIFIED" || qualification.gateFEligible !== true
+    || qualification.alias !== "01" || qualification.effectBoundary !== "READ_ONLY"
+    || qualification.sampleCount !== 2 || qualification.actionCount !== 0
+    || qualification.secretMaterialPresent !== false || qualification.rawDeviceIdentityPresent !== false
+    || !hash(attestation.attestationHash) || !hash(qualification.commandRegistryHash)
+    || Object.entries(attestation).some(([key, entry]) => key.endsWith("Hash") && !hash(entry))
+    || !Array.isArray(qualification.qualifiedAttestationHashes)
+    || qualification.qualifiedAttestationHashes.length !== 1
+    || qualification.qualifiedAttestationHashes[0] !== attestation.attestationHash
+    || qualification.capturedAt !== attestation.capturedAt
+    || qualification.expiresAt !== attestation.expiresAt) return undefined;
+  return structuredClone({ attestation, qualification });
+}
+
 function resultSummary(execution, verification, restoration, error = null) {
   const out = execution?.output;
   const transportEvidence = boundedTransportEvidence(out?.transportEvidence);
   const qrMaskEvidence = boundedQrMaskEvidence(out?.qrMask);
+  const m6EnvironmentQualification = boundedM6EnvironmentQualification(out?.m6EnvironmentQualification);
   return {
     vendorCode: execution?.vendorCode ?? null,
     // 执行细节摘要（ok/step/verified/counts/text），便于 VERIFICATION_FAILED 时回溯，不落完整 dump
@@ -172,6 +210,7 @@ function resultSummary(execution, verification, restoration, error = null) {
           .filter((k) => out[k] !== undefined)
           .map((k) => [k, out[k]])),
         ...(qrMaskEvidence ? { qrMask: qrMaskEvidence } : {}),
+        ...(m6EnvironmentQualification ? { m6EnvironmentQualification } : {}),
       }
       : null,
     ...(transportEvidence ? { transportEvidence } : {}),
@@ -1132,6 +1171,10 @@ export class ControlPlane {
     }
   }
 
+  submitM6QualificationJob(input) {
+    return this.submitJob({ ...input, [M6_QUALIFICATION_SUBMIT_AUTHORITY]: true });
+  }
+
   submitJob({
     idempotencyKey,
     actorId,
@@ -1143,7 +1186,16 @@ export class ControlPlane {
     expectedCapabilityContractHash = undefined,
     expectedCapabilityContractHashAlgorithm = undefined,
     expectedImplementationClosureHash = undefined,
+    [M6_QUALIFICATION_SUBMIT_AUTHORITY]: qualificationSubmitAuthority = false,
   }) {
+    if ((capabilityId === M6_QUALIFICATION_CAPABILITY_ID) !== (qualificationSubmitAuthority === true)
+      || (qualificationSubmitAuthority === true && actorId !== M6_QUALIFICATION_ACTOR_ID)) {
+      throw new ControlPlaneError(
+        "M6_QUALIFICATION_ONLY_REQUIRED",
+        "formal target qualification is available only through the authenticated qualification-only route",
+        { status: 403 },
+      );
+    }
     const capability = this.capabilities.validateParams(capabilityId, params);
     // RI-04 submit lock: compare Worker's bound expected hashes before any Job/operation row.
     assertExpectedImplementationAtSubmit({
@@ -1169,7 +1221,7 @@ export class ControlPlane {
     // Foundation: request-scoped authorization; no ordinary waiting_approval jobs.
     const policy = evaluateCapabilityPolicy(capability, {
       canary,
-      invocation: "job",
+      invocation: qualificationSubmitAuthority === true ? "qualification_job" : "job",
       policyMode: requestPolicyMode,
       actorId,
       enforce: false,
@@ -1179,7 +1231,10 @@ export class ControlPlane {
     const createDeviceId = pilotInScope ? routeRequest.deviceId : deviceId;
     const createPlacement = pilotInScope ? routeRequest.placement : placement;
     this.evidence.assertCapacity(this.capacityBypassOpts(policy.externalEffect, requestPolicyMode));
-    const created = this.state.createJob({
+    const createStoredJob = qualificationSubmitAuthority === true
+      ? this.state.createM6QualificationJob.bind(this.state)
+      : this.state.createJob.bind(this.state);
+    const created = createStoredJob({
       idempotencyKey,
       actorId,
       authorityNodeId: this.authorityNodeId,

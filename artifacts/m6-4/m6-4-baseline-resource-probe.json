@@ -1,0 +1,26 @@
+{
+  "schemaId": "xw.m6-resource-probe.v1",
+  "activeJobStatuses": [
+    "running",
+    "verifying",
+    "restoring"
+  ],
+  "counts": {
+    "activeJobs": 0,
+    "activeSessions": 0,
+    "activeLeases": 0,
+    "pendingApprovals": 0,
+    "actionCount": 0
+  },
+  "leaked": {
+    "activeJobs": [],
+    "activeSessions": [],
+    "activeLeases": [],
+    "pendingApprovals": [],
+    "mutatedActionSessionIds": []
+  },
+  "allZero": true,
+  "dbPath": "C:\\Users\\Public\\xw-runtime\\state\\control-plane\\control.db",
+  "capturedAt": "2026-08-23T12:02:45.097Z",
+  "probeSha256": "90585b997806086df973a77dfbc15a2ad6af725e8808b9985168a80a54f805af"
+}

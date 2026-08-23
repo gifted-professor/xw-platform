@@ -1,0 +1,20 @@
+{
+  "schemaId": "xw.m6-4-resource-snapshot.v1",
+  "source": "read-only Control Plane SQLite queries",
+  "counts": {
+    "activeJobs": 0,
+    "activeSessions": 0,
+    "activeLeases": 0,
+    "pendingApprovals": 0,
+    "actionCount": 0
+  },
+  "allZero": true,
+  "gate": {
+    "mode": "CLOSED",
+    "status": "closed",
+    "liveActionsEnabled": false,
+    "currentFileSha256": "597997f42f12f91e8d4d7abbbbb6054fa351e735272c48474f4838bb0065ed80",
+    "unchangedFromBaseline": true
+  },
+  "snapshotSha256": "500fbc86ea6b4e30878b5a710d6560175ecc86e608b3314586769fbb439bdb1f"
+}

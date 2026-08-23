@@ -6,6 +6,41 @@ on:
   pull_request:
 
 jobs:
+  m6-3-replay:
+    name: M6-3 real replay ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    defaults:
+      run:
+        working-directory: integrations/dsh-xw
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: integrations/dsh-xw/package-lock.json
+
+      - name: Exact clean install
+        run: npm ci --ignore-scripts
+
+      - name: Inventory and lock gate
+        working-directory: .
+        run: node tools/m6/dsh-inventory-check.mjs
+
+      - name: Real child, resume, fault and cleanup gates
+        run: npm run check && npm run test:functional
+
+      - name: Gate E real-route and warm-ack hard SLO
+        run: npm run test:gate-e
+
   offline:
     name: offline ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
@@ -24,6 +59,11 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "24"
+
+      - name: Windows M6-4 ACL inspector hard gate
+        if: runner.os == 'Windows'
+        timeout-minutes: 2
+        run: npm run test:m6-4:acl
 
       - name: Syntax check (no install, no workspaces)
         run: npm run check
@@ -65,6 +105,14 @@ jobs:
       - name: M6 contract and inventory tests
         timeout-minutes: 4
         run: npm run test:m6
+
+      - name: Exact DSH dependency install for M6-4
+        working-directory: integrations/dsh-xw
+        run: npm ci --ignore-scripts
+
+      - name: M6-4 grounded-action offline hard gate
+        timeout-minutes: 6
+        run: npm run ${{ runner.os == 'Windows' && 'test:m6-4:offline-core' || 'test:m6-4:offline' }}
 
       - name: M6-2 zero-live offline frame capture
         timeout-minutes: 6

@@ -1,0 +1,120 @@
+{
+  "schema": "multi-model-execution-route.v1",
+  "routeId": "m6-4-codex-direct-execution-v1",
+  "advisory_only": true,
+  "execute_authorized": true,
+  "plan_status": "READY_FOR_EXECUTION",
+  "plan_sha256": "68887b2f1eeae7c89e726f1a2bd6571bf665c719e8a50017bd1fadb2443b7d29",
+  "review_snapshot_sha256": "7f30179cf367a7d81f70f0ac53a79798160eb867f246394beac09d80a38c748b",
+  "owner_decision_sha256": "f4fd8f1224b7114c0ac5cffc89b5e576a7f4c5879ab44df156b3f5188902b27e",
+  "execution_contract_sha256": "1df83f34ac4862e6648e795d10026983c9dba2d233a133c6d7e5cc30442ca743",
+  "runtime": "codex",
+  "inventory_source": "current-thread-runtime",
+  "risk_tier": "CRITICAL",
+  "profiles": [
+    "agentic",
+    "long-horizon",
+    "security",
+    "terminal-heavy",
+    "device-gated"
+  ],
+  "cost_priority": "reliability",
+  "execution_unit": "WHOLE_PLAN",
+  "status": "USER_AUTHORIZED_DIRECT_EXECUTION",
+  "sourceBranch": "codex/m6-4-grounded-action",
+  "sourceCommit": "df16a0409a0997b01e378933d24ad737fde94e16",
+  "workingDirectory": ".worktrees/m6-4-integrated",
+  "authorization": {
+    "repositoryImplementation": true,
+    "offlineVerification": true,
+    "candidateCommit": true,
+    "gateAThroughE": true,
+    "gateFPreparation": true,
+    "gateFLiveWindow": false,
+    "productionLiveAction": false
+  },
+  "sequence": [
+    {
+      "ordinal": 1,
+      "gate": "A",
+      "name": "baseline-and-four-blocker-spikes",
+      "entry": "owner decision and contract hashes validate; isolated worktree contains M6-3 candidate; live gate is CLOSED",
+      "exit": "all four exact spike thresholds pass with independent evidence"
+    },
+    {
+      "ordinal": 2,
+      "gate": "B",
+      "name": "versioned-contracts-gate-fence-locks-profiles",
+      "entry": "Gate A receipt valid",
+      "exit": "mixed v1/v2 gate, locks v2, shared DB fence, normal/emergency close and replay/live profile separation pass"
+    },
+    {
+      "ordinal": 3,
+      "gate": "C",
+      "name": "grounding-runtime-provider-environment-effects-permits",
+      "entry": "Gate B evidence valid",
+      "exit": "one canonical GroundingRuntime, qualified provider, ActionSlotSpec, environment/effect evidence and durable permit state pass"
+    },
+    {
+      "ordinal": 4,
+      "gate": "D",
+      "name": "narrow-action-facade-ledger-three-transactions",
+      "entry": "Gate C evidence valid",
+      "exit": "StateStore v19, global claims, tx#1/tx#2/tx#3, typed transport, TCB guard, counter truth and no-retry recovery pass"
+    },
+    {
+      "ordinal": 5,
+      "gate": "E",
+      "name": "live-dsh-profile-canary-runner-hard-offline-ci",
+      "entry": "Gate D evidence valid",
+      "exit": "CODE_READY_GATE_CLOSED receipt valid, all hard suites pass, actionCount=0 and resources=0"
+    },
+    {
+      "ordinal": 6,
+      "gate": "F",
+      "name": "separately-authorized-alias01-staged-canary",
+      "entry": "exact live-window authorization binds release, locks, alias 01, manifests, expiry, operator and emergency-close authority; live agent entry and target environment are verified",
+      "exit": "M6_4_ACTION_CANARY_CLOSED receipt valid after exact 5/1/3/20/30 cohorts, all purpose epochs CLOSED and resources=0",
+      "currentlyAuthorized": false
+    },
+    {
+      "ordinal": 7,
+      "gate": "HANDOFF",
+      "name": "completion-audit-and-m6-5-entry",
+      "entry": "all execution-contract items and Gate F evidence are complete",
+      "exit": "candidate commit and completion index are reproducible; M6-5 handoff lists no unresolved M6-4 obligation except the A01 M6-6 WorkReceipt binding"
+    }
+  ],
+  "stopOn": [
+    "any plan, owner-decision or execution-contract hash mismatch",
+    "M6-3 candidate not reachable without squash",
+    "live gate not CLOSED during Gates A-E",
+    "any Gate A hard threshold miss",
+    "provider, model, environment, oracle, release or lock drift",
+    "raw authority, coordinate, ADB, DB, shell or legacy transport bypass reachable from M6",
+    "gate close/send not serializable on one StateStore fence",
+    "counter/ledger/receipt unable to distinguish not-sent from possible effect",
+    "payment, deletion, misclick, stale, duplicate, public or unenumerated effect",
+    "CAPTCHA, login challenge, platform risk control or identity verification",
+    "unknown effect followed by retry",
+    "resource or process residue"
+  ],
+  "contextRehydrationRequires": [
+    "exact Plan V1 and Plan V2 reload and hash verification",
+    "owner decision and execution contract reload and hash verification",
+    "current git commit/tree/status",
+    "completed command and acceptance-output ledger",
+    "current gate and resource state",
+    "unresolved contract item ledger"
+  ],
+  "completionRequires": [
+    "all contract items and required artifacts accounted for",
+    "all probe paths exercised on the final candidate",
+    "CODE_READY_GATE_CLOSED",
+    "M6_4_ACTION_CANARY_CLOSED",
+    "gate CLOSED and resources zero",
+    "candidate commit plus M6-5 handoff",
+    "no claim of M6_4_CLOSED_COMPLETE before M6-6 WorkReceipt binding"
+  ],
+  "reason": "The owner approved the reviewed M6-4 scope and direct repository execution. The route remains advisory and preserves the plan's separate exact authorization requirement for any real alias-01 live action."
+}

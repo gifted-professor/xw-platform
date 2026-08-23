@@ -15,7 +15,7 @@ import { EvidenceStore } from "../control-plane/lib/evidence-store.mjs";
 import { canonicalPaymentApprovalBytes, PaymentApprovalVerifier } from "../control-plane/lib/payment-approval-verifier.mjs";
 import { StateStore } from "../control-plane/lib/state-store.mjs";
 import { ControlRouter } from "../control-plane/router.mjs";
-import { createControlServer } from "../control-plane/server.mjs";
+import { createControlServer, shutdownControlServer } from "../control-plane/server.mjs";
 
 const tempBase = fileURLToPath(new URL("../control-plane/runtime", import.meta.url));
 mkdirSync(tempBase, { recursive: true });
@@ -1133,6 +1133,36 @@ test("bootstrap m6Enabled=off leaves M6 uninstalled; the M6 namespace refuses (5
       (e) => e.code === "M6_FACADE_UNAVAILABLE",
     );
   } finally { state.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test("production bootstrap fails closed when live callback oracle/selector/current-state dependencies are absent", () => {
+  const root = mkdtempSync(join(tempBase, "m6-live-entry-bootstrap-"));
+  const state = new StateStore({ dbPath: join(root, "control.db") });
+  const token = "m6-live-bootstrap-token-32-bytes-minimum";
+  try {
+    assert.throws(() => createControlPlaneRuntime({
+        state,
+        capabilities: new CapabilityRegistry([capability]),
+        adapters: new AdapterRegistry([{ id: "test", async execute() { return {}; }, async verify() { return { ok: true }; }, async restore() { return { ok: true }; } }]),
+        evidence: new EvidenceStore({ runsRoot: join(root, "runs"), state, minFreeBytes: 0, minExternalEffectFreeBytes: 0 }),
+        deviceConfigPath: join(root, "missing-devices.json"),
+        m6LiveEntryEnabled: true,
+        m6LiveEntryConfig: { internalToken: token },
+      }), /production callbacks require sealed state\/capability\/device\/evidence\/oracle\/selector\/guard dependencies/u);
+  } finally { state.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test("server shutdown drains HTTP before live-entry cleanup and closes state last", async () => {
+  const order = [];
+  await shutdownControlServer({
+    server: { close(callback) { order.push("http"); callback(); } },
+    runtime: {
+      m6LiveEntry: { async shutdown() { order.push("live-entry"); } },
+      control: { async stop() { order.push("control"); } },
+      state: { close() { order.push("state"); } },
+    },
+  });
+  assert.deepEqual(order, ["http", "live-entry", "control", "state"]);
 });
 
 test("bootstrap m6Enabled wires the closed facade; routes are observe-capture only", async () => {

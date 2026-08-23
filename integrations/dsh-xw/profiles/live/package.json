@@ -1,0 +1,7 @@
+{
+  "name": "xw-dsh-live-profile",
+  "version": "0.0.0-m6-4",
+  "private": true,
+  "type": "module",
+  "dsh": { "profile": { "bundles": [] } }
+}

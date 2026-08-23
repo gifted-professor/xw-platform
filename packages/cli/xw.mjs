@@ -50,6 +50,7 @@ function usage() {
 Token is read from XW_CONTROL_TOKEN or --token-file. Never pass tokens on argv, query, or stdout.
 xw m6 frame preflight|capture|status|closeout — closed M6-2 observe-capture (see: xw m6 frame --help)
 xw m6 epoch mint|activate|close|status|verify|rollback|aggregate-closeout — M6-2 offline gate operator tools (see: xw m6 epoch --help)
+xw m6 gate-f status|preflight|activate|normal-close|emergency-close|reconcile — Control-Plane-owned Gate F v2 operations
 xw m6 window manifest|snapshot — M6-2 W8/W9 live closeout offline inputs (see: xw m6 window --help)
 xw cutover collect|package|verify|preflight — offline release tools, see: xw cutover --help`;
 }
@@ -105,6 +106,12 @@ function readToken(argv) {
   const file = argOf(argv, "--token-file");
   if (file) return readFileSync(resolve(file), "utf8").trim();
   return process.env.XW_CONTROL_TOKEN || process.env.XHS_CONTROL_TOKEN || null;
+}
+
+function readGateFToken(argv) {
+  const file = argOf(argv, "--token-file");
+  if (file) return readFileSync(resolve(file), "utf8").trim();
+  return process.env.XW_M6_GATE_F_OPERATIONS_TOKEN || null;
 }
 
 function loadContext(argv) {
@@ -465,6 +472,7 @@ async function main(argv = process.argv.slice(2)) {
   if (argv[0] === "m6") {
     const sub = argv.slice(1);
     if (sub[0] === "epoch") return m6EpochMain(sub.slice(1));
+    if (sub[0] === "gate-f") return m6GateFMain(sub.slice(1));
     if (sub[0] === "window") return m6WindowMain(sub.slice(1));
     return m6FrameMain(sub);
   }
@@ -530,6 +538,120 @@ async function main(argv = process.argv.slice(2)) {
   }
   process.stderr.write(`${usage()}\n`);
   return 2;
+}
+
+function m6GateFUsage() {
+  return `xw m6 gate-f — loopback-only Control Plane Gate F v2 operator surface
+
+  xw m6 gate-f status [--control http://127.0.0.1:17920] [--token-file FILE]
+  xw m6 gate-f preflight --operation ACTIVATE --phase GROUNDING_ONLY|GROUNDED_ACTION
+                         --epoch FILE --authorization FILE
+  xw m6 gate-f preflight --operation NORMAL_CLOSE --epoch FILE
+                         --authorization FILE --reason CODE
+  xw m6 gate-f preflight --operation EMERGENCY_CLOSE --epoch FILE --reason CODE
+  xw m6 gate-f activate --phase GROUNDING_ONLY|GROUNDED_ACTION
+                       --epoch FILE --authorization FILE [--yes]
+  xw m6 gate-f normal-close --epoch FILE --authorization FILE --reason CODE [--yes]
+  xw m6 gate-f emergency-close --epoch FILE --reason CODE [--yes]
+  xw m6 gate-f reconcile --operation ACTIVATE|NORMAL_CLOSE|EMERGENCY_CLOSE
+                        --epoch FILE [--phase PHASE --authorization FILE | --reason CODE] --yes
+
+The epoch file is a public signed record containing its detached proof. The
+owner authorization is also public signed material; private keys and provider
+secrets are never accepted. Mutating commands perform preflight unless --yes is
+present. The CLI never opens durable authority storage or edits current.json.`;
+}
+
+function gateFError(message) {
+  process.stderr.write(`m6 gate-f: ${message}\n`);
+  return 2;
+}
+
+function gateFControlUrl(argv) {
+  const value = argOf(argv, "--control", process.env.XW_CONTROL_URL || "http://127.0.0.1:17920");
+  let parsed;
+  try { parsed = new URL(value); } catch { return null; }
+  if (parsed.protocol !== "http:" || parsed.hostname !== "127.0.0.1" || parsed.username || parsed.password
+    || parsed.search || parsed.hash || parsed.pathname !== "/") return null;
+  return parsed.href.replace(/\/$/u, "");
+}
+
+function readGateFJson(path, label) {
+  if (!path) throw Object.assign(new Error(`${label} file is required`), { code: "M6_GATE_F_CLI_INPUT_REQUIRED" });
+  try { return JSON.parse(readFileSync(resolve(path), "utf8")); } catch (cause) {
+    throw Object.assign(new Error(`${label} file is unavailable or malformed`), { code: "M6_GATE_F_CLI_INPUT_INVALID", cause });
+  }
+}
+
+function readGateFSignedEpoch(path) {
+  const record = readGateFJson(path, "signed epoch");
+  if (!record || typeof record !== "object" || Array.isArray(record)
+    || !record.proof || typeof record.proof !== "object" || Array.isArray(record.proof)) {
+    throw Object.assign(new Error("signed epoch file must contain an epoch plus proof"), { code: "M6_GATE_F_CLI_EPOCH_INVALID" });
+  }
+  const { proof, ...epoch } = record;
+  return { epoch, proof };
+}
+
+function gateFPackage(argv, command) {
+  const operation = command === "activate" ? "ACTIVATE"
+    : command === "normal-close" ? "NORMAL_CLOSE"
+      : command === "emergency-close" ? "EMERGENCY_CLOSE"
+        : argOf(argv, "--operation");
+  if (!["ACTIVATE", "NORMAL_CLOSE", "EMERGENCY_CLOSE"].includes(operation)) {
+    throw Object.assign(new Error("--operation must be ACTIVATE, NORMAL_CLOSE, or EMERGENCY_CLOSE"), { code: "M6_GATE_F_CLI_OPERATION_INVALID" });
+  }
+  const { epoch, proof } = readGateFSignedEpoch(argOf(argv, "--epoch"));
+  const active = operation === "ACTIVATE";
+  const authorizationRequired = active || operation === "NORMAL_CLOSE";
+  const phase = active ? argOf(argv, "--phase") : null;
+  if (active && !["GROUNDING_ONLY", "GROUNDED_ACTION"].includes(phase)) {
+    throw Object.assign(new Error("ACTIVATE requires --phase GROUNDING_ONLY or GROUNDED_ACTION"), { code: "M6_GATE_F_CLI_PHASE_INVALID" });
+  }
+  return {
+    authorization: authorizationRequired ? readGateFJson(argOf(argv, "--authorization"), "owner authorization") : null,
+    epoch,
+    operation,
+    phase,
+    proof,
+    reasonCode: active ? null : argOf(argv, "--reason"),
+  };
+}
+
+async function m6GateFMain(argv) {
+  const command = argv[0];
+  if (!command || has(argv, "--help")) {
+    process.stderr.write(`${m6GateFUsage()}\n`);
+    return has(argv, "--help") ? 0 : 2;
+  }
+  const baseUrl = gateFControlUrl(argv);
+  if (!baseUrl) return gateFError("--control must be an exact credential-free http://127.0.0.1 loopback URL");
+  const token = readGateFToken(argv);
+  if (typeof token !== "string" || token.length < 32) return gateFError("XW_M6_GATE_F_OPERATIONS_TOKEN or --token-file is required");
+  const client = new ControlClient({ baseUrl, token });
+  if (command === "status") {
+    emit(argv, redact(await client.m6GateFStatus()));
+    return 0;
+  }
+  if (!["preflight", "activate", "normal-close", "emergency-close", "reconcile"].includes(command)) {
+    process.stderr.write(`${m6GateFUsage()}\n`);
+    return 2;
+  }
+  let body;
+  try { body = gateFPackage(argv, command); } catch (error) { return gateFError(error.message); }
+  if (command === "preflight" || (!has(argv, "--yes") && command !== "reconcile")) {
+    const result = await client.m6GateFPreflight(body);
+    emit(argv, redact({ dryRun: true, ...result }));
+    return 0;
+  }
+  if (!has(argv, "--yes")) return gateFError("reconcile requires explicit --yes");
+  const result = command === "activate"
+    ? await client.m6GateFActivate(body)
+    : command === "reconcile"
+      ? await client.m6GateFReconcile(body)
+      : await client.m6GateFClose(body);
+  emit(argv, redact({ dryRun: false, ...result }));
+  return 0;
 }
 
 if (import.meta.url === `file://${process.argv[1].replaceAll("\\", "/")}` || process.argv[1]?.endsWith("xw.mjs")) {
@@ -617,7 +739,8 @@ function m6EpochUsage() {
 
 --m6-root defaults to XW_RUNTIME_ROOT then the platform canonical root.
 --issuer-keys defaults to <m6-root>/m6-gate/issuer-keys.json. Lock hashes are read
-from the pinned <m6-root>/m6-gate/locks.v1.json (absent -> M6_LOCKS_MISSING).
+from <m6-root>/m6-gate/<gate-id>/locks.v1.json, with the historical global
+<m6-root>/m6-gate/locks.v1.json as a legacy fallback (absent -> M6_LOCKS_MISSING).
 Every write is immutable (refuse-overwrite, atomic temp->fsync->rename).`;
 }
 
@@ -669,7 +792,7 @@ async function m6EpochMint(argv) {
   if (!keyFile) return epochErr("--key-file is required (operator ed25519 private key, off-repo)");
   const signer = resolveSigner(argv, issuerKeysPath);
   if (signer.error) return epochErr(signer.error);
-  const lockHashes = loadM6Locks(m6Root); // absent -> M6_LOCKS_MISSING fail-closed
+  const lockHashes = loadM6Locks(m6Root, { gateId }); // gate-local first; legacy global fallback
   // Parent defaults to the active tail (chain continuity); null for the first epoch.
   let parentHash = argOf(argv, "--parent-hash", null);
   if (parentHash === null) {
@@ -719,9 +842,24 @@ async function m6EpochActivate(argv) {
     }
   }
   const active = readActiveGate({ m6Root, gateId, issuerAllowlistPath: issuerKeysPath });
+  if (active.epochs.some((epoch) => epoch.schemaId !== "xw.m6-live-gate.v1")) {
+    return epochErr("v2 chains may be promoted or reconciled only through xw m6 gate-f; legacy activation is forbidden");
+  }
   const epochHash = explicitHash || (useLatest ? resolveLatestEpoch({ m6Root, gateId, issuerAllowlistPath: issuerKeysPath }) : null);
   if (!epochHash) return epochErr("--latest found no unactivated epoch binding to the current tail");
   if (active.chain.includes(epochHash)) return epochErr(`epoch ${epochHash} is already active`);
+  let candidate;
+  try {
+    const record = JSON.parse(readFileSync(join(m6Root, "m6-gate", gateId, "epochs", `${epochHash}.json`), "utf8"));
+    const { proof: ignoredProof, ...epoch } = record;
+    void ignoredProof;
+    candidate = epoch;
+  } catch {
+    return epochErr(`epoch ${epochHash} is unavailable or malformed`);
+  }
+  if (candidate.schemaId !== "xw.m6-live-gate.v1") {
+    return epochErr("v2 epochs may be promoted only through xw m6 gate-f; the legacy v1 CLI cannot edit their pointer");
+  }
   const newChain = [...active.chain, epochHash];
   const currentPath = join(m6Root, "m6-gate", gateId, "current.json");
   const plan = {
@@ -758,6 +896,9 @@ async function m6EpochClose(argv) {
   if (epochHash !== active.tailEpochHash) return epochErr("--epoch-hash must be the current tail epoch (close seals the active gate)");
   const target = active.epochs.find((e) => e.epochHash === epochHash);
   if (!target) return epochErr(`epoch ${epochHash} is not in the active chain`);
+  if (target.schemaId !== "xw.m6-live-gate.v1") {
+    return epochErr("v2 epochs may be closed only through xw m6 gate-f; the legacy v1 CLI cannot edit their pointer");
+  }
   const aggregatePath = join(m6Root, "m6-gate", gateId, "aggregate", `${aggregateSealHash}.json`);
   if (!existsSync(aggregatePath)) return epochErr(`aggregate seal not found: ${aggregateSealHash}`);
   const aggregate = JSON.parse(readFileSync(aggregatePath, "utf8"));
@@ -849,6 +990,9 @@ async function m6EpochRollback(argv) {
   if (signer.error) return epochErr(signer.error);
   const promotedAt = argOf(argv, "--promoted-at", nowIso());
   const active = readActiveGate({ m6Root, gateId, issuerAllowlistPath: issuerKeysPath });
+  if (active.epochs.some((epoch) => epoch.schemaId !== "xw.m6-live-gate.v1")) {
+    return epochErr("v2 chains may be reconciled or closed only through xw m6 gate-f; legacy rollback is forbidden");
+  }
   const target = active.epochs.find((epoch) => epoch.epochHash === to);
   if (!target || target.mode !== "CLOSED") return epochErr("--to must identify a prior CLOSED epoch in the active chain; OBSERVE_ONLY rollback is forbidden");
   const rollbackEpoch = buildEpochRecord({
@@ -896,6 +1040,9 @@ async function m6EpochAggregateCloseout(argv) {
   const active = readActiveGate({ m6Root, gateId, issuerAllowlistPath: issuerKeysPath });
   if (active.chain.length === 0) return epochErr("gate has no active epoch — mint + activate an OBSERVE_ONLY epoch first");
   const tailEpoch = active.epochs[active.epochs.length - 1];
+  if (tailEpoch.schemaId !== "xw.m6-live-gate.v1") {
+    return epochErr("v2 cohort closeout is outside the legacy 80-frame aggregate tool; use the Gate-F close package");
+  }
   if (tailEpoch.mode !== "OBSERVE_ONLY") return epochErr(`active tail epoch is ${tailEpoch.mode}, not OBSERVE_ONLY — aggregate closeout seals an observe window`);
 
   // Read the audit trail: <attemptId>.json = { receipt, frame } and

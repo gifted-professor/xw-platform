@@ -1,0 +1,79 @@
+{
+  "schemaId": "xw.m6-owner-execution-authorization.v1",
+  "recordId": "m6-4-live-m6-5-execution-20260823",
+  "status": "APPROVED",
+  "issuedAt": "2026-08-23T22:33:18.7701808+08:00",
+  "actor": {
+    "kind": "THREAD_OWNER",
+    "id": "codex-thread-user",
+    "threadId": "01a02ee6-4441-7612-a6f9-a908e0d494cc"
+  },
+  "source": {
+    "kind": "EXPLICIT_USER_MESSAGE",
+    "summary": "Owner instructed Codex to start now and execute the complete frozen M6-4 live plus M6-5 Plan V2."
+  },
+  "plan": {
+    "planV1Path": "C:/Users/windows 10/.codex/visualizations/2026/08/23/01a02ee6-4441-7612-a6f9-a908e0d494cc/M6-4-live-M6-5-execution-plan-v1.md",
+    "planV1Sha256": "8b5800daef9a891a21240b0ef165be31a392097759ae3a144f192610ca07a1aa",
+    "planV2Path": "C:/Users/windows 10/.codex/visualizations/2026/08/23/01a02ee6-4441-7612-a6f9-a908e0d494cc/M6-4-live-M6-5-execution-plan-v2.md",
+    "planV2Sha256": "d86e705bb7a8b3c6cb07a5a080f6ef0a9f9fb2dd6ddfa512ec3363769fb2056d",
+    "compositePlanSha256": "25003ddcb79596c6e4775c59e6a332d72442517db0761daff645e2dcfa5b9e3a"
+  },
+  "repository": {
+    "remoteName": "origin",
+    "destination": "https://github.com/gifted-professor/xw-platform.git",
+    "pushPullRequestMergeAuthorized": true,
+    "requiredReleasePurity": "M6-C1_ONLY_BEFORE_M6-5"
+  },
+  "authorization": {
+    "repositoryImplementation": true,
+    "offlineTests": true,
+    "candidateCommits": true,
+    "pushPullRequestMerge": true,
+    "buildAndDeployPureM6C1": true,
+    "configuredProviderQualification": true,
+    "secureSecretInjectionOnly": true,
+    "alias01ReadOnlyQualification": true,
+    "alias01BoundedLiveCanary": true,
+    "gateEpochMintActivateClose": true,
+    "m6_5ImplementationAfterM6_4LiveExit": true,
+    "m6_6OrM6_7Scope": false,
+    "paymentOrDelete": false,
+    "publicSocialAccountSecuritySettingsDraftEffects": false
+  },
+  "liveBoundary": {
+    "aliasAllowlist": ["01"],
+    "effectBoundary": "BOUNDED_READ_TRACE",
+    "permittedActionFamilies": [
+      "observe",
+      "open_app",
+      "back",
+      "wait",
+      "tap",
+      "scroll",
+      "type_search_text"
+    ],
+    "requiresQualifiedModelProfile": true,
+    "requiresQualifiedTargetEnvironment": true,
+    "requiresMainBuiltSealedRelease": true,
+    "requiresExactSignedLiveWindowAuthorization": true,
+    "thisRecordIsNotLiveWindowAuthorization": true,
+    "requiresEmergencyCloseBeforeActivation": true
+  },
+  "secrets": {
+    "mayUsePreconfiguredSecretChannel": true,
+    "mayCreateOrExposeSecret": false,
+    "mayPersistSecretInRepositoryReceiptLogOrModelPacket": false
+  },
+  "validity": {
+    "mode": "UNTIL_PLAN_COMPLETION_OR_REVOCATION",
+    "expiresAt": null,
+    "invalidatedBy": [
+      "owner revocation",
+      "Plan V1, Plan V2 or composite plan hash change",
+      "repository destination change",
+      "scope expansion beyond alias 01 or beyond M6-5",
+      "payment, deletion or forbidden-effect enablement"
+    ]
+  }
+}

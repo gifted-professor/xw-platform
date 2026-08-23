@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -36,9 +36,13 @@ function makeRepo() {
   mkdirSync(join(root, "services/orchestrator"), { recursive: true });
   mkdirSync(join(root, "services/control-plane/control-plane"), { recursive: true });
   mkdirSync(join(root, "packages/kernel"), { recursive: true });
+  mkdirSync(join(root, "packages/kernel/contracts"), { recursive: true });
   writeFileSync(join(root, "services/orchestrator/registry.mjs"), "// orchestrator entry\n");
   writeFileSync(join(root, "services/control-plane/control-plane/router.mjs"), "// control-plane entry\n");
   writeFileSync(join(root, "packages/kernel/keep.mjs"), "// kernel\n");
+  writeFileSync(join(root, "packages/kernel/contracts/runtime-profile.v1.json"), JSON.stringify({
+    profiles: { legacy_compat: { agenticGroundingEnabled: true } },
+  }));
   git(["add", "-A"]);
   git(["commit", "-qm", "init"]);
   return root;
@@ -81,6 +85,26 @@ test("cutover package → verify → preflight 全链路", (t) => {
   const preflight = run(["cutover", "preflight", "--release", releaseDir, "--json"]);
   assert.equal(preflight.code, 0);
   assert.equal(preflight.json.ok, true);
+});
+
+test("cutover package：dirty tracked/untracked source fail closed", (t) => {
+  for (const drift of ["tracked", "untracked"]) {
+    const root = makeRepo();
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    const outDir = mkdtempSync(join(tmpdir(), "xw-cutover-out-"));
+    t.after(() => rmSync(outDir, { recursive: true, force: true }));
+    if (drift === "tracked") {
+      writeFileSync(join(root, "packages/kernel/keep.mjs"), "// modified after HEAD\n");
+    } else {
+      writeFileSync(join(root, "untracked.txt"), "must not be silently omitted\n");
+    }
+
+    const packaged = run([
+      "cutover", "package", "--out", outDir, "--release-id", `xw-cli-dirty-${drift}`, "--json",
+    ], { cwd: root });
+    assert.equal(packaged.code, 1);
+    assert.equal(existsSync(join(outDir, "releases", `xw-cli-dirty-${drift}`)), false);
+  }
 });
 
 test("cutover preflight：release 被篡改时 exit 1", (t) => {
