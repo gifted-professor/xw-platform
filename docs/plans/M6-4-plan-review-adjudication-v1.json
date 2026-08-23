@@ -1,0 +1,134 @@
+{
+  "schemaId": "xw.multi-model-plan-review-adjudication.v1",
+  "mode": "PLAN_REVIEW",
+  "riskTier": "CRITICAL",
+  "adjudicatedAt": "2026-08-23T19:34:01.4721301+08:00",
+  "authorizationMode": "fix-once",
+  "sourcePacket": {
+    "planV1": {
+      "path": "docs/plans/M6-4-single-alias-grounded-action-plan-v1.md",
+      "bytes": 47009,
+      "sha256": "ec5e7e6959e38d150c468c7f8796f5ecf13fc51d8e552f2258503ecff79fe6e1"
+    },
+    "context": {
+      "path": "docs/plans/M6-4-plan-review-context-v1.md",
+      "bytes": 13208,
+      "sha256": "12118f7d1c9c4881eee6f97ba63e664a7017025b6383d483e16ed73a9d70bfb1"
+    },
+    "packet": {
+      "path": "docs/plans/M6-4-plan-review-packet-v1.json",
+      "sha256": "294c9324751f1a27521ee7dd4108203e1cbac6dded013def73f964f8bee15189",
+      "pairSha256": "cacf63bd61f06dd9962c233146057bcf3e3bec11320280bb1705c08fdc5e4b90"
+    }
+  },
+  "reviewRun": {
+    "path": "docs/plans/M6-4-review-wave-v1.json",
+    "sha256": "8ffdb37374a2ae992601f0936bdf1b05424a10bc7de81775c612b41547b1c386",
+    "route": {
+      "model": "gpt-5.6-sol",
+      "reasoningEffort": "max",
+      "roles": [
+        "coverage",
+        "adversarial"
+      ]
+    },
+    "externalBatch": {
+      "status": "BLOCKED_PRE_DISCLOSURE",
+      "reasonCode": "EXPLICIT_EXTERNAL_DISCLOSURE_APPROVAL_REQUIRED",
+      "packetDisclosed": false,
+      "criticCallsStarted": 0,
+      "reportsFabricated": false
+    },
+    "fallback": {
+      "status": "COMPLETED",
+      "kind": "LOCAL_ROUTED_GPT_FALLBACK",
+      "model": "gpt-5.6-sol",
+      "reasoningEffort": "max",
+      "networkUsed": false,
+      "filesEdited": false,
+      "packetHashesVerified": true,
+      "verdict": "needs_changes",
+      "confidence": "high"
+    }
+  },
+  "adjudicator": {
+    "kind": "PRIMARY_CODEX_GPT_ADJUDICATOR",
+    "policy": "one consolidated adjudication; one Plan V2; no re-review"
+  },
+  "findings": [
+    {
+      "id": "M64-AUTH-001",
+      "severity": "P1",
+      "disposition": "ACCEPT",
+      "rationale": "The original authority chain did not prove that the consumed one-shot slot authorized the exact primitive, trusted parameters, intent policy, and semantic target used at raw I/O.",
+      "revision": "Plan V2 section 3 freezes ActionSlotSpec and carries its hash and primitive/intent/parameter/target bindings through claim, decision, permit, typed authorization, tx#2, after-frame, and final receipt."
+    },
+    {
+      "id": "M64-FRESH-002",
+      "severity": "P1",
+      "disposition": "ACCEPT",
+      "rationale": "A frame and UI identity could become stale in the interval between the last Control Plane check and the transport process issuing raw I/O.",
+      "revision": "Plan V2 section 4 adds a monotonic dispatch deadline, tx#2 freshness evidence, and an immediate possession-TCB pre-I/O guard without changing the database gate fence linearization point."
+    },
+    {
+      "id": "M64-ENV-003",
+      "severity": "P1",
+      "disposition": "ACCEPT",
+      "rationale": "Provider qualification alone did not bind a canary to the exact app build, device, display, locale, theme, IME, accessibility, and capture environment used at runtime.",
+      "revision": "Plan V2 section 5 introduces private TargetEnvironmentAttestation, a locked environment qualification artifact, hash binding across gate/run/action evidence, and fail-closed drift checks."
+    },
+    {
+      "id": "M64-EFFECT-004",
+      "severity": "P1",
+      "disposition": "ACCEPT",
+      "rationale": "The phrase zero persistent/public side effect was not operationally testable across backend, app-local, device/OS, IME, analytics, and public surfaces using independent evidence.",
+      "revision": "Plan V2 section 6 freezes per-family effect boundaries, independent pre/post oracles, reset obligations, and fail-closed behavior; the policy for enumerated private read traces versus strict zero persistence is elevated to owner decision M6-4-A03."
+    }
+  ],
+  "findingSummary": {
+    "P0": 0,
+    "P1": 4,
+    "accepted": 4,
+    "rejected": 0,
+    "deferred": 0,
+    "openTechnicalP0P1AfterRevision": 0
+  },
+  "revision": {
+    "kind": "PLAN_V2_CONSOLIDATED_DELTA",
+    "path": "docs/plans/M6-4-single-alias-grounded-action-plan-v2.md",
+    "bytes": 11428,
+    "sha256": "c0cedd7d605c8fffb8b8793c68782af3c455edb2ccb3e44d738cc7501d01d594",
+    "composesWithFrozenPlanV1": true,
+    "additionalReviewWaveAllowed": false
+  },
+  "remainingOwnerDecisions": [
+    {
+      "id": "M6-4-A01",
+      "requiredValue": "ACCEPT",
+      "meaning": "M6-4 terminates at M6_4_ACTION_CANARY_CLOSED; genuine M5 WorkReceipt trace binding remains an M6-6 obligation and cannot be fabricated or claimed early."
+    },
+    {
+      "id": "M6-4-A02",
+      "requiredValue": "ACCEPT",
+      "meaning": "Split the original M6-C into independently deployable and rollback-capable M6-C1 in M6-4 and M6-C2 in M6-5 without weakening M6-5 reconciliation."
+    },
+    {
+      "id": "M6-4-A03",
+      "allowedValues": [
+        "BOUNDED_READ_TRACE",
+        "STRICT_ZERO_PERSISTENCE"
+      ],
+      "recommendedValue": "BOUNDED_READ_TRACE",
+      "meaning": "Choose the operational policy for explicitly enumerated private read traces; public, social, account, security, financial, destructive, settings, and draft effects remain forbidden under both values."
+    }
+  ],
+  "terminal": {
+    "status": "SCOPE_CHANGE_REQUIRED",
+    "gateState": "CLOSED",
+    "implementationAuthorized": false,
+    "liveAuthorized": false,
+    "executionContractGenerated": false,
+    "executionRouteGenerated": false,
+    "reason": "Owner-signed decisions M6-4-A01, M6-4-A02, and M6-4-A03 are required before READY_FOR_EXECUTION and before any Gate A-F work."
+  }
+}

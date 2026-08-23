@@ -1,0 +1,3 @@
+- insert:
+    - id: xw-dsh-live-runtime
+      name: ../../src/live-runtime-plugin.mjs

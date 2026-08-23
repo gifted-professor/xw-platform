@@ -347,6 +347,50 @@
         ]
       },
       "lifecycle": "canary_only"
+    },
+    {
+      "schemaVersion": 1,
+      "id": "xiaowei.m6.grounded_run",
+      "appId": "xiaowei",
+      "packageName": null,
+      "versionRange": "observed:9.10.113",
+      "maturity": "E1",
+      "risk": "R1",
+      "resources": ["device", "transport:xiaowei:22222"],
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["runPacketRef", "grantRef", "scenarioManifestRef"],
+        "properties": {
+          "runPacketRef": { "type": "string", "minLength": 64, "maxLength": 64 },
+          "grantRef": { "type": "string", "minLength": 64, "maxLength": 64 },
+          "scenarioManifestRef": { "type": "string", "minLength": 64, "maxLength": 64 }
+        }
+      },
+      "outputSchema": { "type": "object" },
+      "preconditions": [
+        "M6 v2 GROUNDED_ACTION gate and DB fence are identical",
+        "alias allowlist is exactly 01",
+        "signed finite action slots and autonomy grant are pinned"
+      ],
+      "verification": {
+        "mode": "custom",
+        "description": "after-frame business oracle and grounded-action receipt"
+      },
+      "restoration": {
+        "required": true,
+        "description": "restore bounded read-trace state and close all run resources"
+      },
+      "timeoutMs": 900000,
+      "idempotency": "ambiguous_on_timeout",
+      "automationPolicy": { "mode": "lab_only", "canaryOnly": true },
+      "implementation": { "adapter": "xiaowei", "action": "m6_grounded_run" },
+      "evidence": ["M6-4-A01", "M6-4-A02", "M6-4-A03-BOUNDED_READ_TRACE"],
+      "availability": "canary_only",
+      "effect": { "class": "reversible", "phase": "na", "commitBoundary": "automatic" },
+      "exposure": "internal",
+      "invocationPolicy": { "allowedModes": ["session"] },
+      "lifecycle": "canary_only"
     }
   ]
 }

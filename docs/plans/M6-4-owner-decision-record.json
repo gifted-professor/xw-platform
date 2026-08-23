@@ -1,0 +1,74 @@
+{
+  "schemaId": "xw.m6-owner-decision-record.v1",
+  "recordId": "m6-4-owner-decisions-20260823",
+  "status": "APPROVED",
+  "issuedAt": "2026-08-23T19:53:48.4112807+08:00",
+  "actor": {
+    "kind": "THREAD_OWNER",
+    "id": "codex-thread-user",
+    "threadId": "01a02e1c-feaa-7723-8a92-3bedec24cdbf"
+  },
+  "source": {
+    "kind": "EXPLICIT_USER_MESSAGE",
+    "summary": "Owner directly approved the recommended M6-4 scope decisions and requested execution through the M6-4 completion boundary."
+  },
+  "plan": {
+    "planV1Path": "docs/plans/M6-4-single-alias-grounded-action-plan-v1.md",
+    "planV1Sha256": "ec5e7e6959e38d150c468c7f8796f5ecf13fc51d8e552f2258503ecff79fe6e1",
+    "planV2Path": "docs/plans/M6-4-single-alias-grounded-action-plan-v2.md",
+    "planV2Sha256": "c0cedd7d605c8fffb8b8793c68782af3c455edb2ccb3e44d738cc7501d01d594",
+    "taskBriefPath": "docs/plans/M6-task-brief.md",
+    "taskBriefSections": [
+      "M6-4 — single-alias Grounded Action canary",
+      "M6-5 — Checkpoint, Ledger reconcile and failure recovery"
+    ]
+  },
+  "validity": {
+    "mode": "UNTIL_SUPERSEDED",
+    "expiresAt": null,
+    "invalidatedBy": [
+      "owner revocation",
+      "Plan V1 or Plan V2 hash change",
+      "task-brief scope change affecting M6-4",
+      "candidate baseline no longer contains M6-3 commit 0fa5ae7f366bf40da242bec824882658fc6596d4"
+    ]
+  },
+  "decisions": [
+    {
+      "id": "M6-4-A01",
+      "value": "ACCEPT",
+      "effect": "M6-4 terminates at M6_4_ACTION_CANARY_CLOSED; genuine M5 WorkReceipt trace binding remains in M6-6 and cannot be fabricated or claimed early."
+    },
+    {
+      "id": "M6-4-A02",
+      "value": "ACCEPT",
+      "effect": "M6-C is split into independently deployable and rollback-capable M6-C1 in M6-4 and M6-C2 in M6-5 without weakening M6-5 reconciliation."
+    },
+    {
+      "id": "M6-4-A03",
+      "value": "BOUNDED_READ_TRACE",
+      "effect": "Only enumerated private read traces on an isolated test account and device may remain; public, social, account, security, financial, destructive, settings and draft effects remain forbidden."
+    }
+  ],
+  "objectiveInterpretation": {
+    "requestedText": "按着这个plan直接做完 直到进入M5",
+    "interpretedBoundary": "M6_4_ACTION_CANARY_CLOSED_AND_M6_5_HANDOFF_READY",
+    "rationale": "The approved plan and task brief place M6-5 immediately after M6-4; M5 is an already-existing scheduler layer and its genuine WorkReceipt binding is explicitly deferred to M6-6 by A01."
+  },
+  "authorization": {
+    "repositoryImplementation": true,
+    "offlineTests": true,
+    "candidateCommit": true,
+    "gatesAuthorized": [
+      "A",
+      "B",
+      "C",
+      "D",
+      "E"
+    ],
+    "gateFPreparation": true,
+    "gateFLiveWindow": false,
+    "productionLiveAction": false,
+    "reasonLiveWindowNotGranted": "Plan V1 requires a separate exact alias-01 window bound to release, locks, manifests, gate epoch, expiry, operator and emergency-close authority; this general approval does not invent those runtime values."
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "schemaId": "xw.m6-live-model-profile.v1",
+  "status": "UNQUALIFIED",
+  "reason": "TARGET_RUNTIME_MODEL_PROVIDER_LICENSE_SECRET_AND_HEALTH_UNRESOLVED",
+  "provider": null,
+  "model": null,
+  "exactVersion": null,
+  "contentHash": null,
+  "secretMaterialPresent": false,
+  "deploymentSecretInjectionRequired": true,
+  "gateFEligible": false
+}

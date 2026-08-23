@@ -1,0 +1,52 @@
+{
+  "schemaId": "xw.m6-4-code-ready-receipt.v1",
+  "status": "CODE_READY_GATE_CLOSED",
+  "planSha256": "68887b2f1eeae7c89e726f1a2bd6571bf665c719e8a50017bd1fadb2443b7d29",
+  "baseCommit": "df16a0409a0997b01e378933d24ad737fde94e16",
+  "candidateSnapshotHash": "f6a844e96a20cd430de8644c57bf3fd4bc0757469b509346ba2853afbd949277",
+  "candidateFileCount": 86,
+  "gateAReceiptSha256": "9ed3e12522d2b90c6c2a528ab0e648e4cfc18f02a726484285a2abafd7babea5",
+  "offlineTestManifestSha256": "bdfd62bb6289497113c875a71883b1a540674cf0276972a47b74be7b5de1344b",
+  "resourceSnapshotSha256": "fed49514d2241f7d1af3f47a9ae69a3b1db173311a338a2a87341c12c40f0631",
+  "artifacts": {
+    "providerCorpus": {
+      "path": "artifacts/m6-4/m6-4-live-provider-corpus.json",
+      "sha256": "2021f288568f7481141e3dfbdcad7cfc2b1eb30fd8d3420188fa5fd8ad215807"
+    },
+    "environmentQualification": {
+      "path": "artifacts/m6-4/m6-4-environment-qualification.json",
+      "sha256": "54e8cfb49c3dc4134f973c67c02b8237ba4dfd3892b274d023d85a679a629f38"
+    },
+    "broker": {
+      "path": "artifacts/m6-4/m6-4-broker-spike.json",
+      "sha256": "30322cfe4042b45226a12ba5131a95c5a8f127f4d1be66fae2c74e19764602f8"
+    },
+    "sameLease": {
+      "path": "artifacts/m6-4/m6-4-same-lease-spike.json",
+      "sha256": "dfa15e286515f361c30f6245968b18c9e04cb91f0664d225781807a4ec7e3ce8"
+    },
+    "ttlModel": {
+      "path": "artifacts/m6-4/m6-4-ttl-model-spike.json",
+      "sha256": "1a1e74b780b188bdf416dc24ffbde71acac39c1ab9ddceb8d1aed7a05352acf4"
+    },
+    "effectBoundary": {
+      "path": "artifacts/m6-4/cohort-manifests/xw.m6-effect-boundary.v1.json",
+      "sha256": "9a39d83f6705d52b1f2ea681ca65d28573fba44cfd3c84a88b884a47d93b4d6c"
+    }
+  },
+  "invariants": {
+    "gateClosed": true,
+    "resourcesZero": true,
+    "actionCount": 0,
+    "liveProfileQualified": false,
+    "liveWindowAuthorized": false,
+    "gateFExecuted": false
+  },
+  "deferred": [
+    "Gate F requires exact live-window authorization and a qualified exact model/provider profile",
+    "automatic reconcile/checkpoint recovery belongs to M6-5",
+    "real M5 WorkReceipt binding belongs to M6-6"
+  ],
+  "nextMilestone": "M6-5",
+  "receiptSha256": "db7eff9aa935e2e8a63614191e1f01cf47099576777fd2ec8106eb4692ea3bf5"
+}

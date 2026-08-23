@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:xw:contract:m6:target-environment-attestation:v1",
+  "title": "xw.m6-target-environment-attestation.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaId", "attestationHash", "appPackageHash", "appBuildHash", "signingHash", "osBuildHash", "displayHash", "localeThemeHash", "imeHash", "accessibilityHash", "accountIsolationHash", "capturedAt", "expiresAt"],
+  "properties": {
+    "schemaId": { "const": "xw.m6-target-environment-attestation.v1" },
+    "attestationHash": { "$ref": "#/$defs/hash" },
+    "appPackageHash": { "$ref": "#/$defs/hash" },
+    "appBuildHash": { "$ref": "#/$defs/hash" },
+    "signingHash": { "$ref": "#/$defs/hash" },
+    "osBuildHash": { "$ref": "#/$defs/hash" },
+    "displayHash": { "$ref": "#/$defs/hash" },
+    "localeThemeHash": { "$ref": "#/$defs/hash" },
+    "imeHash": { "$ref": "#/$defs/hash" },
+    "accessibilityHash": { "$ref": "#/$defs/hash" },
+    "accountIsolationHash": { "$ref": "#/$defs/hash" },
+    "capturedAt": { "type": "string", "minLength": 1 },
+    "expiresAt": { "type": "string", "minLength": 1 }
+  },
+  "$defs": { "hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" } }
+}

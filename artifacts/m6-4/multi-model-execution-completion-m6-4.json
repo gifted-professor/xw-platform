@@ -1,0 +1,324 @@
+{
+  "schema": "multi-model-execution-completion.v1",
+  "planSha256": "68887b2f1eeae7c89e726f1a2bd6571bf665c719e8a50017bd1fadb2443b7d29",
+  "candidateSnapshot": "f6a844e96a20cd430de8644c57bf3fd4bc0757469b509346ba2853afbd949277",
+  "items": [
+    {
+      "id": "M6-4-GA-BASELINE",
+      "status": "complete",
+      "artifactResults": [
+        {
+          "artifact": "docs/plans/M6-4-owner-decision-record.json",
+          "result": "pass",
+          "sha256": "f4fd8f1224b7114c0ac5cffc89b5e576a7f4c5879ab44df156b3f5188902b27e"
+        },
+        {
+          "artifact": "docs/plans/M6-3-completion-index.md",
+          "result": "pass",
+          "sha256": "5a835638d31eb9b3084d56f9d54d4495d9e87b54f4efd7280e9ddb244360375b"
+        },
+        {
+          "artifact": "artifacts/m6-4/m6-4-baseline-preflight.json",
+          "result": "pass",
+          "sha256": "a72a0d2d7ad5a52813d670ab6f8caa6412d11bcaad8168e0ff36adcf444f6a58"
+        }
+      ],
+      "probeResults": [
+        {
+          "probeId": "M6-4-GA-BASELINE-reproduce",
+          "result": "pass",
+          "pathExercised": true,
+          "evidenceSha256": "063344780107019285e4a67687d01c8372c9482f4ec37fd15797bf80474c8567"
+        }
+      ]
+    },
+    {
+      "id": "M6-4-GA-SPIKES",
+      "status": "complete",
+      "artifactResults": [
+        {
+          "artifact": "artifacts/m6-4/m6-4-live-provider-corpus.json",
+          "result": "pass",
+          "sha256": "2021f288568f7481141e3dfbdcad7cfc2b1eb30fd8d3420188fa5fd8ad215807"
+        },
+        {
+          "artifact": "artifacts/m6-4/m6-4-environment-qualification.json",
+          "result": "pass",
+          "sha256": "54e8cfb49c3dc4134f973c67c02b8237ba4dfd3892b274d023d85a679a629f38"
+        },
+        {
+          "artifact": "artifacts/m6-4/m6-4-broker-spike.json",
+          "result": "pass",
+          "sha256": "30322cfe4042b45226a12ba5131a95c5a8f127f4d1be66fae2c74e19764602f8"
+        },
+        {
+          "artifact": "artifacts/m6-4/m6-4-same-lease-spike.json",
+          "result": "pass",
+          "sha256": "dfa15e286515f361c30f6245968b18c9e04cb91f0664d225781807a4ec7e3ce8"
+        },
+        {
+          "artifact": "artifacts/m6-4/m6-4-ttl-model-spike.json",
+          "result": "pass",
+          "sha256": "1a1e74b780b188bdf416dc24ffbde71acac39c1ab9ddceb8d1aed7a05352acf4"
+        }
+      ],
+      "probeResults": [
+        {
+          "probeId": "M6-4-GA-SPIKES-oracle",
+          "result": "pass",
+          "pathExercised": true,
+          "evidenceSha256": "d288e538be81a725af60d36074bbb1b480e432c05c343e8a14e93a57e1e4c418"
+        },
+        {
+          "probeId": "M6-4-GA-SPIKES-mutation",
+          "result": "pass",
+          "pathExercised": true,
+          "evidenceSha256": "3a3eaedc1ca095727176e19242da6fa1d4caf3d6e21c065e198daf2bbbc0758f"
+        },
+        {
+          "probeId": "M6-4-GA-SPIKES-reproduce",
+          "result": "pass",
+          "pathExercised": true,
+          "evidenceSha256": "2854a7aa218597e21380b44f696c1bc824f4aaa1133fc7f4792562143bc47ae1"
+        }
+      ]
+    },
+    {
+      "id": "M6-4-GB-GATE",
+      "status": "complete",
+      "artifactResults": [
+        {
+          "artifact": "packages/kernel/contracts/orchestration/m6/xw.m6-live-gate.v2.schema.json",
+          "result": "pass",
+          "sha256": "448f737e6686296cde251efe81d42d0703e6f48d54b6a8cf3aec5df08afdc256"
+        },
+        {
+          "artifact": "packages/kernel/contracts/orchestration/m6/xw.m6-locks.v2.schema.json",
+          "result": "pass",
+          "sha256": "2a781acee42ff426062110e05bb3f3945bc3373736bb432fac5969970c26a0ae"
+        },
+        {
+          "artifact": "services/control-plane/control-plane/lib/m6-live-gate-v2.mjs",
+          "result": "pass",
+          "sha256": "7aeec916c60b275d777782c2d0fcd22b430eeec03980be5b1c713657579ba1d0"
+        },
+        {
+          "artifact": "services/control-plane/control-plane/lib/m6-gate-promoter.mjs",
+          "result": "pass",
+          "sha256": "905200b453a4e2fdf62e7a5e92cc89248cb5d1069528ab9841855f8048370933"
+        },
+        {
+          "artifact": "services/control-plane/control-plane/lib/state-store.mjs",
+          "result": "pass",
+          "sha256": "34982056a21b74635aa6dbc4c2f997ec7c81837e4e8fb4322d5b739f95f07fe8"
+        }
+      ],
+      "probeResults": [
+        {
+          "probeId": "M6-4-GB-GATE-adversarial",
+          "result": "pass",
+          "pathExercised": true,
+          "evidenceSha256": "f244190b9880ba7fc5e95aef92d331b86c9e6cfbe2bc31d5a23bd5559947cfd1"
+        },
+        {
+          "probeId": "M6-4-GB-GATE-forgery",
+          "result": "pass",
+          "pathExercised": true,
+          "evidenceSha256": "d06da80b18ebf0cb143215bf574161c0627e719adf111462d73f3fab5052ff39"
+        },
+        {
+          "probeId": "M6-4-GB-GATE-replay",
+          "result": "pass",
+          "pathExercised": true,
+          "evidenceSha256": "3436a99e1d14fbb86ac2ba0f987ca4e0d7f5731700d28e932fdf843425619af9"
+        }
+      ]
+    },
+    {
+      "id": "M6-4-GC-GROUNDING",
+      "status": "complete",
+      "artifactResults": [
+        {
+          "artifact": "packages/kernel/lib/m6-live-grounding.mjs",
+          "result": "pass",
+          "sha256": "99f817b081103342c798a0a9da694443c400ca743e2118d9338f1a0ae7e507bf"
+        },
+        {
+          "artifact": "packages/kernel/lib/m6-action-slot.mjs",
+          "result": "pass",
+          "sha256": "cb4c4bf6974144914a79c046d4af07a8b0a22bf99940d29ecbd13c711c8f9012"
+        },
+        {
+          "artifact": "packages/kernel/contracts/orchestration/m6/xw.grounding-decision.v2.schema.json",
+          "result": "pass",
+          "sha256": "621c1796ef0dac7ef487baaa552b25dbe6abc66fab23caf86b8205622aa7ae0a"
+        },
+        {
+          "artifact": "packages/kernel/contracts/orchestration/m6/xw.m6-action-slot-spec.v1.schema.json",
+          "result": "pass",
+          "sha256": "a7c4b099a810732f3cee7185fad5eb3988bf2bede9ceac7fc8a643faf4ee3466"
+        },
+        {
+          "artifact": "packages/kernel/contracts/orchestration/m6/xw.m6-target-environment-attestation.v1.schema.json",
+          "result": "pass",
+          "sha256": "c477da04bba2f2fa19ec7ed35a952fb6f9b89153af82c99be3d4881682b008c1"
+        }
+      ],
+      "probeResults": [
+        {
+          "probeId": "M6-4-GC-GROUNDING-adversarial",
+          "result": "pass",
+          "pathExercised": true,
+          "evidenceSha256": "e9ccc825c2a365bc518b4f8339c60e11957e8fe32fec35b88e94d8ab5d546a60"
+        },
+        {
+          "probeId": "M6-4-GC-GROUNDING-oracle",
+          "result": "pass",
+          "pathExercised": true,
+          "evidenceSha256": "c53e3b25b9710fa520c1eb71fc1e5d9ce78bf0f2a10554473e017fc681286d4a"
+        },
+        {
+          "probeId": "M6-4-GC-GROUNDING-mutation",
+          "result": "pass",
+          "pathExercised": true,
+          "evidenceSha256": "b3052f8c2cb8cb10d2a1559ea6a1cf3c7539a4968c818f96fdc6b5b1dfdf374a"
+        }
+      ]
+    },
+    {
+      "id": "M6-4-GD-DISPATCH",
+      "status": "complete",
+      "artifactResults": [
+        {
+          "artifact": "services/control-plane/control-plane/lib/m6-grounded-action-facade.mjs",
+          "result": "pass",
+          "sha256": "ce9f31c4fec4b337945d682804875eb006e002e2b7224918cb71db8745da06a4"
+        },
+        {
+          "artifact": "services/control-plane/control-plane/lib/m6-typed-transport.mjs",
+          "result": "pass",
+          "sha256": "26e0eaf231c4b2374aa1a7e83c47186f6f69bdbadedd9e1b94c68a45b175df78"
+        },
+        {
+          "artifact": "services/control-plane/control-plane/lib/state-store.mjs",
+          "result": "pass",
+          "sha256": "34982056a21b74635aa6dbc4c2f997ec7c81837e4e8fb4322d5b739f95f07fe8"
+        },
+        {
+          "artifact": "services/control-plane/tests/m6-action-ledger.test.mjs",
+          "result": "pass",
+          "sha256": "5ae39544c888b199cc7cb27ba4fe1279a50c5e324290e9877e09d0ff71531879"
+        },
+        {
+          "artifact": "services/control-plane/tests/m6-grounded-action-facade.test.mjs",
+          "result": "pass",
+          "sha256": "17d6d34d4bc09c4781913f82e1e2b9cd6fe228372a8b3aeb23ee5e2b000c60f9"
+        }
+      ],
+      "probeResults": [
+        {
+          "probeId": "M6-4-GD-DISPATCH-adversarial",
+          "result": "pass",
+          "pathExercised": true,
+          "evidenceSha256": "b3eae5a1b55b67a826c8a4d18e6de7c262926685f010c957e05f44687a87db23"
+        },
+        {
+          "probeId": "M6-4-GD-DISPATCH-forgery",
+          "result": "pass",
+          "pathExercised": true,
+          "evidenceSha256": "4883433911c2809c0a361d9583507b750c6165618667405ac70b4c39a6943796"
+        },
+        {
+          "probeId": "M6-4-GD-DISPATCH-replay",
+          "result": "pass",
+          "pathExercised": true,
+          "evidenceSha256": "9fbfc69fe405b991b6e159147484b7952294de61bec91462049bffe17035c508"
+        }
+      ]
+    },
+    {
+      "id": "M6-4-GE-DSH",
+      "status": "complete",
+      "artifactResults": [
+        {
+          "artifact": "integrations/dsh-xw/profiles/live",
+          "result": "pass",
+          "sha256": "1938a27831e80c1002ee281fa37388eb4ebd857bcd20de5965f44e8243ed76f5"
+        },
+        {
+          "artifact": "integrations/dsh-xw/src/live-pipe-client.mjs",
+          "result": "pass",
+          "sha256": "85274b3c58c8bb02dcddb4b71c363ea59bfa440c5c279386f92ad5008e024e75"
+        },
+        {
+          "artifact": "integrations/dsh-xw/src/live-runtime-plugin.mjs",
+          "result": "pass",
+          "sha256": "987d1f6afafc12c1ebb8a8c4c1b5df17bab014a5dafb6fe9fe06c9a75df5a6cd"
+        },
+        {
+          "artifact": "services/orchestrator/scripts/lib/m6/m6-live-tool-surface.mjs",
+          "result": "pass",
+          "sha256": "85730eae1b80b1c7423cdb1b988614912a3a954f14f040d8902774ec32ee0792"
+        },
+        {
+          "artifact": "artifacts/m6-4/m6-4-broker-spike.json",
+          "result": "pass",
+          "sha256": "30322cfe4042b45226a12ba5131a95c5a8f127f4d1be66fae2c74e19764602f8"
+        }
+      ],
+      "probeResults": [
+        {
+          "probeId": "M6-4-GE-DSH-adversarial",
+          "result": "pass",
+          "pathExercised": true,
+          "evidenceSha256": "f355c2adb3ecfedab67d9ecb9481817017c2aa32694087437bc6e756eccd5dd2"
+        }
+      ]
+    },
+    {
+      "id": "M6-4-GE-OFFLINE-CLOSE",
+      "status": "complete",
+      "artifactResults": [
+        {
+          "artifact": "artifacts/m6-4/m6-4-code-ready-receipt.json",
+          "result": "pass",
+          "sha256": "3d038ff5933d94746b1feb37d25f8abd3a03592a14ca1398960050775e7998cf"
+        },
+        {
+          "artifact": "artifacts/m6-4/m6-4-offline-test-manifest.json",
+          "result": "pass",
+          "sha256": "bdfd62bb6289497113c875a71883b1a540674cf0276972a47b74be7b5de1344b"
+        },
+        {
+          "artifact": "artifacts/m6-4/m6-4-resource-snapshot.json",
+          "result": "pass",
+          "sha256": "fed49514d2241f7d1af3f47a9ae69a3b1db173311a338a2a87341c12c40f0631"
+        },
+        {
+          "artifact": ".github/workflows/source-fusion.yml",
+          "result": "pass",
+          "sha256": "e1fc29ab7911f87a203c23968797d33651c95e38be1b317a07763e91e0d36a1a"
+        }
+      ],
+      "probeResults": [
+        {
+          "probeId": "M6-4-GE-OFFLINE-CLOSE-reproduce",
+          "result": "pass",
+          "pathExercised": true,
+          "evidenceSha256": "fb02b87002f4d0f6ef5e06b3676dc698422f6bdfaf86c50c6b4a55235b85b64b"
+        }
+      ]
+    }
+  ],
+  "executionEvents": [
+    {
+      "kind": "start",
+      "runtime": "codex-desktop",
+      "model": "gpt-5.6-sol"
+    },
+    {
+      "kind": "context-compaction",
+      "reloadedPlanSha256": "68887b2f1eeae7c89e726f1a2bd6571bf665c719e8a50017bd1fadb2443b7d29"
+    }
+  ]
+}

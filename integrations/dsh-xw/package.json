@@ -7,11 +7,11 @@
     "node": ">=24"
   },
   "scripts": {
-    "check": "node --check plugin.mjs && node --check src/stdio-supervisor.mjs && node --check src/supervisor-cli.mjs && node --check src/process-adapter.mjs && node --check src/runtime-plugin.mjs && node --check src/xw-protocol-server.mjs && node --check src/replay-tools.mjs && node --check src/replay-journal.mjs && node --check src/deterministic-llm.mjs",
+    "check": "node --check plugin.mjs && node --check src/stdio-supervisor.mjs && node --check src/supervisor-cli.mjs && node --check src/process-adapter.mjs && node --check src/runtime-plugin.mjs && node --check src/live-runtime-plugin.mjs && node --check src/live-pipe-client.mjs && node --check src/xw-protocol-server.mjs && node --check src/replay-tools.mjs && node --check src/replay-journal.mjs && node --check src/deterministic-llm.mjs",
     "test:gate-b": "node --test test/stdio-supervisor.spec.mjs test/process-tree.real.spec.mjs test/supervisor-real-fatal.spec.mjs",
     "test:gate-c": "node --test test/tool-boundaries.spec.mjs test/real-tool-loop.spec.mjs test/real-routes.spec.mjs",
     "test:gate-d": "node --test test/cross-process-resume.real.spec.mjs test/checkpoint-faults.real.spec.mjs test/fault-matrix.real.spec.mjs",
-    "test:gate-e": "node --test test/benchmark.real.spec.mjs",
+    "test:gate-e": "node --test test/benchmark.real.spec.mjs test/live-profile.spec.mjs",
     "test:functional": "npm run test:gate-b && npm run test:gate-c && npm run test:gate-d",
     "test": "npm run check && npm run test:functional && npm run test:gate-e"
   },

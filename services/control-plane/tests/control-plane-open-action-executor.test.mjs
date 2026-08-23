@@ -95,7 +95,7 @@ async function postAction(f, created, body) {
   });
 }
 
-test("fresh databases land on schema 18 with action ledger", () => {
+test("fresh databases land on schema 19 with grounded-action tables", () => {
   const f = runtime();
   try {
     assert.equal(f.state.db.prepare("PRAGMA user_version").get().user_version, CURRENT_CONTROL_SCHEMA_VERSION);

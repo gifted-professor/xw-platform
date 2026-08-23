@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:xw:contract:m6:effect-boundary:v1",
+  "title": "xw.m6-effect-boundary.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaId", "boundaryHash", "a03Mode", "testIdentityHash", "families"],
+  "properties": {
+    "schemaId": { "const": "xw.m6-effect-boundary.v1" },
+    "boundaryHash": { "$ref": "#/$defs/hash" },
+    "a03Mode": { "const": "BOUNDED_READ_TRACE" },
+    "testIdentityHash": { "$ref": "#/$defs/hash" },
+    "families": {
+      "type": "array", "minItems": 8, "maxItems": 8,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["primaryFamily", "oracleHash", "forbiddenEffectClasses", "allowedBoundedReadTraces", "resetObligations"],
+        "properties": {
+          "primaryFamily": { "enum": ["app-launch", "app-switch", "search", "text-input", "scroll", "tab-back", "form-edit", "settings-nav"] },
+          "oracleHash": { "$ref": "#/$defs/hash" },
+          "forbiddenEffectClasses": { "type": "array", "minItems": 9, "uniqueItems": true, "items": { "type": "string" } },
+          "allowedBoundedReadTraces": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+          "resetObligations": { "type": "array", "uniqueItems": true, "items": { "type": "string" } }
+        }
+      }
+    }
+  },
+  "$defs": { "hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" } }
+}

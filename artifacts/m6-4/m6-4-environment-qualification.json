@@ -1,0 +1,53 @@
+{
+  "schemaId": "xw.m6-environment-qualification.v1",
+  "qualificationId": "m6-4-gate-a-evidence-only",
+  "providerSourceSha256": "0f3067984d3465f3e0932a6cc5efbeefc9d44edbf199bde87deba201fa841d05",
+  "corpusSha256": "99ba713c694e4d388889622ee2c540f0dd9efad6b56e7924e86b051068366160",
+  "supportedEvidence": {
+    "sourceDumpHashes": [
+      "090a825c7efefd750e8c80a372bfe9a67691363f2a06ebefb7a7abea2930653b",
+      "0c7bad50e59bc345f14cdbb9aa93312bb23bbfe298bfb6d5ae2fd4a2cca22f4b",
+      "1038e723f050aebb0e98c9e6ca8cebfc0bcb22ae9098167283fef34d04a7bb1b",
+      "16e8c5b20579e41d5d0336e83b3134529f6b247064b012fdd083fa58db2f4d22",
+      "30d5823cc8865c5b10dd344016486c4c0ce741e4a502c26e53bdcb36448fd668",
+      "3c5d330f227443fbbd56c75779818a44b1137f5f3befd93e166889e814d32f8f",
+      "5a13dbf24242f4d264b14cf3828131143631efa6d01128d165d858424186b47b",
+      "5c1dab0cd47c455f204a3a2ad11e7fcce3a61384bea3c3136b4b207e60771ef0",
+      "67152b815c3561fdbb5cee8797cc36dcf6da2979075b0f1e967d459b7aaf2ebd",
+      "6a5b80b81e6c85514cf7378c28116f5055fa76fb13a27bf1a73795f7e96f0683",
+      "6becbb38b95c240fa254a38823a0cc94d5c5d7e7dd5b699856954646285f31f5",
+      "753565311bb8fc24aa1135aa9d2facccb80e44917b137626da1b9d2f00c937c8",
+      "8511101a1a133e558a830cd152b8aade5cae4d71c997c11fe14585c79028d501",
+      "89efb985f766b8f032deb42748bdf72467c5861898a625fdee9335b3464cb45b",
+      "8dd7488385e7ed17765f3f471b26a5a8128a6d9aa5d5c380b823f84ac4ddd3a4",
+      "a3afa387974c0e6c8e3bab8d045828fc19efdfc9e9bb2b3c36d9a50145e1ab41",
+      "ac4b6517faae03c6b080b45cb5287df76f9eb89e9469b17bbb5730cf8f44935f",
+      "adae58dec2e2c08a3a0db7695925134e25a12b0c7aa05b25debd1ac6a783ab71",
+      "ae3bedf72df985bd968a594a1ccd9c5ca36ec0bf3af1e354b7a3f7148ca0c4c7",
+      "ba7f603b6c3e514c7b14d7358d452da3e699134dcd1a4da7d05589082ab1fd01",
+      "bedc00aa4a6681dafd83de6f7ffdfbfb5f7ed56b5e27658b002d5f1e060b253d",
+      "c0d33faae7c6c64cad2f136582842213f59bbc0fad91500df46a71d1d1933913",
+      "c0e8d4374d608b235325c46745fd00a764ad4c9d194037ad0a23967b8c8b2c3a",
+      "c1a84a79dcb107f0e8512136d3ffdb0e5e9bff47dfbc2652ce6667e030e319a8",
+      "dca468c5a20d1a360c3ced0698953a051da7af0c8f74729ef60166e91d117b85",
+      "f26993fff7a430dd01f9d8209c9cfe3586e48605ca7355657a86cdb964dad3fa",
+      "f3932b7491134071c1c74a58f5a6cf068401c8067ff6dcf21a98bda8525112a9",
+      "f9834beb286696b83afbbc287a222286ce12ab51b88e43b79177b7443ab88ced"
+    ],
+    "packageHashes": [
+      "10e91357b2f2c847e85337ca22baada51642d97ec39eff55cf5e30e1512b70d0",
+      "1e34be275f0d4ffef3767a0ebddb03d50b6e669ad4ba35dcc8e90d1813302b2b",
+      "2c2fd222abf8ff40526623827b2793386ca0ad2a6d42be09928bae62c45b7ab2",
+      "d291d70a529713c040f4807c36932d34367e6a15c973ac675677b586e9781691"
+    ],
+    "displayShapeHashes": [
+      "974daf20e957e96c37381457faeb1481067a4551307e627361cd87529273613f",
+      "7497ec9357daab682f7cfc03454bf5ac9f33f3029c9ea5014249d1ec20a7caa5"
+    ]
+  },
+  "runtimeAttestationHashes": [],
+  "qualificationStatus": "EVIDENCE_CORPUS_PASS_RUNTIME_ATTESTATION_PENDING",
+  "gateFEligible": false,
+  "reasonGateFIneligible": "Exact app build/signing, OS build, display, locale/theme, IME, accessibility configuration and isolated-account attestation are not present in the historical evidence corpus and must be captured through the approved runtime inventory path before Gate F.",
+  "qualificationSha256": "ec175683c5d33936f5796815dd427cdd3e3e56ce7d4f165c8c00c6ecc32df629"
+}

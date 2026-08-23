@@ -15,7 +15,7 @@ import {
   consumeTransportActionAuthorization as consumeTransportAuthKernel,
 } from "./transport-action-authorization.mjs";
 
-export const CURRENT_CONTROL_SCHEMA_VERSION = 18;
+export const CURRENT_CONTROL_SCHEMA_VERSION = 19;
 
 const ACTIVE_JOB_STATES = new Set(["running", "verifying", "restoring"]);
 const TERMINAL_JOB_STATES = new Set(["succeeded", "failed", "ambiguous", "recovery_required", "cancelled"]);
@@ -196,12 +196,71 @@ export class StateStore {
     this.#recoverInFlightActions();
   }
 
+  #migrateV18ToV19() {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS m6_gate_fence (
+        marker TEXT PRIMARY KEY CHECK(marker='M6'),
+        gate_id TEXT NOT NULL,
+        epoch_hash TEXT NOT NULL,
+        generation INTEGER NOT NULL CHECK(generation>=0),
+        mode TEXT NOT NULL,
+        purpose TEXT,
+        allowlist_json TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        release_id TEXT NOT NULL,
+        source_commit TEXT NOT NULL,
+        locks_hash TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS m6_emergency_close_consumptions (
+        nonce TEXT PRIMARY KEY,
+        authorization_hash TEXT NOT NULL UNIQUE,
+        reason_code TEXT NOT NULL,
+        consumed_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS m6_grounding_permits (
+        permit_id TEXT PRIMARY KEY,
+        permit_hash TEXT NOT NULL UNIQUE,
+        decision_ref TEXT NOT NULL UNIQUE,
+        operation_key TEXT NOT NULL,
+        permit_json TEXT NOT NULL,
+        issued_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        consumed_at INTEGER,
+        consumption_receipt_json TEXT
+      );
+      CREATE TABLE IF NOT EXISTS m6_action_claims (
+        operation_key TEXT PRIMARY KEY,
+        action_id TEXT NOT NULL UNIQUE,
+        slot_spec_hash TEXT NOT NULL,
+        target_hash TEXT NOT NULL,
+        status TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS m6_grounded_action_details (
+        action_id TEXT PRIMARY KEY,
+        operation_key TEXT NOT NULL UNIQUE REFERENCES m6_action_claims(operation_key),
+        permit_id TEXT NOT NULL UNIQUE REFERENCES m6_grounding_permits(permit_id),
+        run_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        lease_id TEXT NOT NULL,
+        authorization_receipt_json TEXT,
+        guard_receipt_json TEXT,
+        transport_result_json TEXT,
+        completion_receipt_json TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+    `);
+  }
+
   #recoverInFlightActions() {
     const now = this.now();
     this.db.prepare(`
       UPDATE device_session_actions
       SET status='AMBIGUOUS', error_code=COALESCE(error_code, 'CONTROL_PLANE_RESTART'), updated_at=?
-      WHERE status IN ('REQUESTED', 'ASSESSED', 'EXECUTING')
+      WHERE status IN ('REQUESTED', 'ASSESSED', 'EXECUTING') AND execution_mode <> 'm6-grounded-live-v2'
     `).run(now);
   }
 
@@ -658,6 +717,7 @@ export class StateStore {
         if (current < 16) this.#migrateV15ToV16();
         if (current < 17) this.#migrateV16ToV17();
         if (current < 18) this.#migrateV17ToV18();
+        if (current < 19) this.#migrateV18ToV19();
         this.#setUserVersion(CURRENT_CONTROL_SCHEMA_VERSION);
       });
     }
@@ -697,6 +757,7 @@ export class StateStore {
       this.#recoverInterruptedEffects(now);
       this.#recoverInterruptedProtectedCommits(now);
       this.#recoverInFlightActions();
+      this.#recoverM6ActionLedger(now);
       this.db.exec("DELETE FROM sessions; DELETE FROM leases;");
       return [];
     }
@@ -724,6 +785,7 @@ export class StateStore {
       this.#recoverInterruptedEffects(now);
       this.#recoverInterruptedProtectedCommits(now);
       this.#recoverInFlightActions();
+      this.#recoverM6ActionLedger(now);
       this.db.exec("DELETE FROM sessions; DELETE FROM leases;");
     });
     return interrupted.map((row) => row.job_id);
@@ -2018,6 +2080,510 @@ export class StateStore {
   listLeases() {
     this.cleanupExpiredLeases();
     return this.db.prepare("SELECT * FROM leases ORDER BY created_at").all().map((row) => publicLease(row));
+  }
+
+  #recoverM6ActionLedger(now) {
+    this.db.prepare(`
+      UPDATE device_session_actions SET status='BLOCKED',
+        effect_assessment_json='{"effectStatus":"GROUND_ACTION_ABORTED_NOT_SENT"}',
+        error_code='CONTROL_RESTART_NO_SEND', updated_at=?
+      WHERE execution_mode='m6-grounded-live-v2' AND status <> 'COMPLETED' AND transport_called=0
+    `).run(now);
+    this.db.prepare(`
+      UPDATE device_session_actions SET status='AMBIGUOUS',
+        effect_assessment_json='{"effectStatus":"POSSIBLE_EFFECT"}',
+        error_code='CONTROL_RESTART_AFTER_SEND', updated_at=?
+      WHERE execution_mode='m6-grounded-live-v2' AND status <> 'COMPLETED' AND transport_called=1
+    `).run(now);
+    this.db.prepare(`
+      UPDATE m6_action_claims SET status='BLOCKED', updated_at=?
+      WHERE action_id IN (SELECT action_id FROM device_session_actions WHERE execution_mode='m6-grounded-live-v2' AND status='BLOCKED')
+    `).run(now);
+    this.db.prepare(`
+      UPDATE m6_action_claims SET status='AMBIGUOUS', updated_at=?
+      WHERE action_id IN (SELECT action_id FROM device_session_actions WHERE execution_mode='m6-grounded-live-v2' AND status='AMBIGUOUS')
+    `).run(now);
+  }
+
+  getM6GateFence() {
+    const row = this.db.prepare("SELECT * FROM m6_gate_fence WHERE marker='M6'").get();
+    if (!row) return null;
+    return {
+      gateId: row.gate_id,
+      epochHash: row.epoch_hash,
+      generation: Number(row.generation),
+      mode: row.mode,
+      purpose: row.purpose,
+      allowlist: parseJson(row.allowlist_json, []),
+      expiresAt: row.expires_at,
+      releaseId: row.release_id,
+      sourceCommit: row.source_commit,
+      locksHash: row.locks_hash,
+      updatedAt: iso(row.updated_at),
+    };
+  }
+
+  seedM6GateFence({ epoch, locksHash }) {
+    const { epochHash: _ignoredEpochHash, ...epochPayload } = epoch || {};
+    const derivedEpochHash = sha256(`xw.m6-live-gate.v1:${canonicalJson(epochPayload)}`);
+    if (!epoch || epoch.schemaId !== "xw.m6-live-gate.v1" || epoch.mode !== "CLOSED" || epoch.status !== "closed"
+      || !epoch.closeoutRef || !epoch.aggregateSealRef || epoch.epochHash !== derivedEpochHash) {
+      throw new ControlPlaneError(
+        "M6_GATE_FENCE_SEED_INVALID",
+        "v19 fence may only seed from a verified v1 CLOSED tail",
+        { status: 409 },
+      );
+    }
+    if (!/^[0-9a-f]{64}$/.test(locksHash || "")) {
+      throw new ControlPlaneError("M6_GATE_FENCE_SEED_INVALID", "fence seed requires a 64-hex locks hash", { status: 409 });
+    }
+    return this.transaction(() => {
+      const existing = this.getM6GateFence();
+      if (existing) {
+        if (existing.epochHash !== epoch.epochHash || existing.generation !== 0 || existing.mode !== "CLOSED") {
+          throw new ControlPlaneError("M6_GATE_FENCE_ALREADY_SEEDED", "existing M6 fence differs from the seed", { status: 409 });
+        }
+        return existing;
+      }
+      this.db.prepare(`
+        INSERT INTO m6_gate_fence (
+          marker, gate_id, epoch_hash, generation, mode, purpose, allowlist_json,
+          expires_at, release_id, source_commit, locks_hash, updated_at
+        ) VALUES ('M6', ?, ?, 0, 'CLOSED', NULL, ?, ?, ?, ?, ?, ?)
+      `).run(
+        epoch.gateId,
+        epoch.epochHash,
+        canonicalJson(epoch.allowlist),
+        epoch.expiresAt,
+        epoch.releaseId,
+        epoch.sourceCommit,
+        locksHash,
+        this.now(),
+      );
+      return this.getM6GateFence();
+    });
+  }
+
+  promoteM6GateFence({ expectedEpochHash, expectedGeneration, next, emergencyCloseConsumption = null }) {
+    if (!next || !/^[0-9a-f]{64}$/.test(next.epochHash || "") || !/^[0-9a-f]{64}$/.test(next.locksHash || "")
+      || !Number.isFinite(Date.parse(next.expiresAt)) || !Array.isArray(next.allowlist) || next.allowlist.length === 0
+      || !["CLOSED", "OBSERVE_ONLY", "GROUNDED_ACTION"].includes(next.mode)) {
+      throw new ControlPlaneError("M6_GATE_FENCE_PROMOTE_INVALID", "next M6 fence is incomplete", { status: 409 });
+    }
+    return this.transaction(() => {
+      const current = this.getM6GateFence();
+      if (!current || current.epochHash !== expectedEpochHash || current.generation !== expectedGeneration) {
+        throw new ControlPlaneError("M6_GATE_FENCE_CAS_MISMATCH", "M6 fence compare-and-swap precondition failed", {
+          status: 409,
+          details: { expectedEpochHash, expectedGeneration, actualEpochHash: current?.epochHash || null, actualGeneration: current?.generation ?? null },
+        });
+      }
+      const generation = current.generation + 1;
+      if (emergencyCloseConsumption) {
+        if (typeof emergencyCloseConsumption.nonce !== "string" || emergencyCloseConsumption.nonce === ""
+          || !/^[0-9a-f]{64}$/.test(emergencyCloseConsumption.authorizationHash || "")
+          || typeof emergencyCloseConsumption.reasonCode !== "string" || emergencyCloseConsumption.reasonCode === "") {
+          throw new ControlPlaneError("M6_GATE_EMERGENCY_CLOSE_INVALID", "emergency-close consumption is incomplete", { status: 409 });
+        }
+        try {
+          this.db.prepare(`
+            INSERT INTO m6_emergency_close_consumptions (nonce, authorization_hash, reason_code, consumed_at)
+            VALUES (?, ?, ?, ?)
+          `).run(
+            emergencyCloseConsumption.nonce,
+            emergencyCloseConsumption.authorizationHash,
+            emergencyCloseConsumption.reasonCode,
+            this.now(),
+          );
+        } catch (error) {
+          if (/UNIQUE|PRIMARY KEY/i.test(String(error?.message || error))) {
+            throw new ControlPlaneError("M6_GATE_EMERGENCY_CLOSE_REPLAY", "emergency-close authorization was already consumed", { status: 409 });
+          }
+          throw error;
+        }
+      }
+      this.db.prepare(`
+        UPDATE m6_gate_fence SET
+          gate_id=?, epoch_hash=?, generation=?, mode=?, purpose=?, allowlist_json=?,
+          expires_at=?, release_id=?, source_commit=?, locks_hash=?, updated_at=?
+        WHERE marker='M6'
+      `).run(
+        next.gateId,
+        next.epochHash,
+        generation,
+        next.mode,
+        next.purpose ?? null,
+        canonicalJson(next.allowlist),
+        next.expiresAt,
+        next.releaseId,
+        next.sourceCommit,
+        next.locksHash,
+        this.now(),
+      );
+      return this.getM6GateFence();
+    });
+  }
+
+  assertM6GateFence(expected) {
+    const current = this.getM6GateFence();
+    const same = current && [
+      "gateId", "epochHash", "generation", "mode", "purpose", "expiresAt",
+      "releaseId", "sourceCommit", "locksHash",
+    ].every((key) => current[key] === expected?.[key])
+      && canonicalJson(current.allowlist) === canonicalJson(expected?.allowlist);
+    if (!same) {
+      throw new ControlPlaneError("M6_GATE_FENCE_MISMATCH", "file gate and DB fence are not identical", { status: 423 });
+    }
+    return current;
+  }
+
+  getM6EmergencyCloseConsumption(nonce) {
+    const row = this.db.prepare("SELECT * FROM m6_emergency_close_consumptions WHERE nonce=?").get(nonce);
+    return row ? {
+      nonce: row.nonce,
+      authorizationHash: row.authorization_hash,
+      reasonCode: row.reason_code,
+      consumedAt: iso(row.consumed_at),
+    } : null;
+  }
+
+  issueM6GroundingPermit({ decision, slot, timing }) {
+    const forbiddenKey = (value) => {
+      if (!value || typeof value !== "object") return false;
+      if (Array.isArray(value)) return value.some(forbiddenKey);
+      return Object.entries(value).some(([key, child]) => /^(?:x|y|x1|y1|x2|y2|bounds|coordinates?|primitiveAction)$/iu.test(key) || forbiddenKey(child));
+    };
+    if (decision?.schemaId !== "xw.grounding-decision.v2" || decision.disposition !== "ALLOW_ONCE"
+      || !/^[0-9a-f]{64}$/.test(decision.decisionRef || "") || forbiddenKey(decision)
+      || !slot || !/^[0-9a-f]{64}$/.test(slot.slotSpecHash || "")
+      || forbiddenKey(slot) || !timing || !Number.isFinite(timing.issuedAtMs)
+      || !Number.isFinite(timing.expiresAtMs) || timing.expiresAtMs <= timing.issuedAtMs
+      || !Number.isFinite(timing.dispatchDeadlineMonoMs)) {
+      throw new ControlPlaneError("M6_GROUNDING_PERMIT_INVALID", "durable grounding permit input is invalid", { status: 409 });
+    }
+    const now = this.now();
+    if (timing.expiresAtMs <= now) {
+      throw new ControlPlaneError("M6_GROUNDING_PERMIT_EXPIRED", "grounding permit is already expired", { status: 409 });
+    }
+    const permitId = newId("m6_permit");
+    const raw = {
+      schemaId: "xw.m6-grounding-permit.v1",
+      permitId,
+      decisionRef: decision.decisionRef,
+      operationKey: decision.operationKey,
+      target: decision.target,
+      bindings: decision.bindings,
+      slot: { ...slot },
+      timing: {
+        issuedAtMs: timing.issuedAtMs,
+        expiresAtMs: timing.expiresAtMs,
+        dispatchDeadlineMonoMs: timing.dispatchDeadlineMonoMs,
+      },
+    };
+    const permitHash = sha256(`xw.m6-grounding-permit.v1:${canonicalJson(raw)}`);
+    const permit = { ...raw, permitHash };
+    try {
+      this.db.prepare(`
+        INSERT INTO m6_grounding_permits (
+          permit_id, permit_hash, decision_ref, operation_key, permit_json, issued_at, expires_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(permitId, permitHash, decision.decisionRef, decision.operationKey, canonicalJson(permit), timing.issuedAtMs, timing.expiresAtMs);
+    } catch (error) {
+      if (/UNIQUE|PRIMARY KEY/i.test(String(error?.message || error))) {
+        throw new ControlPlaneError("M6_GROUNDING_DECISION_REPLAY", "grounding decision already owns a permit", { status: 409 });
+      }
+      throw error;
+    }
+    return permit;
+  }
+
+  getM6GroundingPermit(permitId) {
+    const row = this.db.prepare("SELECT * FROM m6_grounding_permits WHERE permit_id=?").get(permitId);
+    if (!row) return null;
+    return {
+      ...parseJson(row.permit_json),
+      consumedAt: iso(row.consumed_at),
+      consumptionReceipt: parseJson(row.consumption_receipt_json),
+    };
+  }
+
+  #consumeM6GroundingPermitNoTransaction({ permitId, expected, nowMonoMs, minimumRemainingTtlMs = 1000 }) {
+    if (!Number.isFinite(nowMonoMs) || !Number.isFinite(minimumRemainingTtlMs) || minimumRemainingTtlMs < 1000) {
+      throw new ControlPlaneError("M6_GROUNDING_PERMIT_INVALID", "permit consume requires monotonic time and minimum TTL >=1s", { status: 409 });
+    }
+    const permit = this.getM6GroundingPermit(permitId);
+    if (!permit) throw new ControlPlaneError("M6_GROUNDING_PERMIT_NOT_FOUND", "grounding permit not found", { status: 404 });
+    if (permit.consumedAt) throw new ControlPlaneError("M6_GROUNDING_PERMIT_REPLAY", "grounding permit is already consumed", { status: 409 });
+    const remainingTtlMs = permit.timing.expiresAtMs - this.now();
+    const remainingMonoMs = permit.timing.dispatchDeadlineMonoMs - nowMonoMs;
+    if (remainingTtlMs < minimumRemainingTtlMs || remainingMonoMs < minimumRemainingTtlMs) {
+      throw new ControlPlaneError("M6_GROUNDING_PERMIT_STALE", "grounding permit has insufficient remaining TTL", { status: 409 });
+    }
+    const expectedBinding = { operationKey: expected?.operationKey, target: expected?.target, bindings: expected?.bindings, slot: expected?.slot };
+    const actualBinding = { operationKey: permit.operationKey, target: permit.target, bindings: permit.bindings, slot: permit.slot };
+    if (canonicalJson(expectedBinding) !== canonicalJson(actualBinding)) {
+      throw new ControlPlaneError("M6_GROUNDING_PERMIT_BINDING_MISMATCH", "grounding permit binding changed before consume", { status: 409 });
+    }
+    const consumedAtMs = this.now();
+    const receiptRaw = {
+      schemaId: "xw.m6-grounding-permit-consumption.v1", permitId: permit.permitId, permitHash: permit.permitHash,
+      decisionRef: permit.decisionRef, operationKey: permit.operationKey, target: permit.target, bindings: permit.bindings,
+      slot: permit.slot, remainingTtlMs, remainingMonoMs, dispatchDeadlineMonoMs: permit.timing.dispatchDeadlineMonoMs,
+      consumedAtMonoMs: nowMonoMs, consumedAtMs,
+    };
+    const receipt = { ...receiptRaw, consumptionHash: sha256(`xw.m6-grounding-permit-consumption.v1:${canonicalJson(receiptRaw)}`) };
+    const updated = this.db.prepare(`UPDATE m6_grounding_permits SET consumed_at=?, consumption_receipt_json=? WHERE permit_id=? AND consumed_at IS NULL`)
+      .run(consumedAtMs, canonicalJson(receipt), permitId);
+    if (!updated.changes) throw new ControlPlaneError("M6_GROUNDING_PERMIT_REPLAY", "grounding permit is already consumed", { status: 409 });
+    return receipt;
+  }
+
+  consumeM6GroundingPermit(input) {
+    return this.transaction(() => this.#consumeM6GroundingPermitNoTransaction(input));
+  }
+
+  #mapM6ActionLedger(row) {
+    if (!row) return null;
+    return {
+      actionId: row.action_id,
+      operationKey: row.operation_key,
+      permitId: row.permit_id,
+      runId: row.run_id,
+      sessionId: row.session_id,
+      leaseId: row.lease_id,
+      status: row.status,
+      transportCounter: Number(row.transport_called),
+      externalEffect: Boolean(row.transport_called),
+      effectStatus: parseJson(row.effect_assessment_json)?.effectStatus || "NO_EFFECT",
+      authorizationReceipt: parseJson(row.authorization_receipt_json),
+      guardReceipt: parseJson(row.guard_receipt_json),
+      transportResult: parseJson(row.transport_result_json),
+      completionReceipt: parseJson(row.completion_receipt_json),
+      errorCode: row.error_code,
+      createdAt: iso(row.action_created_at),
+      updatedAt: iso(row.action_updated_at),
+    };
+  }
+
+  getM6ActionLedger(actionId) {
+    return this.#mapM6ActionLedger(this.db.prepare(`
+      SELECT d.*, a.status, a.transport_called, a.effect_assessment_json, a.error_code,
+        a.created_at AS action_created_at, a.updated_at AS action_updated_at
+      FROM m6_grounded_action_details d
+      JOIN device_session_actions a ON a.action_id=d.action_id AND a.session_id=d.session_id
+      WHERE d.action_id=?
+    `).get(actionId));
+  }
+
+  prepareM6GroundedAction({ decision, slot, timing, fence, actionId = newId("m6_action") }) {
+    return this.transaction(() => {
+      this.assertM6GateFence(fence);
+      if (decision?.bindings?.gateEpochHash !== fence.epochHash || decision?.bindings?.gateGeneration !== fence.generation
+        || decision?.bindings?.sessionId == null || decision?.bindings?.leaseId == null || decision?.bindings?.runId == null) {
+        throw new ControlPlaneError("M6_ACTION_BINDING_MISMATCH", "decision does not bind to the current fence/run/session/lease", { status: 409 });
+      }
+      const permit = this.issueM6GroundingPermit({ decision, slot, timing });
+      const targetHash = sha256(`xw.m6-action-target.v1:${canonicalJson(decision.target)}`);
+      const now = this.now();
+      try {
+        this.db.prepare(`
+          INSERT INTO m6_action_claims (
+            operation_key, action_id, slot_spec_hash, target_hash, status, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, 'RESERVED', ?, ?)
+        `).run(decision.operationKey, actionId, slot.slotSpecHash, targetHash, now, now);
+        this.db.prepare(`
+          INSERT INTO device_session_actions (
+            session_id, idempotency_key, action_id, fingerprint_json, result_json, executed, created_at,
+            status, execution_mode, transport_called, executor_id, effect_assessment_json, updated_at
+          ) VALUES (?, ?, ?, ?, '{}', 0, ?, 'ASSESSED', 'm6-grounded-live-v2', 0, 'm6-typed-adapter',
+            '{"effectStatus":"NO_EFFECT"}', ?)
+        `).run(decision.bindings.sessionId, decision.operationKey, actionId, canonicalJson({
+          operationKey: decision.operationKey, decisionRef: decision.decisionRef, slotSpecHash: slot.slotSpecHash, targetHash,
+        }), now, now);
+        this.db.prepare(`
+          INSERT INTO m6_grounded_action_details (
+            action_id, operation_key, permit_id, run_id, session_id, lease_id, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          actionId,
+          decision.operationKey,
+          permit.permitId,
+          decision.bindings.runId,
+          decision.bindings.sessionId,
+          decision.bindings.leaseId,
+          now,
+          now,
+        );
+      } catch (error) {
+        if (/UNIQUE|PRIMARY KEY/i.test(String(error?.message || error))) {
+          throw new ControlPlaneError("M6_LOGICAL_ACTION_CLAIM_CONFLICT", "logical action already has a global claim", { status: 409 });
+        }
+        throw error;
+      }
+      return { permit, ledger: this.getM6ActionLedger(actionId) };
+    });
+  }
+
+  authorizeM6GroundedActionSend({ actionId, fence, expectedPermit, nowMonoMs, typedAuthorization }) {
+    return this.transaction(() => {
+      this.assertM6GateFence(fence);
+      const ledger = this.getM6ActionLedger(actionId);
+      if (!ledger || ledger.status !== "ASSESSED" || ledger.transportCounter !== 0) {
+        throw new ControlPlaneError("M6_ACTION_STATE_INVALID", "only ASSESSED zero-transport actions may authorize", { status: 409 });
+      }
+      const permitReceipt = this.#consumeM6GroundingPermitNoTransaction({
+        permitId: ledger.permitId,
+        expected: expectedPermit,
+        nowMonoMs,
+        minimumRemainingTtlMs: 1000,
+      });
+      if (permitReceipt.bindings.gateEpochHash !== fence.epochHash || permitReceipt.bindings.gateGeneration !== fence.generation) {
+        throw new ControlPlaneError("M6_GATE_FENCE_MISMATCH", "permit consumption fence changed", { status: 423 });
+      }
+      const typedAuthorizationId = typedAuthorization?.authorizationId || typedAuthorization?.authorization?.authorizationId;
+      const storedAuthorization = this.getTransportActionAuthorization(typedAuthorizationId);
+      const capabilityJob = storedAuthorization?.jobId ? this.getJob(storedAuthorization.jobId) : null;
+      if (!storedAuthorization || storedAuthorization.kind !== "capability_job" || storedAuthorization.purpose !== "execute"
+        || !storedAuthorization.jobId || storedAuthorization.runId !== permitReceipt.bindings.runId
+        || storedAuthorization.leaseId !== permitReceipt.bindings.leaseId || storedAuthorization.operationKey !== permitReceipt.operationKey
+        || !capabilityJob || capabilityJob.status !== "running" || capabilityJob.runId !== storedAuthorization.runId
+        || capabilityJob.sessionId !== ledger.sessionId || capabilityJob.deviceId !== storedAuthorization.deviceId) {
+        throw new ControlPlaneError("M6_TYPED_AUTH_BINDING_MISMATCH", "typed transport authorization is not bound to the capability job/run/lease/operation", { status: 409 });
+      }
+      const typedReceipt = this.#consumeTransportActionAuthorizationNoTransaction({
+        authorizationId: typedAuthorizationId,
+        token: typedAuthorization.token,
+        expectedPurpose: "execute",
+        expectedDeviceId: storedAuthorization.deviceId,
+        expectedLeaseId: permitReceipt.bindings.leaseId,
+      });
+      const receipt = { schemaId: "xw.m6-action-authorization-receipt.v1", permit: permitReceipt, typedAuthorization: typedReceipt };
+      this.db.prepare(`
+        UPDATE m6_grounded_action_details SET authorization_receipt_json=?, updated_at=?
+        WHERE action_id=?
+      `).run(canonicalJson(receipt), this.now(), actionId);
+      this.db.prepare("UPDATE device_session_actions SET status='EXECUTING', updated_at=? WHERE action_id=? AND session_id=?")
+        .run(this.now(), actionId, ledger.sessionId);
+      this.db.prepare("UPDATE m6_action_claims SET status='CONSUMED', updated_at=? WHERE action_id=?").run(this.now(), actionId);
+      return this.getM6ActionLedger(actionId);
+    });
+  }
+
+  markM6ActionTransportStart({ actionId, currentState, guardStartedMonoMs, writeReadyMonoMs }) {
+    return this.transaction(() => {
+      const ledger = this.getM6ActionLedger(actionId);
+      if (!ledger || ledger.status !== "EXECUTING" || ledger.transportCounter !== 0 || !ledger.authorizationReceipt) {
+        throw new ControlPlaneError("M6_ACTION_STATE_INVALID", "transport start requires an EXECUTING zero-counter action", { status: 409 });
+      }
+      const slot = ledger.authorizationReceipt.permit.slot;
+      const comparableKeys = [
+        "uiStateGeneration", "appPackageHash", "focusHash", "pageFingerprint",
+        "rotation", "displayHash", "environmentAttestationHash",
+      ];
+      if (!Number.isFinite(guardStartedMonoMs) || !Number.isFinite(writeReadyMonoMs)
+        || writeReadyMonoMs < guardStartedMonoMs || writeReadyMonoMs - guardStartedMonoMs > 250
+        || writeReadyMonoMs >= ledger.authorizationReceipt.permit.dispatchDeadlineMonoMs
+        || comparableKeys.some((key) => currentState?.[key] !== slot?.[key])) {
+        this.db.prepare(`
+          UPDATE device_session_actions SET status='BLOCKED', effect_assessment_json='{"effectStatus":"GROUND_ACTION_ABORTED_NOT_SENT"}',
+            error_code='M6_TCB_CURRENT_STATE_GUARD', updated_at=? WHERE action_id=? AND session_id=?
+        `).run(this.now(), actionId, ledger.sessionId);
+        this.db.prepare("UPDATE m6_action_claims SET status='BLOCKED', updated_at=? WHERE action_id=?").run(this.now(), actionId);
+        throw new ControlPlaneError("M6_TCB_CURRENT_STATE_GUARD", "current UI/environment state or guard deadline changed before send", { status: 409 });
+      }
+      const guardRaw = {
+        schemaId: "xw.m6-tcb-current-state-guard.v1",
+        actionId,
+        slotSpecHash: slot.slotSpecHash,
+        stateHash: sha256(`xw.m6-current-state.v1:${canonicalJson(currentState)}`),
+        guardDelayMs: writeReadyMonoMs - guardStartedMonoMs,
+        writeReadyMonoMs,
+      };
+      const guardReceipt = { ...guardRaw, guardHash: sha256(`xw.m6-tcb-current-state-guard.v1:${canonicalJson(guardRaw)}`) };
+      this.db.prepare(`
+        UPDATE m6_grounded_action_details SET guard_receipt_json=?, updated_at=? WHERE action_id=?
+      `).run(canonicalJson(guardReceipt), this.now(), actionId);
+      this.db.prepare(`
+        UPDATE device_session_actions SET transport_called=1,
+          effect_assessment_json='{"effectStatus":"POSSIBLE_EFFECT"}', updated_at=?
+        WHERE action_id=? AND session_id=? AND transport_called=0
+      `).run(this.now(), actionId, ledger.sessionId);
+      return this.getM6ActionLedger(actionId);
+    });
+  }
+
+  recordM6ActionTransportOutcome({ actionId, ok, result = {}, errorCode = null }) {
+    return this.transaction(() => {
+      const ledger = this.getM6ActionLedger(actionId);
+      if (!ledger || ledger.status !== "EXECUTING" || ledger.transportCounter !== 1) {
+        throw new ControlPlaneError("M6_ACTION_STATE_INVALID", "transport outcome requires an EXECUTING action", { status: 409 });
+      }
+      const status = ok ? "EXECUTED" : "AMBIGUOUS";
+      const effectStatus = ok ? "EFFECT_SENT_PENDING_VERIFY" : "POSSIBLE_EFFECT";
+      this.db.prepare(`
+        UPDATE m6_grounded_action_details SET transport_result_json=?, updated_at=? WHERE action_id=?
+      `).run(canonicalJson(result), this.now(), actionId);
+      this.db.prepare(`UPDATE device_session_actions SET status=?, result_json=?, effect_assessment_json=?, error_code=?, updated_at=?
+        WHERE action_id=? AND session_id=?`)
+        .run(status, canonicalJson(result), canonicalJson({ effectStatus }), errorCode, this.now(), actionId, ledger.sessionId);
+      if (!ok) this.db.prepare("UPDATE m6_action_claims SET status='AMBIGUOUS', updated_at=? WHERE action_id=?").run(this.now(), actionId);
+      return this.getM6ActionLedger(actionId);
+    });
+  }
+
+  completeM6GroundedAction({ actionId, afterObservation, verification, receipt }) {
+    return this.transaction(() => {
+      const ledger = this.getM6ActionLedger(actionId);
+      if (!ledger || ledger.status !== "EXECUTED" || ledger.transportCounter !== 1) {
+        throw new ControlPlaneError("M6_ACTION_STATE_INVALID", "completion requires an EXECUTED action", { status: 409 });
+      }
+      if (!afterObservation?.observationId || verification?.ok !== true || receipt?.actionId !== actionId
+        || receipt?.operationKey !== ledger.operationKey) {
+        throw new ControlPlaneError("M6_ACTION_COMPLETION_INVALID", "after observation, verification, and receipt must agree", { status: 409 });
+      }
+      this.recordDeviceSessionObservation({ sessionId: ledger.sessionId, observation: afterObservation, mutatingCalls: 0 });
+      this.#insertDeviceSessionEvent({
+        sessionId: ledger.sessionId,
+        type: "observation.captured",
+        payload: { observationId: afterObservation.observationId, evidenceRefs: afterObservation.evidenceRefs, mutatingCalls: 0 },
+      });
+      const completionRaw = {
+        schemaId: "xw.m6-grounded-action-completion.v1",
+        actionId,
+        operationKey: ledger.operationKey,
+        afterObservationId: afterObservation.observationId,
+        verification,
+        receipt,
+        transportCounter: 1,
+        externalEffect: true,
+      };
+      const completion = { ...completionRaw, completionHash: sha256(`xw.m6-grounded-action-completion.v1:${canonicalJson(completionRaw)}`) };
+      this.db.prepare(`
+        UPDATE m6_grounded_action_details SET completion_receipt_json=?, updated_at=? WHERE action_id=?
+      `).run(canonicalJson(completion), this.now(), actionId);
+      this.db.prepare(`UPDATE device_session_actions SET status='VERIFIED', after_observation_id=?, updated_at=?
+        WHERE action_id=? AND session_id=?`).run(afterObservation.observationId, this.now(), actionId, ledger.sessionId);
+      this.db.prepare(`UPDATE device_session_actions SET status='COMPLETED', executed=1,
+        effect_assessment_json='{"effectStatus":"VERIFIED_EFFECT"}', updated_at=?
+        WHERE action_id=? AND session_id=?`).run(this.now(), actionId, ledger.sessionId);
+      this.db.prepare("UPDATE m6_action_claims SET status='COMPLETED', updated_at=? WHERE action_id=?").run(this.now(), actionId);
+      return this.getM6ActionLedger(actionId);
+    });
+  }
+
+  abortM6GroundedActionNotSent({ actionId, errorCode }) {
+    return this.transaction(() => {
+      const ledger = this.getM6ActionLedger(actionId);
+      if (!ledger || ledger.transportCounter !== 0 || !["ASSESSED", "EXECUTING"].includes(ledger.status)) {
+        throw new ControlPlaneError("M6_ACTION_STATE_INVALID", "only an unsent action may abort without effect", { status: 409 });
+      }
+      this.db.prepare(`
+        UPDATE device_session_actions SET status='BLOCKED', effect_assessment_json='{"effectStatus":"GROUND_ACTION_ABORTED_NOT_SENT"}',
+          error_code=?, updated_at=? WHERE action_id=? AND session_id=?
+      `).run(errorCode || "M6_ACTION_ABORTED", this.now(), actionId, ledger.sessionId);
+      this.db.prepare("UPDATE m6_action_claims SET status='BLOCKED', updated_at=? WHERE action_id=?").run(this.now(), actionId);
+      return this.getM6ActionLedger(actionId);
+    });
   }
 
   appendEvent({ jobId = null, runId = null, type, payload = {} }) {
@@ -3873,31 +4439,27 @@ export class StateStore {
     return publicTransportAuth(row);
   }
 
-  consumeTransportActionAuthorization({ authorizationId, token, expectedPurpose = null, expectedDeviceId = null, expectedLeaseId = null } = {}) {
-    return this.transaction(() => {
-      const row = this.db.prepare("SELECT * FROM transport_action_authorizations WHERE authorization_id=?").get(authorizationId);
-      if (!row) {
-        throw new ControlPlaneError("TRANSPORT_AUTH_NOT_FOUND", "authorization missing", { status: 404 });
-      }
-      const stored = publicTransportAuth(row);
-      const consumed = consumeTransportAuthKernel({
-        stored,
-        token: { ...token, authorizationId },
-        expectedPurpose: expectedPurpose || stored.purpose,
-        expectedDeviceId: expectedDeviceId || stored.deviceId,
-        expectedLeaseId: expectedLeaseId || stored.leaseId,
-      });
-      const updated = this.db.prepare(
-        "UPDATE transport_action_authorizations SET consumed_at=? WHERE authorization_id=? AND consumed_at IS NULL",
-      ).run(consumed.consumedAt, authorizationId);
-      if (!updated.changes) {
-        throw new ControlPlaneError("TRANSPORT_AUTH_REPLAY", "authorization nonce already consumed", {
-          status: 409,
-          details: { authorizationId },
-        });
-      }
-      return this.getTransportActionAuthorization(authorizationId);
+  #consumeTransportActionAuthorizationNoTransaction({ authorizationId, token, expectedPurpose = null, expectedDeviceId = null, expectedLeaseId = null } = {}) {
+    const row = this.db.prepare("SELECT * FROM transport_action_authorizations WHERE authorization_id=?").get(authorizationId);
+    if (!row) throw new ControlPlaneError("TRANSPORT_AUTH_NOT_FOUND", "authorization missing", { status: 404 });
+    const stored = publicTransportAuth(row);
+    const consumed = consumeTransportAuthKernel({
+      stored,
+      token: { ...token, authorizationId },
+      expectedPurpose: expectedPurpose || stored.purpose,
+      expectedDeviceId: expectedDeviceId || stored.deviceId,
+      expectedLeaseId: expectedLeaseId || stored.leaseId,
     });
+    const updated = this.db.prepare("UPDATE transport_action_authorizations SET consumed_at=? WHERE authorization_id=? AND consumed_at IS NULL")
+      .run(consumed.consumedAt, authorizationId);
+    if (!updated.changes) {
+      throw new ControlPlaneError("TRANSPORT_AUTH_REPLAY", "authorization nonce already consumed", { status: 409, details: { authorizationId } });
+    }
+    return this.getTransportActionAuthorization(authorizationId);
+  }
+
+  consumeTransportActionAuthorization(input = {}) {
+    return this.transaction(() => this.#consumeTransportActionAuthorizationNoTransaction(input));
   }
 }
 

@@ -1,0 +1,71 @@
+{
+  "schemaId": "xw.m6-4-gate-a-spike-receipt.v1",
+  "status": "OFFLINE_IMPLEMENTATION_ALLOWED_LIVE_PROFILE_UNQUALIFIED",
+  "provider": {
+    "passed": true,
+    "caseCount": 200,
+    "negativeCount": 40,
+    "metrics": {
+      "cases": 200,
+      "positives": 160,
+      "negatives": 40,
+      "familyCounts": {
+        "app-launch": 23,
+        "app-switch": 23,
+        "search": 23,
+        "text-input": 22,
+        "scroll": 22,
+        "tab-back": 22,
+        "form-edit": 22,
+        "settings-nav": 3
+      },
+      "negativeKindCounts": {
+        "empty": 17,
+        "ambiguous": 13,
+        "system": 9,
+        "sensitive": 1
+      },
+      "blockRecallPercent": 100,
+      "top1Percent": 100,
+      "safeRegionPercent": 100,
+      "negativeReplanPercent": 100,
+      "forbiddenSelected": 0,
+      "misclick": 0,
+      "stale": 0
+    },
+    "runtimeAttestationPending": true,
+    "artifact": {
+      "path": "artifacts/m6-4/m6-4-environment-qualification.json",
+      "sha256": "54e8cfb49c3dc4134f973c67c02b8237ba4dfd3892b274d023d85a679a629f38"
+    }
+  },
+  "broker": {
+    "passed": true,
+    "exactToolCount": 10,
+    "remainingOwnedTrees": 0,
+    "artifact": {
+      "path": "artifacts/m6-4/m6-4-broker-spike.json",
+      "sha256": "30322cfe4042b45226a12ba5131a95c5a8f127f4d1be66fae2c74e19764602f8"
+    }
+  },
+  "sameLease": {
+    "passed": true,
+    "resourcesClosed": true,
+    "artifact": {
+      "path": "artifacts/m6-4/m6-4-same-lease-spike.json",
+      "sha256": "dfa15e286515f361c30f6245968b18c9e04cb91f0664d225781807a4ec7e3ce8"
+    }
+  },
+  "ttlModel": {
+    "passedForLive": false,
+    "offlineImplementationAllowed": true,
+    "gateFEligible": false,
+    "thresholdsRelaxed": false,
+    "artifact": {
+      "path": "artifacts/m6-4/m6-4-ttl-model-spike.json",
+      "sha256": "1a1e74b780b188bdf416dc24ffbde71acac39c1ab9ddceb8d1aed7a05352acf4"
+    }
+  },
+  "liveActionAuthorized": false,
+  "receiptSha256": "87471bb856ca37e77f9e415a918f749ac22428712c2d680359116618908e8d14"
+}

@@ -33,6 +33,13 @@ import { canonicalJson, sha256 } from "./canonical.mjs";
 import { ControlPlaneError } from "./errors.mjs";
 import { validateJsonSchema } from "./json-schema-validator.mjs";
 import { deriveM6CloseoutHash, deriveM6EpochHash } from "./m6-live-gate.mjs";
+import {
+  deriveEpochHashBySchema,
+  deriveM6EmergencyCloseAuthorizationHash,
+  deriveM6V2LockSetHash,
+  M6_GATE_V2_SCHEMA_ID,
+  M6_LOCKS_V2_SCHEMA_ID,
+} from "./m6-live-gate-v2.mjs";
 import { loadGateIssuerAllowlist, verifyEpochProof } from "./m6-issuer-allowlist.mjs";
 import { deriveM6AggregateSealHash } from "../../../../packages/kernel/lib/m6-aggregate-closeout.mjs";
 
@@ -40,12 +47,20 @@ export const M6_LOCKS_SCHEMA_ID = "xw.m6-locks.v1";
 const HEX64 = /^[0-9a-f]{64}$/;
 
 let EPOCH_SCHEMA = null;
+let EPOCH_SCHEMA_V2 = null;
 export function loadEpochSchema() {
   if (EPOCH_SCHEMA) return EPOCH_SCHEMA;
   // Shared kernel schema — the same file the orchestrator validates against.
   const path = join(import.meta.dirname, "..", "..", "..", "..", "packages", "kernel", "contracts", "orchestration", "m6", "xw.m6-live-gate.v1.schema.json");
   EPOCH_SCHEMA = JSON.parse(readFileSync(path, "utf8"));
   return EPOCH_SCHEMA;
+}
+
+export function loadEpochSchemaV2() {
+  if (EPOCH_SCHEMA_V2) return EPOCH_SCHEMA_V2;
+  const path = join(import.meta.dirname, "..", "..", "..", "..", "packages", "kernel", "contracts", "orchestration", "m6", "xw.m6-live-gate.v2.schema.json");
+  EPOCH_SCHEMA_V2 = JSON.parse(readFileSync(path, "utf8"));
+  return EPOCH_SCHEMA_V2;
 }
 
 function fail(code, message, extra = {}) {
@@ -107,16 +122,64 @@ function loadEpochFile(fileDir, epochHash, allowlist) {
   const raw = readRegularJson(filePath);
   if (!raw) fail("M6_GATE_EPOCH_MISSING", `epoch file ${epochHash}.json is absent`);
   const { proof, ...epoch } = raw;
+  const schema = epoch.schemaId === "xw.m6-live-gate.v1"
+    ? loadEpochSchema()
+    : epoch.schemaId === M6_GATE_V2_SCHEMA_ID
+      ? loadEpochSchemaV2()
+      : null;
+  if (!schema) fail("M6_GATE_SCHEMA_UNKNOWN", `epoch ${epochHash} has unknown schemaId`);
   // Schema (no proof field — additionalProperties: false).
-  const schemaErrors = validateJsonSchema(epoch, loadEpochSchema());
+  const schemaErrors = validateJsonSchema(epoch, schema);
   if (schemaErrors.length > 0) fail("M6_GATE_EPOCH_SCHEMA_INVALID", `epoch ${epochHash} fails schema: ${schemaErrors.join("; ")}`);
   // Re-derive the self-hash; must match the embedded hash AND the file address.
-  const derived = deriveM6EpochHash(epoch);
+  const derived = deriveEpochHashBySchema(epoch);
   if (derived !== epoch.epochHash) fail("M6_GATE_EPOCH_FORGED", `epoch ${epochHash} self-hash does not match its payload`);
   if (derived !== epochHash) fail("M6_GATE_EPOCH_ADDRESS_MISMATCH", `epoch file address does not match its hash`);
   // Verify the issuer signature.
   verifyEpochProof({ epoch, epochHash, proof, allowlist });
   return epoch;
+}
+
+function loadContentAddressedRegistry(dir, {
+  schemaId,
+  idField,
+  hashField,
+  deriveHash,
+  errorCode,
+}) {
+  const records = {};
+  if (!existsSync(dir)) return records;
+  for (const name of readdirSync(dir)) {
+    if (!name.endsWith(".json")) continue;
+    const record = readRegularJson(join(dir, name));
+    const id = name.slice(0, -5);
+    if (!record || record.schemaId !== schemaId || record[idField] !== id
+      || record[hashField] !== deriveHash(record)) {
+      fail(errorCode, `${schemaId} record ${id} is malformed or forged`);
+    }
+    records[id] = record;
+  }
+  return records;
+}
+
+function loadV2LockSets(m6Root) {
+  return loadContentAddressedRegistry(join(m6Root, "m6-gate", "locks.v2"), {
+    schemaId: M6_LOCKS_V2_SCHEMA_ID,
+    idField: "lockSetId",
+    hashField: "lockSetHash",
+    deriveHash: deriveM6V2LockSetHash,
+    errorCode: "M6_LOCKS_INVALID",
+  });
+}
+
+function loadEmergencyCloseAuthorizations(gateDirPath) {
+  return loadContentAddressedRegistry(join(gateDirPath, "emergency-close"), {
+    schemaId: "xw.m6-emergency-close-authorization.v1",
+    idField: "authorizationId",
+    hashField: "authorizationHash",
+    deriveHash: deriveM6EmergencyCloseAuthorizationHash,
+    errorCode: "M6_GATE_EMERGENCY_CLOSE_INVALID",
+  });
 }
 
 // Load all closeout records for the gate into a {closeoutId: record} map. Each
@@ -172,13 +235,13 @@ export function loadM6Gate({
   const dir = gateDir(m6Root, gateId);
   if (!existsSync(dir)) {
     // No gate installed → empty chain (gate evaluates to M6_GATE_EMPTY, CLOSED).
-    return { chain: [], closeouts: {}, aggregates: {}, lockHashes: loadM6Locks(m6Root, { requireLocks }), gateId, tailEpochHash: null };
+    return { chain: [], closeouts: {}, aggregates: {}, lockHashes: loadM6Locks(m6Root, { requireLocks }), lockSets: loadV2LockSets(m6Root), emergencyCloseAuthorizations: {}, gateId, tailEpochHash: null };
   }
   const allowlist = loadGateIssuerAllowlist(issuerAllowlistPath);
   const currentPath = join(dir, "current.json");
   const current = readRegularJson(currentPath);
   if (!current || !Array.isArray(current.chain) || current.chain.length === 0) {
-    return { chain: [], closeouts: {}, aggregates: {}, lockHashes: loadM6Locks(m6Root, { requireLocks }), gateId, tailEpochHash: null };
+    return { chain: [], closeouts: {}, aggregates: {}, lockHashes: loadM6Locks(m6Root, { requireLocks }), lockSets: loadV2LockSets(m6Root), emergencyCloseAuthorizations: {}, gateId, tailEpochHash: null };
   }
   const chain = [];
   for (const epochHash of current.chain) {
@@ -187,7 +250,16 @@ export function loadM6Gate({
   }
   const closeouts = loadCloseouts(dir);
   const aggregates = loadAggregates(dir);
-  return { chain, closeouts, aggregates, lockHashes: loadM6Locks(m6Root, { requireLocks }), gateId, tailEpochHash: current.tailEpochHash ?? current.chain[current.chain.length - 1] };
+  return {
+    chain,
+    closeouts,
+    aggregates,
+    lockHashes: loadM6Locks(m6Root, { requireLocks }),
+    lockSets: loadV2LockSets(m6Root),
+    emergencyCloseAuthorizations: loadEmergencyCloseAuthorizations(dir),
+    gateId,
+    tailEpochHash: current.tailEpochHash ?? current.chain[current.chain.length - 1],
+  };
 }
 
 // Probe that a directory is writable (mkdir + temp write + fsync + unlink).

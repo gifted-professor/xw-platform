@@ -1,0 +1,209 @@
+{
+  "schema": "multi-model-execution-contract.v1",
+  "planSha256": "68887b2f1eeae7c89e726f1a2bd6571bf665c719e8a50017bd1fadb2443b7d29",
+  "authorizationMode": "close-accepted-blockers",
+  "budgets": {
+    "externalReviewWaves": 1,
+    "reviewerDrivenFixBatches": 1,
+    "localRepairTails": 1,
+    "targetedVerifications": 2
+  },
+  "execution": {
+    "runtime": "codex-desktop",
+    "primaryModel": "gpt-5.6-sol",
+    "maxModelSwitches": 1,
+    "rehydrateOnContextChange": true
+  },
+  "items": [
+    {
+      "id": "M6-4-GA-BASELINE",
+      "severity": "P1",
+      "invariant": "The candidate contains the exact unsquashed M6-3 commit, preserves historical receipts and begins from a CLOSED, zero-resource baseline without scratch or private runtime state.",
+      "riskClasses": ["reproducible-artifact"],
+      "requiredArtifacts": ["docs/plans/M6-4-owner-decision-record.json", "docs/plans/M6-3-completion-index.md", "artifacts/m6-4/m6-4-baseline-preflight.json"],
+      "forbiddenDependencies": [".m6-3-spike", "private profiles or sessions", "node_modules in the candidate", "rewritten M6-2/M6-3 receipts", "squashed M6-3 history"],
+      "probes": [
+        {
+          "id": "M6-4-GA-BASELINE-reproduce",
+          "kind": "reproduction",
+          "procedure": "Re-hash the plan, decision and M6-2/M6-3 receipt index; verify 0fa5ae7f366bf40da242bec824882658fc6596d4 is an ancestor and inspect the CLOSED gate/resource probe.",
+          "preFixExpected": "Missing ancestry, hash drift, an open gate or a nonzero resource prevents entry.",
+          "postFixExpected": "All indexed hashes match, ancestry is preserved, gate is CLOSED and every resource count is zero.",
+          "pathExercise": "The probe consumes the actual Git ancestor relation, external receipt bytes, gate tail and database-derived resource counts."
+        }
+      ]
+    },
+    {
+      "id": "M6-4-GA-SPIKES",
+      "severity": "P1",
+      "invariant": "Provider, broker, same-lease and TTL/model feasibility are evidenced independently and never use replay output as live truth or relax the five-second TTL.",
+      "riskClasses": ["independent-oracle", "reproducible-artifact"],
+      "requiredArtifacts": ["artifacts/m6-4/m6-4-live-provider-corpus.json", "artifacts/m6-4/m6-4-environment-qualification.json", "artifacts/m6-4/m6-4-broker-spike.json", "artifacts/m6-4/m6-4-same-lease-spike.json", "artifacts/m6-4/m6-4-ttl-model-spike.json"],
+      "forbiddenDependencies": ["M6-1 hermetic blocks as live proof", "synthetic geometry as expected truth", "TCP broker listener", "broker token in child", "frame TTL above 5000ms", "fabricated live-model qualification"],
+      "probes": [
+        {
+          "id": "M6-4-GA-SPIKES-oracle",
+          "kind": "independent-oracle",
+          "procedure": "Evaluate 200 separately frozen semantic/accessibility cases across eight families, including 40 negatives.",
+          "preFixExpected": "Unsafe, stale, ambiguous or sensitive candidates can be selected or metrics are derived from SUT output.",
+          "postFixExpected": "Recall/top1/safe-region/negative-REPLAN are 100 percent and forbidden, misclick and stale counts are zero.",
+          "pathExercise": "The corpus carries frozen expected disposition and the verifier reports exact positive, negative and family counts."
+        },
+        {
+          "id": "M6-4-GA-SPIKES-mutation",
+          "kind": "mutation",
+          "procedure": "Run wrong binding, extra method, nonce replay, oversize, timeout and descendant-growth cases against the inherited-pipe broker.",
+          "preFixExpected": "At least one invalid child request reaches a tool result or leaves a process/pipe alive.",
+          "postFixExpected": "Every invalid case rejects with its exact code, actionCount stays zero and all owned processes/pipes close.",
+          "pathExercise": "Each case launches a real child and records hello verification, actual rejection code and cleanup state."
+        },
+        {
+          "id": "M6-4-GA-SPIKES-reproduce",
+          "kind": "reproduction",
+          "procedure": "Regenerate all four spike artifacts and compare their self-hashes and frozen thresholds.",
+          "preFixExpected": "A missing artifact, changed threshold or nondeterministic provider payload fails comparison.",
+          "postFixExpected": "All artifact hashes recompute and liveHardGatePassed remains false while the model profile is unresolved.",
+          "pathExercise": "The generators read their own sources and emit content-addressed artifacts consumed by the review packet."
+        }
+      ]
+    },
+    {
+      "id": "M6-4-GB-GATE",
+      "severity": "P1",
+      "invariant": "Versioned gate authority, immutable epoch files, v19 database fence and generation pointer fail closed as one authority, while emergency-close authorization is single-use and covers the epoch plus grace.",
+      "riskClasses": ["trust-boundary", "single-use-authorization"],
+      "requiredArtifacts": ["packages/kernel/contracts/orchestration/m6/xw.m6-live-gate.v2.schema.json", "packages/kernel/contracts/orchestration/m6/xw.m6-locks.v2.schema.json", "services/control-plane/control-plane/lib/m6-live-gate-v2.mjs", "services/control-plane/control-plane/lib/m6-gate-promoter.mjs", "services/control-plane/control-plane/lib/state-store.mjs"],
+      "forbiddenDependencies": ["v2-to-v1 downgrade", "second live gate", "wall-clock send ordering", "open interpretation on file/pointer/fence mismatch", "reusable emergency nonce"],
+      "probes": [
+        {
+          "id": "M6-4-GB-GATE-adversarial",
+          "kind": "adversarial",
+          "procedure": "Mutate schema, mode, allowlist, lock set, parent, emergency coverage and file/pointer/fence generation.",
+          "preFixExpected": "A malformed or inconsistent authority can evaluate open.",
+          "postFixExpected": "Every mutation evaluates CLOSED or throws an exact fail-closed error before action authority.",
+          "pathExercise": "Tests call mixed evaluator, loader, fence and promoter through both valid and corrupted records."
+        },
+        {
+          "id": "M6-4-GB-GATE-forgery",
+          "kind": "forgery",
+          "procedure": "Forge lock, epoch and emergency-authorization hashes while preserving field shape.",
+          "preFixExpected": "Shape-only validation accepts the forged record.",
+          "postFixExpected": "Self-hash and content-address validation reject every forged record.",
+          "pathExercise": "The test changes hash-covered payload bytes and asserts the exact evaluator/loader rejection."
+        },
+        {
+          "id": "M6-4-GB-GATE-replay",
+          "kind": "replay",
+          "procedure": "Consume one emergency-close nonce and attempt a second promotion with the same nonce/authorization hash.",
+          "preFixExpected": "The second promotion is accepted.",
+          "postFixExpected": "The database unique consumption record rejects replay.",
+          "pathExercise": "The test performs two StateStore consumption attempts against the same durable database."
+        }
+      ]
+    },
+    {
+      "id": "M6-4-GC-GROUNDING",
+      "severity": "P1",
+      "invariant": "Live v2 grounding is a shared-kernel, semantic/accessibility-first authority bound to exact environment, ActionSlotSpec and independent effect expectations; model-visible data contains no geometry or authority.",
+      "riskClasses": ["trust-boundary", "independent-oracle"],
+      "requiredArtifacts": ["packages/kernel/lib/m6-live-grounding.mjs", "packages/kernel/lib/m6-action-slot.mjs", "packages/kernel/contracts/orchestration/m6/xw.grounding-decision.v2.schema.json", "packages/kernel/contracts/orchestration/m6/xw.m6-action-slot-spec.v1.schema.json", "packages/kernel/contracts/orchestration/m6/xw.m6-target-environment-attestation.v1.schema.json"],
+      "forbiddenDependencies": ["caller targetKind authority", "model coordinates or bounds", "synthetic block for screen/none", "legacy resolveInternalPoint on the live path", "SUT-derived expected effects"],
+      "probes": [
+        {
+          "id": "M6-4-GC-GROUNDING-adversarial",
+          "kind": "adversarial",
+          "procedure": "Supply empty, ambiguous, sensitive, keyboard, system and environment-mismatched evidence plus caller geometry fields.",
+          "preFixExpected": "Unsafe evidence yields ALLOW_ONCE or raw authority crosses the public surface.",
+          "postFixExpected": "Unsafe evidence REPLAN/HARD_STOPs and public decisions contain no raw text, bounds or coordinates.",
+          "pathExercise": "Tests parse real-shaped accessibility XML and inspect both public block data and the private geometry map."
+        },
+        {
+          "id": "M6-4-GC-GROUNDING-oracle",
+          "kind": "independent-oracle",
+          "procedure": "Compare provider selections to separately frozen corpus expectations and exact smooth-family distribution.",
+          "preFixExpected": "Expected data can be synthesized from provider output or family cardinality can drift.",
+          "postFixExpected": "Independent expected dispositions and 4/4/4/4/4/4/3/3 distribution validate exactly.",
+          "pathExercise": "The validators consume frozen expected records and reject a deliberately changed primary family."
+        },
+        {
+          "id": "M6-4-GC-GROUNDING-mutation",
+          "kind": "mutation",
+          "procedure": "Substitute primitive, intentRef, trustedParameterHash, target kind and slot hash for one action family.",
+          "preFixExpected": "A same-family substitution reaches permit preparation.",
+          "postFixExpected": "Every substitution throws M6_ACTION_SLOT_INVALID before transport.",
+          "pathExercise": "The test passes each mutated field through assertM6ActionSlotDispatch and verifies the code."
+        }
+      ]
+    },
+    {
+      "id": "M6-4-GD-DISPATCH",
+      "severity": "P1",
+      "invariant": "One stable logical action can pass at most once through permit, global claim, three StateStore transactions, TCB guard and typed transport; recovery never retries and reports counter-derived effect truthfully.",
+      "riskClasses": ["trust-boundary", "single-use-authorization"],
+      "requiredArtifacts": ["services/control-plane/control-plane/lib/m6-grounded-action-facade.mjs", "services/control-plane/control-plane/lib/m6-typed-transport.mjs", "services/control-plane/control-plane/lib/state-store.mjs", "services/control-plane/tests/m6-action-ledger.test.mjs", "services/control-plane/tests/m6-grounded-action-facade.test.mjs"],
+      "forbiddenDependencies": ["raw transport in caller input", "nested BEGIN IMMEDIATE", "materialization before tx2", "raw I/O before counter=1", "COMPLETED without verification", "new-run retry"],
+      "probes": [
+        {
+          "id": "M6-4-GD-DISPATCH-adversarial",
+          "kind": "adversarial",
+          "procedure": "Inject gate, session, lease, UI generation, app, focus, page, rotation, environment and timing drift around tx2 and the TCB guard.",
+          "preFixExpected": "A stale or rebound target reaches raw I/O.",
+          "postFixExpected": "All pre-counter drift becomes BLOCKED false/0; post-counter failure becomes AMBIGUOUS true/1.",
+          "pathExercise": "StateStore tests assert the durable ledger row and an independent fake raw-channel counter."
+        },
+        {
+          "id": "M6-4-GD-DISPATCH-forgery",
+          "kind": "forgery",
+          "procedure": "Forge decision, permit binding, operation key, slot spec and typed invocation fields.",
+          "preFixExpected": "A shape-valid forged reference authorizes transport.",
+          "postFixExpected": "Binding fingerprints and closed typed schemas reject before counter increment.",
+          "pathExercise": "Tests call permit consumption and typed validation with independently modified bindings."
+        },
+        {
+          "id": "M6-4-GD-DISPATCH-replay",
+          "kind": "replay",
+          "procedure": "Race and restart the same operationKey/decision with counter zero and one.",
+          "preFixExpected": "A second ledger action or transport call is created.",
+          "postFixExpected": "The global claim remains unique; restart terminalizes BLOCKED or AMBIGUOUS and no retry occurs.",
+          "pathExercise": "The test reopens the same database and queries the preserved claim, ledger and transport count."
+        }
+      ]
+    },
+    {
+      "id": "M6-4-GE-DSH",
+      "severity": "P1",
+      "invariant": "Replay and live profiles are separately versioned; a live child can possess only one inherited bounded pipe exposing exactly ten opaque-reference tools, and an unqualified model profile cannot start.",
+      "riskClasses": ["trust-boundary"],
+      "requiredArtifacts": ["integrations/dsh-xw/profiles/live", "integrations/dsh-xw/src/live-pipe-client.mjs", "integrations/dsh-xw/src/live-runtime-plugin.mjs", "services/orchestrator/scripts/lib/m6/m6-live-tool-surface.mjs", "artifacts/m6-4/m6-4-broker-spike.json"],
+      "forbiddenDependencies": ["modified replay semantics", "network broker listener", "broker token in child", "raw session/lease/device authority", "qualified status without exact model hash"],
+      "probes": [
+        {
+          "id": "M6-4-GE-DSH-adversarial",
+          "kind": "adversarial",
+          "procedure": "Mutate live tool inventory, arguments, results, correlation, nonce, line size and process-tree possession.",
+          "preFixExpected": "An extra tool, raw field, replay or descendant is accepted.",
+          "postFixExpected": "Exactly ten names validate and every authority leak or broker mutation rejects with zero action.",
+          "pathExercise": "The live schema tests and broker spike exercise a real spawned child and inherited fd3 pipe."
+        }
+      ]
+    },
+    {
+      "id": "M6-4-GE-OFFLINE-CLOSE",
+      "severity": "P1",
+      "invariant": "CODE_READY_GATE_CLOSED is reproducible from the final candidate with the live gate still CLOSED, zero actions/resources, hard cross-platform CI and explicit recording of unresolved Gate F authority/model qualification.",
+      "riskClasses": ["reproducible-artifact"],
+      "requiredArtifacts": ["artifacts/m6-4/m6-4-code-ready-receipt.json", "artifacts/m6-4/m6-4-offline-test-manifest.json", "artifacts/m6-4/m6-4-resource-snapshot.json", ".github/workflows/source-fusion.yml"],
+      "forbiddenDependencies": ["live epoch activation", "device action", "unrecorded suite failure", "generic Windows exception", "claiming M6_4_ACTION_CANARY_CLOSED"],
+      "probes": [
+        {
+          "id": "M6-4-GE-OFFLINE-CLOSE-reproduce",
+          "kind": "reproduction",
+          "procedure": "Run check, test:m6-4:offline, M6, M6-2 offline/epoch, M6-3, orchestrator and targeted schema-v19 regressions; re-hash all evidence and inspect gate/resource state.",
+          "preFixExpected": "A required suite, artifact, hash, CLOSED gate or zero-resource assertion is missing.",
+          "postFixExpected": "All M6-specific suites pass, the sole orchestrator exception is exact Windows symlink EPERM, and unrelated Control Plane baseline failures are enumerated without being presented as green.",
+          "pathExercise": "The completion manifest records each command, test count/status, artifact hash and exact exception rather than only an aggregate claim."
+        }
+      ]
+    }
+  ]
+}

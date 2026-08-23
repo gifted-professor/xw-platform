@@ -1,0 +1,166 @@
+{
+  "schemaId": "xw.m6-effect-boundary.v1",
+  "a03Mode": "BOUNDED_READ_TRACE",
+  "testIdentityHash": "00f37b948a865dcb417df4e99406126e0d62d5efe736efad0d30c5d83fcfb579",
+  "families": [
+    {
+      "primaryFamily": "app-launch",
+      "oracleHash": "286e88bb358edca726a31f1d34c5d53a2e7ebcb0e29e5a4bc95afa2c2261ba73",
+      "forbiddenEffectClasses": [
+        "public",
+        "social",
+        "account",
+        "security",
+        "financial",
+        "destructive",
+        "settings-write",
+        "draft",
+        "unknown"
+      ],
+      "allowedBoundedReadTraces": [
+        "private-recent-app"
+      ],
+      "resetObligations": []
+    },
+    {
+      "primaryFamily": "app-switch",
+      "oracleHash": "a96f70901ab670658a1ba277ede0d3ac500808a22d6caa5c825043cd41b77fcf",
+      "forbiddenEffectClasses": [
+        "public",
+        "social",
+        "account",
+        "security",
+        "financial",
+        "destructive",
+        "settings-write",
+        "draft",
+        "unknown"
+      ],
+      "allowedBoundedReadTraces": [
+        "private-recent-app"
+      ],
+      "resetObligations": []
+    },
+    {
+      "primaryFamily": "search",
+      "oracleHash": "96625d6b28f8174d7d2f57e2b9c509300ff25037b6ce7b47179058fda3c6ac5e",
+      "forbiddenEffectClasses": [
+        "public",
+        "social",
+        "account",
+        "security",
+        "financial",
+        "destructive",
+        "settings-write",
+        "draft",
+        "unknown"
+      ],
+      "allowedBoundedReadTraces": [
+        "private-search-history"
+      ],
+      "resetObligations": [
+        "reset-search"
+      ]
+    },
+    {
+      "primaryFamily": "text-input",
+      "oracleHash": "0f86ea70c355b91a3cd20243e5bf9227a20e7adf5b2fd0b0c98120325921edda",
+      "forbiddenEffectClasses": [
+        "public",
+        "social",
+        "account",
+        "security",
+        "financial",
+        "destructive",
+        "settings-write",
+        "draft",
+        "unknown"
+      ],
+      "allowedBoundedReadTraces": [
+        "private-ime-suggestion"
+      ],
+      "resetObligations": [
+        "reset-text-input"
+      ]
+    },
+    {
+      "primaryFamily": "scroll",
+      "oracleHash": "fea82cdfa1cbfd2cec137e6bf5a3f386594915a21dd747eeb790fc6e9ce1b6f5",
+      "forbiddenEffectClasses": [
+        "public",
+        "social",
+        "account",
+        "security",
+        "financial",
+        "destructive",
+        "settings-write",
+        "draft",
+        "unknown"
+      ],
+      "allowedBoundedReadTraces": [
+        "private-read-analytics"
+      ],
+      "resetObligations": []
+    },
+    {
+      "primaryFamily": "tab-back",
+      "oracleHash": "87b7d3b5b4a1cf6072ffde0f2b97cf2923916bcd5594193f71e5099b833f3100",
+      "forbiddenEffectClasses": [
+        "public",
+        "social",
+        "account",
+        "security",
+        "financial",
+        "destructive",
+        "settings-write",
+        "draft",
+        "unknown"
+      ],
+      "allowedBoundedReadTraces": [
+        "private-read-analytics"
+      ],
+      "resetObligations": []
+    },
+    {
+      "primaryFamily": "form-edit",
+      "oracleHash": "45345afe227a633b157a6355eaa8b81e29dedb316b499030bd5a767dd9ff028f",
+      "forbiddenEffectClasses": [
+        "public",
+        "social",
+        "account",
+        "security",
+        "financial",
+        "destructive",
+        "settings-write",
+        "draft",
+        "unknown"
+      ],
+      "allowedBoundedReadTraces": [
+        "private-ime-suggestion"
+      ],
+      "resetObligations": [
+        "reset-form-edit"
+      ]
+    },
+    {
+      "primaryFamily": "settings-nav",
+      "oracleHash": "a90e212d98b80021c41e90ed96191f1be32011e7abb29afcc2cc648899bae7f5",
+      "forbiddenEffectClasses": [
+        "public",
+        "social",
+        "account",
+        "security",
+        "financial",
+        "destructive",
+        "settings-write",
+        "draft",
+        "unknown"
+      ],
+      "allowedBoundedReadTraces": [
+        "private-recent-app"
+      ],
+      "resetObligations": []
+    }
+  ],
+  "boundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+}

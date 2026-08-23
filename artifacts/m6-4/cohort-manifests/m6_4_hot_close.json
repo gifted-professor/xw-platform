@@ -1,0 +1,20 @@
+{
+  "schemaId": "xw.m6-4-cohort-manifest.v1",
+  "purpose": "M6_4_HOT_CLOSE",
+  "alias": "01",
+  "gateFEligible": false,
+  "liveAuthorizationRef": null,
+  "qualification": "OFFLINE_TEMPLATE_NOT_LIVE_AUTHORIZATION",
+  "scenarios": [
+    {
+      "scenarioKey": "m6_4_hot_close-01",
+      "alias": "01",
+      "primaryFamily": "app-launch",
+      "authorized": false,
+      "executionStatus": "NOT_RUN",
+      "oracleHash": "286e88bb358edca726a31f1d34c5d53a2e7ebcb0e29e5a4bc95afa2c2261ba73",
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+    }
+  ],
+  "manifestHash": "0702fc1b9ab511f681a20097b768852f9648bb6e819b0f4a17e85e944506fc70"
+}

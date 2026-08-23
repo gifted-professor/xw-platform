@@ -101,6 +101,10 @@ jobs:
         timeout-minutes: 4
         run: npm run test:m6
 
+      - name: M6-4 grounded-action offline hard gate
+        timeout-minutes: 6
+        run: npm run test:m6-4:offline
+
       - name: M6-2 zero-live offline frame capture
         timeout-minutes: 6
         run: npm run test:m6-2:offline

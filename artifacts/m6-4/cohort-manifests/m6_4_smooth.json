@@ -1,0 +1,281 @@
+{
+  "schemaId": "xw.m6-4-cohort-manifest.v1",
+  "purpose": "M6_4_SMOOTH",
+  "alias": "01",
+  "gateFEligible": false,
+  "liveAuthorizationRef": null,
+  "qualification": "OFFLINE_TEMPLATE_NOT_LIVE_AUTHORIZATION",
+  "scenarios": [
+    {
+      "scenarioKey": "m6_4_smooth-01",
+      "alias": "01",
+      "primaryFamily": "app-launch",
+      "authorized": false,
+      "executionStatus": "NOT_RUN",
+      "oracleHash": "286e88bb358edca726a31f1d34c5d53a2e7ebcb0e29e5a4bc95afa2c2261ba73",
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+    },
+    {
+      "scenarioKey": "m6_4_smooth-02",
+      "alias": "01",
+      "primaryFamily": "app-launch",
+      "authorized": false,
+      "executionStatus": "NOT_RUN",
+      "oracleHash": "286e88bb358edca726a31f1d34c5d53a2e7ebcb0e29e5a4bc95afa2c2261ba73",
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+    },
+    {
+      "scenarioKey": "m6_4_smooth-03",
+      "alias": "01",
+      "primaryFamily": "app-launch",
+      "authorized": false,
+      "executionStatus": "NOT_RUN",
+      "oracleHash": "286e88bb358edca726a31f1d34c5d53a2e7ebcb0e29e5a4bc95afa2c2261ba73",
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+    },
+    {
+      "scenarioKey": "m6_4_smooth-04",
+      "alias": "01",
+      "primaryFamily": "app-launch",
+      "authorized": false,
+      "executionStatus": "NOT_RUN",
+      "oracleHash": "286e88bb358edca726a31f1d34c5d53a2e7ebcb0e29e5a4bc95afa2c2261ba73",
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+    },
+    {
+      "scenarioKey": "m6_4_smooth-05",
+      "alias": "01",
+      "primaryFamily": "app-switch",
+      "authorized": false,
+      "executionStatus": "NOT_RUN",
+      "oracleHash": "a96f70901ab670658a1ba277ede0d3ac500808a22d6caa5c825043cd41b77fcf",
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+    },
+    {
+      "scenarioKey": "m6_4_smooth-06",
+      "alias": "01",
+      "primaryFamily": "app-switch",
+      "authorized": false,
+      "executionStatus": "NOT_RUN",
+      "oracleHash": "a96f70901ab670658a1ba277ede0d3ac500808a22d6caa5c825043cd41b77fcf",
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+    },
+    {
+      "scenarioKey": "m6_4_smooth-07",
+      "alias": "01",
+      "primaryFamily": "app-switch",
+      "authorized": false,
+      "executionStatus": "NOT_RUN",
+      "oracleHash": "a96f70901ab670658a1ba277ede0d3ac500808a22d6caa5c825043cd41b77fcf",
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+    },
+    {
+      "scenarioKey": "m6_4_smooth-08",
+      "alias": "01",
+      "primaryFamily": "app-switch",
+      "authorized": false,
+      "executionStatus": "NOT_RUN",
+      "oracleHash": "a96f70901ab670658a1ba277ede0d3ac500808a22d6caa5c825043cd41b77fcf",
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+    },
+    {
+      "scenarioKey": "m6_4_smooth-09",
+      "alias": "01",
+      "primaryFamily": "search",
+      "authorized": false,
+      "executionStatus": "NOT_RUN",
+      "oracleHash": "96625d6b28f8174d7d2f57e2b9c509300ff25037b6ce7b47179058fda3c6ac5e",
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+    },
+    {
+      "scenarioKey": "m6_4_smooth-10",
+      "alias": "01",
+      "primaryFamily": "search",
+      "authorized": false,
+      "executionStatus": "NOT_RUN",
+      "oracleHash": "96625d6b28f8174d7d2f57e2b9c509300ff25037b6ce7b47179058fda3c6ac5e",
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+    },
+    {
+      "scenarioKey": "m6_4_smooth-11",
+      "alias": "01",
+      "primaryFamily": "search",
+      "authorized": false,
+      "executionStatus": "NOT_RUN",
+      "oracleHash": "96625d6b28f8174d7d2f57e2b9c509300ff25037b6ce7b47179058fda3c6ac5e",
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+    },
+    {
+      "scenarioKey": "m6_4_smooth-12",
+      "alias": "01",
+      "primaryFamily": "search",
+      "authorized": false,
+      "executionStatus": "NOT_RUN",
+      "oracleHash": "96625d6b28f8174d7d2f57e2b9c509300ff25037b6ce7b47179058fda3c6ac5e",
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+    },
+    {
+      "scenarioKey": "m6_4_smooth-13",
+      "alias": "01",
+      "primaryFamily": "text-input",
+      "authorized": false,
+      "executionStatus": "NOT_RUN",
+      "oracleHash": "0f86ea70c355b91a3cd20243e5bf9227a20e7adf5b2fd0b0c98120325921edda",
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+    },
+    {
+      "scenarioKey": "m6_4_smooth-14",
+      "alias": "01",
+      "primaryFamily": "text-input",
+      "authorized": false,
+      "executionStatus": "NOT_RUN",
+      "oracleHash": "0f86ea70c355b91a3cd20243e5bf9227a20e7adf5b2fd0b0c98120325921edda",
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+    },
+    {
+      "scenarioKey": "m6_4_smooth-15",
+      "alias": "01",
+      "primaryFamily": "text-input",
+      "authorized": false,
+      "executionStatus": "NOT_RUN",
+      "oracleHash": "0f86ea70c355b91a3cd20243e5bf9227a20e7adf5b2fd0b0c98120325921edda",
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+    },
+    {
+      "scenarioKey": "m6_4_smooth-16",
+      "alias": "01",
+      "primaryFamily": "text-input",
+      "authorized": false,
+      "executionStatus": "NOT_RUN",
+      "oracleHash": "0f86ea70c355b91a3cd20243e5bf9227a20e7adf5b2fd0b0c98120325921edda",
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+    },
+    {
+      "scenarioKey": "m6_4_smooth-17",
+      "alias": "01",
+      "primaryFamily": "scroll",
+      "authorized": false,
+      "executionStatus": "NOT_RUN",
+      "oracleHash": "fea82cdfa1cbfd2cec137e6bf5a3f386594915a21dd747eeb790fc6e9ce1b6f5",
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+    },
+    {
+      "scenarioKey": "m6_4_smooth-18",
+      "alias": "01",
+      "primaryFamily": "scroll",
+      "authorized": false,
+      "executionStatus": "NOT_RUN",
+      "oracleHash": "fea82cdfa1cbfd2cec137e6bf5a3f386594915a21dd747eeb790fc6e9ce1b6f5",
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+    },
+    {
+      "scenarioKey": "m6_4_smooth-19",
+      "alias": "01",
+      "primaryFamily": "scroll",
+      "authorized": false,
+      "executionStatus": "NOT_RUN",
+      "oracleHash": "fea82cdfa1cbfd2cec137e6bf5a3f386594915a21dd747eeb790fc6e9ce1b6f5",
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+    },
+    {
+      "scenarioKey": "m6_4_smooth-20",
+      "alias": "01",
+      "primaryFamily": "scroll",
+      "authorized": false,
+      "executionStatus": "NOT_RUN",
+      "oracleHash": "fea82cdfa1cbfd2cec137e6bf5a3f386594915a21dd747eeb790fc6e9ce1b6f5",
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+    },
+    {
+      "scenarioKey": "m6_4_smooth-21",
+      "alias": "01",
+      "primaryFamily": "tab-back",
+      "authorized": false,
+      "executionStatus": "NOT_RUN",
+      "oracleHash": "87b7d3b5b4a1cf6072ffde0f2b97cf2923916bcd5594193f71e5099b833f3100",
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+    },
+    {
+      "scenarioKey": "m6_4_smooth-22",
+      "alias": "01",
+      "primaryFamily": "tab-back",
+      "authorized": false,
+      "executionStatus": "NOT_RUN",
+      "oracleHash": "87b7d3b5b4a1cf6072ffde0f2b97cf2923916bcd5594193f71e5099b833f3100",
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+    },
+    {
+      "scenarioKey": "m6_4_smooth-23",
+      "alias": "01",
+      "primaryFamily": "tab-back",
+      "authorized": false,
+      "executionStatus": "NOT_RUN",
+      "oracleHash": "87b7d3b5b4a1cf6072ffde0f2b97cf2923916bcd5594193f71e5099b833f3100",
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+    },
+    {
+      "scenarioKey": "m6_4_smooth-24",
+      "alias": "01",
+      "primaryFamily": "tab-back",
+      "authorized": false,
+      "executionStatus": "NOT_RUN",
+      "oracleHash": "87b7d3b5b4a1cf6072ffde0f2b97cf2923916bcd5594193f71e5099b833f3100",
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+    },
+    {
+      "scenarioKey": "m6_4_smooth-25",
+      "alias": "01",
+      "primaryFamily": "form-edit",
+      "authorized": false,
+      "executionStatus": "NOT_RUN",
+      "oracleHash": "45345afe227a633b157a6355eaa8b81e29dedb316b499030bd5a767dd9ff028f",
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+    },
+    {
+      "scenarioKey": "m6_4_smooth-26",
+      "alias": "01",
+      "primaryFamily": "form-edit",
+      "authorized": false,
+      "executionStatus": "NOT_RUN",
+      "oracleHash": "45345afe227a633b157a6355eaa8b81e29dedb316b499030bd5a767dd9ff028f",
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+    },
+    {
+      "scenarioKey": "m6_4_smooth-27",
+      "alias": "01",
+      "primaryFamily": "form-edit",
+      "authorized": false,
+      "executionStatus": "NOT_RUN",
+      "oracleHash": "45345afe227a633b157a6355eaa8b81e29dedb316b499030bd5a767dd9ff028f",
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+    },
+    {
+      "scenarioKey": "m6_4_smooth-28",
+      "alias": "01",
+      "primaryFamily": "settings-nav",
+      "authorized": false,
+      "executionStatus": "NOT_RUN",
+      "oracleHash": "a90e212d98b80021c41e90ed96191f1be32011e7abb29afcc2cc648899bae7f5",
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+    },
+    {
+      "scenarioKey": "m6_4_smooth-29",
+      "alias": "01",
+      "primaryFamily": "settings-nav",
+      "authorized": false,
+      "executionStatus": "NOT_RUN",
+      "oracleHash": "a90e212d98b80021c41e90ed96191f1be32011e7abb29afcc2cc648899bae7f5",
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+    },
+    {
+      "scenarioKey": "m6_4_smooth-30",
+      "alias": "01",
+      "primaryFamily": "settings-nav",
+      "authorized": false,
+      "executionStatus": "NOT_RUN",
+      "oracleHash": "a90e212d98b80021c41e90ed96191f1be32011e7abb29afcc2cc648899bae7f5",
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+    }
+  ],
+  "manifestHash": "e352ea3607360180306caa3b8826278da22aea66b10b9b96ba7861cc59555135"
+}

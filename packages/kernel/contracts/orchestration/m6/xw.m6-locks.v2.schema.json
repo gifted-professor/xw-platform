@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:xw:contract:m6:locks:v2",
+  "title": "xw.m6-locks.v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaId", "lockSetId", "lockSetHash", "lockHashes"],
+  "properties": {
+    "schemaId": { "const": "xw.m6-locks.v2" },
+    "lockSetId": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "lockSetHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "lockHashes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "runtimeProfile", "hardRedlinePolicy", "groundingRuntime",
+        "dshSource", "dshProfile", "liveToolSpec", "modelProfile",
+        "liveProvider", "grantActionPolicy", "brokerProtocol",
+        "typedTransport", "scenarioManifest"
+      ],
+      "properties": {
+        "runtimeProfile": { "$ref": "#/$defs/hash" },
+        "hardRedlinePolicy": { "$ref": "#/$defs/hash" },
+        "groundingRuntime": { "$ref": "#/$defs/hash" },
+        "dshSource": { "$ref": "#/$defs/hash" },
+        "dshProfile": { "$ref": "#/$defs/hash" },
+        "liveToolSpec": { "$ref": "#/$defs/hash" },
+        "modelProfile": { "$ref": "#/$defs/hash" },
+        "liveProvider": { "$ref": "#/$defs/hash" },
+        "grantActionPolicy": { "$ref": "#/$defs/hash" },
+        "brokerProtocol": { "$ref": "#/$defs/hash" },
+        "typedTransport": { "$ref": "#/$defs/hash" },
+        "scenarioManifest": { "$ref": "#/$defs/hash" }
+      }
+    }
+  },
+  "$defs": {
+    "hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+  }
+}

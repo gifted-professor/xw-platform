@@ -1,0 +1,47 @@
+{
+  "schemaId": "xw.m6-ttl-model-spike.v1",
+  "qualification": "LIVE_PROFILE_UNRESOLVED_OFFLINE_IMPLEMENTATION_ONLY",
+  "candidateLiveProfile": {
+    "path": "integrations/dsh-xw/profiles/live/package.json",
+    "present": true,
+    "presentInRuntimeInventory": false,
+    "locked": false,
+    "modelIdentityResolved": false,
+    "providerIdentityResolved": false,
+    "licenseProvenanceResolved": false,
+    "secretInjectionResolved": false,
+    "healthResolved": false
+  },
+  "currentInventory": {
+    "sha256": "55e97d63f593d3c02c3c6c20027869444e5d8e10ff9a689e3886501a6a852b1a",
+    "replayOnly": true
+  },
+  "frozenSloContractSha256": "47d73abaf6f097118dcc14049f164b276cdaf3b39170227fb89e1bdaf1d50fb0",
+  "frozenThresholds": {
+    "frameTtlMs": 5000,
+    "minRemainingTtlMs": 1000,
+    "bridgeP95MaxMs": 100,
+    "groundingDecisionP95MaxMs": 1000,
+    "groundResultToActIngressP95MaxMs": 2500,
+    "capturedToFinalPrecheckP95MaxMs": 4000,
+    "minimumValidLoops": 99,
+    "requiredWarmLoops": 100
+  },
+  "warmCompleteToolLoopsAttempted": 0,
+  "warmCompleteToolLoopsQualified": 0,
+  "externalModelInvoked": false,
+  "deviceEffect": false,
+  "deviceTransportCalls": 0,
+  "thresholdsRelaxed": false,
+  "liveHardGatePassed": false,
+  "offlineImplementationAllowed": true,
+  "gateFEligible": false,
+  "requiredNextEvidence": [
+    "target-runtime live model/provider inventory",
+    "content-addressed live profile and license/provenance record",
+    "approved secret-injection path without secret disclosure",
+    "100 warm no-device-effect complete tool loops satisfying every frozen SLO"
+  ],
+  "sourceSha256": "326cc6199e2bfcbc8a48cc5515c50fb7c7b6a6c8ebfc413fed2bc0a1e0e972d0",
+  "artifactSha256": "6e2dfb332749c4bfb0dad165437a3b8f93640c4469c8a0a4f0c13d498d7382fb"
+}
