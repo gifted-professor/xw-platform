@@ -13,7 +13,13 @@
       "authorized": false,
       "executionStatus": "NOT_RUN",
       "oracleHash": "286e88bb358edca726a31f1d34c5d53a2e7ebcb0e29e5a4bc95afa2c2261ba73",
-      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+      "actionPlan": {
+        "schemaId": "xw.m6-scenario-action-plan.v1",
+        "maxActionCount": 0,
+        "slots": [],
+        "actionPlanHash": "d59eb561138ef1dc521034fc010842daaccf68a5e70d0b00e0f2da3808b0af9d"
+      }
     },
     {
       "scenarioKey": "m6_4_shadow-02",
@@ -22,7 +28,13 @@
       "authorized": false,
       "executionStatus": "NOT_RUN",
       "oracleHash": "286e88bb358edca726a31f1d34c5d53a2e7ebcb0e29e5a4bc95afa2c2261ba73",
-      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+      "actionPlan": {
+        "schemaId": "xw.m6-scenario-action-plan.v1",
+        "maxActionCount": 0,
+        "slots": [],
+        "actionPlanHash": "d59eb561138ef1dc521034fc010842daaccf68a5e70d0b00e0f2da3808b0af9d"
+      }
     },
     {
       "scenarioKey": "m6_4_shadow-03",
@@ -31,7 +43,13 @@
       "authorized": false,
       "executionStatus": "NOT_RUN",
       "oracleHash": "286e88bb358edca726a31f1d34c5d53a2e7ebcb0e29e5a4bc95afa2c2261ba73",
-      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+      "actionPlan": {
+        "schemaId": "xw.m6-scenario-action-plan.v1",
+        "maxActionCount": 0,
+        "slots": [],
+        "actionPlanHash": "d59eb561138ef1dc521034fc010842daaccf68a5e70d0b00e0f2da3808b0af9d"
+      }
     },
     {
       "scenarioKey": "m6_4_shadow-04",
@@ -40,7 +58,13 @@
       "authorized": false,
       "executionStatus": "NOT_RUN",
       "oracleHash": "286e88bb358edca726a31f1d34c5d53a2e7ebcb0e29e5a4bc95afa2c2261ba73",
-      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+      "actionPlan": {
+        "schemaId": "xw.m6-scenario-action-plan.v1",
+        "maxActionCount": 0,
+        "slots": [],
+        "actionPlanHash": "d59eb561138ef1dc521034fc010842daaccf68a5e70d0b00e0f2da3808b0af9d"
+      }
     },
     {
       "scenarioKey": "m6_4_shadow-05",
@@ -49,8 +73,14 @@
       "authorized": false,
       "executionStatus": "NOT_RUN",
       "oracleHash": "286e88bb358edca726a31f1d34c5d53a2e7ebcb0e29e5a4bc95afa2c2261ba73",
-      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+      "actionPlan": {
+        "schemaId": "xw.m6-scenario-action-plan.v1",
+        "maxActionCount": 0,
+        "slots": [],
+        "actionPlanHash": "d59eb561138ef1dc521034fc010842daaccf68a5e70d0b00e0f2da3808b0af9d"
+      }
     }
   ],
-  "manifestHash": "b227c365bf26c94fd5ee91af1726fe27c4dc6b58b7ef3877e10c39fe509e97a7"
+  "manifestHash": "906d2571689dd668ef12a0b2cebcc517fdee467b4faa742969292793b6f6a4b6"
 }

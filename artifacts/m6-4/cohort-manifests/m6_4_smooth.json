@@ -13,7 +13,60 @@
       "authorized": false,
       "executionStatus": "NOT_RUN",
       "oracleHash": "286e88bb358edca726a31f1d34c5d53a2e7ebcb0e29e5a4bc95afa2c2261ba73",
-      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+      "actionPlan": {
+        "schemaId": "xw.m6-scenario-action-plan.v1",
+        "maxActionCount": 2,
+        "slots": [
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 0,
+            "logicalStepId": "m6_4_smooth-01:step-01",
+            "actionSlotOrdinal": 0,
+            "primitive": "open_app",
+            "actionFamily": "app-launch:launch",
+            "intentRef": "64a9b79e36d9d362462a6d6a191a5f46b0b17a17fbd8ee494e46f9e321e3c3c1",
+            "intentPolicyHash": "75e880dffa11fd72b1700b659f7364b04c89dd0700b38ed07628184aae98ae38",
+            "targetKind": "none",
+            "targetEligibilityHash": "ef48f3a093aa5056e7f43f1ee8616478632aed76cf33019c0042b755162ee79c",
+            "trustedParams": {
+              "appRef": "41f372f81029876126d7ce9fccb6a302e0c47886e3538f6ba7b4522fa885e0d1"
+            },
+            "trustedParameterHash": "23e7704a38f7b70555604050d19b7e79d21311a565dab6e423c9b093d359d88f",
+            "allowedStateHash": "8c752ff9cb7e8fa4b9932a6eb483cc307ee6ed842b911038052d094a44d7c13e",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "0f9a01218726447962c1ddbcdd6e0aa800ee2ae5ab1d6390dfa72e3629aee1de",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "aebde67846c32bcb4c7411f1e7d69093b36b4aa53420a4c118e353386fc78cd2",
+            "oracleHash": "286e88bb358edca726a31f1d34c5d53a2e7ebcb0e29e5a4bc95afa2c2261ba73",
+            "verificationPolicyHash": "21870eb13fa4b54ceebf12f310fe90474604d5d23495cf46580260e116e6935d",
+            "slotAuthorityHash": "bae4fbd975be70550fea4b3d617722343048cc8bea6aae6b8cbdb7e86905665c"
+          },
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 1,
+            "logicalStepId": "m6_4_smooth-01:step-02",
+            "actionSlotOrdinal": 0,
+            "primitive": "back",
+            "actionFamily": "app-launch:reset-back",
+            "intentRef": "3b0a084065e9523cd9f4c11921e2f81a169cee2729defa0a389e37daa8282649",
+            "intentPolicyHash": "d52605381b03f267a77fd7f9592c8e5927e3a1a65dc802bc1e15d50d653f346c",
+            "targetKind": "none",
+            "targetEligibilityHash": "0684463e6ea80c3e600abbf87d4423efac6ad2d3fc0bcef479845c83244881a1",
+            "trustedParams": {},
+            "trustedParameterHash": "5d0591e6e20e724c24fdd4faed18cd656a5d2a27fcdd23b036a7c1f98d84212c",
+            "allowedStateHash": "a31d7c1ad556b2d0f21c85619173949166bc91b948dbcfe7486318b2375566bf",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "965551dd8f508cfb2ad673d9441a97509ca64ee791bf10a23edbe616e71cc128",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "aebde67846c32bcb4c7411f1e7d69093b36b4aa53420a4c118e353386fc78cd2",
+            "oracleHash": "286e88bb358edca726a31f1d34c5d53a2e7ebcb0e29e5a4bc95afa2c2261ba73",
+            "verificationPolicyHash": "8fd04e043edc09c1857de16de9af6d19155d5dc21a8776531fa8b0db8b154c94",
+            "slotAuthorityHash": "e02fae77f1fa172d676201200bdff09a5bb42cea30ea877944f71eb3a59bc40e"
+          }
+        ],
+        "actionPlanHash": "25432349625df5ac7eb546e0fad8af928009653da032056b64a5797a285a2ef6"
+      }
     },
     {
       "scenarioKey": "m6_4_smooth-02",
@@ -22,7 +75,60 @@
       "authorized": false,
       "executionStatus": "NOT_RUN",
       "oracleHash": "286e88bb358edca726a31f1d34c5d53a2e7ebcb0e29e5a4bc95afa2c2261ba73",
-      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+      "actionPlan": {
+        "schemaId": "xw.m6-scenario-action-plan.v1",
+        "maxActionCount": 2,
+        "slots": [
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 0,
+            "logicalStepId": "m6_4_smooth-02:step-01",
+            "actionSlotOrdinal": 0,
+            "primitive": "open_app",
+            "actionFamily": "app-launch:launch",
+            "intentRef": "aedd3b547e06a22d5ca946667a616e81d11787997d58718d7e1657fceaf61701",
+            "intentPolicyHash": "8b44cc548b2dbe84f51c5544b9515b580207e2c267baf66d1b09546bb0959f58",
+            "targetKind": "none",
+            "targetEligibilityHash": "e3e059638346e4ee1f2d8b2c96811bb13d6df549114ffe34683e9fe50cdcbe80",
+            "trustedParams": {
+              "appRef": "41f372f81029876126d7ce9fccb6a302e0c47886e3538f6ba7b4522fa885e0d1"
+            },
+            "trustedParameterHash": "23e7704a38f7b70555604050d19b7e79d21311a565dab6e423c9b093d359d88f",
+            "allowedStateHash": "57c8665c33f1a3913945bf2116575cfc685f4c7925ec8ddfce6b1010bfb6adf3",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "eed3544aed33388aad92c5027f0aabc0884e2df8e4ccb6fab5e88f92405b0167",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "29c80db6e02b625605f8f54cfb242f8917741c8e3b91be49412696e2442c20c4",
+            "oracleHash": "286e88bb358edca726a31f1d34c5d53a2e7ebcb0e29e5a4bc95afa2c2261ba73",
+            "verificationPolicyHash": "bbd8ae42491db80461c0287f2a2b76d3cf06b914f80aece7de7e3692c4be0f0e",
+            "slotAuthorityHash": "39ba4c3bdda105d26b6a913c379b39d2b44eb0c68157eca38384dc9c2949495e"
+          },
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 1,
+            "logicalStepId": "m6_4_smooth-02:step-02",
+            "actionSlotOrdinal": 0,
+            "primitive": "back",
+            "actionFamily": "app-launch:reset-back",
+            "intentRef": "de11865d3ffa0111f95505fbe11afb708145743077415f20a260c2e56cb45daa",
+            "intentPolicyHash": "5486b0928a1e0fedf837d1f9dbee76dd41b084b8b63a02a7b488509d926628e9",
+            "targetKind": "none",
+            "targetEligibilityHash": "a95ac3a08dbe2eb814e5f879ce928245ea9bbbc8151aa000ae2d353df68ecd70",
+            "trustedParams": {},
+            "trustedParameterHash": "5d0591e6e20e724c24fdd4faed18cd656a5d2a27fcdd23b036a7c1f98d84212c",
+            "allowedStateHash": "303a516a97301084ec0a4412b424d5b981bbadb7d32ab4fd40d777165eb9cc6e",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "b5a7c79b75a0f3a684beb28d6441b792a775584726aa838520ff0b5ace8f1468",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "29c80db6e02b625605f8f54cfb242f8917741c8e3b91be49412696e2442c20c4",
+            "oracleHash": "286e88bb358edca726a31f1d34c5d53a2e7ebcb0e29e5a4bc95afa2c2261ba73",
+            "verificationPolicyHash": "a3d8d86b0e23aaf77a83ed10e29c85919efc191aee89c1ff5d2949f3cd0de66f",
+            "slotAuthorityHash": "997becf037718236e8c362c287a49cb9aed8026a559c3124d4becb4d7dec152c"
+          }
+        ],
+        "actionPlanHash": "2e2e131d6d306a6a242d9f6b53b677699c6b3be82c47be6b2139ba7439289d8a"
+      }
     },
     {
       "scenarioKey": "m6_4_smooth-03",
@@ -31,7 +137,60 @@
       "authorized": false,
       "executionStatus": "NOT_RUN",
       "oracleHash": "286e88bb358edca726a31f1d34c5d53a2e7ebcb0e29e5a4bc95afa2c2261ba73",
-      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+      "actionPlan": {
+        "schemaId": "xw.m6-scenario-action-plan.v1",
+        "maxActionCount": 2,
+        "slots": [
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 0,
+            "logicalStepId": "m6_4_smooth-03:step-01",
+            "actionSlotOrdinal": 0,
+            "primitive": "open_app",
+            "actionFamily": "app-launch:launch",
+            "intentRef": "52b7e67ec7cd50f1cde8c97bc451f99807d0c217e075c06f926aeff867e74481",
+            "intentPolicyHash": "649c6e7bf99aa45733d58ebd19fe55401393bad194ff67bab9b1464f74c3ee20",
+            "targetKind": "none",
+            "targetEligibilityHash": "b9604c22128b1d3a92a3dc55e4423fb5892e157e23afeb91f5ecbf7519ecebbb",
+            "trustedParams": {
+              "appRef": "41f372f81029876126d7ce9fccb6a302e0c47886e3538f6ba7b4522fa885e0d1"
+            },
+            "trustedParameterHash": "23e7704a38f7b70555604050d19b7e79d21311a565dab6e423c9b093d359d88f",
+            "allowedStateHash": "934f08874c8f01ee5657b8c0be3d8686db4d8b3a8efc47e332009ea3146f4a5a",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "c69335896f24eb8e6149f53b450b288864e84188fbeecfd6531a768909659f4f",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "c7de0087aebaf0f38f11fa7d50c15ee1f905f32f8480fc864421db48a308fdf3",
+            "oracleHash": "286e88bb358edca726a31f1d34c5d53a2e7ebcb0e29e5a4bc95afa2c2261ba73",
+            "verificationPolicyHash": "88c9811d1dd6ffcab5e6310ed831de8ad0aa2696de15fc459e686caac70c3fa1",
+            "slotAuthorityHash": "f9c6ae0e68b6d64025629a68c4c526a439d6354fd4009e0065ad13ed8e47b8c0"
+          },
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 1,
+            "logicalStepId": "m6_4_smooth-03:step-02",
+            "actionSlotOrdinal": 0,
+            "primitive": "back",
+            "actionFamily": "app-launch:reset-back",
+            "intentRef": "d6a3a16885abd142b39aa768603c7205b48d2b9285b3efb775a1ce56843ce871",
+            "intentPolicyHash": "1a11fa2e49f20aaf7b853d2ac9982f0629e31e2dbbfaf38411c3c944895817b4",
+            "targetKind": "none",
+            "targetEligibilityHash": "5b65d33411f0e67db0a20bca547c93c1b0bd3f15654c6ec7e815ecbc1b6c5b01",
+            "trustedParams": {},
+            "trustedParameterHash": "5d0591e6e20e724c24fdd4faed18cd656a5d2a27fcdd23b036a7c1f98d84212c",
+            "allowedStateHash": "441768e9dcb9410d63d151f47477f343171a3e1b6a06181ab64aa79423673b9b",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "b78b85d60042037288a05f00387b4c527a01b367274526f49d7582c05e6fcf1f",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "c7de0087aebaf0f38f11fa7d50c15ee1f905f32f8480fc864421db48a308fdf3",
+            "oracleHash": "286e88bb358edca726a31f1d34c5d53a2e7ebcb0e29e5a4bc95afa2c2261ba73",
+            "verificationPolicyHash": "11f41d3c27d2550c0a5b1003fa0654c31d047bfea51875cfc6978bcf01f638fc",
+            "slotAuthorityHash": "3d406395502f8ecf040b6b96ef8d5326da985d95b4c1e9fbb7128f6f7e860039"
+          }
+        ],
+        "actionPlanHash": "7724406e30149c2134ab8d1f1619e61414ebb38d64af6556b56b76018c77fc0b"
+      }
     },
     {
       "scenarioKey": "m6_4_smooth-04",
@@ -40,7 +199,60 @@
       "authorized": false,
       "executionStatus": "NOT_RUN",
       "oracleHash": "286e88bb358edca726a31f1d34c5d53a2e7ebcb0e29e5a4bc95afa2c2261ba73",
-      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+      "actionPlan": {
+        "schemaId": "xw.m6-scenario-action-plan.v1",
+        "maxActionCount": 2,
+        "slots": [
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 0,
+            "logicalStepId": "m6_4_smooth-04:step-01",
+            "actionSlotOrdinal": 0,
+            "primitive": "open_app",
+            "actionFamily": "app-launch:launch",
+            "intentRef": "e3008bbda0e04b6e24bf4de19d962c059009790a9134be6c039a7769cddbe34d",
+            "intentPolicyHash": "a903a2e883e4921f998ce5aa07ca912329adcc24d2f537c75fbba728d2a63af7",
+            "targetKind": "none",
+            "targetEligibilityHash": "f5caed6182b80a481cc1ddc22719942f7a025180f1f8f947490cbb4778380f56",
+            "trustedParams": {
+              "appRef": "41f372f81029876126d7ce9fccb6a302e0c47886e3538f6ba7b4522fa885e0d1"
+            },
+            "trustedParameterHash": "23e7704a38f7b70555604050d19b7e79d21311a565dab6e423c9b093d359d88f",
+            "allowedStateHash": "88673f4aab0c991ed3662d57a0cea138c7b68e4582828ba879e790be252930e3",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "dca9359ad26a41606a46cafcf5190c788ba965278d216a421b809fc064ec4f91",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "144b44e60f332071696014eedc84d6668f0fa34bd460ea3a44e306aa26d2a5ad",
+            "oracleHash": "286e88bb358edca726a31f1d34c5d53a2e7ebcb0e29e5a4bc95afa2c2261ba73",
+            "verificationPolicyHash": "e8a5eb31d92f9786067d9ebfccfcb8af13de05f3dac454d332b908b5887a1638",
+            "slotAuthorityHash": "2c07a9ce74b90d4cbae080eead12d4eccce320e55af484660954bb7513dbebdb"
+          },
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 1,
+            "logicalStepId": "m6_4_smooth-04:step-02",
+            "actionSlotOrdinal": 0,
+            "primitive": "back",
+            "actionFamily": "app-launch:reset-back",
+            "intentRef": "6303c0803d7f19fd18fb958335ae184ea5a7a9a10d0468d8efb32c0305d74389",
+            "intentPolicyHash": "01072259db760d10d84314dce2b37d899015bdbc69d5e6008452c9ae7b862019",
+            "targetKind": "none",
+            "targetEligibilityHash": "238eb0c4f84a06f37219e07077df3ef79742a756d27b028d297bdc499f734f50",
+            "trustedParams": {},
+            "trustedParameterHash": "5d0591e6e20e724c24fdd4faed18cd656a5d2a27fcdd23b036a7c1f98d84212c",
+            "allowedStateHash": "f3d717efd5f04076f9199319c58b70adc2aea38ed564f5d87fd5fae8ff714c67",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "3032a949a2e03b076db847db05e3a00042c882e8cb71a6ab1fb6a6bd53f22285",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "144b44e60f332071696014eedc84d6668f0fa34bd460ea3a44e306aa26d2a5ad",
+            "oracleHash": "286e88bb358edca726a31f1d34c5d53a2e7ebcb0e29e5a4bc95afa2c2261ba73",
+            "verificationPolicyHash": "a30d4cd91fa8041c839cb8636f62f82b11fa0ce5510dd364bcac8d363206e987",
+            "slotAuthorityHash": "c4b72cba4828dbb304e98e5d830498d7d39b2ee1412e11a85df5c8e6b9370af7"
+          }
+        ],
+        "actionPlanHash": "a507644491826ae429768e738114d463daebd8bc1222545a2d9eb90b5c09dc74"
+      }
     },
     {
       "scenarioKey": "m6_4_smooth-05",
@@ -49,7 +261,84 @@
       "authorized": false,
       "executionStatus": "NOT_RUN",
       "oracleHash": "a96f70901ab670658a1ba277ede0d3ac500808a22d6caa5c825043cd41b77fcf",
-      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+      "actionPlan": {
+        "schemaId": "xw.m6-scenario-action-plan.v1",
+        "maxActionCount": 3,
+        "slots": [
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 0,
+            "logicalStepId": "m6_4_smooth-05:step-01",
+            "actionSlotOrdinal": 0,
+            "primitive": "open_app",
+            "actionFamily": "app-switch:open-source",
+            "intentRef": "596a462385d57b56630aa87f8a0260f859e16f11da796f147b860bd5bf6d1962",
+            "intentPolicyHash": "46ce1ca048ace7a2b7cea1ff79c2ac70390e6a020f602a19d106ceb4121e469b",
+            "targetKind": "none",
+            "targetEligibilityHash": "bb967668ca52263153e69caea4e8a9593b1be737d93ebe7fd2068763603fbde8",
+            "trustedParams": {
+              "appRef": "41f372f81029876126d7ce9fccb6a302e0c47886e3538f6ba7b4522fa885e0d1"
+            },
+            "trustedParameterHash": "23e7704a38f7b70555604050d19b7e79d21311a565dab6e423c9b093d359d88f",
+            "allowedStateHash": "ae69f07aa2b145342b9e38f190c6bc0f75387ce8b1a1da992beb1856ae46844e",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "8cc1137912e9e6296ec6facbb9eb47166cead298d9a23a9e0bc17edf707a9eec",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "7b8ad11049eb02314cff88b70833f6f9ea3e706b33574a5c31f55d60c00d4ca6",
+            "oracleHash": "a96f70901ab670658a1ba277ede0d3ac500808a22d6caa5c825043cd41b77fcf",
+            "verificationPolicyHash": "4bd3539ba6b55538626da97a9ae443620922c4cb380cc7229448a6b1222d3fb0",
+            "slotAuthorityHash": "fdc0ac33bac47b6a06d28a75a16111ca79c8ba3b0ffc47801324dd9f761990a7"
+          },
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 1,
+            "logicalStepId": "m6_4_smooth-05:step-02",
+            "actionSlotOrdinal": 0,
+            "primitive": "open_app",
+            "actionFamily": "app-switch:switch-destination",
+            "intentRef": "26faa7a2d3bf9a596ce109c77c8431ff46cc6632db2fcae893b821d94cb8baa1",
+            "intentPolicyHash": "7e1b2c3b989a9fec3d7593fc9bddb3ac4c1c68b5ecd438df9c5e3aaf54652c8a",
+            "targetKind": "none",
+            "targetEligibilityHash": "e878143253c842fe8c33a12abd214e6b9ac8245d12acf7bdcb7c247c3444e3e4",
+            "trustedParams": {
+              "appRef": "d5ac540ad11b0ae05ae53294ef09f554a16fd7f5beae5d190f16a3f5f5268cb7"
+            },
+            "trustedParameterHash": "49868a3436c997c9ae3da644e151a4321b2c498f5bc2ca89ccfe5e8d7e54b35b",
+            "allowedStateHash": "461dafe599899bdd062991d40af59f50f5ce9c8654e46724a165a347584a6a49",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "821436211c6138a8330bec13f845420b5ab7ada74996a358886f4748627ca80f",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "7b8ad11049eb02314cff88b70833f6f9ea3e706b33574a5c31f55d60c00d4ca6",
+            "oracleHash": "a96f70901ab670658a1ba277ede0d3ac500808a22d6caa5c825043cd41b77fcf",
+            "verificationPolicyHash": "17b963cd80a727640b38ca7c670380bb8b3aea80a7809a798af7beb88d20c2d4",
+            "slotAuthorityHash": "86e3ee904b0f769af22c21eb3745ba159d5ab0047d71297581c30ce26a9b09fb"
+          },
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 2,
+            "logicalStepId": "m6_4_smooth-05:step-03",
+            "actionSlotOrdinal": 0,
+            "primitive": "back",
+            "actionFamily": "app-switch:reset-back",
+            "intentRef": "1facac36ef8c18dc9a6bc1aa878c9b95dd4235c90159b2107a7dbe92bca5600b",
+            "intentPolicyHash": "a6f4cce26410af3b2a7583a508669facc10e31b5cf55756e654d4e89d83de90d",
+            "targetKind": "none",
+            "targetEligibilityHash": "507ba5a7c9fa58461bf68a233eec0e6fc18efeb5f88c8a91ba4a56d5ab3c92f6",
+            "trustedParams": {},
+            "trustedParameterHash": "5d0591e6e20e724c24fdd4faed18cd656a5d2a27fcdd23b036a7c1f98d84212c",
+            "allowedStateHash": "9e84451eb0ffea5d543eba8083f2fd898f1fc1f05ff89f17ceb17ebbe56e91c6",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "6ead154b38f7c284412d16fe672a2171f74d0c7ea437bf59ae66eca213ce3422",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "7b8ad11049eb02314cff88b70833f6f9ea3e706b33574a5c31f55d60c00d4ca6",
+            "oracleHash": "a96f70901ab670658a1ba277ede0d3ac500808a22d6caa5c825043cd41b77fcf",
+            "verificationPolicyHash": "1ee8d844a4db179c093a40f4ddb82e6dbed4631bd47aaa36728bbdd7a102bcdf",
+            "slotAuthorityHash": "3b1884a5a8039edca16990c9912ce6bcdc4149e351329ce85ca5434b90232e10"
+          }
+        ],
+        "actionPlanHash": "a1800914fb6b8a1af53192d1684d3e7b12fcd84e27484aea81360cb39b5264a9"
+      }
     },
     {
       "scenarioKey": "m6_4_smooth-06",
@@ -58,7 +347,84 @@
       "authorized": false,
       "executionStatus": "NOT_RUN",
       "oracleHash": "a96f70901ab670658a1ba277ede0d3ac500808a22d6caa5c825043cd41b77fcf",
-      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+      "actionPlan": {
+        "schemaId": "xw.m6-scenario-action-plan.v1",
+        "maxActionCount": 3,
+        "slots": [
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 0,
+            "logicalStepId": "m6_4_smooth-06:step-01",
+            "actionSlotOrdinal": 0,
+            "primitive": "open_app",
+            "actionFamily": "app-switch:open-source",
+            "intentRef": "28c1814a933dad4ac647c4de1183b48a66ca2a49d491d3eb091c56a153e3e9f4",
+            "intentPolicyHash": "d0152305d359437ed7c9d9d7fb9d7d20da69cd39aa912e1daabbc12e73b4d32e",
+            "targetKind": "none",
+            "targetEligibilityHash": "6a2dd4692642f4112414c5fbe9b200c0a084f5188268eff2bf858157473188a0",
+            "trustedParams": {
+              "appRef": "41f372f81029876126d7ce9fccb6a302e0c47886e3538f6ba7b4522fa885e0d1"
+            },
+            "trustedParameterHash": "23e7704a38f7b70555604050d19b7e79d21311a565dab6e423c9b093d359d88f",
+            "allowedStateHash": "a140b0376f4096d57af944dd8c866acedebc285cb880974c6211d3f0a5cf9a0f",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "b8d5d60439724a95d2d62af63fbab53402606780396ee37dbb8fd3e5c8ce48de",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "7d6d04c9154642b30ebc84f9d5498dde26904e47d8b920e965fbd0aae39b19b9",
+            "oracleHash": "a96f70901ab670658a1ba277ede0d3ac500808a22d6caa5c825043cd41b77fcf",
+            "verificationPolicyHash": "c60a47cf52a5964bf0f2d960278c136674b1193d85e074e47039f5ff8b80cf0d",
+            "slotAuthorityHash": "4fb4a246717a2665c0fd28208e10275063db2cfadb80f08158fedf1746f66e3b"
+          },
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 1,
+            "logicalStepId": "m6_4_smooth-06:step-02",
+            "actionSlotOrdinal": 0,
+            "primitive": "open_app",
+            "actionFamily": "app-switch:switch-destination",
+            "intentRef": "2145a386857feac04d51a07bad9200ca5743cc9a3175bb221e41b5158062f173",
+            "intentPolicyHash": "5bbade47ccc23b0c049028d0cc949e95e7f1967170902e64b00ba1e3a7a41789",
+            "targetKind": "none",
+            "targetEligibilityHash": "124c0280d40691cd17b149652fdef007650a6f6778ad110f455b79bb4a011176",
+            "trustedParams": {
+              "appRef": "d5ac540ad11b0ae05ae53294ef09f554a16fd7f5beae5d190f16a3f5f5268cb7"
+            },
+            "trustedParameterHash": "49868a3436c997c9ae3da644e151a4321b2c498f5bc2ca89ccfe5e8d7e54b35b",
+            "allowedStateHash": "1a04947e94f5d39cd83ab1601a1fcb7056d369ba46d9245cbe7597e62b587a16",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "1aeb18c5b3065c51eb216e079a76b627fc2ca687d35cac2f6041fdf940036aa9",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "7d6d04c9154642b30ebc84f9d5498dde26904e47d8b920e965fbd0aae39b19b9",
+            "oracleHash": "a96f70901ab670658a1ba277ede0d3ac500808a22d6caa5c825043cd41b77fcf",
+            "verificationPolicyHash": "ca2123f5d3921c06ee5655dfc81a25f318ce1efcb83c3a47e7a363926e410456",
+            "slotAuthorityHash": "08dd02080f101b0e94ac3314ec8b3b87e70cba11ebe045738430671739839d9d"
+          },
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 2,
+            "logicalStepId": "m6_4_smooth-06:step-03",
+            "actionSlotOrdinal": 0,
+            "primitive": "back",
+            "actionFamily": "app-switch:reset-back",
+            "intentRef": "9e8bce28e32e751ea9b4eed0a966c60997e7d37ac02788d56b2b7b74a6120096",
+            "intentPolicyHash": "5443a2337957ef0e2adb05be626439a373b81eb068d769b7c3d2e904da3fc711",
+            "targetKind": "none",
+            "targetEligibilityHash": "6e7e5a2faf729970a91fdcea801d6a449968f338988a959221aa9c8f03e6fac4",
+            "trustedParams": {},
+            "trustedParameterHash": "5d0591e6e20e724c24fdd4faed18cd656a5d2a27fcdd23b036a7c1f98d84212c",
+            "allowedStateHash": "4c3684d7728fe370a60492aedac88f98b08aded5be64e7b5cccd137a2f6be3a5",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "386c86a6692cd47a308a8441f526e005ccfb7840001fa8f2c2717f632b761635",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "7d6d04c9154642b30ebc84f9d5498dde26904e47d8b920e965fbd0aae39b19b9",
+            "oracleHash": "a96f70901ab670658a1ba277ede0d3ac500808a22d6caa5c825043cd41b77fcf",
+            "verificationPolicyHash": "3573146a1f85a6cdbc3a4bbd8200aba34683afde5b8def8bb4770986d6ae4d70",
+            "slotAuthorityHash": "b8f54d3c5e38a18bf4692bd703b0f4a73aa4d15ed91a2381864aee8df7799eb2"
+          }
+        ],
+        "actionPlanHash": "190fa00548ec1649c710b3ff36afcc20c656c38bf88888cbe3a7936249ced4ec"
+      }
     },
     {
       "scenarioKey": "m6_4_smooth-07",
@@ -67,7 +433,84 @@
       "authorized": false,
       "executionStatus": "NOT_RUN",
       "oracleHash": "a96f70901ab670658a1ba277ede0d3ac500808a22d6caa5c825043cd41b77fcf",
-      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+      "actionPlan": {
+        "schemaId": "xw.m6-scenario-action-plan.v1",
+        "maxActionCount": 3,
+        "slots": [
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 0,
+            "logicalStepId": "m6_4_smooth-07:step-01",
+            "actionSlotOrdinal": 0,
+            "primitive": "open_app",
+            "actionFamily": "app-switch:open-source",
+            "intentRef": "f24a8c3d028f2c72159b5e3191bce347d966e6b71b1a83820f04e7c84f49f56b",
+            "intentPolicyHash": "c9efe95bebf8f63341221d6b0c58b6a68cfc0b427fbb9b8f139a9b765f64df68",
+            "targetKind": "none",
+            "targetEligibilityHash": "74da77d8a43e18a411a695b6f81b218315aaf31ad4884937a2bbf5c0a416a2d4",
+            "trustedParams": {
+              "appRef": "41f372f81029876126d7ce9fccb6a302e0c47886e3538f6ba7b4522fa885e0d1"
+            },
+            "trustedParameterHash": "23e7704a38f7b70555604050d19b7e79d21311a565dab6e423c9b093d359d88f",
+            "allowedStateHash": "cf6886c427097a97087b6329b8b34bb0ef542db2bcbced1a43cc9dc13ed9f37a",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "83b3f5dee3a3fb9f47a047f83c6f36f3dc14d74bd35a2bac740b386697ca2695",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "bdc3780ffaeac3ca8b8d517c7818d7db69b0af963e714149ba420f7ae669eb96",
+            "oracleHash": "a96f70901ab670658a1ba277ede0d3ac500808a22d6caa5c825043cd41b77fcf",
+            "verificationPolicyHash": "440dd849c2ec66e4c2c295fa97ae74b18b43ecbf701be8bc54a6571fafb8099f",
+            "slotAuthorityHash": "5ca87072b4aef1ef61e28c42506207e5ef95d9508aea30a019460556cd45462e"
+          },
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 1,
+            "logicalStepId": "m6_4_smooth-07:step-02",
+            "actionSlotOrdinal": 0,
+            "primitive": "open_app",
+            "actionFamily": "app-switch:switch-destination",
+            "intentRef": "2b0ab53c4a931dd18049ec262a69156897c1b8a75d0ffdd1e496e7453eb5747e",
+            "intentPolicyHash": "a34a145432cbbb9a95297de6486ed7a70290b84866a5451cebc42dea52b00aa6",
+            "targetKind": "none",
+            "targetEligibilityHash": "7a37fb4add18d3eaa49287a305753d01d0bf4244a5fef683afe40405b2ad7cdb",
+            "trustedParams": {
+              "appRef": "d5ac540ad11b0ae05ae53294ef09f554a16fd7f5beae5d190f16a3f5f5268cb7"
+            },
+            "trustedParameterHash": "49868a3436c997c9ae3da644e151a4321b2c498f5bc2ca89ccfe5e8d7e54b35b",
+            "allowedStateHash": "9972bbcc1757c7881d276fbe29c9c8b64541729b3dc64758d3bb7b7f8bcde4c7",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "ebf31679e2ffc74df019c5fe63824072374dec3f48155c0fd66b838fd2f2b307",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "bdc3780ffaeac3ca8b8d517c7818d7db69b0af963e714149ba420f7ae669eb96",
+            "oracleHash": "a96f70901ab670658a1ba277ede0d3ac500808a22d6caa5c825043cd41b77fcf",
+            "verificationPolicyHash": "471ba033235567384eb73e5ac727ab6378edb7f70bf811053ecf029f76b6bbfd",
+            "slotAuthorityHash": "5a2439c64cf2450916a81b4faca6f8b27ccf6935699e58459dafff8b9f14ee08"
+          },
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 2,
+            "logicalStepId": "m6_4_smooth-07:step-03",
+            "actionSlotOrdinal": 0,
+            "primitive": "back",
+            "actionFamily": "app-switch:reset-back",
+            "intentRef": "68aca61313d03f8667c03d15ac5a49818d2e65e081d10aca6ee10cbf8de30f72",
+            "intentPolicyHash": "d60aba02c08778adb867aa8bac8ed68a5b5bfd21127012191e1f326978bb9304",
+            "targetKind": "none",
+            "targetEligibilityHash": "9bd0be2102a05431fb5785f16f3e8c841cef2d2603fa8333568468f9048d36ef",
+            "trustedParams": {},
+            "trustedParameterHash": "5d0591e6e20e724c24fdd4faed18cd656a5d2a27fcdd23b036a7c1f98d84212c",
+            "allowedStateHash": "e4a14ff70baca90eba453a2cb739f1c1ef37b31663ae1054e2e4121fd9f2709a",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "940f31264b97740ab5c87decf8ba9fdd4e608f6843b9f6b9b670941fab75ff46",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "bdc3780ffaeac3ca8b8d517c7818d7db69b0af963e714149ba420f7ae669eb96",
+            "oracleHash": "a96f70901ab670658a1ba277ede0d3ac500808a22d6caa5c825043cd41b77fcf",
+            "verificationPolicyHash": "6f63af4b044abce918e1b7e2883a71f7288cdf4578c67de3154394f0e4f41703",
+            "slotAuthorityHash": "27e8b90f4c11d61264eecebd484857e20317dce7ea9bb34c0102327fdc41d4aa"
+          }
+        ],
+        "actionPlanHash": "95e0f1fc36cd6a7c82faba4f6dc568b20d32856fb04c81435134c20ce080e23c"
+      }
     },
     {
       "scenarioKey": "m6_4_smooth-08",
@@ -76,7 +519,84 @@
       "authorized": false,
       "executionStatus": "NOT_RUN",
       "oracleHash": "a96f70901ab670658a1ba277ede0d3ac500808a22d6caa5c825043cd41b77fcf",
-      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+      "actionPlan": {
+        "schemaId": "xw.m6-scenario-action-plan.v1",
+        "maxActionCount": 3,
+        "slots": [
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 0,
+            "logicalStepId": "m6_4_smooth-08:step-01",
+            "actionSlotOrdinal": 0,
+            "primitive": "open_app",
+            "actionFamily": "app-switch:open-source",
+            "intentRef": "e3d318fad9426471349fe7439f6161da7d313d6e5340f5d6009a687b5565027a",
+            "intentPolicyHash": "69415f7a2ffa7cf2ce0364de669a11435dfb91143792b7d19d0c6c05d002d3ad",
+            "targetKind": "none",
+            "targetEligibilityHash": "f221e0fa7d192ccb42d25f6332137131e0b989f3841b9028535f68dd3f65381e",
+            "trustedParams": {
+              "appRef": "41f372f81029876126d7ce9fccb6a302e0c47886e3538f6ba7b4522fa885e0d1"
+            },
+            "trustedParameterHash": "23e7704a38f7b70555604050d19b7e79d21311a565dab6e423c9b093d359d88f",
+            "allowedStateHash": "292170e1328ffcda2f46dbea651c99a4e0d148adb74368fb76e45613ec6217c8",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "9f9744c33db1ae8175a19a3a54e87a2e8adceb2ee288ca0efb1d7d30e9a01bbe",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "d1d45fda2e133f04e3cf36b356447e0670ab8e71d072a6c5f09c76f89855981d",
+            "oracleHash": "a96f70901ab670658a1ba277ede0d3ac500808a22d6caa5c825043cd41b77fcf",
+            "verificationPolicyHash": "cad6d97e368ba346a4538f89e644208f273a7293bfc42cdec6c85bacccee05fe",
+            "slotAuthorityHash": "2a3890b5d75f12f2a3291d63145de0d0e842d324076855a04846a2455d9cf48b"
+          },
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 1,
+            "logicalStepId": "m6_4_smooth-08:step-02",
+            "actionSlotOrdinal": 0,
+            "primitive": "open_app",
+            "actionFamily": "app-switch:switch-destination",
+            "intentRef": "cef24371e93288c019a4b1c6e1fb130a37b06a35e317299a17ce67ce7b0151a2",
+            "intentPolicyHash": "3166c4f94fea6f3dd17700a5c6fd1b9f0756cce853c27abfe52867162f23c7f7",
+            "targetKind": "none",
+            "targetEligibilityHash": "c2c5e0f339cdc7fc6cdbf6f07ee9abdd4616cc895d2b4755241298d6ed4acf93",
+            "trustedParams": {
+              "appRef": "d5ac540ad11b0ae05ae53294ef09f554a16fd7f5beae5d190f16a3f5f5268cb7"
+            },
+            "trustedParameterHash": "49868a3436c997c9ae3da644e151a4321b2c498f5bc2ca89ccfe5e8d7e54b35b",
+            "allowedStateHash": "e839d75d428d6b4f181440cbac41e1c458bfdf35ca2329529c043f51c0d4ccc7",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "db16b5c56bd30a8215df4f831ccf7fe6b02830572992d030146675e7a4800ab8",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "d1d45fda2e133f04e3cf36b356447e0670ab8e71d072a6c5f09c76f89855981d",
+            "oracleHash": "a96f70901ab670658a1ba277ede0d3ac500808a22d6caa5c825043cd41b77fcf",
+            "verificationPolicyHash": "c959b9df7fb230522e10fec118b2b2b170db5751e71f3adf994c67f9fda21a73",
+            "slotAuthorityHash": "37e1b4e880242411f2b8d40df43a9722e26a49620b75a3c88d3f8334476f756a"
+          },
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 2,
+            "logicalStepId": "m6_4_smooth-08:step-03",
+            "actionSlotOrdinal": 0,
+            "primitive": "back",
+            "actionFamily": "app-switch:reset-back",
+            "intentRef": "4c9123e9ebf3b80057e81d66a75130555012737e4ce64bde97c5cf7bf6625b34",
+            "intentPolicyHash": "2492fe907f70e2eab71f808f94cd0b7562089ad4eb6765fdd27d48a573bf68d0",
+            "targetKind": "none",
+            "targetEligibilityHash": "1e13c7d55d98e6d1dfce0dcb5b87325eb7ea8fa51926afacbd234806767a466c",
+            "trustedParams": {},
+            "trustedParameterHash": "5d0591e6e20e724c24fdd4faed18cd656a5d2a27fcdd23b036a7c1f98d84212c",
+            "allowedStateHash": "2c377c88cf2f946ba3c4d7f87119f0f56d6be3973446dc2a90c32368b505e8a9",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "d47da97782017647c539f6a6a9a5d8d1ca6d13ac6d7562371891d282868b1809",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "d1d45fda2e133f04e3cf36b356447e0670ab8e71d072a6c5f09c76f89855981d",
+            "oracleHash": "a96f70901ab670658a1ba277ede0d3ac500808a22d6caa5c825043cd41b77fcf",
+            "verificationPolicyHash": "2e8f8016dd2204b28d39afea4391ba851a4e1b6d742bc5fe5e5fb8ec9afcc9b0",
+            "slotAuthorityHash": "867ef49f45a1df2f1c337d1a141c52c0b1d5ac9279989c5d5cd45ba8c74c5e46"
+          }
+        ],
+        "actionPlanHash": "34d5033dfa523f872e2f2fb21923fd810a6e10c679c3c42abde96b90b77cf72c"
+      }
     },
     {
       "scenarioKey": "m6_4_smooth-09",
@@ -85,7 +605,128 @@
       "authorized": false,
       "executionStatus": "NOT_RUN",
       "oracleHash": "96625d6b28f8174d7d2f57e2b9c509300ff25037b6ce7b47179058fda3c6ac5e",
-      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+      "actionPlan": {
+        "schemaId": "xw.m6-scenario-action-plan.v1",
+        "maxActionCount": 5,
+        "slots": [
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 0,
+            "logicalStepId": "m6_4_smooth-09:step-01",
+            "actionSlotOrdinal": 0,
+            "primitive": "open_app",
+            "actionFamily": "search:open-app",
+            "intentRef": "ff24ba992a428a67c38b22a5159d1ec754c5bfe93d0649616504268acc73021d",
+            "intentPolicyHash": "1efa7ca42e5f0a068b16482b78148b101bc97d44a881a55792f8a5d953846dba",
+            "targetKind": "none",
+            "targetEligibilityHash": "79a3e0a7c8f75db8f35aded9c0a611afa238b786d2b2c764bcef6adcd0bfbb76",
+            "trustedParams": {
+              "appRef": "41f372f81029876126d7ce9fccb6a302e0c47886e3538f6ba7b4522fa885e0d1"
+            },
+            "trustedParameterHash": "23e7704a38f7b70555604050d19b7e79d21311a565dab6e423c9b093d359d88f",
+            "allowedStateHash": "6df564049de94b932e227ec7b8674efc120bf6f4a51af1152d763d9ede13ae67",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "8fd10fce3f53c982cb7fb41fb378b91694b86986524c5259b684de2c41296a54",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "5318e6f8a747700948955427308c961ea24b9d1ddc426b5aafd735d232355ef6",
+            "oracleHash": "96625d6b28f8174d7d2f57e2b9c509300ff25037b6ce7b47179058fda3c6ac5e",
+            "verificationPolicyHash": "ff32197d1ab2faa7ca7c957b99f5fcefb3acb0b546d20b088a46ba65e2b88e4b",
+            "slotAuthorityHash": "1b6388b5e21c0ee9f397c0a9ce64dd11ef20dee41de9ba6d35ffd3aa998893da"
+          },
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 1,
+            "logicalStepId": "m6_4_smooth-09:step-02",
+            "actionSlotOrdinal": 0,
+            "primitive": "tap",
+            "actionFamily": "search:focus-search",
+            "intentRef": "1093bad0e59b5b005f89cf7fbe5895ea9f24221e6c5231c0d14f916aa0bc3402",
+            "intentPolicyHash": "c081fcc57e645c633b448efa7fa73648c11088d42ade6400050875e3e9e0924b",
+            "targetKind": "block",
+            "targetEligibilityHash": "fb0a78761135f0f11942e13438706f018f1a4b43f6e46913fdc1c76843bbb921",
+            "trustedParams": {},
+            "trustedParameterHash": "5d0591e6e20e724c24fdd4faed18cd656a5d2a27fcdd23b036a7c1f98d84212c",
+            "allowedStateHash": "893d7adcd5ee063bb3dd8499c7ff4456f0ea346c82b6f9dddca37a041cc9a20e",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "ec10c981e9633977e338352e752de63e4f87d1de29fdc63865e08f60be672a1e",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "5318e6f8a747700948955427308c961ea24b9d1ddc426b5aafd735d232355ef6",
+            "oracleHash": "96625d6b28f8174d7d2f57e2b9c509300ff25037b6ce7b47179058fda3c6ac5e",
+            "verificationPolicyHash": "dc8910bd40a3b33497402ec4c7fb0442d7d00169fc879c520c434d97bdcee940",
+            "slotAuthorityHash": "1bb7c7d5695a1a7289eba98761e72deae5e39c6081c4e5c0eaa5bc3a67fd74d2"
+          },
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 2,
+            "logicalStepId": "m6_4_smooth-09:step-03",
+            "actionSlotOrdinal": 0,
+            "primitive": "type_search_text",
+            "actionFamily": "search:type-query",
+            "intentRef": "85ec904b3277797a2a838a717db09558b0ee193ab28edbc5cfefa4417f28e94e",
+            "intentPolicyHash": "209b84c775914dab2914cb2e654bcb0c2ea727705559f0b391c6633e4949d0d3",
+            "targetKind": "block",
+            "targetEligibilityHash": "0938b25902c1247fa5f3621fbe6122fb073a892b03273ea8ab60093124de3bc7",
+            "trustedParams": {
+              "textRef": "72f8032deea860c885181f371bd8eb3c88af640cbfcbe23f7e5a0dfe797d5389"
+            },
+            "trustedParameterHash": "b9c050dbdf8835d5488704ffaf0eee5d4e1b732a7ee26093fcbe5b0f68c50eb5",
+            "allowedStateHash": "4b32321eb5a1e9d1064add5ddcbeea2a3c791fa7232a418fc70f3a5c35c46c8f",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "8942c0a23be440bbbff65c897591d579917d751cc5c994edaf3621f38d85ae6a",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "5318e6f8a747700948955427308c961ea24b9d1ddc426b5aafd735d232355ef6",
+            "oracleHash": "96625d6b28f8174d7d2f57e2b9c509300ff25037b6ce7b47179058fda3c6ac5e",
+            "verificationPolicyHash": "f16ce6b8d733c3cb29e6b75788c3aa0e4497747ec9320306335400079737ef0d",
+            "slotAuthorityHash": "c98616a18870b0beacfa17a6cf37b5217fc54d6dbd81ca7f1a40c04da4631583"
+          },
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 3,
+            "logicalStepId": "m6_4_smooth-09:step-04",
+            "actionSlotOrdinal": 0,
+            "primitive": "tap",
+            "actionFamily": "search:open-result",
+            "intentRef": "cb1563f736ea6f335822f4ba06ccafff72f9ac482b91f36cb7b193a5af576bc3",
+            "intentPolicyHash": "78b8856726a9c39df552945060acde547c8969db7a126b2a1d53e5ab6f0fd0a2",
+            "targetKind": "block",
+            "targetEligibilityHash": "47f2e38917c9584b8a523e839c5216aa488343b98ac4cb417f23cc8878590fe8",
+            "trustedParams": {},
+            "trustedParameterHash": "5d0591e6e20e724c24fdd4faed18cd656a5d2a27fcdd23b036a7c1f98d84212c",
+            "allowedStateHash": "12544321647ed04ecebe9597f4ae77b3bf1cba76d6e865a98b31ff1dcc880c47",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "6d360efd8872abf837e7ea2eeedf2aa2850745226206f4a0621da94bc43e1d48",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "5318e6f8a747700948955427308c961ea24b9d1ddc426b5aafd735d232355ef6",
+            "oracleHash": "96625d6b28f8174d7d2f57e2b9c509300ff25037b6ce7b47179058fda3c6ac5e",
+            "verificationPolicyHash": "d608fb5e719cfb51730a853285958f8ecbfdec2c2f573726d69ea9ca304678a9",
+            "slotAuthorityHash": "e9a71dc690efe50dfa4440d44966e2c5de79e24befbbf19f7ec228d0d7308cb7"
+          },
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 4,
+            "logicalStepId": "m6_4_smooth-09:step-05",
+            "actionSlotOrdinal": 0,
+            "primitive": "back",
+            "actionFamily": "search:reset-back",
+            "intentRef": "a2f57178e5a22557cdbd59cc9f9847713116553e8f8a9dd0a00882b1d87efad9",
+            "intentPolicyHash": "e32f5545bf995c21ea18f60b2004d143fe8636116223cf0539ef90bfaf28c74e",
+            "targetKind": "none",
+            "targetEligibilityHash": "4fc5b2b2b6268b1a3524e209e58e556c1cbac8b5250e35c3ece1b599255bfe42",
+            "trustedParams": {},
+            "trustedParameterHash": "5d0591e6e20e724c24fdd4faed18cd656a5d2a27fcdd23b036a7c1f98d84212c",
+            "allowedStateHash": "bf4073c13ede58346b3a3b207de529b87136ab3be561d29158f8cee628835aa2",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "5b91458310bd009613f773866f7f4c88339fa96620cf404999032653577f86b5",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "5318e6f8a747700948955427308c961ea24b9d1ddc426b5aafd735d232355ef6",
+            "oracleHash": "96625d6b28f8174d7d2f57e2b9c509300ff25037b6ce7b47179058fda3c6ac5e",
+            "verificationPolicyHash": "8b66a4a8b2476ddd88213e31f1a27fec0b7481dc4f366cf02a51809cedede466",
+            "slotAuthorityHash": "d5e9f9e2cf903b56631060212b7205bd5b2b2a1c0f1c9466f4ddda557d10e4a9"
+          }
+        ],
+        "actionPlanHash": "94d0eaa5bf8e2ae6dead40947aa6614b3ca5f53e1d1f469656a36169b0a81791"
+      }
     },
     {
       "scenarioKey": "m6_4_smooth-10",
@@ -94,7 +735,128 @@
       "authorized": false,
       "executionStatus": "NOT_RUN",
       "oracleHash": "96625d6b28f8174d7d2f57e2b9c509300ff25037b6ce7b47179058fda3c6ac5e",
-      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+      "actionPlan": {
+        "schemaId": "xw.m6-scenario-action-plan.v1",
+        "maxActionCount": 5,
+        "slots": [
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 0,
+            "logicalStepId": "m6_4_smooth-10:step-01",
+            "actionSlotOrdinal": 0,
+            "primitive": "open_app",
+            "actionFamily": "search:open-app",
+            "intentRef": "88d5ba943c50c1654071ca0af06a590bcd9606d9ddffe52234d8b7db60198425",
+            "intentPolicyHash": "6949de6d33e604467dc9e1cbe25bf53be0a2af151dba534b570b022d6500ba87",
+            "targetKind": "none",
+            "targetEligibilityHash": "9c07393802230dfcbbfc8009654f5728e4a1dcdd6ab992dc9b3d22e4b342ee1a",
+            "trustedParams": {
+              "appRef": "41f372f81029876126d7ce9fccb6a302e0c47886e3538f6ba7b4522fa885e0d1"
+            },
+            "trustedParameterHash": "23e7704a38f7b70555604050d19b7e79d21311a565dab6e423c9b093d359d88f",
+            "allowedStateHash": "f88334166919972bf53cea25e076811816f4c1624e76eb216c9c6ff1446be990",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "9d74f99ba23dc09c4d99e5dfa3b817790c2cf1da19711b9e0f8cbd615eadf940",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "d639cfe2c9de4a1a587218f81cc57f6482e29fc0d5fcac346ecd65e4e4fdad1e",
+            "oracleHash": "96625d6b28f8174d7d2f57e2b9c509300ff25037b6ce7b47179058fda3c6ac5e",
+            "verificationPolicyHash": "5b6b6c8905d7dc19812ba0bd640527dbb3c303027b558800d2fc668572ce2c0d",
+            "slotAuthorityHash": "cd1addbfed4b62901c712d169ccbdb56c3100f471aaee977e0c1c67cd3c6a6e8"
+          },
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 1,
+            "logicalStepId": "m6_4_smooth-10:step-02",
+            "actionSlotOrdinal": 0,
+            "primitive": "tap",
+            "actionFamily": "search:focus-search",
+            "intentRef": "4e3b7b9b8f38f9dabd38227a774e91bb54afe6f01fe9b4878ef64c671f7312f9",
+            "intentPolicyHash": "c1f65b21246eb859a3244fbf18038d5423f6afc89fe07d98bcc5a7d0a7e02354",
+            "targetKind": "block",
+            "targetEligibilityHash": "cc45a41febd6967147be7bc74b5bb6f0cda51e420ae53dfe48b0d3824b87bf52",
+            "trustedParams": {},
+            "trustedParameterHash": "5d0591e6e20e724c24fdd4faed18cd656a5d2a27fcdd23b036a7c1f98d84212c",
+            "allowedStateHash": "b9882d33ddc328bc05a31d2bb6d4c7849f2733827e02479b30d29b8e1231cf6e",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "9ce361c0eab351204066ae4d49901b91ab358da00cbf209afd7521aa5454da56",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "d639cfe2c9de4a1a587218f81cc57f6482e29fc0d5fcac346ecd65e4e4fdad1e",
+            "oracleHash": "96625d6b28f8174d7d2f57e2b9c509300ff25037b6ce7b47179058fda3c6ac5e",
+            "verificationPolicyHash": "dd33abd5f74a8900325aa1915594cab064c1bb22680d63dbeef9f296ba2d5a1f",
+            "slotAuthorityHash": "a5b995a5d9912f772e9d4bf42ffef6aff500aa053012eebb1cb74d65f10b0997"
+          },
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 2,
+            "logicalStepId": "m6_4_smooth-10:step-03",
+            "actionSlotOrdinal": 0,
+            "primitive": "type_search_text",
+            "actionFamily": "search:type-query",
+            "intentRef": "985ae16b649156fa6006064ca2574b6aad544d9f2bb2bbd6edc7c457c7102d59",
+            "intentPolicyHash": "ad88e6cf806b1de4897fc71f856b00310a2e9cb88b03b33ab2032961ddb6b7b6",
+            "targetKind": "block",
+            "targetEligibilityHash": "77c1e1d730e997473508f718b14cc395bae37c45895b42b239e8c320ab700c95",
+            "trustedParams": {
+              "textRef": "64b28c2114ef1c840c6a9a913d6905e436eb26bafd1328630b92e28abe3085e6"
+            },
+            "trustedParameterHash": "38f15554908ef8c39b3f354379c8d9ad76445ca5fe8a4fd05f994ae469564164",
+            "allowedStateHash": "e9fb6a6905495f1381048801806eb19a765b0a54ac34296293a34133eb1f2e1d",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "cf48c51ebf55b2c4c54a26e8a049480ea99f0c147644610119d5d908934b6722",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "d639cfe2c9de4a1a587218f81cc57f6482e29fc0d5fcac346ecd65e4e4fdad1e",
+            "oracleHash": "96625d6b28f8174d7d2f57e2b9c509300ff25037b6ce7b47179058fda3c6ac5e",
+            "verificationPolicyHash": "397e2dabb8ffcf2a9e5c63d45a76644caa69def57ae04398ebd620eb90d3b714",
+            "slotAuthorityHash": "05b70721beec9603905f7280dddde6336f5396400f28014f8898b74ff7a8da06"
+          },
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 3,
+            "logicalStepId": "m6_4_smooth-10:step-04",
+            "actionSlotOrdinal": 0,
+            "primitive": "tap",
+            "actionFamily": "search:open-result",
+            "intentRef": "2726dfd85b083eb35ef16ad92ca10319f41c073bd4b061a0108156b912905f8d",
+            "intentPolicyHash": "b2242508c120bf71b752a4dc0b6bf6b043f7a474d8d12b648b256c82eb6e4324",
+            "targetKind": "block",
+            "targetEligibilityHash": "bcb2c3f0dfb17f5fe8fa491fae853a379cdeccbe0ea0e50d514f9b7c1dce1a9f",
+            "trustedParams": {},
+            "trustedParameterHash": "5d0591e6e20e724c24fdd4faed18cd656a5d2a27fcdd23b036a7c1f98d84212c",
+            "allowedStateHash": "bb7c2f44523b0e10756ad50735d2a329a411bc4258abf62044f91967a976e2f7",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "f882e195c885ac6a4e298351d51dc495923cb3caa900e80f0611506c4831bd2f",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "d639cfe2c9de4a1a587218f81cc57f6482e29fc0d5fcac346ecd65e4e4fdad1e",
+            "oracleHash": "96625d6b28f8174d7d2f57e2b9c509300ff25037b6ce7b47179058fda3c6ac5e",
+            "verificationPolicyHash": "30ef51d91e135258bf600092116da687b2d6d02b6c38a4d0245f609931ffee61",
+            "slotAuthorityHash": "e6c728896b2c4a06ee5c537d406064d04d19d6c2b0f192565153733b9da2f944"
+          },
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 4,
+            "logicalStepId": "m6_4_smooth-10:step-05",
+            "actionSlotOrdinal": 0,
+            "primitive": "back",
+            "actionFamily": "search:reset-back",
+            "intentRef": "02011326c845e0898ec884415d95bad4e3a4d570c26fddf6c93a7c0ab07b2c37",
+            "intentPolicyHash": "3b1e17c3cb8f2260d9cb450fb171f2b2142ccfb5cf4129bcb2d6766ae842ca69",
+            "targetKind": "none",
+            "targetEligibilityHash": "f73d7615bd6ea46a9d30595a55d3a7fee0a442577cda1bef1a0bbcc9ab4ca729",
+            "trustedParams": {},
+            "trustedParameterHash": "5d0591e6e20e724c24fdd4faed18cd656a5d2a27fcdd23b036a7c1f98d84212c",
+            "allowedStateHash": "162e96b5395461065773d767fb25102dc3c2c6d4b3efae9aa128b7f54378b4aa",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "46cf753e160a5969a96a350a7b02f2d58628ac6075a28d100070d6e1922a7c3a",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "d639cfe2c9de4a1a587218f81cc57f6482e29fc0d5fcac346ecd65e4e4fdad1e",
+            "oracleHash": "96625d6b28f8174d7d2f57e2b9c509300ff25037b6ce7b47179058fda3c6ac5e",
+            "verificationPolicyHash": "5d95e1fbe2659d7bc3a055ff4d25601022a1d86befb213b6f09a9192d5d719b8",
+            "slotAuthorityHash": "f0a602311cfcca1fadf875491b24e25d319e862902fd5bc8310f2fd6fd0f5f94"
+          }
+        ],
+        "actionPlanHash": "606b09133348b86882aa7e710f243fb1d66a051891e8a124de3ba44ba4fbdcf6"
+      }
     },
     {
       "scenarioKey": "m6_4_smooth-11",
@@ -103,7 +865,128 @@
       "authorized": false,
       "executionStatus": "NOT_RUN",
       "oracleHash": "96625d6b28f8174d7d2f57e2b9c509300ff25037b6ce7b47179058fda3c6ac5e",
-      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+      "actionPlan": {
+        "schemaId": "xw.m6-scenario-action-plan.v1",
+        "maxActionCount": 5,
+        "slots": [
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 0,
+            "logicalStepId": "m6_4_smooth-11:step-01",
+            "actionSlotOrdinal": 0,
+            "primitive": "open_app",
+            "actionFamily": "search:open-app",
+            "intentRef": "8bbe5aa5397600ae3f0c17db8f7fdd82a2edf097bdb46833686f16ccaeb8d2b1",
+            "intentPolicyHash": "8da2be582c6f1e9064e8854a4fd2b941d393ed6afbf3af8c0ec2af86827d8b94",
+            "targetKind": "none",
+            "targetEligibilityHash": "eb9c40fda4fb694d28c8a5e300dfacaad3700734deee728f2b59c6fe8ef444bc",
+            "trustedParams": {
+              "appRef": "41f372f81029876126d7ce9fccb6a302e0c47886e3538f6ba7b4522fa885e0d1"
+            },
+            "trustedParameterHash": "23e7704a38f7b70555604050d19b7e79d21311a565dab6e423c9b093d359d88f",
+            "allowedStateHash": "4183294a1336fb54c9310308c82d95c6da6ba070b99130a2afaf2ca2af6e5d76",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "6c92f846259c04ac4cc064a290d190e465372633b139a9d2e8f100ce6be846f1",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "0cc394d5f61ee267967983558a4b9e2acf8d0cf7b1fb2ee04ba5a3ea221c8c7d",
+            "oracleHash": "96625d6b28f8174d7d2f57e2b9c509300ff25037b6ce7b47179058fda3c6ac5e",
+            "verificationPolicyHash": "b17003d881da1693fe8884ba3bd9a4492fbe98f8e72b00c8aba256c91bf69c7f",
+            "slotAuthorityHash": "1a0dd677c9a4d1ec4c853295bc182f26fa06d597983553b8c9bd4b29f87b9256"
+          },
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 1,
+            "logicalStepId": "m6_4_smooth-11:step-02",
+            "actionSlotOrdinal": 0,
+            "primitive": "tap",
+            "actionFamily": "search:focus-search",
+            "intentRef": "12bafc4d66f329f51bb06a63d7a04f0a917fe8d7b1efe5b0227a65c018a788c7",
+            "intentPolicyHash": "8638835f92c0e19871dd476f918a9e885e5711bb3b86b96c40f840f060b92228",
+            "targetKind": "block",
+            "targetEligibilityHash": "538d1b1fe36cca96d9bb2b6b11e43fd3d11752d586157ffe4dbb43859b6883e3",
+            "trustedParams": {},
+            "trustedParameterHash": "5d0591e6e20e724c24fdd4faed18cd656a5d2a27fcdd23b036a7c1f98d84212c",
+            "allowedStateHash": "b8bf730d28f6684c57ddce3cce7cf47a282ca4230d6da2fad246b059333a19ed",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "6afebc4df6e7a5ba92af403edfd93ac7a8382d09f2e243587afd54e1cf22bc4f",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "0cc394d5f61ee267967983558a4b9e2acf8d0cf7b1fb2ee04ba5a3ea221c8c7d",
+            "oracleHash": "96625d6b28f8174d7d2f57e2b9c509300ff25037b6ce7b47179058fda3c6ac5e",
+            "verificationPolicyHash": "aae552926943924025f1c705dc1f57e0c394fffe867e24e8a1035e4829118eec",
+            "slotAuthorityHash": "350abd9e3a93cf6ae81f339eaa687c4b686c7e1f4d0e8bb1397d31e8f42fc239"
+          },
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 2,
+            "logicalStepId": "m6_4_smooth-11:step-03",
+            "actionSlotOrdinal": 0,
+            "primitive": "type_search_text",
+            "actionFamily": "search:type-query",
+            "intentRef": "ef1f8d397d2902b6e6056a9c776951075fd861716ab48bd37c428e61be973f69",
+            "intentPolicyHash": "baf2919ddd67de02536859a9aa5716f97fe73760f769326bf5c95c0f65f089a7",
+            "targetKind": "block",
+            "targetEligibilityHash": "cf98fd8c335c2a195f0326cc38faf82aabc8e99a8d90d7698ff917132399c844",
+            "trustedParams": {
+              "textRef": "d27a22742460097913c1b9c943bdca8fc931b5af7fb43bb4596cdf93615a5ed3"
+            },
+            "trustedParameterHash": "f10e0a30e4683acb43be862676a3d4637d02b408275222e7b743d51c3c5bbb9f",
+            "allowedStateHash": "42bbd3630aae3f8630bdefd328930a1fecb8034d0072dfd684ccb4864289835c",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "9d494200ae96620ae005a581d70254766cefa9a141f0032603adfec3fcd522ce",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "0cc394d5f61ee267967983558a4b9e2acf8d0cf7b1fb2ee04ba5a3ea221c8c7d",
+            "oracleHash": "96625d6b28f8174d7d2f57e2b9c509300ff25037b6ce7b47179058fda3c6ac5e",
+            "verificationPolicyHash": "3d524b177ff4bf85bc9a0b40de36c39c6884637c4c016294a2afa53d2b90e635",
+            "slotAuthorityHash": "78a869c1445085a70c645b8211c1234f93310a01dcf61615585e994599fa10f0"
+          },
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 3,
+            "logicalStepId": "m6_4_smooth-11:step-04",
+            "actionSlotOrdinal": 0,
+            "primitive": "tap",
+            "actionFamily": "search:open-result",
+            "intentRef": "1913e842a90bcf549cf9bdaf4fd8f9a21e16907e407465bc142b6d987ebd7101",
+            "intentPolicyHash": "0664d9cd005f38bd6ea227aa2f6116f761a1ab7c6e176a037d2fd61eede2177a",
+            "targetKind": "block",
+            "targetEligibilityHash": "fed5480ef54a063e095676e3ff60e869a4997a13b1cd24c7289bc30193d4a121",
+            "trustedParams": {},
+            "trustedParameterHash": "5d0591e6e20e724c24fdd4faed18cd656a5d2a27fcdd23b036a7c1f98d84212c",
+            "allowedStateHash": "303a2540b07cdd80f6ccc3dc7f49ee8de0362f6c26ad2dff6057a9e5b7eab411",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "014c4b8f51933dfb0eace624ef1430938a72ae358f7d83178f08b3f2ce6396f2",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "0cc394d5f61ee267967983558a4b9e2acf8d0cf7b1fb2ee04ba5a3ea221c8c7d",
+            "oracleHash": "96625d6b28f8174d7d2f57e2b9c509300ff25037b6ce7b47179058fda3c6ac5e",
+            "verificationPolicyHash": "195a8879ade5eb0086c2a1949e6b99b704f9e8d1bbd52b76cf93eadff0813e9d",
+            "slotAuthorityHash": "860949df403ce6101849e419ec01b6c990403a2fcd26544aab40370e806c325d"
+          },
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 4,
+            "logicalStepId": "m6_4_smooth-11:step-05",
+            "actionSlotOrdinal": 0,
+            "primitive": "back",
+            "actionFamily": "search:reset-back",
+            "intentRef": "a2161313d9a333f498d9b31c10de2b28e49fb748544b35fa612ef6d4c56c9b74",
+            "intentPolicyHash": "e91089ed9867872bb86e9810bcd750f160eb8c746f31e2873ce54e8e72e2abfa",
+            "targetKind": "none",
+            "targetEligibilityHash": "a3b478e6c020e35c526ec8b6f592f27a0b3b8a8b46ebbf13741e09f6282612de",
+            "trustedParams": {},
+            "trustedParameterHash": "5d0591e6e20e724c24fdd4faed18cd656a5d2a27fcdd23b036a7c1f98d84212c",
+            "allowedStateHash": "e71b0e1fc0d94b4d1b53e9d052cd1510613584f94455b63949484351c1afaa9f",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "1d651030aebec318f8abea8c5118615dbe68794affa392d32dd699812ce5f057",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "0cc394d5f61ee267967983558a4b9e2acf8d0cf7b1fb2ee04ba5a3ea221c8c7d",
+            "oracleHash": "96625d6b28f8174d7d2f57e2b9c509300ff25037b6ce7b47179058fda3c6ac5e",
+            "verificationPolicyHash": "f02f499373cecaad9da3b4d42875d991a7bca2193cb388cfd1ac6e1ac330dbea",
+            "slotAuthorityHash": "492404a8cd15feb0badfef1b94023b7e3734d10ae901f015146dd567138d2f9b"
+          }
+        ],
+        "actionPlanHash": "832179339826e9c2a7e97dfd964afa03401e746c94cc2481f7d8c089146fdca3"
+      }
     },
     {
       "scenarioKey": "m6_4_smooth-12",
@@ -112,7 +995,128 @@
       "authorized": false,
       "executionStatus": "NOT_RUN",
       "oracleHash": "96625d6b28f8174d7d2f57e2b9c509300ff25037b6ce7b47179058fda3c6ac5e",
-      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+      "actionPlan": {
+        "schemaId": "xw.m6-scenario-action-plan.v1",
+        "maxActionCount": 5,
+        "slots": [
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 0,
+            "logicalStepId": "m6_4_smooth-12:step-01",
+            "actionSlotOrdinal": 0,
+            "primitive": "open_app",
+            "actionFamily": "search:open-app",
+            "intentRef": "6a2bcbc77e05b3764ef730edea9a0c695843aceb4ec58bd16cdb3669f516c1a6",
+            "intentPolicyHash": "326435bd9ac84a672cecc690893556e07df847c9d5d7426d84d8f423c036e653",
+            "targetKind": "none",
+            "targetEligibilityHash": "32ad259745c775a90c7d09adf6642de7810f44a5bcbd44bd454e91432b54fbb4",
+            "trustedParams": {
+              "appRef": "41f372f81029876126d7ce9fccb6a302e0c47886e3538f6ba7b4522fa885e0d1"
+            },
+            "trustedParameterHash": "23e7704a38f7b70555604050d19b7e79d21311a565dab6e423c9b093d359d88f",
+            "allowedStateHash": "62dd02ca6f75b30cd35f6963088b18b05e8aa8c82c96a66199c02fa4e755fb0f",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "c81ce4a803d40e1c6560074d7b65b1e2ca58d316a944322901db0904033c8689",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "8205f82427d69bcac02746b2f20ee5c0f220e0f20d4972b6c21eabcfef9253f8",
+            "oracleHash": "96625d6b28f8174d7d2f57e2b9c509300ff25037b6ce7b47179058fda3c6ac5e",
+            "verificationPolicyHash": "e7d7eba506a9f455cc5cc1b2b69a2d53e9a88ab3a0eda0987b8780cdd30e77b3",
+            "slotAuthorityHash": "756040a8e8511554ff61f34bb96adda84243fa03e7b6a7b401822c6a7109ba40"
+          },
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 1,
+            "logicalStepId": "m6_4_smooth-12:step-02",
+            "actionSlotOrdinal": 0,
+            "primitive": "tap",
+            "actionFamily": "search:focus-search",
+            "intentRef": "ae7d28390c4a0d590bd5e90a5e7b9f055833625ebc526de5995e0b974296175b",
+            "intentPolicyHash": "9abbb8a62c89a42769d591f2b77bfd6bbe458a538d9249e46a6dc7aca245eeb7",
+            "targetKind": "block",
+            "targetEligibilityHash": "84d2ed83a819fc9dd0ca7189bd84074d3d5945db49517783c3410a34cb65199c",
+            "trustedParams": {},
+            "trustedParameterHash": "5d0591e6e20e724c24fdd4faed18cd656a5d2a27fcdd23b036a7c1f98d84212c",
+            "allowedStateHash": "2071f42bcc9f3b2b084b28a856fd134981629930adaada551bb91f0b40c5158c",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "5613771527e600cc11dc7a2165381648059c4d1dc66121b3eb67f2263943b230",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "8205f82427d69bcac02746b2f20ee5c0f220e0f20d4972b6c21eabcfef9253f8",
+            "oracleHash": "96625d6b28f8174d7d2f57e2b9c509300ff25037b6ce7b47179058fda3c6ac5e",
+            "verificationPolicyHash": "5be470f376a17e5bd2d26f63928aa5a55645356dbde91f692850805e0cb7baad",
+            "slotAuthorityHash": "b45f6c891f5dba4c2075ea38d8e59371bbf1a97b0d938c2de4adff71b41e4bc4"
+          },
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 2,
+            "logicalStepId": "m6_4_smooth-12:step-03",
+            "actionSlotOrdinal": 0,
+            "primitive": "type_search_text",
+            "actionFamily": "search:type-query",
+            "intentRef": "44de41ef23420fa9aaee905a2e8e856ce79c3e9d1ba357031bdf384dd2c19af9",
+            "intentPolicyHash": "e143194eac63ee2f0389b0b7ede1f8fbdd522fba2f0679b41f7f1eed5b8b8e85",
+            "targetKind": "block",
+            "targetEligibilityHash": "d2ae5677036fd7b46d4228bd8eb25a25ad06be5bdb16ded16ac150deedecee3b",
+            "trustedParams": {
+              "textRef": "4343127c448367f448db347adb65e061bbd5edc31ad2c6027a74f2faf2a86969"
+            },
+            "trustedParameterHash": "4884e584ad8f386d0eb5e10ae6b890ad8d9bdd4ead1d2a050cb213c780b615cd",
+            "allowedStateHash": "938b7ab408b38f3353e44192fc6e5f820a1211990d98428d7ab18ef3d779cc6e",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "fb86e6b9d4839940511420169de47df14f8521111c3a2db459ba67715f0d7c67",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "8205f82427d69bcac02746b2f20ee5c0f220e0f20d4972b6c21eabcfef9253f8",
+            "oracleHash": "96625d6b28f8174d7d2f57e2b9c509300ff25037b6ce7b47179058fda3c6ac5e",
+            "verificationPolicyHash": "d719a95dce25d9a8016054372ca22eb42fdeeaf601664cb636e82087aca48747",
+            "slotAuthorityHash": "06eb838512bc7e5808bc7d032ab5ee6c383522f31a106bf052a1c557e872215a"
+          },
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 3,
+            "logicalStepId": "m6_4_smooth-12:step-04",
+            "actionSlotOrdinal": 0,
+            "primitive": "tap",
+            "actionFamily": "search:open-result",
+            "intentRef": "9edb1acafb9b7196df1712514ab7a3d56b85628ba0196b241c81c7b5f31ee0d5",
+            "intentPolicyHash": "c786f782e6c1d6cc4873ce622ac2c37af022388965df44772a38dff992ef12aa",
+            "targetKind": "block",
+            "targetEligibilityHash": "3eb113900539284594db9e50dfc246016fdddf9d9b03d274952351a130a362d7",
+            "trustedParams": {},
+            "trustedParameterHash": "5d0591e6e20e724c24fdd4faed18cd656a5d2a27fcdd23b036a7c1f98d84212c",
+            "allowedStateHash": "be000a00633fd451ac8c97b081f78e6dc38b6af9df17833dcc7d552afc889c31",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "ef5a4611e669baff9f5f5e37c2b8ca1e5f2d46fd38f639ab3e6e01ed40d63082",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "8205f82427d69bcac02746b2f20ee5c0f220e0f20d4972b6c21eabcfef9253f8",
+            "oracleHash": "96625d6b28f8174d7d2f57e2b9c509300ff25037b6ce7b47179058fda3c6ac5e",
+            "verificationPolicyHash": "df9562bdf1d59796203a9e878fcee9649411c0b2a8c12f6492dd0bbd9a370736",
+            "slotAuthorityHash": "838e2f8a5d24468c99eccb56de11d6a5db2540b14ebb655064fa283d3d8987c5"
+          },
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 4,
+            "logicalStepId": "m6_4_smooth-12:step-05",
+            "actionSlotOrdinal": 0,
+            "primitive": "back",
+            "actionFamily": "search:reset-back",
+            "intentRef": "9908e7528a0e06eb5cf6b75061de2d173def2b3a132578a9fb37a01eceadafbb",
+            "intentPolicyHash": "8f69a6d38969f2e7e9cdab231e2b26904de53975ef5a196492cac5e1cb4956a5",
+            "targetKind": "none",
+            "targetEligibilityHash": "26a5065f0c1f624c40af567b9c19e16e62e0a7a1a61edc9082e70d35de8bb491",
+            "trustedParams": {},
+            "trustedParameterHash": "5d0591e6e20e724c24fdd4faed18cd656a5d2a27fcdd23b036a7c1f98d84212c",
+            "allowedStateHash": "5c1f9c4efb97383ed1408a18df1498089e7236ea92275a5e610597d64f9ffc7a",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "48f64626e3e8a601481314b702ada9e4fb6d443f64af959c2fa347defe0a42cb",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "8205f82427d69bcac02746b2f20ee5c0f220e0f20d4972b6c21eabcfef9253f8",
+            "oracleHash": "96625d6b28f8174d7d2f57e2b9c509300ff25037b6ce7b47179058fda3c6ac5e",
+            "verificationPolicyHash": "2e5cb0366664bf5f0022abd0a4164305e905d7c48f7492a5db4328d521fa74b9",
+            "slotAuthorityHash": "af7591db4c97637cbef0be12cdfd95f0207ec6650ed149a295694642e3b4763e"
+          }
+        ],
+        "actionPlanHash": "6c0bc2a7650e612b054f84b39245f60befc7c408e590f5f5a459d61bf76ead50"
+      }
     },
     {
       "scenarioKey": "m6_4_smooth-13",
@@ -121,7 +1125,82 @@
       "authorized": false,
       "executionStatus": "NOT_RUN",
       "oracleHash": "0f86ea70c355b91a3cd20243e5bf9227a20e7adf5b2fd0b0c98120325921edda",
-      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+      "actionPlan": {
+        "schemaId": "xw.m6-scenario-action-plan.v1",
+        "maxActionCount": 3,
+        "slots": [
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 0,
+            "logicalStepId": "m6_4_smooth-13:step-01",
+            "actionSlotOrdinal": 0,
+            "primitive": "tap",
+            "actionFamily": "text-input:focus-input",
+            "intentRef": "f0abe90683397b2163989371d47c6b2eac912ab44ca739e27acb870309a578c6",
+            "intentPolicyHash": "41b3bf40acbfc1b518a7f3552736f41014fe76bacba494ebed64ec04574d4da6",
+            "targetKind": "block",
+            "targetEligibilityHash": "cab4d28d422a7f0d4a06dfa9fc0af21b36a0e20251fbb328b67a7620cdcb3a73",
+            "trustedParams": {},
+            "trustedParameterHash": "5d0591e6e20e724c24fdd4faed18cd656a5d2a27fcdd23b036a7c1f98d84212c",
+            "allowedStateHash": "42cf6bd9e54603a61c1c7321852103f0594f7d3b65676e16ab9d156243ec8a9b",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "b0d0f71230c585fcbf19b5964c099760801959add92c39575ae570b99ba2629c",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "60027e995451a93b465f2834f25715c5fc0d89b7fb9cd5acb86350744ab2dbcc",
+            "oracleHash": "0f86ea70c355b91a3cd20243e5bf9227a20e7adf5b2fd0b0c98120325921edda",
+            "verificationPolicyHash": "7e0907114521a6c7a814bc33f6001543ae3cd4684c6942c74e62b5937827cce7",
+            "slotAuthorityHash": "f8880a8065ca983f7fcbe9a5d4dc80bd413b9b5bd7bef145872932890669703e"
+          },
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 1,
+            "logicalStepId": "m6_4_smooth-13:step-02",
+            "actionSlotOrdinal": 0,
+            "primitive": "type_search_text",
+            "actionFamily": "text-input:type-text",
+            "intentRef": "20418dc4583c354788d7c7920770d8479368d36afd39f5a9fd9ee83f13ec7223",
+            "intentPolicyHash": "0ba2d9e67215bbdce18a248bb41ea47f3897747eb737bc729d1bce9f79531a04",
+            "targetKind": "block",
+            "targetEligibilityHash": "f3dd6c0052474b81b368bb228eea506c7e662f3c178174409c9a792e21935926",
+            "trustedParams": {
+              "textRef": "4c2f4145385aeab733d7062796f48a2c7ed19b7ee2fd5cc386034dba868d7a03"
+            },
+            "trustedParameterHash": "623593b98987f646bb591ae86c3011717d9d57acb146715c43589fff0818be9e",
+            "allowedStateHash": "622ef75e6c5586a5e2799ec9ff89931818ecf03d0d816602ff1f97e74723af45",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "59b175c8f5f22233c4fb101492ee15a270a9b69934514f01adc416ddce87cba3",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "60027e995451a93b465f2834f25715c5fc0d89b7fb9cd5acb86350744ab2dbcc",
+            "oracleHash": "0f86ea70c355b91a3cd20243e5bf9227a20e7adf5b2fd0b0c98120325921edda",
+            "verificationPolicyHash": "9650f33cbcc07e9ce330c3fe452ea7307f96754aec2f6ce006eb1c76169f21ba",
+            "slotAuthorityHash": "72bb28f1312c23737f5466dc56112e648001cf5205278b22d6fe481ab9c08403"
+          },
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 2,
+            "logicalStepId": "m6_4_smooth-13:step-03",
+            "actionSlotOrdinal": 0,
+            "primitive": "back",
+            "actionFamily": "text-input:reset-back",
+            "intentRef": "308c618900bf87eeb1302d750c53c8955a267cafc7a4e1dfb45a9d94ebc2b452",
+            "intentPolicyHash": "5d5bde828f231446e2dfc7c9512449bd529652904ba6d746204a8801bc2d0ff2",
+            "targetKind": "none",
+            "targetEligibilityHash": "23620705d5393c978cc51ece7935ff1aae34fc05a8dd4c01fab9b8c3112412d0",
+            "trustedParams": {},
+            "trustedParameterHash": "5d0591e6e20e724c24fdd4faed18cd656a5d2a27fcdd23b036a7c1f98d84212c",
+            "allowedStateHash": "c13ae78fd15cd56269dbcfc9203e8b9e07812250fdcf5d2f86ea318932e44319",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "4976468a49d464f1d67e4293ba8db92b4520b762c607e26ac40644eb29f60a79",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "60027e995451a93b465f2834f25715c5fc0d89b7fb9cd5acb86350744ab2dbcc",
+            "oracleHash": "0f86ea70c355b91a3cd20243e5bf9227a20e7adf5b2fd0b0c98120325921edda",
+            "verificationPolicyHash": "1cf82953a665eb668427f7780d18cf02e7f357680171845f40f2c4a5551788b0",
+            "slotAuthorityHash": "78386b59516e25fe8b63af94f8b840faf3f7505a9283163793b3f9bc26f5bc66"
+          }
+        ],
+        "actionPlanHash": "b8409c6bdb90ae9ee02889ff11c9b09f6ff9a3d8f144b84cbe74f0dbfa785ff0"
+      }
     },
     {
       "scenarioKey": "m6_4_smooth-14",
@@ -130,7 +1209,82 @@
       "authorized": false,
       "executionStatus": "NOT_RUN",
       "oracleHash": "0f86ea70c355b91a3cd20243e5bf9227a20e7adf5b2fd0b0c98120325921edda",
-      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+      "actionPlan": {
+        "schemaId": "xw.m6-scenario-action-plan.v1",
+        "maxActionCount": 3,
+        "slots": [
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 0,
+            "logicalStepId": "m6_4_smooth-14:step-01",
+            "actionSlotOrdinal": 0,
+            "primitive": "tap",
+            "actionFamily": "text-input:focus-input",
+            "intentRef": "8a712865d284d7599f7d1574b5d4769ef9018889bf50755b65bc250443d68e91",
+            "intentPolicyHash": "49b77ae277026091f84d144330454ba17b25a2988df7095db3f32af9d2edcf61",
+            "targetKind": "block",
+            "targetEligibilityHash": "2163764eb87c88c3380aed0174d177e57fe9d72bf31e6c2977a30592bd24ade7",
+            "trustedParams": {},
+            "trustedParameterHash": "5d0591e6e20e724c24fdd4faed18cd656a5d2a27fcdd23b036a7c1f98d84212c",
+            "allowedStateHash": "e021fc7c59a147f99b13b60f878fe92a6f4f16cd38cbb034bae69b7190b031a2",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "d59dbf2ab5d4a79f11a36be1d4810d170b6fef5fd67aa8bd142ad604804998e1",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "4fbd2bb9fc2ae650bcb8d1d90b18d3b1c95e6ebd1d83a0937f907765a11f78b1",
+            "oracleHash": "0f86ea70c355b91a3cd20243e5bf9227a20e7adf5b2fd0b0c98120325921edda",
+            "verificationPolicyHash": "230426666708c715b95130f3c55adda5715b4c940759695455bc4a67ffeeb8f3",
+            "slotAuthorityHash": "a5da7cbaf0e230cb5b1bf4d731452220e82891481fe10367c0088d5a7c0ca6a0"
+          },
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 1,
+            "logicalStepId": "m6_4_smooth-14:step-02",
+            "actionSlotOrdinal": 0,
+            "primitive": "type_search_text",
+            "actionFamily": "text-input:type-text",
+            "intentRef": "1f433c0e661832fe9e1aac7809b3c942b1767a5efe3bf1ec2e7da87cba8ff8ce",
+            "intentPolicyHash": "d1a27fda8ae65e82709b7f3446744eb70621140f58f0e15fff260fdbf35c6ea5",
+            "targetKind": "block",
+            "targetEligibilityHash": "260303a98791bb1c07a2152bd24eb00a15f77415ec8cc78336dd2f8656b48037",
+            "trustedParams": {
+              "textRef": "174d56636f538d3cc137e53b35ef4e2f1e7c4f2c575b8f3d1c9edf6c71200f8e"
+            },
+            "trustedParameterHash": "3572321873fecb8172bd474bfbdfc625338bbc1c0b2cf9ee6f1bdc1ce788cffb",
+            "allowedStateHash": "368b9e5769687d65b6d9944e598739ff210ed0645a38464e51d5c403a1482c5e",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "0c28dbda253e7380ebec75b4cb67cc6be175474028338251b084eef9d464f833",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "4fbd2bb9fc2ae650bcb8d1d90b18d3b1c95e6ebd1d83a0937f907765a11f78b1",
+            "oracleHash": "0f86ea70c355b91a3cd20243e5bf9227a20e7adf5b2fd0b0c98120325921edda",
+            "verificationPolicyHash": "36320723dc0e9aee004562b06dd06f5d928475c9c8652e92d20b60d5b598ff20",
+            "slotAuthorityHash": "894a65e8369de3440a4ed7eb1143da2aead4f28b04cbe107498cac1ec709b403"
+          },
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 2,
+            "logicalStepId": "m6_4_smooth-14:step-03",
+            "actionSlotOrdinal": 0,
+            "primitive": "back",
+            "actionFamily": "text-input:reset-back",
+            "intentRef": "270cd1844047da2597a277336ae7a17666ceb1ba543035ca36e1deb5a7ee0a82",
+            "intentPolicyHash": "7840f7ba9cb25f7a0ec8a27d6b8a9f0bde507ccde498132525a5b4b7d0022fce",
+            "targetKind": "none",
+            "targetEligibilityHash": "b4502042375a4c425bd5d337c2cea763a8605a96ad8fe05d7fbe3241a7519c0d",
+            "trustedParams": {},
+            "trustedParameterHash": "5d0591e6e20e724c24fdd4faed18cd656a5d2a27fcdd23b036a7c1f98d84212c",
+            "allowedStateHash": "c290858ac3c0db3a7c324d76c4221ba993c641af3f6d4e4ecb7474155b7e3db1",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "2dd10917c3b38d385fd73bb1663483cf1e3bcabfdd664c8e8029a5913b0d7330",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "4fbd2bb9fc2ae650bcb8d1d90b18d3b1c95e6ebd1d83a0937f907765a11f78b1",
+            "oracleHash": "0f86ea70c355b91a3cd20243e5bf9227a20e7adf5b2fd0b0c98120325921edda",
+            "verificationPolicyHash": "0cf6cdd7498ce39c931831efca007271aa36c9362c58107a8b32c54c03f01c69",
+            "slotAuthorityHash": "3d57c99a0b562e31b7590db652c8b92cc0119ba277605c80a0fdb4321754f8f2"
+          }
+        ],
+        "actionPlanHash": "efb7f616b20404e99e610cfd22e9059c8b4fbb500ba58ed85cd688ecd5ae2f6d"
+      }
     },
     {
       "scenarioKey": "m6_4_smooth-15",
@@ -139,7 +1293,82 @@
       "authorized": false,
       "executionStatus": "NOT_RUN",
       "oracleHash": "0f86ea70c355b91a3cd20243e5bf9227a20e7adf5b2fd0b0c98120325921edda",
-      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+      "actionPlan": {
+        "schemaId": "xw.m6-scenario-action-plan.v1",
+        "maxActionCount": 3,
+        "slots": [
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 0,
+            "logicalStepId": "m6_4_smooth-15:step-01",
+            "actionSlotOrdinal": 0,
+            "primitive": "tap",
+            "actionFamily": "text-input:focus-input",
+            "intentRef": "50ca452f76bae7565d530a662d87ce54a81b2d4558ef295b4540a66d5fea5b2e",
+            "intentPolicyHash": "bb87b582022505f7e69d0a72d53d910f22c1d0ab9f719d71b44f383e0a758c09",
+            "targetKind": "block",
+            "targetEligibilityHash": "725e22753605a3883460bb28bd62f8e27ed3c54d38d1d2d282a38df9b31c9e76",
+            "trustedParams": {},
+            "trustedParameterHash": "5d0591e6e20e724c24fdd4faed18cd656a5d2a27fcdd23b036a7c1f98d84212c",
+            "allowedStateHash": "5ad71258fc3ec05bcf0387a21e922bb96a4d57537416a9e8d3e35e433df0a049",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "ed653d7707209de616f8f58832a3bdc9f9e17bf2f461abd9e3a7cee505f940f7",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "90ed64eb1ba8a8c77bda0ee4a1782a643f31d82b4e2eaff3d84e46adb32b9f11",
+            "oracleHash": "0f86ea70c355b91a3cd20243e5bf9227a20e7adf5b2fd0b0c98120325921edda",
+            "verificationPolicyHash": "5388d4911cf748a0370b7bb70d8fa7774c898e029ebe51aead512771d0f0cf1a",
+            "slotAuthorityHash": "cccbeca672cf36f79292ae5f7248cfbd29098a17fee7cad8e7fa0a597a3b4f4a"
+          },
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 1,
+            "logicalStepId": "m6_4_smooth-15:step-02",
+            "actionSlotOrdinal": 0,
+            "primitive": "type_search_text",
+            "actionFamily": "text-input:type-text",
+            "intentRef": "e84509500c7660713daab88c08307e0286110c56345d2ab34d76c53edea16f6c",
+            "intentPolicyHash": "d325b6a2406ccd3bbc6cb4738f9262348c9a968b284fb9762f8d1689e65fe9d3",
+            "targetKind": "block",
+            "targetEligibilityHash": "2644d8e8e7b91b56d2e56515e756eea14af47c48615be144ecddf2e4a2727f40",
+            "trustedParams": {
+              "textRef": "f1968eaefccbbb6fb7d4b64e0a04c1ece3a499d595db36ef2c838d64d2dacaa8"
+            },
+            "trustedParameterHash": "a9bd171eebab10d18bc89fd4f219f71af28c5777b363260e166a501796533fa2",
+            "allowedStateHash": "4d4b3bbbcd6ab499d448f6a503a0c0515e571eb73c4bec7e31798cef4109fc2b",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "31d72f52f28718dcb169749dc888ff76a45cf3d86e99ada9123d66d167548a17",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "90ed64eb1ba8a8c77bda0ee4a1782a643f31d82b4e2eaff3d84e46adb32b9f11",
+            "oracleHash": "0f86ea70c355b91a3cd20243e5bf9227a20e7adf5b2fd0b0c98120325921edda",
+            "verificationPolicyHash": "e9fff39d6c60c580dccfa28ad3afadd0ef4753ea2ae2bf7333fe931530ed1db3",
+            "slotAuthorityHash": "e52b45571e2a8f1fcbd34a76a280eeda3aca7167294bb2dbbb64c27b1b943b10"
+          },
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 2,
+            "logicalStepId": "m6_4_smooth-15:step-03",
+            "actionSlotOrdinal": 0,
+            "primitive": "back",
+            "actionFamily": "text-input:reset-back",
+            "intentRef": "ea4349fd578d9c6d7937cb867996daa1bd5cc3bd8052e1a4bd739e8eb0b2f877",
+            "intentPolicyHash": "804004213b3c192693a0a9d80d3ead3e7862ed37a537b78ee402dfd3f0c0559e",
+            "targetKind": "none",
+            "targetEligibilityHash": "b65501b453a8e6343316c52a516d82e53edb75b64715d84ce06f7c113d6718d3",
+            "trustedParams": {},
+            "trustedParameterHash": "5d0591e6e20e724c24fdd4faed18cd656a5d2a27fcdd23b036a7c1f98d84212c",
+            "allowedStateHash": "57eedd800a8f453af02d6632c85221c8f8e009bb907c95b2c4dc6ef3b1e6957b",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "f856e53ca3c5a986738a3a31692623e20a8e9df0d2970842a12d8434701eed4e",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "90ed64eb1ba8a8c77bda0ee4a1782a643f31d82b4e2eaff3d84e46adb32b9f11",
+            "oracleHash": "0f86ea70c355b91a3cd20243e5bf9227a20e7adf5b2fd0b0c98120325921edda",
+            "verificationPolicyHash": "9bd08fd75269d954abdfe398424d0cad5195827381746f99d68d13bba11a85f8",
+            "slotAuthorityHash": "d59f213386ed264ca279677c2018987885c6b4ec0b6a080f99202b5747ef54aa"
+          }
+        ],
+        "actionPlanHash": "d97fd1871d01cdf2c2c41abc973fad5c11bc70639a6827ee5618e21c5384914b"
+      }
     },
     {
       "scenarioKey": "m6_4_smooth-16",
@@ -148,7 +1377,82 @@
       "authorized": false,
       "executionStatus": "NOT_RUN",
       "oracleHash": "0f86ea70c355b91a3cd20243e5bf9227a20e7adf5b2fd0b0c98120325921edda",
-      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+      "actionPlan": {
+        "schemaId": "xw.m6-scenario-action-plan.v1",
+        "maxActionCount": 3,
+        "slots": [
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 0,
+            "logicalStepId": "m6_4_smooth-16:step-01",
+            "actionSlotOrdinal": 0,
+            "primitive": "tap",
+            "actionFamily": "text-input:focus-input",
+            "intentRef": "3dab994467a0c024a2ad9ee228198c50a57a27e071e16679b2d99a4c4def046e",
+            "intentPolicyHash": "ef0ac3d2decf3bc1b91acec523442c22b82dbefb22b3a6dc54a987f72f77a6ae",
+            "targetKind": "block",
+            "targetEligibilityHash": "830514ada82b3d43b397517b5a23584e5c58a711c934ffb243190a8382236046",
+            "trustedParams": {},
+            "trustedParameterHash": "5d0591e6e20e724c24fdd4faed18cd656a5d2a27fcdd23b036a7c1f98d84212c",
+            "allowedStateHash": "7aac966ae6570c0120cf506e39409008345a38edb82ac7d4b7158a033f4cec51",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "3627dc70faab084b2e691acdc52f035e1361f1c0553f5a7c6687ea205d467020",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "af59f8af965dfb81bd0f568f4b8552caa7765030384706b0aab6a0de053a38a7",
+            "oracleHash": "0f86ea70c355b91a3cd20243e5bf9227a20e7adf5b2fd0b0c98120325921edda",
+            "verificationPolicyHash": "cbd5d2be44e26dbb1ad23e6808e1b273df2b86b781d05b015549eaaaa141e916",
+            "slotAuthorityHash": "bbf8d7285dd360fd806134b166b54fa2506eb37dcf2a37f9e97c7fa81a0f9a6e"
+          },
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 1,
+            "logicalStepId": "m6_4_smooth-16:step-02",
+            "actionSlotOrdinal": 0,
+            "primitive": "type_search_text",
+            "actionFamily": "text-input:type-text",
+            "intentRef": "4f72d4e3ab3016eaae05cfa65a0ec61f885cfb777f7ea334cad21c780c333168",
+            "intentPolicyHash": "ec78abd9098a6b9b7eaf95c95470e790847274008be26394aedb6a587499b150",
+            "targetKind": "block",
+            "targetEligibilityHash": "edf6ad3a2f0a8b534e4eee32d5a48210e8f07943da9853de097cd444c50fee17",
+            "trustedParams": {
+              "textRef": "83718625c3f527f8ca3426ad7b59e5b3e5e88de900c3146d886a4d3f2789375c"
+            },
+            "trustedParameterHash": "fd110621a06670f8382c662f551ad771eeee0ed6057873d0211b9d2c411f5289",
+            "allowedStateHash": "44d0f4055f6bfced0e0a0bcbb2c17b8d07c6e2af5b938400f206239e4e5edd4d",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "33030cbd3910d0c666a92a9e0a992a0c615cc69f1f92463bd59ac41c0ed728b3",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "af59f8af965dfb81bd0f568f4b8552caa7765030384706b0aab6a0de053a38a7",
+            "oracleHash": "0f86ea70c355b91a3cd20243e5bf9227a20e7adf5b2fd0b0c98120325921edda",
+            "verificationPolicyHash": "66fd5519c5a544401303c590d85c7017161f12bd251a0a98f19c2e914661db0f",
+            "slotAuthorityHash": "4961e56187e2a909f94ccb900ab58bb77da4f5f86b1cd7d8fbcda36f43030a11"
+          },
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 2,
+            "logicalStepId": "m6_4_smooth-16:step-03",
+            "actionSlotOrdinal": 0,
+            "primitive": "back",
+            "actionFamily": "text-input:reset-back",
+            "intentRef": "513b2ea67a116cc686463dcf599ebe8194a733d673d7bab507092c3062481cde",
+            "intentPolicyHash": "457e3d3f9139ddcddef133634b111284ca6c4bd2305590ccafed4957f38cb1e5",
+            "targetKind": "none",
+            "targetEligibilityHash": "e6e98484c27d58d636e68df9e910b024e852940946f0f4d84f3f15c77490b81d",
+            "trustedParams": {},
+            "trustedParameterHash": "5d0591e6e20e724c24fdd4faed18cd656a5d2a27fcdd23b036a7c1f98d84212c",
+            "allowedStateHash": "aa80a451a01e23e44c4017c40dadef75dfd5aeb2beba89d8e6ce9bcc7b135c81",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "4803e15d04e085a0fee937e35a39ccc66443829d109c00556401c35bd1e18073",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "af59f8af965dfb81bd0f568f4b8552caa7765030384706b0aab6a0de053a38a7",
+            "oracleHash": "0f86ea70c355b91a3cd20243e5bf9227a20e7adf5b2fd0b0c98120325921edda",
+            "verificationPolicyHash": "0c7cda1b5ebcc774ee87fc6179f5e967f0100fc912fe807f2e0fa8a48ce26a03",
+            "slotAuthorityHash": "db6f544cbf5c32096b587f3f8de7f50030378d7b38e4b746c83238f96401455a"
+          }
+        ],
+        "actionPlanHash": "66433c0dd9f8efb2a417b129c691a6407569d1d1afea423c322c5ba144918581"
+      }
     },
     {
       "scenarioKey": "m6_4_smooth-17",
@@ -157,7 +1461,64 @@
       "authorized": false,
       "executionStatus": "NOT_RUN",
       "oracleHash": "fea82cdfa1cbfd2cec137e6bf5a3f386594915a21dd747eeb790fc6e9ce1b6f5",
-      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+      "actionPlan": {
+        "schemaId": "xw.m6-scenario-action-plan.v1",
+        "maxActionCount": 2,
+        "slots": [
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 0,
+            "logicalStepId": "m6_4_smooth-17:step-01",
+            "actionSlotOrdinal": 0,
+            "primitive": "scroll",
+            "actionFamily": "scroll:scroll-down",
+            "intentRef": "0c877d6dc7217afb54204f84374e5c544a6a5a4df850adbfffdf10af71385b6b",
+            "intentPolicyHash": "287443f2ec114e797d0544c0850ba4c119b74d157a1c152423b4d392f62c4ecb",
+            "targetKind": "screen",
+            "targetEligibilityHash": "991b0af15d2ec09f1b226eb6c38fa5ccdbb7bb0ecc98021033cb23fd804ebbbb",
+            "trustedParams": {
+              "direction": "down",
+              "distanceTier": "short"
+            },
+            "trustedParameterHash": "2ddfb5a485a376c0daa57e7b78f5a522c6e27c223dcd118f4fb0c3c12d3491bc",
+            "allowedStateHash": "187c43543c9ef8f9d75d50915542b9227d3b6f1bedb9533926b023223c83cac1",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "c00ec8157f6673f20e046ed3b52f9611d320774de5278b0a9218c657d5349ba4",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "6c21753132e14ffd31f99e39c5ff88fcb27c01a800b24847e71b7cc46452b338",
+            "oracleHash": "fea82cdfa1cbfd2cec137e6bf5a3f386594915a21dd747eeb790fc6e9ce1b6f5",
+            "verificationPolicyHash": "4b5c8da1cfb033a808d263cf9b1f07bafa8a355fc0ab31092588b351ee2f2b5f",
+            "slotAuthorityHash": "1718b46b4c8efda2986f2a507fa38ad4969f1f999afc4a00f5c4b7f1d2aae97c"
+          },
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 1,
+            "logicalStepId": "m6_4_smooth-17:step-02",
+            "actionSlotOrdinal": 0,
+            "primitive": "scroll",
+            "actionFamily": "scroll:reset-scroll",
+            "intentRef": "1333878307fa64d7047c88067bf08320c2b421de762521c2c179f482458b17a1",
+            "intentPolicyHash": "c930abe86112bd2ebbe99b5a7735794d8f4085a48717a5c7899d97a7f57be429",
+            "targetKind": "screen",
+            "targetEligibilityHash": "b751bbcabc8460731a82a4a70445208f3303c20571c9409bd6786e85e573b99c",
+            "trustedParams": {
+              "direction": "up",
+              "distanceTier": "short"
+            },
+            "trustedParameterHash": "2e4590c3652e19b20702b7c13e02ff8d571dd042868791c69407d341723106ac",
+            "allowedStateHash": "fc57244c1b4de1b80030cb2a1c71169315eace1ed6f89495060e912645ecc8ca",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "0908bb1235faf036db9623dead62f04049366bbe04b0910567620bd23b637bae",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "6c21753132e14ffd31f99e39c5ff88fcb27c01a800b24847e71b7cc46452b338",
+            "oracleHash": "fea82cdfa1cbfd2cec137e6bf5a3f386594915a21dd747eeb790fc6e9ce1b6f5",
+            "verificationPolicyHash": "337f7e7a3032dc7b6a9412d51d5266c4eccd28e42ad90fcbea510731237306e7",
+            "slotAuthorityHash": "1e0e84dc84ff9dc531d6156349b94d382cfb22a7336300681d2a44253d093483"
+          }
+        ],
+        "actionPlanHash": "f6682139d1fdd439d1ddde35c96b8756e3cfd43209c50c39321d098f6d88683e"
+      }
     },
     {
       "scenarioKey": "m6_4_smooth-18",
@@ -166,7 +1527,64 @@
       "authorized": false,
       "executionStatus": "NOT_RUN",
       "oracleHash": "fea82cdfa1cbfd2cec137e6bf5a3f386594915a21dd747eeb790fc6e9ce1b6f5",
-      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+      "actionPlan": {
+        "schemaId": "xw.m6-scenario-action-plan.v1",
+        "maxActionCount": 2,
+        "slots": [
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 0,
+            "logicalStepId": "m6_4_smooth-18:step-01",
+            "actionSlotOrdinal": 0,
+            "primitive": "scroll",
+            "actionFamily": "scroll:scroll-down",
+            "intentRef": "6b2c74b2430339b51f76dc005ff4e80bff89d7c98c2f1daf1790b369782a9457",
+            "intentPolicyHash": "3d3df867826317342b1481fab50b2d97421c224b3ef9a0fd8c3d57bb46fb4978",
+            "targetKind": "screen",
+            "targetEligibilityHash": "2733b0a8764902c528a43af1073b126b67e8406c9a6aff27e1324c9a801ea8aa",
+            "trustedParams": {
+              "direction": "down",
+              "distanceTier": "short"
+            },
+            "trustedParameterHash": "2ddfb5a485a376c0daa57e7b78f5a522c6e27c223dcd118f4fb0c3c12d3491bc",
+            "allowedStateHash": "bbf67d0d8415b2347b2ffc00585cc88c5662b74ad5e88b1f68ec34d23dc471d7",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "8e9920f541fd325dfc0f7989e9f266d140586b9d4778fe543ae7e1baf629131f",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "bebf3d91b720e2b76020cfe00bf1f445e8f4bdd0cc30870c6eb19c4e75124db7",
+            "oracleHash": "fea82cdfa1cbfd2cec137e6bf5a3f386594915a21dd747eeb790fc6e9ce1b6f5",
+            "verificationPolicyHash": "5b0b2c50ea8e7e732916f48d71c46dd87a7bcdc70937aafd52ad4e7cb39a55d4",
+            "slotAuthorityHash": "02292e62c1f669b001628ba34458252d5808091dfc5e4f6235948ec90e7e6947"
+          },
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 1,
+            "logicalStepId": "m6_4_smooth-18:step-02",
+            "actionSlotOrdinal": 0,
+            "primitive": "scroll",
+            "actionFamily": "scroll:reset-scroll",
+            "intentRef": "4ba5901ddee1d4f240b5b8438de465d6503ac81ec4bb8613198cf2d56a29a79b",
+            "intentPolicyHash": "c1503a0ff7d68ca8f1641b63cecaf3cbfb93a471bf91fa7f9bc027b6e26cf58b",
+            "targetKind": "screen",
+            "targetEligibilityHash": "893772f53470597b1355d10b5786a93b9c0e333b9392aaa77d7c838962e46cfd",
+            "trustedParams": {
+              "direction": "up",
+              "distanceTier": "short"
+            },
+            "trustedParameterHash": "2e4590c3652e19b20702b7c13e02ff8d571dd042868791c69407d341723106ac",
+            "allowedStateHash": "fd0552050e4bee1e527ebcd16465881e2bf43c7776fd2c8c1d27386700f8ddb5",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "453d347447bc12c567fd29064331a5eb47bca76266e1e62e612f24633182bc8a",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "bebf3d91b720e2b76020cfe00bf1f445e8f4bdd0cc30870c6eb19c4e75124db7",
+            "oracleHash": "fea82cdfa1cbfd2cec137e6bf5a3f386594915a21dd747eeb790fc6e9ce1b6f5",
+            "verificationPolicyHash": "a8c20745545368139df2a5b8cc92b8cbdc12a50a127e6fe88eacc660b83a14d0",
+            "slotAuthorityHash": "4a5e830cb4aadc57f77b5dfad8df2f9be62505e1d08ba72a24a507a831a99939"
+          }
+        ],
+        "actionPlanHash": "55a6c4c3010eba2f60119c1e556cfd2d897b9b69548419e650ce06a64acd8725"
+      }
     },
     {
       "scenarioKey": "m6_4_smooth-19",
@@ -175,7 +1593,64 @@
       "authorized": false,
       "executionStatus": "NOT_RUN",
       "oracleHash": "fea82cdfa1cbfd2cec137e6bf5a3f386594915a21dd747eeb790fc6e9ce1b6f5",
-      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+      "actionPlan": {
+        "schemaId": "xw.m6-scenario-action-plan.v1",
+        "maxActionCount": 2,
+        "slots": [
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 0,
+            "logicalStepId": "m6_4_smooth-19:step-01",
+            "actionSlotOrdinal": 0,
+            "primitive": "scroll",
+            "actionFamily": "scroll:scroll-down",
+            "intentRef": "690429bc65df0c39a2590366c3c648dd4c7ed5bd53a825c1bffe2ecd638d1970",
+            "intentPolicyHash": "966047db48145bea821f844c3276d5208a3ba819ed07bf5ce6e426e355aac497",
+            "targetKind": "screen",
+            "targetEligibilityHash": "a8562a58032c2fc8d3fb876159e1c336a355d7fa5ab8d2c27d3ecc8ffab7a4d8",
+            "trustedParams": {
+              "direction": "down",
+              "distanceTier": "short"
+            },
+            "trustedParameterHash": "2ddfb5a485a376c0daa57e7b78f5a522c6e27c223dcd118f4fb0c3c12d3491bc",
+            "allowedStateHash": "35fcb396eb77a9bad39d2e77c13af8b56011c63fca994a0a11f2cf4185fbd36b",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "9e00ead9d5c48078dc098b4a8a002893642273b5abdc65901fe4af719eafb22a",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "c112fb379dbbf5e9e91476b1c2ba3579ca9bda83f6784e69d1946d9ba5caa6ee",
+            "oracleHash": "fea82cdfa1cbfd2cec137e6bf5a3f386594915a21dd747eeb790fc6e9ce1b6f5",
+            "verificationPolicyHash": "3c2b808ce4fcfec87d08eddbbc4ec2f8a3196475eb5431b7c092e1b20e3e1869",
+            "slotAuthorityHash": "515992a7939e968a1dce35097d4049aecd8548748ffadd3509b3b01d9e776761"
+          },
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 1,
+            "logicalStepId": "m6_4_smooth-19:step-02",
+            "actionSlotOrdinal": 0,
+            "primitive": "scroll",
+            "actionFamily": "scroll:reset-scroll",
+            "intentRef": "f81a082a4439d7e5ffd96fbb4908cfd87608bee78050fcc7eae1154c929c415a",
+            "intentPolicyHash": "4681894d1b2ce9c4422966549bd944b67036719fbb24e676b679420ceeca5180",
+            "targetKind": "screen",
+            "targetEligibilityHash": "1c9f0d74a2473d580116c6446cf598efb6d1f55f10e573c9d0d6d23f9ec67638",
+            "trustedParams": {
+              "direction": "up",
+              "distanceTier": "short"
+            },
+            "trustedParameterHash": "2e4590c3652e19b20702b7c13e02ff8d571dd042868791c69407d341723106ac",
+            "allowedStateHash": "81d88f0d5712ee24fac69db0f6d32c91e65c76f23809ac8813769d5102095d14",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "cc0b80ddadcdb7d74dca649d16e30d1d194176acfba70630c630bc2b9de53aff",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "c112fb379dbbf5e9e91476b1c2ba3579ca9bda83f6784e69d1946d9ba5caa6ee",
+            "oracleHash": "fea82cdfa1cbfd2cec137e6bf5a3f386594915a21dd747eeb790fc6e9ce1b6f5",
+            "verificationPolicyHash": "d5bd7c24a088dca1acf9e245a958dcaca971f7013a484aff2e180a94b9339003",
+            "slotAuthorityHash": "7ac6ff98a10f941f0d90336edb112f65429185480c9b6edcd02a0be47a3b385b"
+          }
+        ],
+        "actionPlanHash": "e46e58d01580d803a63bf583969ad9f9fddfba54c73bf840f3daa9acdc5f1378"
+      }
     },
     {
       "scenarioKey": "m6_4_smooth-20",
@@ -184,7 +1659,64 @@
       "authorized": false,
       "executionStatus": "NOT_RUN",
       "oracleHash": "fea82cdfa1cbfd2cec137e6bf5a3f386594915a21dd747eeb790fc6e9ce1b6f5",
-      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+      "actionPlan": {
+        "schemaId": "xw.m6-scenario-action-plan.v1",
+        "maxActionCount": 2,
+        "slots": [
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 0,
+            "logicalStepId": "m6_4_smooth-20:step-01",
+            "actionSlotOrdinal": 0,
+            "primitive": "scroll",
+            "actionFamily": "scroll:scroll-down",
+            "intentRef": "7235cf9fc2251d2071804c47def2ea9ef5e9ac4b53a8f8cd7644efba760226dd",
+            "intentPolicyHash": "78433fe8c44755b4c6a69077b6a8ddd079b63bbf26c02b8c45c53f805189076a",
+            "targetKind": "screen",
+            "targetEligibilityHash": "ef12db456253942d7f0d0bdc61dc891fdd58868395fdd388a498cf59d874bcb3",
+            "trustedParams": {
+              "direction": "down",
+              "distanceTier": "short"
+            },
+            "trustedParameterHash": "2ddfb5a485a376c0daa57e7b78f5a522c6e27c223dcd118f4fb0c3c12d3491bc",
+            "allowedStateHash": "bd64fb1067e5390e7795bde517db98ea99974c3349215f2753f31c1daa20d8da",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "d88f61823ee51fff8b4e9cbb2a442fb0d3fcc2715a0c34f3cbaa24bc6ab84cb8",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "7c406edeb2f019892e8d005574eea234df5862e5d7c36e0fa0222e33f5d923a9",
+            "oracleHash": "fea82cdfa1cbfd2cec137e6bf5a3f386594915a21dd747eeb790fc6e9ce1b6f5",
+            "verificationPolicyHash": "d5744d3ae2b214b5a234c2b864ac6583606448f63925e0492dc997b61d90e655",
+            "slotAuthorityHash": "aa62daa62fd83e11d186ac1a15f13784bd513170c4eaae963e328fd4b4591ff0"
+          },
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 1,
+            "logicalStepId": "m6_4_smooth-20:step-02",
+            "actionSlotOrdinal": 0,
+            "primitive": "scroll",
+            "actionFamily": "scroll:reset-scroll",
+            "intentRef": "69ce94488c84b2508dfc98dd338c46e44311138dc157a1f8a83ce7f7e467b0df",
+            "intentPolicyHash": "72775bb0eb790b98702965d62b1cd4f1305c7f38fc33c126b49e8c4ae071a365",
+            "targetKind": "screen",
+            "targetEligibilityHash": "69a7dc3f0926e3fdb95a82b08da77a5aa4b538d5ec34454f7d7ce499c197eedf",
+            "trustedParams": {
+              "direction": "up",
+              "distanceTier": "short"
+            },
+            "trustedParameterHash": "2e4590c3652e19b20702b7c13e02ff8d571dd042868791c69407d341723106ac",
+            "allowedStateHash": "a546a4d4c8f8a395d420f2fcf4103067d8e4b7b7c6162c4b68b927737f289228",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "b8f1b75de8cac0df6b46a1ac597bceb94dee5951a30100ca528b8af6e8cbdd82",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "7c406edeb2f019892e8d005574eea234df5862e5d7c36e0fa0222e33f5d923a9",
+            "oracleHash": "fea82cdfa1cbfd2cec137e6bf5a3f386594915a21dd747eeb790fc6e9ce1b6f5",
+            "verificationPolicyHash": "92cbb43e40b0622046e6e5a2b7c829bfe72864f2832a60502380d35ebf561d22",
+            "slotAuthorityHash": "c545c3cb735d3d667eb4265b6d088d317688fb76bbe6d453148225e617268e2a"
+          }
+        ],
+        "actionPlanHash": "3bd5cf814a3ba0d006819e58c65c6d4fe7984a2d927d8aa243ebb5c34ff03051"
+      }
     },
     {
       "scenarioKey": "m6_4_smooth-21",
@@ -193,7 +1725,58 @@
       "authorized": false,
       "executionStatus": "NOT_RUN",
       "oracleHash": "87b7d3b5b4a1cf6072ffde0f2b97cf2923916bcd5594193f71e5099b833f3100",
-      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+      "actionPlan": {
+        "schemaId": "xw.m6-scenario-action-plan.v1",
+        "maxActionCount": 2,
+        "slots": [
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 0,
+            "logicalStepId": "m6_4_smooth-21:step-01",
+            "actionSlotOrdinal": 0,
+            "primitive": "tap",
+            "actionFamily": "tab-back:open-tab",
+            "intentRef": "ccc387006cb52d03e0bd58937ca5523e6272e450cb348dedbb4fe0810ef48a17",
+            "intentPolicyHash": "9c9ed0996b74a8dbdadabd47ee02fc5f471071d689bc6cfe096df798183395d9",
+            "targetKind": "block",
+            "targetEligibilityHash": "ca87674089932a80d3e51fa803120237f19ea60d70ed65d0d45c5cd669f8cf99",
+            "trustedParams": {},
+            "trustedParameterHash": "5d0591e6e20e724c24fdd4faed18cd656a5d2a27fcdd23b036a7c1f98d84212c",
+            "allowedStateHash": "104b8b6a638e1e0dadef394f9a8058390cb116e7d13805ae781c2cd7f0c55a0c",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "a09b2e1841535736f79e4d926e9d8d396dd07e7def135167b8844927b0968960",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "fc7d9a08193fdd2f86d634a83d65907aae7d2dfb44419fab8bc3a6cfd65dbd8f",
+            "oracleHash": "87b7d3b5b4a1cf6072ffde0f2b97cf2923916bcd5594193f71e5099b833f3100",
+            "verificationPolicyHash": "80ae1c8d5fa078df95de976f3ea1c47d762d8e6606130c7bc755aa2fdb2a8058",
+            "slotAuthorityHash": "7e45b7c4f47e3694c22ae4c47ff2538a771f17449e1a0be9c9f089bf11e960fb"
+          },
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 1,
+            "logicalStepId": "m6_4_smooth-21:step-02",
+            "actionSlotOrdinal": 0,
+            "primitive": "back",
+            "actionFamily": "tab-back:reset-back",
+            "intentRef": "4e410370498f3ec34b60ba420ddbc9d06c6318b986ff85bdcfe60c8648ec893a",
+            "intentPolicyHash": "921985203de7fa34e01b8ce01c6bf2367e63297e6ef4d31c49c23589010fe625",
+            "targetKind": "none",
+            "targetEligibilityHash": "8f1d878e212a27800a180041bf0ed4d1c11023f7a4599414f246d2bd0875061d",
+            "trustedParams": {},
+            "trustedParameterHash": "5d0591e6e20e724c24fdd4faed18cd656a5d2a27fcdd23b036a7c1f98d84212c",
+            "allowedStateHash": "991e6e73880c4461b25b3899814bbea69cc18716f7d73d7fcae32efe648b9ef2",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "441c7ba9992d74e091ab0f68161d49c76cd3e05cb20b5ffacdced5a691b45657",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "fc7d9a08193fdd2f86d634a83d65907aae7d2dfb44419fab8bc3a6cfd65dbd8f",
+            "oracleHash": "87b7d3b5b4a1cf6072ffde0f2b97cf2923916bcd5594193f71e5099b833f3100",
+            "verificationPolicyHash": "6d724659d696b1b0cc9240a6f63555ae267eef63f7087f6abdb6a2de5613e3bf",
+            "slotAuthorityHash": "7ce3727b9780e1c77f5d8a7c0678a1eed1cf6b3b689a97b432b37e1654ba0741"
+          }
+        ],
+        "actionPlanHash": "b6c75e64eec6fcc07bc16d1df624636c89e56abe4592e8c5b27b3bd78086b700"
+      }
     },
     {
       "scenarioKey": "m6_4_smooth-22",
@@ -202,7 +1785,58 @@
       "authorized": false,
       "executionStatus": "NOT_RUN",
       "oracleHash": "87b7d3b5b4a1cf6072ffde0f2b97cf2923916bcd5594193f71e5099b833f3100",
-      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+      "actionPlan": {
+        "schemaId": "xw.m6-scenario-action-plan.v1",
+        "maxActionCount": 2,
+        "slots": [
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 0,
+            "logicalStepId": "m6_4_smooth-22:step-01",
+            "actionSlotOrdinal": 0,
+            "primitive": "tap",
+            "actionFamily": "tab-back:open-tab",
+            "intentRef": "c61012aa437ea56979935e87d746d5040febe1128e70c26e2be753b66a893811",
+            "intentPolicyHash": "8d967c5445b466c77e6021dffcc1af6f198e3cd5c86d34cc467c7ed96fe126f5",
+            "targetKind": "block",
+            "targetEligibilityHash": "34b1fdfa74eb717c111466abcb5344d2fd699efce3568a4b24cf0527da029720",
+            "trustedParams": {},
+            "trustedParameterHash": "5d0591e6e20e724c24fdd4faed18cd656a5d2a27fcdd23b036a7c1f98d84212c",
+            "allowedStateHash": "b9e57f35b52b86f1981c1fda91ed53a6bd4617ba57c448f5bf36cdd356dcda9c",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "c166b1c90a2ca95521a827c1dad184ac355a2edab6c77a72d8dc03a5d7e62978",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "1cc5d092028f519cde234d626043812766d69e768b098229da4a1696b681bad6",
+            "oracleHash": "87b7d3b5b4a1cf6072ffde0f2b97cf2923916bcd5594193f71e5099b833f3100",
+            "verificationPolicyHash": "f72e3dbf72848e7edfcd566f5d312aec4e176c4c06a1b5b08937a52ae31a53d4",
+            "slotAuthorityHash": "4659d3c7db52a976886d9ad7892fab04f794329abc65aa713eb3b925f45843d3"
+          },
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 1,
+            "logicalStepId": "m6_4_smooth-22:step-02",
+            "actionSlotOrdinal": 0,
+            "primitive": "back",
+            "actionFamily": "tab-back:reset-back",
+            "intentRef": "223272f1ce38a0425b94e5fd526892ef032190ae779c3efd7e928753dc16e057",
+            "intentPolicyHash": "accd263b60a2628764be415975538a672bd3597750ddef674f26ca8247d8c6d2",
+            "targetKind": "none",
+            "targetEligibilityHash": "e210871d2021290f37bef71cef6f4099dec718f8ece150af475d8163b634ca49",
+            "trustedParams": {},
+            "trustedParameterHash": "5d0591e6e20e724c24fdd4faed18cd656a5d2a27fcdd23b036a7c1f98d84212c",
+            "allowedStateHash": "7834730444154246366aefb23243bf659cd1dceddafc8d7fc3d61068dfbcc251",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "5173a9457f0e35fa2b9203ef17f4dc010f85b8f6821c08c6dfeaa17c08c45018",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "1cc5d092028f519cde234d626043812766d69e768b098229da4a1696b681bad6",
+            "oracleHash": "87b7d3b5b4a1cf6072ffde0f2b97cf2923916bcd5594193f71e5099b833f3100",
+            "verificationPolicyHash": "01214fa51cc592b78bf7c4826cc796f44a2d7cbba2375ea6b2f2e63b4ebd5fa5",
+            "slotAuthorityHash": "3bdcb330d14eec922922c7e21635a7aef3b334c1a3b33e08566ca9d2be63d609"
+          }
+        ],
+        "actionPlanHash": "d47c49c4d0f85dd435cfee649757ee96dd9bbd3e49ecae42d7564bc58355c451"
+      }
     },
     {
       "scenarioKey": "m6_4_smooth-23",
@@ -211,7 +1845,58 @@
       "authorized": false,
       "executionStatus": "NOT_RUN",
       "oracleHash": "87b7d3b5b4a1cf6072ffde0f2b97cf2923916bcd5594193f71e5099b833f3100",
-      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+      "actionPlan": {
+        "schemaId": "xw.m6-scenario-action-plan.v1",
+        "maxActionCount": 2,
+        "slots": [
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 0,
+            "logicalStepId": "m6_4_smooth-23:step-01",
+            "actionSlotOrdinal": 0,
+            "primitive": "tap",
+            "actionFamily": "tab-back:open-tab",
+            "intentRef": "6b8fd55e1ed90b8e46bc600a0fc4f7b89e1a1c40f763c62c68511cd33f819f0b",
+            "intentPolicyHash": "1538835b62210aa012eeffc808a4dcc87604561c1475e084ed85180e42670890",
+            "targetKind": "block",
+            "targetEligibilityHash": "4770146c72d7155d0211b7218111a7bedfc9e03b0bfa40f007d4d105d8009d49",
+            "trustedParams": {},
+            "trustedParameterHash": "5d0591e6e20e724c24fdd4faed18cd656a5d2a27fcdd23b036a7c1f98d84212c",
+            "allowedStateHash": "5187bb5db8887e2f056b0a007d7268495a6449f46889e6d1c8e3874e2243fd94",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "a821a4575d3ef6bd3b44ba16f95b9b7079a75f38637f1b46533b3d627384c0ac",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "0f38dfccb0654f9c3ed22629c00a182d3fc71662353ab58c80ba17cb5fd76a23",
+            "oracleHash": "87b7d3b5b4a1cf6072ffde0f2b97cf2923916bcd5594193f71e5099b833f3100",
+            "verificationPolicyHash": "9abfa5153d0a86c00590c00f23cc955d599deba1661f9f373bccfff6279218cd",
+            "slotAuthorityHash": "8d581baebf0fe09d187e7d5c243c4e86e57c183e2a0692fc9c8f8bacfb2683c4"
+          },
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 1,
+            "logicalStepId": "m6_4_smooth-23:step-02",
+            "actionSlotOrdinal": 0,
+            "primitive": "back",
+            "actionFamily": "tab-back:reset-back",
+            "intentRef": "047c5a7919666b24dba48e50a0616d3d6c938f7e56809c283b6bc0fa8fb9948b",
+            "intentPolicyHash": "7f883f2f40cc51331b6c2c1121be7ebdd21aa80cc66463e45da03f35bb544fd4",
+            "targetKind": "none",
+            "targetEligibilityHash": "424dd2101d7954e88cfc9820c80a98ecfa73cfd391b9aa6d3aa30cc6197a3789",
+            "trustedParams": {},
+            "trustedParameterHash": "5d0591e6e20e724c24fdd4faed18cd656a5d2a27fcdd23b036a7c1f98d84212c",
+            "allowedStateHash": "7453ae41f9302f16dd2489a9902eb8d35c30f09ee35e85625d943f9c7419364a",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "67820176b190b4d14a7548e820e0a9d33b1bb48e7626bf7b0807152d7f7a5651",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "0f38dfccb0654f9c3ed22629c00a182d3fc71662353ab58c80ba17cb5fd76a23",
+            "oracleHash": "87b7d3b5b4a1cf6072ffde0f2b97cf2923916bcd5594193f71e5099b833f3100",
+            "verificationPolicyHash": "fd5706647f3cf0dbfd87de1153efcd15ddbfb64f831f4e00f5123fbe12e7b842",
+            "slotAuthorityHash": "adb14254ce84432f5667ff263313fde563bd09279b6e9462277694b66ee5d2c7"
+          }
+        ],
+        "actionPlanHash": "9af71b88a8a9ef84e762e2baa8231e953d6aa3d6507a7a77a2e755c0d1e5c544"
+      }
     },
     {
       "scenarioKey": "m6_4_smooth-24",
@@ -220,7 +1905,58 @@
       "authorized": false,
       "executionStatus": "NOT_RUN",
       "oracleHash": "87b7d3b5b4a1cf6072ffde0f2b97cf2923916bcd5594193f71e5099b833f3100",
-      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+      "actionPlan": {
+        "schemaId": "xw.m6-scenario-action-plan.v1",
+        "maxActionCount": 2,
+        "slots": [
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 0,
+            "logicalStepId": "m6_4_smooth-24:step-01",
+            "actionSlotOrdinal": 0,
+            "primitive": "tap",
+            "actionFamily": "tab-back:open-tab",
+            "intentRef": "14d693756c497b5dcbd9bd6a651188e9369c18ec5b06e4cff666bdd1dcbc54fa",
+            "intentPolicyHash": "d0ada68bb83708577b129bb1c7fe50f17097e1e2342875800ef8d9be3db2ff06",
+            "targetKind": "block",
+            "targetEligibilityHash": "4b7b3301674d9ce32706fb536fb113aaf6edc44cd6fd0c9fb642a76e3134011e",
+            "trustedParams": {},
+            "trustedParameterHash": "5d0591e6e20e724c24fdd4faed18cd656a5d2a27fcdd23b036a7c1f98d84212c",
+            "allowedStateHash": "91d2bb64df362c6c733bc9afbd8058c21b29610d5306afb906585e0b09271923",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "9cdb42b732610223a3a010e5bf1f43f2fba41eb73cbdcc80f40a8ba0699d3af9",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "4f94d8939eb79bf0e564572fdd2773e4194311caaaeceabf0b984cb849267700",
+            "oracleHash": "87b7d3b5b4a1cf6072ffde0f2b97cf2923916bcd5594193f71e5099b833f3100",
+            "verificationPolicyHash": "7951c7778005c0c5664180a57aa9ea45efdc6b3411505036131d5d1a4fad801d",
+            "slotAuthorityHash": "20b2c012de6d108b4e7febaa7d5e5965c6a0374e990fee089cb5b6a2eff82f18"
+          },
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 1,
+            "logicalStepId": "m6_4_smooth-24:step-02",
+            "actionSlotOrdinal": 0,
+            "primitive": "back",
+            "actionFamily": "tab-back:reset-back",
+            "intentRef": "9a76d2b6b52b79f6d411a8568dd9e6d22219c974fe374f8bc2b904ac272d595f",
+            "intentPolicyHash": "ccb1f1d3cc1f110956a96411cec94b2b20fe05c121ec4703231b2a7cce60d93a",
+            "targetKind": "none",
+            "targetEligibilityHash": "e51bda4bd55291b37d9b89d7dcfbd075d3581c3c990dc520cb13da6e56f51672",
+            "trustedParams": {},
+            "trustedParameterHash": "5d0591e6e20e724c24fdd4faed18cd656a5d2a27fcdd23b036a7c1f98d84212c",
+            "allowedStateHash": "6726e1d37541f1195022476f0592f61e9f7a3c0c8d0dfbbe6c4b981c1fb9700b",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "ca91fd877bf942e0d490bf282f8d08e950d6642889eaeeb9b80a0a4d4bf9bc81",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "4f94d8939eb79bf0e564572fdd2773e4194311caaaeceabf0b984cb849267700",
+            "oracleHash": "87b7d3b5b4a1cf6072ffde0f2b97cf2923916bcd5594193f71e5099b833f3100",
+            "verificationPolicyHash": "7154cfa8480bcd4e51e9839c31091d60d288a48d2dacca217219ed19014339bc",
+            "slotAuthorityHash": "543c617ef37ca96036b584c0480b3f6fb5f5dbe0684de55b2decaf0cdb45817f"
+          }
+        ],
+        "actionPlanHash": "8ffa10324eb525dca7b71fc64f790fcb617700fbca2d76f3323990483d4c7525"
+      }
     },
     {
       "scenarioKey": "m6_4_smooth-25",
@@ -229,7 +1965,82 @@
       "authorized": false,
       "executionStatus": "NOT_RUN",
       "oracleHash": "45345afe227a633b157a6355eaa8b81e29dedb316b499030bd5a767dd9ff028f",
-      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+      "actionPlan": {
+        "schemaId": "xw.m6-scenario-action-plan.v1",
+        "maxActionCount": 3,
+        "slots": [
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 0,
+            "logicalStepId": "m6_4_smooth-25:step-01",
+            "actionSlotOrdinal": 0,
+            "primitive": "tap",
+            "actionFamily": "form-edit:focus-field",
+            "intentRef": "9934ea9594ed1e381ba441da3a244e283e27e6947771b0adfe7cb3b764f4094c",
+            "intentPolicyHash": "de90ae04af1e2b88c59571733ea64a46dbd51665898640ceff90a1a43964abfb",
+            "targetKind": "block",
+            "targetEligibilityHash": "2bd348dc5a2df6c0734fb4b217200f831e0443ada881dcf6b01c9d781111bc16",
+            "trustedParams": {},
+            "trustedParameterHash": "5d0591e6e20e724c24fdd4faed18cd656a5d2a27fcdd23b036a7c1f98d84212c",
+            "allowedStateHash": "f8ed99ae98a8d6056e02cbd4178dc6282892535db2aaa01c72569ef866dc2587",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "d973949e8ff70be0c15506118219d5791461d28363ebe4509303bacf05a79fe6",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "ed47f147bf081a6701a3bc5cf158cff12edc06b3dc2741f12d71075f1bb4c1d7",
+            "oracleHash": "45345afe227a633b157a6355eaa8b81e29dedb316b499030bd5a767dd9ff028f",
+            "verificationPolicyHash": "8de4e21675e9e02c397dab95767515642600e1107fc7a17238aeba99233e964f",
+            "slotAuthorityHash": "e423ad0cce51a19108ff1e1f756e5a0ae15ddeca9196c8511d12f64a214c3f12"
+          },
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 1,
+            "logicalStepId": "m6_4_smooth-25:step-02",
+            "actionSlotOrdinal": 0,
+            "primitive": "type_search_text",
+            "actionFamily": "form-edit:edit-field",
+            "intentRef": "1cdae97b4346f65024d08e9d7bda3d9fdfc9d578482565c4304766711b465f2d",
+            "intentPolicyHash": "b66813ed202b353a4468739751d548a44517e99f8d6905b82a77884f01f499fc",
+            "targetKind": "block",
+            "targetEligibilityHash": "944be654d985e489effc6c9a3ebe5c05dbba6e364ffd4fdefbe5c80091f657e5",
+            "trustedParams": {
+              "textRef": "ddb2a6096da49a311c5c506beab6a64e5b46f6de6e2d2513e2b9e3a7035a8c5d"
+            },
+            "trustedParameterHash": "09df7a0ce9922f7713b157db67cfded4dc516a7ec60fa0dd01c9844d7bb46b25",
+            "allowedStateHash": "8b0dbcc9db2e32f99e1cb9753e29a506098b02c77df73354aae6f2b930043e70",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "e9d7a2c053b122472b76c2782822d61ce4b5981ae035b4e487f12da5b64c2204",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "ed47f147bf081a6701a3bc5cf158cff12edc06b3dc2741f12d71075f1bb4c1d7",
+            "oracleHash": "45345afe227a633b157a6355eaa8b81e29dedb316b499030bd5a767dd9ff028f",
+            "verificationPolicyHash": "adf279c547ae067a3f47186dd0e62ca536f3225b4d48f0470d4ec63b5cde2946",
+            "slotAuthorityHash": "c0ae0750f5b2c96c044e852927ee784dcca3afcd4df8e8ed444b2c3ef5b574df"
+          },
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 2,
+            "logicalStepId": "m6_4_smooth-25:step-03",
+            "actionSlotOrdinal": 0,
+            "primitive": "back",
+            "actionFamily": "form-edit:reset-back",
+            "intentRef": "590e245d8d6bece7eaf78be89c92663275f45a5580cab71dbaded18b8c7d8020",
+            "intentPolicyHash": "f9f010bb6db1ee9ba13473cec165bc8040411cf83c2162e9a90296fcde8f8720",
+            "targetKind": "none",
+            "targetEligibilityHash": "6fba68e659f8374a8751a17b9250d14a1ba2a2753ba9cb87f659650a6656f370",
+            "trustedParams": {},
+            "trustedParameterHash": "5d0591e6e20e724c24fdd4faed18cd656a5d2a27fcdd23b036a7c1f98d84212c",
+            "allowedStateHash": "94e1a48a83c96d20a37dee90c0515e42114472c4ac2760a419168d0a21f79af8",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "4f29c5a670ae491a228ddf71d3a171b59a321b672cb67f6545a9aee948a00565",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "ed47f147bf081a6701a3bc5cf158cff12edc06b3dc2741f12d71075f1bb4c1d7",
+            "oracleHash": "45345afe227a633b157a6355eaa8b81e29dedb316b499030bd5a767dd9ff028f",
+            "verificationPolicyHash": "640bd583fcbd0c009a1ddb642554056087a0277c74601ef49715ec437b5ba3fa",
+            "slotAuthorityHash": "6f0c3b71f296cd1dac6814f13d7b9612651d6979215ac99803847ffbe5cb7de4"
+          }
+        ],
+        "actionPlanHash": "0dc946c1726b007be4070cf1554046553a242a42919a5d9c617e35bbf96676cf"
+      }
     },
     {
       "scenarioKey": "m6_4_smooth-26",
@@ -238,7 +2049,82 @@
       "authorized": false,
       "executionStatus": "NOT_RUN",
       "oracleHash": "45345afe227a633b157a6355eaa8b81e29dedb316b499030bd5a767dd9ff028f",
-      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+      "actionPlan": {
+        "schemaId": "xw.m6-scenario-action-plan.v1",
+        "maxActionCount": 3,
+        "slots": [
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 0,
+            "logicalStepId": "m6_4_smooth-26:step-01",
+            "actionSlotOrdinal": 0,
+            "primitive": "tap",
+            "actionFamily": "form-edit:focus-field",
+            "intentRef": "cd5486b2e3e8feedc922d90299aa69c09bb4eb97ae3d3b0d37def27514164566",
+            "intentPolicyHash": "427bfa1a47f1191a0ab1f938ccfa1332b19b9d8af31e9a7eddaecf0719c18bbb",
+            "targetKind": "block",
+            "targetEligibilityHash": "54192d5f058a4f615cb2feeda30807c0427e088bfa98c056e783855d561e669d",
+            "trustedParams": {},
+            "trustedParameterHash": "5d0591e6e20e724c24fdd4faed18cd656a5d2a27fcdd23b036a7c1f98d84212c",
+            "allowedStateHash": "5c19e99fc358ad2e7ec062a8edd468b13e9c3656552403d9a2e652305f04eff9",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "c9fccb292980659b2fe6ca215c9ce4390985ae1467308e99f5c15a17e5601d7e",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "a45f84c39ed160138137003fb99edcbb8241c6ed80fdfe74527c8d411b8747ca",
+            "oracleHash": "45345afe227a633b157a6355eaa8b81e29dedb316b499030bd5a767dd9ff028f",
+            "verificationPolicyHash": "90c7dae44f5e8fcaa8456b73fd44abf81b4e05b67f44538c4fa59fec3efbea0f",
+            "slotAuthorityHash": "ad77f13240b3624ce3e4d152c1d46458dae73a3f1b20ef9d89b2790be0a4e233"
+          },
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 1,
+            "logicalStepId": "m6_4_smooth-26:step-02",
+            "actionSlotOrdinal": 0,
+            "primitive": "type_search_text",
+            "actionFamily": "form-edit:edit-field",
+            "intentRef": "4bc1660bc9fd0ee70392786954f5b18fb22acc8d103d85732e2617d848310436",
+            "intentPolicyHash": "574ad7ec4d8d3fd13868150542710366fa41680bdad7b77bd4ae81feebb2134f",
+            "targetKind": "block",
+            "targetEligibilityHash": "0ed26b5f60998ef501c5c65b799b039cfd1d47e27dadf53421bc14ff50407ba6",
+            "trustedParams": {
+              "textRef": "98ce61db8b613a6d3ec78ac87e91af49af89504b892879573c0b2c021eabbb60"
+            },
+            "trustedParameterHash": "27eaecd26578b4b635a3c6544b9a570ddb4d895a6fea58628333e6773fa1fadc",
+            "allowedStateHash": "00885877467a6ab2c440d679ed81a61e5bf18c127dcfa7b2483b565cd38fbe8b",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "e44b0bd955df61a7fc562b7821634823ead116df5eb915281172f950e062112f",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "a45f84c39ed160138137003fb99edcbb8241c6ed80fdfe74527c8d411b8747ca",
+            "oracleHash": "45345afe227a633b157a6355eaa8b81e29dedb316b499030bd5a767dd9ff028f",
+            "verificationPolicyHash": "edffd60becc52ef56fa51a0ac2f1d484890f64192d066a1514cccc31f8659b57",
+            "slotAuthorityHash": "f0fdc4e736d41108cd71e1e82f4756025105f9c9e5faa9ab945d1977db3b36c1"
+          },
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 2,
+            "logicalStepId": "m6_4_smooth-26:step-03",
+            "actionSlotOrdinal": 0,
+            "primitive": "back",
+            "actionFamily": "form-edit:reset-back",
+            "intentRef": "cb7f15b4b57ac2d00a40a7aa732ebd95244ee088c0260713e60cdc20eccaabb6",
+            "intentPolicyHash": "747c323ab5b40da9e696a755f92ad998192ad3260d6ec6bf5b53e3bf6fc053c8",
+            "targetKind": "none",
+            "targetEligibilityHash": "06c0fa03af30a487ed9adb080622c2e7e03bbc379bb33a49f9d7bbc5484f70d8",
+            "trustedParams": {},
+            "trustedParameterHash": "5d0591e6e20e724c24fdd4faed18cd656a5d2a27fcdd23b036a7c1f98d84212c",
+            "allowedStateHash": "f502e33b20e03c26886ff2ea571b47d2b8154e5d3352f84ffe4cc6162ad87868",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "fc13bc06753dc998f0f5afd9f00ac60fd7f8410bb91be306d21c2dacccdb5142",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "a45f84c39ed160138137003fb99edcbb8241c6ed80fdfe74527c8d411b8747ca",
+            "oracleHash": "45345afe227a633b157a6355eaa8b81e29dedb316b499030bd5a767dd9ff028f",
+            "verificationPolicyHash": "b8010c91d095d7c88f929686d8e01c6807e964feba24bb878ce238d9b4f10dc1",
+            "slotAuthorityHash": "929dd2cdd78a4da47369b4cb6cc460e2ee38e668fa3fe1d54661d910d63a7857"
+          }
+        ],
+        "actionPlanHash": "757f624f4c53e59147a2a2193e3b992c4c92b4e25dc0e2de9a6a52b417e6ffec"
+      }
     },
     {
       "scenarioKey": "m6_4_smooth-27",
@@ -247,7 +2133,82 @@
       "authorized": false,
       "executionStatus": "NOT_RUN",
       "oracleHash": "45345afe227a633b157a6355eaa8b81e29dedb316b499030bd5a767dd9ff028f",
-      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+      "actionPlan": {
+        "schemaId": "xw.m6-scenario-action-plan.v1",
+        "maxActionCount": 3,
+        "slots": [
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 0,
+            "logicalStepId": "m6_4_smooth-27:step-01",
+            "actionSlotOrdinal": 0,
+            "primitive": "tap",
+            "actionFamily": "form-edit:focus-field",
+            "intentRef": "37ea97c9c53b5261aaa0aa28f5409666898a3ea230151ace4977b8112fa40c06",
+            "intentPolicyHash": "8114c77c34a4b573e19f490510d092b101ab4d8680a51a5f26617d7c046a2a2e",
+            "targetKind": "block",
+            "targetEligibilityHash": "89e98412aea5ce5cf10e843ca6380906868ca21de6e661ddf49729a05d486860",
+            "trustedParams": {},
+            "trustedParameterHash": "5d0591e6e20e724c24fdd4faed18cd656a5d2a27fcdd23b036a7c1f98d84212c",
+            "allowedStateHash": "0980324d10ef6da322b67cae851179c82f2b03fd9c9fe05e131be63e70aa0db4",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "91dd3079ac992df54a90386764119f73c895546c71ecf44a9ca06b25ae21e931",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "2d5b8b7b29d0e459f4f56f0a94617515fee7d76e0ba675d00b8f8783e0afa2b2",
+            "oracleHash": "45345afe227a633b157a6355eaa8b81e29dedb316b499030bd5a767dd9ff028f",
+            "verificationPolicyHash": "a47ffbb0fc6596ef8c5379191bff9c0a972a82ce9f380af4889a1677b919c8eb",
+            "slotAuthorityHash": "6a6119a556e54db31cffbb00655aba8d8bbd0d9f50a5fdc8098b3d2cc6d25a35"
+          },
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 1,
+            "logicalStepId": "m6_4_smooth-27:step-02",
+            "actionSlotOrdinal": 0,
+            "primitive": "type_search_text",
+            "actionFamily": "form-edit:edit-field",
+            "intentRef": "3a6a256fa2a6935feca40d6a7a9b202302c69a5338723f2833e3c7898916edf6",
+            "intentPolicyHash": "7e6e8fb95d00d9848f97d5eb1d7f4740b73438f38a45129893334789bd499a42",
+            "targetKind": "block",
+            "targetEligibilityHash": "0639649e4bdc0527e94249774b167cc77cf1423db61fa6bab398d20df3edb41c",
+            "trustedParams": {
+              "textRef": "92241eff82e046d1075c974c1453425566590052a5ddf0fdeb7c273c4e429bba"
+            },
+            "trustedParameterHash": "7c7329fe86913374c3f43e1237aeb3779836c5df111a1359e30a1329dab549f6",
+            "allowedStateHash": "80467c2a655f637fc1a1ae56320423ad422717fd0aa75b1845c0783b85710af6",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "9352689c17ed1cee8e9a4e8bbff0ceb47df3ed6dffe6692562e327ddf8f5db27",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "2d5b8b7b29d0e459f4f56f0a94617515fee7d76e0ba675d00b8f8783e0afa2b2",
+            "oracleHash": "45345afe227a633b157a6355eaa8b81e29dedb316b499030bd5a767dd9ff028f",
+            "verificationPolicyHash": "cac22a50a90aed528f60e61d009144eccf2131885b1c558db7efa17eecbcf1f7",
+            "slotAuthorityHash": "34dde5398e72a9bfea84f185268209837c0f45659269c825bd0896add008cdbe"
+          },
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 2,
+            "logicalStepId": "m6_4_smooth-27:step-03",
+            "actionSlotOrdinal": 0,
+            "primitive": "back",
+            "actionFamily": "form-edit:reset-back",
+            "intentRef": "411043467bc273067205ab426dbf8941f5ac1a7f144bacf254b9c477afcc8e7e",
+            "intentPolicyHash": "3b97875d7c6cbfccc0de7893556a61ff66efa983b16cf915ad72e060621d1182",
+            "targetKind": "none",
+            "targetEligibilityHash": "68e0e7d4ef996f372e246bbba582318039e72ca3cbfda43b7e9c49c74a968161",
+            "trustedParams": {},
+            "trustedParameterHash": "5d0591e6e20e724c24fdd4faed18cd656a5d2a27fcdd23b036a7c1f98d84212c",
+            "allowedStateHash": "b0f054f10c609965af2ceecdba8cf0d2c1571041a1ad12f824308981298d9e04",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "e05cc2c1c6564b744b2129e1667c566f04976e6244f94cfd5bbb31b62f02d78c",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "2d5b8b7b29d0e459f4f56f0a94617515fee7d76e0ba675d00b8f8783e0afa2b2",
+            "oracleHash": "45345afe227a633b157a6355eaa8b81e29dedb316b499030bd5a767dd9ff028f",
+            "verificationPolicyHash": "1ebcba25996e90e8963302db6063f377861f317482ceca42cb5f9109475281c5",
+            "slotAuthorityHash": "0a7532c5eaccb6b975394e8643981c8d5f19cff5dde9d2aaa4758226e58b4657"
+          }
+        ],
+        "actionPlanHash": "43cbb0ab03a87a2ffcce52777832427480bd984e43b0060eefb7022392437a62"
+      }
     },
     {
       "scenarioKey": "m6_4_smooth-28",
@@ -256,7 +2217,82 @@
       "authorized": false,
       "executionStatus": "NOT_RUN",
       "oracleHash": "a90e212d98b80021c41e90ed96191f1be32011e7abb29afcc2cc648899bae7f5",
-      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+      "actionPlan": {
+        "schemaId": "xw.m6-scenario-action-plan.v1",
+        "maxActionCount": 3,
+        "slots": [
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 0,
+            "logicalStepId": "m6_4_smooth-28:step-01",
+            "actionSlotOrdinal": 0,
+            "primitive": "open_app",
+            "actionFamily": "settings-nav:open-settings",
+            "intentRef": "8fa71c5058f032687da986505d57f59d2ffdbf761dba6ad54607d120786df5b4",
+            "intentPolicyHash": "38871690b168a8d5a8036a739c831e1e15e1fba55249df0650fd849489650374",
+            "targetKind": "none",
+            "targetEligibilityHash": "1307df52ceae10d10d935c1981b54ad2e88bead7811b17be4d287d510611e5f1",
+            "trustedParams": {
+              "appRef": "d5ac540ad11b0ae05ae53294ef09f554a16fd7f5beae5d190f16a3f5f5268cb7"
+            },
+            "trustedParameterHash": "49868a3436c997c9ae3da644e151a4321b2c498f5bc2ca89ccfe5e8d7e54b35b",
+            "allowedStateHash": "6cd18eaab0ef72e1532ecae70949010c78aa75792a0b49736d130d2240917ae4",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "77d9e61eb9b1b118855b2b0903069b77d4c5d0051513c15f017878c8191e0eb3",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "777e8722c8dd985ddb12804c080f51e5311a54f5a1e665ced9222d6dc12e387a",
+            "oracleHash": "a90e212d98b80021c41e90ed96191f1be32011e7abb29afcc2cc648899bae7f5",
+            "verificationPolicyHash": "6cf69090d2be1b97d9c61d03d7498d4cf4cb5d67d0bfe7bfad64f49b6601cbee",
+            "slotAuthorityHash": "15fbec2139c4c1d64c8a8a60a39cf87d90a52be030d047a5385f12ec3f8f6637"
+          },
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 1,
+            "logicalStepId": "m6_4_smooth-28:step-02",
+            "actionSlotOrdinal": 0,
+            "primitive": "tap",
+            "actionFamily": "settings-nav:open-safe-setting",
+            "intentRef": "3f930c1e05d642bce02c4c3a7c05c155234d5bb606c4b2285d59b40035b577f1",
+            "intentPolicyHash": "974e138a39fc2373efd5a7aee77891c12f89a3894d82fa3e14f2a29fee6a6c2d",
+            "targetKind": "block",
+            "targetEligibilityHash": "cee7f6084225ccdd069c32447cf5e39a6620f4c5d6348ac7cfc14611226a8477",
+            "trustedParams": {},
+            "trustedParameterHash": "5d0591e6e20e724c24fdd4faed18cd656a5d2a27fcdd23b036a7c1f98d84212c",
+            "allowedStateHash": "dad2cb05cbb9dc2a3ddede230c416e5e0e4a09af77c8801f71a84c36e158b92d",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "eb6b63b0b9bf9aa11e2dd85cf6279a24be65db91ab482cbacfe4e5ac3805ccda",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "777e8722c8dd985ddb12804c080f51e5311a54f5a1e665ced9222d6dc12e387a",
+            "oracleHash": "a90e212d98b80021c41e90ed96191f1be32011e7abb29afcc2cc648899bae7f5",
+            "verificationPolicyHash": "9343a15fbc1fbe7554b673eb5041a457b089cbeaa3a8e4105fde752d7e543503",
+            "slotAuthorityHash": "8f51b539408242a91fd5b3f10499917f927c5c164894afce0b0124fe9e45e3fa"
+          },
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 2,
+            "logicalStepId": "m6_4_smooth-28:step-03",
+            "actionSlotOrdinal": 0,
+            "primitive": "back",
+            "actionFamily": "settings-nav:reset-back",
+            "intentRef": "4e0e2f8ecafd94362258157c89a3763c2c1d5170c51f1e5689e470761d97396a",
+            "intentPolicyHash": "b2eaf833920852ca25e39c1dc7dd9f37903230e02ea5bfc6f670a87b47461335",
+            "targetKind": "none",
+            "targetEligibilityHash": "bd68c4aee452088617e1f569266a77da06eb178946d390852f776a9248289a0e",
+            "trustedParams": {},
+            "trustedParameterHash": "5d0591e6e20e724c24fdd4faed18cd656a5d2a27fcdd23b036a7c1f98d84212c",
+            "allowedStateHash": "6699e2344d35b28faed1646d1d8fbd9df5881a8a6c74c492c0e355f587095098",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "ed777534412240e7aa06d20d9882d74e7d22ccabddba7f93fd6a19a3763744f8",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "777e8722c8dd985ddb12804c080f51e5311a54f5a1e665ced9222d6dc12e387a",
+            "oracleHash": "a90e212d98b80021c41e90ed96191f1be32011e7abb29afcc2cc648899bae7f5",
+            "verificationPolicyHash": "8555bdf625af5316916b56457a3d4f43ab02d3fe56ee0348c27716d11a458cb6",
+            "slotAuthorityHash": "cf75b9c65acb5bbb16f231d6667c99f0ea166dc6f3051d2ef3f78fdccb71cec6"
+          }
+        ],
+        "actionPlanHash": "f60f8775106129e270e5b62a8eb014f7fa2c059bce6186694073bcfe1a6a83f8"
+      }
     },
     {
       "scenarioKey": "m6_4_smooth-29",
@@ -265,7 +2301,82 @@
       "authorized": false,
       "executionStatus": "NOT_RUN",
       "oracleHash": "a90e212d98b80021c41e90ed96191f1be32011e7abb29afcc2cc648899bae7f5",
-      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+      "actionPlan": {
+        "schemaId": "xw.m6-scenario-action-plan.v1",
+        "maxActionCount": 3,
+        "slots": [
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 0,
+            "logicalStepId": "m6_4_smooth-29:step-01",
+            "actionSlotOrdinal": 0,
+            "primitive": "open_app",
+            "actionFamily": "settings-nav:open-settings",
+            "intentRef": "452eb1648a055afdf557a59fa44cfeefd9601b6568a338c03732abbb708027da",
+            "intentPolicyHash": "6e509dae43dac2884babd6b86a407236441000f6e35a0fe75eb7926b715ff45a",
+            "targetKind": "none",
+            "targetEligibilityHash": "4f528e6b5381a7f26e530b6375a15aecd9179d32bb7efe42cb6aba26ee87d537",
+            "trustedParams": {
+              "appRef": "d5ac540ad11b0ae05ae53294ef09f554a16fd7f5beae5d190f16a3f5f5268cb7"
+            },
+            "trustedParameterHash": "49868a3436c997c9ae3da644e151a4321b2c498f5bc2ca89ccfe5e8d7e54b35b",
+            "allowedStateHash": "f1a5d1e27644168ccd1de35584f86bee5acfcd5166591b64438239d9d1a2127b",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "1fadbe0f529ca460dfea41fa9a83cd3a88c24264827fa70a3dd3d40d4b489b3d",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "a76e052f696077dec9ce0ecd2de27f887bd3fedd9df8815a96aa5415eb78ef4d",
+            "oracleHash": "a90e212d98b80021c41e90ed96191f1be32011e7abb29afcc2cc648899bae7f5",
+            "verificationPolicyHash": "00118ba73cac027172675e40b78c117ca74ce2af2ff4c75083d95d213c878131",
+            "slotAuthorityHash": "1711085971b06ab1cbf4bb7485fcd48109a3da4c5efe79a6a9a2f4fcbd3284c4"
+          },
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 1,
+            "logicalStepId": "m6_4_smooth-29:step-02",
+            "actionSlotOrdinal": 0,
+            "primitive": "tap",
+            "actionFamily": "settings-nav:open-safe-setting",
+            "intentRef": "6024b8a952f5b184c085e6bf4834d91e8f4274493e56137c8a97619c7e7020e1",
+            "intentPolicyHash": "4d94416b2c1a24405beb0addcb3fcdc9a98f8167c47591c37b6443347671d897",
+            "targetKind": "block",
+            "targetEligibilityHash": "96cccedc6d5a62f086bd95810241254b08cfab2acaff5bd1afbd588dd190d58f",
+            "trustedParams": {},
+            "trustedParameterHash": "5d0591e6e20e724c24fdd4faed18cd656a5d2a27fcdd23b036a7c1f98d84212c",
+            "allowedStateHash": "e60daba5aa49600c47cbe289565fccf08d98586de76eb17d140f3217c97b438e",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "6413c9ff15a25f6d5fad0e853dd7379db882f4d999083aa44e8f06b3e74f478e",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "a76e052f696077dec9ce0ecd2de27f887bd3fedd9df8815a96aa5415eb78ef4d",
+            "oracleHash": "a90e212d98b80021c41e90ed96191f1be32011e7abb29afcc2cc648899bae7f5",
+            "verificationPolicyHash": "eb4addb61b1ba3ebb79c1e055b32b6567975812e4c9c03c4521fd871655a01ec",
+            "slotAuthorityHash": "f44c4c3e6d0f54548895b822f54feeeaac592383349ac1388cfa1172b7349894"
+          },
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 2,
+            "logicalStepId": "m6_4_smooth-29:step-03",
+            "actionSlotOrdinal": 0,
+            "primitive": "back",
+            "actionFamily": "settings-nav:reset-back",
+            "intentRef": "eafc3c73d4befede6108aa1b286b884963da921038c26031969a5b31b8823273",
+            "intentPolicyHash": "0514a5d1ef4eb20cf086abde7f47b38d91448b6c92c0afa811d7ad299924c011",
+            "targetKind": "none",
+            "targetEligibilityHash": "4c28e6c50f2d436a78675afcd851bda4628aaf787a9a97036bfb1ab1cdc7c61a",
+            "trustedParams": {},
+            "trustedParameterHash": "5d0591e6e20e724c24fdd4faed18cd656a5d2a27fcdd23b036a7c1f98d84212c",
+            "allowedStateHash": "37db876ca353f5b4a3c2e499e7794330ea99eecf2b32f418f1ce3de6e997183d",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "5aeb84c97deeeab3055e8b8bfdebfcc79b86cba30259814d53000c502db80bc3",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "a76e052f696077dec9ce0ecd2de27f887bd3fedd9df8815a96aa5415eb78ef4d",
+            "oracleHash": "a90e212d98b80021c41e90ed96191f1be32011e7abb29afcc2cc648899bae7f5",
+            "verificationPolicyHash": "247ca8ea5c194f14f3c9551b95de7260fb846ed4e2ccb8de91b532a512533912",
+            "slotAuthorityHash": "37e6c87bcf967bc42870c1813744adc39bf0c41c7ca95b12c7cc5a2d5adf971e"
+          }
+        ],
+        "actionPlanHash": "c45c2cb093d911b6907ba64744718c9369a6423ae52018107c0f314cf7afdcd2"
+      }
     },
     {
       "scenarioKey": "m6_4_smooth-30",
@@ -274,8 +2385,83 @@
       "authorized": false,
       "executionStatus": "NOT_RUN",
       "oracleHash": "a90e212d98b80021c41e90ed96191f1be32011e7abb29afcc2cc648899bae7f5",
-      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df"
+      "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+      "actionPlan": {
+        "schemaId": "xw.m6-scenario-action-plan.v1",
+        "maxActionCount": 3,
+        "slots": [
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 0,
+            "logicalStepId": "m6_4_smooth-30:step-01",
+            "actionSlotOrdinal": 0,
+            "primitive": "open_app",
+            "actionFamily": "settings-nav:open-settings",
+            "intentRef": "71b3c5ba74105cb2cca2b1685d05b1f9bc19b3aa8f5ed3f0372ae4dbe9f2be70",
+            "intentPolicyHash": "336f30c8181a9fb7edee6db95c2411ddbfeccf247c875a6e1733ae3d5f6d03e9",
+            "targetKind": "none",
+            "targetEligibilityHash": "7518026e7477a9faf9b0d7ecfd376b7725416ccbc1c7e342fc3727bc894e6ab8",
+            "trustedParams": {
+              "appRef": "d5ac540ad11b0ae05ae53294ef09f554a16fd7f5beae5d190f16a3f5f5268cb7"
+            },
+            "trustedParameterHash": "49868a3436c997c9ae3da644e151a4321b2c498f5bc2ca89ccfe5e8d7e54b35b",
+            "allowedStateHash": "da660537ba3c0125a62c09e4da93dbd5c9726ed4708c106f4d38d913bca0b1f8",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "96e93ba6a53ddb3feae5b6136953f2ac8dd574240b82b782b64a97f7f0e391d2",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "825ca29b02f3bea25bbcd4d16ea98c23be059245d06f097a9209a4f10bcee321",
+            "oracleHash": "a90e212d98b80021c41e90ed96191f1be32011e7abb29afcc2cc648899bae7f5",
+            "verificationPolicyHash": "16369ca3d5a57c5f0ee1753a33c56fb914007fd566cc2074f33720276fe819c2",
+            "slotAuthorityHash": "46eb89ce30e63afb71ea19ee275ef909c0524e346cc897c96a5cd2ff3cc8287f"
+          },
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 1,
+            "logicalStepId": "m6_4_smooth-30:step-02",
+            "actionSlotOrdinal": 0,
+            "primitive": "tap",
+            "actionFamily": "settings-nav:open-safe-setting",
+            "intentRef": "bee7398aca63121ead7d85c7b0b98be233e6049fdb999e3f7dce1b052f75288f",
+            "intentPolicyHash": "e54c7d929a3076991b2a31724346b079d5594e7018dbeeaa7b5075b290e95096",
+            "targetKind": "block",
+            "targetEligibilityHash": "af5d5811000a6e16aea2099dc032995f7e923a3b733f1b150dff4d94fd3e8f26",
+            "trustedParams": {},
+            "trustedParameterHash": "5d0591e6e20e724c24fdd4faed18cd656a5d2a27fcdd23b036a7c1f98d84212c",
+            "allowedStateHash": "7fdc1330251bf147ba30e98ff2a55f4b9b5548714601d551c402596cc4d31695",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "657aca08df4bf98405ddddf3b3a5e1beac0c077458690051c2e6f8583d6d0138",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "825ca29b02f3bea25bbcd4d16ea98c23be059245d06f097a9209a4f10bcee321",
+            "oracleHash": "a90e212d98b80021c41e90ed96191f1be32011e7abb29afcc2cc648899bae7f5",
+            "verificationPolicyHash": "0fd0925690563fcf624835e5e2fa28a17b0e6fe58f9b547c25ddd101a8b53a03",
+            "slotAuthorityHash": "ab10af37a2e80cc9207b01369035fdad429539cbb466df48bc2470640e043405"
+          },
+          {
+            "schemaId": "xw.m6-action-slot-authority.v1",
+            "sequenceIndex": 2,
+            "logicalStepId": "m6_4_smooth-30:step-03",
+            "actionSlotOrdinal": 0,
+            "primitive": "back",
+            "actionFamily": "settings-nav:reset-back",
+            "intentRef": "b00ae489d6506d466ef2965a532568b5e41ed14d63e687e86ecea58e100b0395",
+            "intentPolicyHash": "c3fbc0d7421ccf016623a4c470cfd0d538e170658b63fdb91e9655d5967c76bb",
+            "targetKind": "none",
+            "targetEligibilityHash": "f053272dde5254f052f8d4794cca16aad2b9729530e5ebfd2053090f08a1dfd4",
+            "trustedParams": {},
+            "trustedParameterHash": "5d0591e6e20e724c24fdd4faed18cd656a5d2a27fcdd23b036a7c1f98d84212c",
+            "allowedStateHash": "07e7a82f7762a5e4959d0da94197aeb8b8d9c445fee89919c3e567fd28de332e",
+            "effectBoundaryHash": "48ff40e2e9bd3335816008e2101f0d01966baf17bd4a8c96ce5c466850a9c9df",
+            "budgetPolicyHash": "223fca3793d83d94723921aafe0edc06c720f2c6f4e49820e1059db7ecac5f33",
+            "redlinePolicyHash": "a91c2210ec34ac4e3a8fc985fb6cafcb35f9f79fbf8324ab12714ef2f229a14e",
+            "resetPolicyHash": "825ca29b02f3bea25bbcd4d16ea98c23be059245d06f097a9209a4f10bcee321",
+            "oracleHash": "a90e212d98b80021c41e90ed96191f1be32011e7abb29afcc2cc648899bae7f5",
+            "verificationPolicyHash": "7685eea1286ecd920ba368490ca84779368a69a9bd53b5fe05b46c22681f2bb6",
+            "slotAuthorityHash": "2513c084963e9c3be4efc7ef3b32af69e5de5814a966b1e62278c671472cb1a0"
+          }
+        ],
+        "actionPlanHash": "7f5133b7e562efa95b28d16047c3add071cd158d72b5a020441d2345b7290fb5"
+      }
     }
   ],
-  "manifestHash": "e352ea3607360180306caa3b8826278da22aea66b10b9b96ba7861cc59555135"
+  "manifestHash": "7b7654799e1f8c32812f47a7175c6f30b347bed15aa7e2514aaca0678e5a41f9"
 }

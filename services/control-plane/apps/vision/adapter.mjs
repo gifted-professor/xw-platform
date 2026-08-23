@@ -1,7 +1,3 @@
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { pathToFileURL } from "node:url";
-
 import { ControlPlaneError } from "../../control-plane/lib/errors.mjs";
 import {
   fingerprintLabels,
@@ -10,8 +6,6 @@ import {
   isForbiddenLabel,
   resolveTarget,
 } from "../../scripts/vision-safety.mjs";
-
-const root = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 
 /**
  * vision adapter — 语义/视觉 resolve 安全闸 dry-run
@@ -58,11 +52,11 @@ export function createVisionAdapter({
         if (!device?.runtimeId) {
           throw new ControlPlaneError("DEVICE_RUNTIME_ID_MISSING", "vision resolve needs device when elements omitted", { status: 503 });
         }
-        const { GatewayOperator } = await import(pathToFileURL(join(root, "scripts/gateway-operator.mjs")).href);
+        const { GatewayOperator } = await import("../../scripts/gateway-operator.mjs");
         const GO = GatewayOperatorClass || GatewayOperator;
         op = await new GO({ serial: device.runtimeId, leaseAuthorization }).start();
         try {
-          const { snapshot, center } = await import(pathToFileURL(join(root, "scripts/xianyu-operator.mjs")).href);
+          const { snapshot, center } = await import("../../scripts/xianyu-operator.mjs");
           const snap = await snapshot(op, "vision-resolve");
           focus = snap.focus || null;
           elements = (snap.nodes || []).filter((n) => n.bounds).map((n) => ({
@@ -170,7 +164,7 @@ export function createVisionAdapter({
             },
           };
         }
-        const { GatewayOperator } = await import(pathToFileURL(join(root, "scripts/gateway-operator.mjs")).href);
+        const { GatewayOperator } = await import("../../scripts/gateway-operator.mjs");
         const GO = GatewayOperatorClass || GatewayOperator;
         op = await new GO({ serial: device.runtimeId, leaseAuthorization }).start();
         try {

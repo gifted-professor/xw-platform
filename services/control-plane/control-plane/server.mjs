@@ -54,6 +54,33 @@ export function createControlServer({ router }) {
   });
 }
 
+export async function shutdownControlServer({ server, runtime }) {
+  const failures = [];
+  const settle = async (operation) => {
+    try { await operation(); } catch (error) { failures.push(error); }
+  };
+  // Drain in-flight HTTP work after stopping acceptance, so a concurrent start
+  // cannot appear after the live-entry shutdown snapshot. Child/broker cleanup
+  // then runs while the scheduler and StateStore are still available.
+  await settle(() => new Promise((resolve, reject) => {
+    server.close((error) => error ? reject(error) : resolve());
+  }));
+  await settle(() => runtime.m6LiveEntry?.shutdown?.() ?? Promise.resolve());
+  await settle(() => runtime.control.stop());
+  try {
+    runtime.state.close();
+  } catch (error) { failures.push(error); }
+  if (failures.length > 0) throw failures[0];
+}
+
+export function startControlPlaneScheduler(runtime) {
+  if (runtime?.m6StartupRecovery?.required === true) {
+    return Object.freeze({ started: false, recoveryOnly: true });
+  }
+  runtime.control.start();
+  return Object.freeze({ started: true, recoveryOnly: false });
+}
+
 function parseArgs(argv) {
   const options = {
     command: argv[0] || "help",
@@ -82,7 +109,7 @@ export async function main(argv = process.argv.slice(2)) {
   const runtime = createControlPlaneRuntime({ nodeId });
   const router = new ControlRouter({ ...runtime, nodeId });
   const server = createControlServer({ router });
-  runtime.control.start();
+  const scheduler = startControlPlaneScheduler(runtime);
   await new Promise((resolve, reject) => {
     server.once("error", reject);
     server.listen(options.port, options.host, resolve);
@@ -94,15 +121,23 @@ export async function main(argv = process.argv.slice(2)) {
     host: options.host,
     port: options.port,
     api: "/control/v1/health",
+    recoveryOnly: scheduler.recoveryOnly,
   }));
 
-  const shutdown = async () => {
-    server.close();
-    await runtime.control.stop();
-    runtime.state.close();
+  let shutdownTask;
+  const shutdown = () => {
+    shutdownTask ??= shutdownControlServer({ server, runtime });
+    return shutdownTask;
   };
-  process.once("SIGINT", () => void shutdown().finally(() => { process.exitCode = 0; }));
-  process.once("SIGTERM", () => void shutdown().finally(() => { process.exitCode = 0; }));
+  const onSignal = () => void shutdown().then(
+    () => { process.exitCode = 0; },
+    (error) => {
+      console.error(JSON.stringify(errorBody(error)));
+      process.exitCode = 1;
+    },
+  );
+  process.once("SIGINT", onSignal);
+  process.once("SIGTERM", onSignal);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

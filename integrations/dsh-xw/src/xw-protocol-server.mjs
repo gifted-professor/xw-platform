@@ -13,6 +13,8 @@ export class XwHarnessProtocolServer {
     this.ctx = ctx;
     this.transport = transport;
     this.sessionMode = options.sessionMode ?? "create";
+    this.serverName = options.serverName ?? "xw-dsh-replay-runtime";
+    this.providerErrorPrefix = options.providerErrorPrefix ?? "closed replay provider is not registered";
     this.sessions = new Map();
     this.creations = new Map();
     this.disposers = [
@@ -35,8 +37,8 @@ export class XwHarnessProtocolServer {
     this.provider = params.provider;
     this.model = params.model;
     this.maxTokens = params.maxTokens;
-    if (!this.ctx.llm.listProviders().some((provider) => provider.id === this.provider)) throw new Error(`closed replay provider is not registered: ${this.provider}`);
-    return { serverInfo: { name: "xw-dsh-replay-runtime", version: "1.0.0" } };
+    if (!this.ctx.llm.listProviders().some((provider) => provider.id === this.provider)) throw new Error(`${this.providerErrorPrefix}: ${this.provider}`);
+    return { serverInfo: { name: this.serverName, version: "1.0.0" } };
   }
 
   async prompt(params) {

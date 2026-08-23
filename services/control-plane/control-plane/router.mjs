@@ -2,9 +2,23 @@ import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { ControlPlaneError } from "./lib/errors.mjs";
+import { canonicalJson, sha256 } from "./lib/canonical.mjs";
 import { RUNTIME_POLICY_VERSION } from "./lib/nonpayment-autonomy-policy.mjs";
 import { LIVE_PROGRESS_CACHE_MS, readLiveProgressTail } from "../scripts/lib/stall-progress.mjs";
 import { loadReleaseIdentity } from "../../../packages/release/lib/release-identity.mjs";
+
+const HASH = /^[0-9a-f]{64}$/u;
+const QUALIFICATION_CAPABILITY_ID = "xiaowei.m6.qualify_environment";
+const QUALIFICATION_ACTOR_ID = "operator:m6-target-environment-qualification";
+const QUALIFICATION_JOB_KEYS = Object.freeze([
+  "actorId", "canary", "capabilityId", "deviceId", "expectedGateEpochHash",
+  "expectedGateGeneration", "expectedGateLocksHash", "idempotencyKey", "params",
+]);
+
+function exactKeys(value, keys) {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value)
+    && canonicalJson(Object.keys(value).sort()) === canonicalJson([...keys].sort()));
+}
 
 // M3-R1：health 统一暴露 sourceRepo/sourceCommit/releaseId/runtimeProfile。
 // 优先级见 packages/release/lib/release-identity.mjs；加载失败不阻塞 health。
@@ -150,7 +164,7 @@ function publicGrantView(grant) {
 }
 
 export class ControlRouter {
-  constructor({ control, state, capabilities, evidence, delegationGrants = null, canaryEvidenceAuthorizer = null, nodeId = "DESKTOP-3I1EVHE", m6 = null }) {
+  constructor({ control, state, capabilities, evidence, delegationGrants = null, canaryEvidenceAuthorizer = null, nodeId = "DESKTOP-3I1EVHE", m6 = null, m6GateFOperations = null, m6LiveEntry = null, m6RuntimeMode = "STANDARD", m6StartupRecovery = null }) {
     this.control = control;
     this.state = state;
     this.capabilities = capabilities;
@@ -159,7 +173,154 @@ export class ControlRouter {
     this.canaryEvidenceAuthorizer = canaryEvidenceAuthorizer;
     this.nodeId = nodeId;
     this.m6 = m6;
+    this.m6GateFOperations = m6GateFOperations;
+    this.m6LiveEntry = m6LiveEntry;
+    this.m6RuntimeMode = m6RuntimeMode;
+    this.m6StartupRecovery = m6StartupRecovery;
     this.liveProgressCache = new Map();
+  }
+
+  assertStartupRecoveryRouteAllowed(method, path) {
+    if (this.m6StartupRecovery?.required !== true) return;
+    const allowed = (method === "GET" && new Set([
+      "/control/v1/internal/m6/gate-f/status",
+      "/control/v1/internal/m6/live/status",
+    ]).has(path)) || (method === "POST" && new Set([
+      "/control/v1/internal/m6/gate-f/recover-armed-active",
+      "/control/v1/internal/m6/live/recover-epoch",
+    ]).has(path));
+    if (!allowed) {
+      throw new ControlPlaneError(
+        "M6_STARTUP_RECOVERY_ONLY",
+        "FINAL runtime is latched to authenticated M6 recovery; a recovered or terminal canary cannot resume",
+        {
+          status: 503,
+          details: {
+            recoveryStatus: this.m6StartupRecovery.status,
+            schedulerAllowed: false,
+            externalResourceState: "NOT_ASSERTED",
+          },
+        },
+      );
+    }
+  }
+
+  qualificationGateStatus({ requireZeroResources }) {
+    if (!this.m6GateFOperations) {
+      throw new ControlPlaneError("M6_QUALIFICATION_GATE_STATUS_UNAVAILABLE", "qualification-only mode requires sealed Gate-F status", { status: 503 });
+    }
+    const gate = this.m6GateFOperations.status();
+    const resourceCounts = gate?.resourceCounts;
+    const zeroResources = resourceCounts?.jobs === 0 && resourceCounts?.leases === 0
+      && resourceCounts?.runs === 0 && resourceCounts?.sessions === 0;
+    if (gate?.schemaId !== "xw.m6-gate-f-operations-status.v1"
+      || gate.mode !== "CLOSED" || gate.phase !== "CLOSED" || gate.purpose !== null
+      || gate.tripleConsistent !== true || !Array.isArray(gate.errors) || gate.errors.length !== 0
+      || gate.activeAuthorizationCount !== 0 || gate.actionCount !== 0
+      || !HASH.test(gate.epochHash ?? "") || !HASH.test(gate.locksHash ?? "")
+      || !Number.isInteger(gate.generation) || gate.generation < 0
+      || (requireZeroResources && !zeroResources)) {
+      throw new ControlPlaneError(
+        "M6_QUALIFICATION_GATE_NOT_CLOSED",
+        "qualification-only execution requires one exact CLOSED Gate generation",
+        { status: 409 },
+      );
+    }
+    return gate;
+  }
+
+  assertQualificationAuthorized(headers) {
+    if (!this.m6GateFOperations?.assertAuthorized) {
+      throw new ControlPlaneError("M6_QUALIFICATION_AUTHORITY_UNAVAILABLE", "qualification-only authority is unavailable", { status: 503 });
+    }
+    this.m6GateFOperations.assertAuthorized(headers);
+  }
+
+  qualificationDevice() {
+    const matches = this.state.listDevices().filter((device) => device?.alias === "01"
+      && device.online === true && device.quarantined !== true);
+    if (matches.length !== 1 || typeof matches[0].deviceId !== "string" || matches[0].deviceId === "") {
+      throw new ControlPlaneError("M6_ENV_ALIAS01_BINDING_INVALID", "qualification-only mode requires one online alias-01 binding", { status: 409 });
+    }
+    const device = matches[0];
+    return Object.freeze({ deviceId: device.deviceId, alias: "01", online: true, quarantined: false });
+  }
+
+  async handleQualificationOnly({ method, path, body, headers }) {
+    this.assertQualificationAuthorized(headers);
+    if (method === "GET" && path === "/control/v1/internal/m6/gate-f/status") {
+      return { status: 200, body: { gate: this.qualificationGateStatus({ requireZeroResources: false }) } };
+    }
+    if (method === "GET" && path === "/control/v1/devices") {
+      return { status: 200, body: { devices: [this.qualificationDevice()] } };
+    }
+    const jobMatch = path.match(/^\/control\/v1\/jobs\/([^/]+)$/u);
+    if (method === "GET" && jobMatch) {
+      const job = this.state.requireJob(decodeURIComponent(jobMatch[1]));
+      if (job?.capabilityId !== QUALIFICATION_CAPABILITY_ID || job?.canary !== true) {
+        throw new ControlPlaneError("M6_QUALIFICATION_JOB_SCOPE_INVALID", "only formal qualification jobs are visible in qualification-only mode", { status: 403 });
+      }
+      return { status: 200, body: { job: this.attachTransportLock(publicJob(job)) } };
+    }
+    if (method === "POST" && path === "/control/v1/jobs") {
+      const input = requireBody(body);
+      if (!exactKeys(input, QUALIFICATION_JOB_KEYS) || !exactKeys(input.params, [
+        "accountIsolationBindingHash", "gateEpochHash", "gateGeneration", "gateLocksHash",
+      ])
+        || input.actorId !== QUALIFICATION_ACTOR_ID || input.capabilityId !== QUALIFICATION_CAPABILITY_ID
+        || input.canary !== true || !HASH.test(input.params.accountIsolationBindingHash ?? "")
+        || !HASH.test(input.params.gateEpochHash ?? "") || !HASH.test(input.params.gateLocksHash ?? "")
+        || !Number.isInteger(input.params.gateGeneration) || input.params.gateGeneration < 0
+        || !HASH.test(input.expectedGateEpochHash ?? "") || !HASH.test(input.expectedGateLocksHash ?? "")
+        || !Number.isInteger(input.expectedGateGeneration) || input.expectedGateGeneration < 0) {
+        throw new ControlPlaneError("M6_QUALIFICATION_JOB_INPUT_CLOSED", "qualification job input is not the exact sealed form", { status: 400 });
+      }
+      const device = this.qualificationDevice();
+      const before = this.qualificationGateStatus({ requireZeroResources: true });
+      if (input.deviceId !== device.deviceId || input.expectedGateEpochHash !== before.epochHash
+        || input.expectedGateGeneration !== before.generation || input.expectedGateLocksHash !== before.locksHash
+        || input.params.gateEpochHash !== before.epochHash || input.params.gateGeneration !== before.generation
+        || input.params.gateLocksHash !== before.locksHash) {
+        throw new ControlPlaneError("M6_QUALIFICATION_GATE_REBOUND", "qualification job does not bind the current CLOSED Gate generation", { status: 409 });
+      }
+      const requestHash = sha256(`xw.m6-target-environment-job.v1:${canonicalJson({
+        accountIsolationBindingHash: input.params.accountIsolationBindingHash,
+        deviceId: device.deviceId,
+        gateEpochHash: before.epochHash,
+        gateGeneration: before.generation,
+        gateLocksHash: before.locksHash,
+      })}`);
+      if (input.idempotencyKey !== `m6-env-${requestHash}`) {
+        throw new ControlPlaneError("M6_QUALIFICATION_JOB_BINDING_INVALID", "qualification idempotency key is not bound to the CLOSED Gate generation", { status: 409 });
+      }
+      if (typeof this.control.submitM6QualificationJob !== "function") {
+        throw new ControlPlaneError("M6_QUALIFICATION_AUTHORITY_UNAVAILABLE", "formal qualification job creator is unavailable", { status: 503 });
+      }
+      const created = this.control.submitM6QualificationJob({
+        actorId: input.actorId,
+        capabilityId: input.capabilityId,
+        idempotencyKey: input.idempotencyKey,
+        params: input.params,
+        canary: true,
+        deviceId: device.deviceId,
+      });
+      try {
+        const after = this.qualificationGateStatus({ requireZeroResources: false });
+        if (after.epochHash !== before.epochHash || after.generation !== before.generation
+          || after.locksHash !== before.locksHash) {
+          throw new ControlPlaneError("M6_QUALIFICATION_GATE_DRIFT", "Gate generation changed while the qualification job was submitted", { status: 409 });
+        }
+      } catch (error) {
+        try { this.control.cancelJob(created?.job?.jobId); } catch { /* fail closed below */ }
+        throw error;
+      }
+      return { status: 202, body: { ...created, job: publicJob(created.job) } };
+    }
+    throw new ControlPlaneError(
+      "M6_QUALIFICATION_ONLY_ROUTE_FORBIDDEN",
+      `${method} ${path} is outside the qualification-only route set`,
+      { status: 403 },
+    );
   }
 
   // M6-2 W5 closed input envelope: the M6 namespace accepts ONLY alias +
@@ -220,7 +381,7 @@ export class ControlRouter {
           node: process.versions.node,
           sqlite: "node:sqlite",
           devices: this.state.listDevices().length,
-          capabilities: this.capabilities.capabilities.length,
+          capabilities: this.m6RuntimeMode === "QUALIFICATION_ONLY" ? 1 : this.capabilities.capabilities.length,
           activeLeases: this.state.listLeases().length,
           evidenceFreeBytes: freeBytes,
           externalEffectsBlockedForLowDisk: freeBytes < this.evidence.minExternalEffectFreeBytes,
@@ -233,11 +394,92 @@ export class ControlRouter {
           sourceCommit: releaseIdentity().sourceCommit,
           runtimeProfile: releaseIdentity().runtimeProfile,
           releaseId: releaseIdentity().releaseId ?? process.env.CONTROL_PLANE_RELEASE_ID ?? null,
+          m6RuntimeMode: this.m6RuntimeMode,
           // M6-2 W8 #3: read-only M6 live-gate snapshot. Omitted entirely when
           // the facade is not installed (M6 disabled). No device I/O.
           ...(this.m6 ? { m6: this.m6.health() } : {}),
+          ...(this.m6GateFOperations ? { m6GateFOperations: this.m6GateFOperations.health() } : {}),
+          // M6-C1 internal production entry readiness contains blocker codes
+          // and resource counts only. It never exposes the internal token,
+          // provider credential, child command, paths, or raw device identity.
+          ...(this.m6LiveEntry ? { m6LiveEntry: this.m6LiveEntry.health() } : {}),
+          ...(this.m6StartupRecovery ? { m6StartupRecovery: this.m6StartupRecovery } : {}),
         },
       };
+    }
+
+    this.assertStartupRecoveryRouteAllowed(method, path);
+
+    if (this.m6RuntimeMode === "QUALIFICATION_ONLY") {
+      return this.handleQualificationOnly({ method, path, body, headers });
+    }
+
+    // Gate-F operator mutations have one Control-Plane-owned path. The CLI is
+    // deliberately unable to open the DB or rewrite the file pointer itself.
+    if (path.startsWith("/control/v1/internal/m6/gate-f/")) {
+      if (!this.m6GateFOperations) {
+        throw new ControlPlaneError(
+          "M6_GATE_F_OPERATIONS_UNAVAILABLE",
+          "M6 Gate-F operations are not installed in this runtime",
+          { status: 503 },
+        );
+      }
+      this.m6GateFOperations.assertAuthorized(headers);
+      if (method === "GET" && path === "/control/v1/internal/m6/gate-f/status") {
+        return { status: 200, body: { gate: this.m6GateFOperations.status() } };
+      }
+      if (method === "POST" && path === "/control/v1/internal/m6/gate-f/preflight") {
+        return { status: 200, body: { preflight: this.m6GateFOperations.preflight(body) } };
+      }
+      if (method === "POST" && path === "/control/v1/internal/m6/gate-f/activate") {
+        if (body?.operation !== "ACTIVATE") {
+          throw new ControlPlaneError("M6_GATE_F_INPUT_INVALID", "activate route accepts only ACTIVATE packages", { status: 400 });
+        }
+        return { status: 200, body: { promotion: this.m6GateFOperations.apply(body) } };
+      }
+      if (method === "POST" && path === "/control/v1/internal/m6/gate-f/close") {
+        if (!new Set(["NORMAL_CLOSE", "EMERGENCY_CLOSE"]).has(body?.operation)) {
+          throw new ControlPlaneError("M6_GATE_F_INPUT_INVALID", "close route accepts only normal/emergency close packages", { status: 400 });
+        }
+        return { status: 200, body: { promotion: this.m6GateFOperations.apply(body) } };
+      }
+      if (method === "POST" && path === "/control/v1/internal/m6/gate-f/reconcile") {
+        return { status: 200, body: { reconciliation: this.m6GateFOperations.reconcile(body) } };
+      }
+      if (method === "POST" && path === "/control/v1/internal/m6/gate-f/recover-armed-active") {
+        return { status: 200, body: this.m6GateFOperations.recoverArmedActive(body) };
+      }
+      throw new ControlPlaneError("ROUTE_NOT_FOUND", `${method} ${path} not found`, { status: 404 });
+    }
+
+    // M6-C1 has one loopback-only internal namespace. Authentication is
+    // header-only; exact request bodies reject token/device/raw fields before
+    // preflight can inspect any sealed artifact or create any resource.
+    if (path.startsWith("/control/v1/internal/m6/live/")) {
+      if (!this.m6LiveEntry) {
+        throw new ControlPlaneError(
+          "M6_LIVE_ENTRY_UNAVAILABLE",
+          "M6 production live entry is not installed in this runtime",
+          { status: 503 },
+        );
+      }
+      this.m6LiveEntry.assertAuthorized(headers);
+      if (method === "POST" && path === "/control/v1/internal/m6/live/recover-epoch") {
+        return { status: 200, body: { recovery: await this.m6LiveEntry.recoverEpoch(body) } };
+      }
+      if (method === "POST" && path === "/control/v1/internal/m6/live/preflight") {
+        return { status: 200, body: { preflight: this.m6LiveEntry.preflight(body) } };
+      }
+      if (method === "POST" && path === "/control/v1/internal/m6/live/start") {
+        return { status: 202, body: { run: await this.m6LiveEntry.start(body) } };
+      }
+      if (method === "GET" && path === "/control/v1/internal/m6/live/status") {
+        return { status: 200, body: { run: this.m6LiveEntry.status(Object.fromEntries(query.entries())) } };
+      }
+      if (method === "POST" && path === "/control/v1/internal/m6/live/close") {
+        return { status: 200, body: { run: await this.m6LiveEntry.close(body) } };
+      }
+      throw new ControlPlaneError("ROUTE_NOT_FOUND", `${method} ${path} not found`, { status: 404 });
     }
     if (method === "GET" && path === "/control/v1/devices") {
       return { status: 200, body: { devices: this.state.listDevices() } };

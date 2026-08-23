@@ -75,3 +75,32 @@ test("empty or mismatched evidence replans instead of synthesizing a block", () 
   assert.equal(result.blockSet, null);
   assert.equal(result.privateGeometry.size, 0);
 });
+
+test("nested and neighboring redline semantics hard-stop blank clickable containers independent of intent", () => {
+  const env = environment();
+  const frame = { frameId: H("redline-frame"), environmentAttestationHash: env.attestationHash, focusHash: H("focus") };
+  for (const xml of [
+    `<hierarchy><node text="" resource-id="" class="android.widget.Button" package="com.xhs" clickable="true" bounds="[10,100][900,400]"><node text="删除账号" resource-id="com.xhs:id/label" class="android.widget.TextView" package="com.xhs" clickable="false" bounds="[30,140][600,260]"/></node><node text="" class="android.view.View" clickable="false" bounds="[0,0][1080,2400]"/></hierarchy>`,
+    `<hierarchy><node text="" resource-id="com.xhs:id/button" class="android.widget.Button" package="com.xhs" clickable="true" bounds="[10,100][900,400]"/><node text="Delete account" resource-id="com.xhs:id/neighbor" class="android.widget.TextView" package="com.xhs" clickable="false" bounds="[30,140][600,260]"/><node text="" class="android.view.View" clickable="false" bounds="[0,0][1080,2400]"/></hierarchy>`,
+  ]) {
+    const result = deriveLiveVisualBlockSet({ frame, dumpXml: xml, environmentAttestation: env });
+    assert.equal(result.disposition, "HARD_STOP");
+    assert.equal(result.reason, "M6_LIVE_HARD_REDLINE_NO_SAFE_CANDIDATE");
+    assert.equal(result.blockSet, null);
+    assert.equal(result.privateGeometry.size, 0);
+  }
+});
+
+test("malformed node nesting hard-stops before a detached redline can become a candidate", () => {
+  const env = environment();
+  const frame = { frameId: H("malformed-frame"), environmentAttestationHash: env.attestationHash, focusHash: H("focus") };
+  const result = deriveLiveVisualBlockSet({
+    frame,
+    dumpXml: `<hierarchy><node text="" class="android.widget.Button" package="com.xhs" clickable="true" bounds="[10,100][300,300]"></node></node><node text="删除账号" class="android.widget.TextView" package="com.xhs" clickable="false" bounds="[800,1000][1000,1150]"/></hierarchy>`,
+    environmentAttestation: env,
+  });
+  assert.equal(result.disposition, "HARD_STOP");
+  assert.equal(result.reason, "M6_LIVE_DUMP_STRUCTURE_INVALID");
+  assert.equal(result.blockSet, null);
+  assert.equal(result.privateGeometry.size, 0);
+});

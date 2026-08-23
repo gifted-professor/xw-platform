@@ -41,6 +41,10 @@ import {
   M6_LOCKS_V2_SCHEMA_ID,
 } from "./m6-live-gate-v2.mjs";
 import { loadGateIssuerAllowlist, verifyEpochProof } from "./m6-issuer-allowlist.mjs";
+import {
+  deriveM6GateFSafetyCloseProofHash,
+  isM6GateFSafetyCloseLoadAuthority,
+} from "./m6-gate-safety-close-arm.mjs";
 import { deriveM6AggregateSealHash } from "../../../../packages/kernel/lib/m6-aggregate-closeout.mjs";
 
 export const M6_LOCKS_SCHEMA_ID = "xw.m6-locks.v1";
@@ -114,7 +118,7 @@ function gateDir(m6Root, gateId) {
 // Load + validate one epoch file. The file is the canonical epoch record plus a
 // sibling `proof` field (ed25519 over the epochHash bytes). The proof is NOT
 // part of the hashed payload and NOT in the schema; it is stripped here.
-function loadEpochFile(fileDir, epochHash, allowlist) {
+function loadEpochFile(fileDir, epochHash, allowlist, { verifyProof = true, expectedProofHash = null } = {}) {
   if (typeof epochHash !== "string" || !HEX64.test(epochHash)) {
     fail("M6_GATE_EPOCH_HASH_INVALID", `epoch file address is not a 64-hex sha256: ${epochHash}`);
   }
@@ -122,6 +126,9 @@ function loadEpochFile(fileDir, epochHash, allowlist) {
   const raw = readRegularJson(filePath);
   if (!raw) fail("M6_GATE_EPOCH_MISSING", `epoch file ${epochHash}.json is absent`);
   const { proof, ...epoch } = raw;
+  if (expectedProofHash && deriveM6GateFSafetyCloseProofHash(proof) !== expectedProofHash) {
+    fail("M6_GATE_SAFETY_CLOSE_PROOF_DRIFT", `epoch ${epochHash} proof differs from its activation-time arm`);
+  }
   const schema = epoch.schemaId === "xw.m6-live-gate.v1"
     ? loadEpochSchema()
     : epoch.schemaId === M6_GATE_V2_SCHEMA_ID
@@ -136,7 +143,7 @@ function loadEpochFile(fileDir, epochHash, allowlist) {
   if (derived !== epoch.epochHash) fail("M6_GATE_EPOCH_FORGED", `epoch ${epochHash} self-hash does not match its payload`);
   if (derived !== epochHash) fail("M6_GATE_EPOCH_ADDRESS_MISMATCH", `epoch file address does not match its hash`);
   // Verify the issuer signature.
-  verifyEpochProof({ epoch, epochHash, proof, allowlist });
+  if (verifyProof) verifyEpochProof({ epoch, epochHash, proof, allowlist });
   return epoch;
 }
 
@@ -223,30 +230,58 @@ function loadAggregates(gateDirPath) {
 
 // Load the active gate from disk: current pointer → ordered chain → per-epoch
 // validation + signature verification → closeout registry → pinned locks.
-// Returns { chain, closeouts, lockHashes, gateId, tailEpochHash }.
+// Returns the verified chain plus the exact current pointer used to select it.
 // Missing gate directory → empty chain (fail closed via M6_GATE_EMPTY upstream).
 export function loadM6Gate({
   m6Root,
   gateId,
   issuerAllowlistPath,
   requireLocks = true,
+  safetyCloseLoadAuthority = null,
 } = {}) {
   if (!m6Root) fail("M6_GATE_ROOT_REQUIRED", "M6 runtime root is required");
   const dir = gateDir(m6Root, gateId);
   if (!existsSync(dir)) {
     // No gate installed → empty chain (gate evaluates to M6_GATE_EMPTY, CLOSED).
-    return { chain: [], closeouts: {}, aggregates: {}, lockHashes: loadM6Locks(m6Root, { requireLocks }), lockSets: loadV2LockSets(m6Root), emergencyCloseAuthorizations: {}, gateId, tailEpochHash: null };
+    return { chain: [], closeouts: {}, aggregates: {}, lockHashes: loadM6Locks(m6Root, { requireLocks }), lockSets: loadV2LockSets(m6Root), emergencyCloseAuthorizations: {}, gateId, tailEpochHash: null, currentPointer: null };
   }
-  const allowlist = loadGateIssuerAllowlist(issuerAllowlistPath);
+  // Only a process-local authority minted from an exact durable safety-close
+  // arm may bypass current allowlist re-evaluation. The recovery read still
+  // validates schemas, self-hashes, addresses, registries, and the full chain.
+  const verifyEpochProofs = !isM6GateFSafetyCloseLoadAuthority(safetyCloseLoadAuthority);
+  const allowlist = verifyEpochProofs ? loadGateIssuerAllowlist(issuerAllowlistPath) : null;
   const currentPath = join(dir, "current.json");
   const current = readRegularJson(currentPath);
   if (!current || !Array.isArray(current.chain) || current.chain.length === 0) {
-    return { chain: [], closeouts: {}, aggregates: {}, lockHashes: loadM6Locks(m6Root, { requireLocks }), lockSets: loadV2LockSets(m6Root), emergencyCloseAuthorizations: {}, gateId, tailEpochHash: null };
+    return { chain: [], closeouts: {}, aggregates: {}, lockHashes: loadM6Locks(m6Root, { requireLocks }), lockSets: loadV2LockSets(m6Root), emergencyCloseAuthorizations: {}, gateId, tailEpochHash: null, currentPointer: null };
   }
   const chain = [];
   for (const epochHash of current.chain) {
-    const epoch = loadEpochFile(dir, epochHash, allowlist);
+    const expectedProofHash = !verifyEpochProofs && epochHash === safetyCloseLoadAuthority.activeEpochHash
+      ? safetyCloseLoadAuthority.activationProofHash
+      : !verifyEpochProofs && epochHash === safetyCloseLoadAuthority.terminalEpochHash
+        ? safetyCloseLoadAuthority.status === "CONSUMED"
+          ? safetyCloseLoadAuthority.closeProofHash
+          : safetyCloseLoadAuthority.status === "RELEASED"
+            ? safetyCloseLoadAuthority.terminalProofHash
+            : null
+        : null;
+    const epoch = loadEpochFile(dir, epochHash, allowlist, { verifyProof: verifyEpochProofs, expectedProofHash });
     chain.push(epoch);
+  }
+  if (!verifyEpochProofs) {
+    const tail = chain.at(-1);
+    const authority = safetyCloseLoadAuthority;
+    const activeAtTail = tail?.epochHash === authority.activeEpochHash;
+    const activationRecoveryAtTail = tail?.epochHash === authority.recoveryParentEpochHash;
+    const terminalAtTail = tail?.epochHash === authority.terminalEpochHash
+      && chain.at(-2)?.epochHash === authority.activeEpochHash;
+    const authorityMatchesChain = authority.status === "ARMED"
+      ? activeAtTail || activationRecoveryAtTail
+      : ["CONSUMED", "RELEASED"].includes(authority.status) && (activeAtTail || terminalAtTail);
+    if (!authorityMatchesChain) {
+      fail("M6_GATE_SAFETY_CLOSE_LOAD_AUTHORITY_MISMATCH", "safety-close recovery authority does not bind the selected gate tail");
+    }
   }
   const closeouts = loadCloseouts(dir);
   const aggregates = loadAggregates(dir);
@@ -259,6 +294,7 @@ export function loadM6Gate({
     emergencyCloseAuthorizations: loadEmergencyCloseAuthorizations(dir),
     gateId,
     tailEpochHash: current.tailEpochHash ?? current.chain[current.chain.length - 1],
+    currentPointer: Object.freeze({ ...current, chain: Object.freeze([...current.chain]) }),
   };
 }
 

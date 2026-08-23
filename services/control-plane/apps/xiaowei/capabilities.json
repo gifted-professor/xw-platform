@@ -196,6 +196,89 @@
     },
     {
       "schemaVersion": 1,
+      "id": "xiaowei.m6.qualify_environment",
+      "appId": "xiaowei",
+      "packageName": "com.xingin.xhs",
+      "versionRange": "observed:9.10.113",
+      "maturity": "E1",
+      "risk": "R0",
+      "resources": [
+        "device",
+        "transport:xiaowei:22222"
+      ],
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "accountIsolationBindingHash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "gateEpochHash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "gateGeneration": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "gateLocksHash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        },
+        "required": [
+          "accountIsolationBindingHash",
+          "gateEpochHash",
+          "gateGeneration",
+          "gateLocksHash"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object"
+      },
+      "preconditions": [
+        "Gate F is CLOSED before submission and remains generation-stable",
+        "alias is exactly 01",
+        "fixed double-sampled read-only registry; no caller shell or raw runtime identity"
+      ],
+      "verification": {
+        "mode": "custom",
+        "description": "two equal fixed read-only samples produce one content-addressed target attestation"
+      },
+      "restoration": {
+        "required": false,
+        "description": "read-only qualification; no device action is permitted"
+      },
+      "timeoutMs": 300000,
+      "idempotency": "read_only",
+      "automationPolicy": {
+        "mode": "lab_only",
+        "canaryOnly": true
+      },
+      "implementation": {
+        "adapter": "xiaowei",
+        "action": "m6_qualify_environment"
+      },
+      "evidence": [
+        "M6-4-L1-target-environment-qualification"
+      ],
+      "availability": "canary_only",
+      "effect": {
+        "class": "none",
+        "phase": "na",
+        "commitBoundary": "automatic"
+      },
+      "exposure": "internal",
+      "invocationPolicy": {
+        "allowedModes": [
+          "job"
+        ]
+      },
+      "lifecycle": "canary_only"
+    },
+    {
+      "schemaVersion": 1,
       "id": "xiaowei.explorer.primitive",
       "appId": "xiaowei",
       "packageName": null,
@@ -384,12 +467,17 @@
       "timeoutMs": 900000,
       "idempotency": "ambiguous_on_timeout",
       "automationPolicy": { "mode": "lab_only", "canaryOnly": true },
-      "implementation": { "adapter": "xiaowei", "action": "m6_grounded_run" },
+      "implementation": {
+        "adapter": "xiaowei",
+        "action": "m6_grounded_run",
+        "implementationClosureHash": "a6827c1b5b09b96b7beb57d8cd45fd7a9aa18ee9195110f8a17074229e0fb6d1",
+        "tcbManifestRef": "xw.m6-grounded-run.tcb.v1"
+      },
       "evidence": ["M6-4-A01", "M6-4-A02", "M6-4-A03-BOUNDED_READ_TRACE"],
       "availability": "canary_only",
       "effect": { "class": "reversible", "phase": "na", "commitBoundary": "automatic" },
       "exposure": "internal",
-      "invocationPolicy": { "allowedModes": ["session"] },
+      "invocationPolicy": { "allowedModes": ["composite_action"] },
       "lifecycle": "canary_only"
     }
   ]

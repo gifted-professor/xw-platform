@@ -62,13 +62,19 @@ export function createBoundedLineReader(stream, options) {
 }
 
 export function spawnOwnedProcess(command, args = [], options = {}) {
+  if (options.extraPipeFd !== undefined) {
+    invariant(options.extraPipeFd === 3, "M6_DSH_EXTRA_PIPE_FD_INVALID", "the only supported child broker pipe is FD3");
+  }
+  const stdio = options.extraPipeFd === 3
+    ? ["pipe", "pipe", "pipe", "pipe"]
+    : ["pipe", "pipe", "pipe"];
   const child = spawn(command, args, {
     cwd: options.cwd,
     env: options.env ?? process.env,
     shell: false,
     windowsHide: true,
     detached: process.platform !== "win32",
-    stdio: ["pipe", "pipe", "pipe"],
+    stdio,
   });
   return Object.freeze({
     schemaId: "xw.dsh.process-ref.v1",

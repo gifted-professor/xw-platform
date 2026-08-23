@@ -6,10 +6,11 @@
 // signed schema-valid epoch from flags, prints the candidate + path, and writes
 // nothing. Runs the real CLI as a subprocess (exercises the main guard).
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { generateKeyPairSync } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { createServer } from "node:http";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -33,6 +34,28 @@ function run(args, { cwd } = {}) {
   let json = null;
   try { if (line) json = JSON.parse(line); } catch { json = null; }
   return { code, stdout, stderr, json };
+}
+
+function runAsync(args, { cwd } = {}) {
+  return new Promise((resolveRun, rejectRun) => {
+    const child = spawn(process.execPath, [xwPath, ...args], {
+      cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.once("error", rejectRun);
+    child.once("close", (code) => {
+      const line = stdout.trim().split("\n").at(-1);
+      let json = null;
+      try { if (line) json = JSON.parse(line); } catch { json = null; }
+      resolveRun({ code: code ?? 1, stdout, stderr, json });
+    });
+  });
 }
 
 const HEX40 = "a".repeat(40);
@@ -77,6 +100,72 @@ test("xw m6 epoch (no command) exits 2 with usage", () => {
   const { code, stderr } = run(["m6", "epoch"]);
   assert.equal(code, 2);
   assert.match(stderr, /xw m6 epoch/);
+});
+
+test("xw m6 gate-f defaults to preflight and mutates only through the loopback Control Plane with --yes", async () => {
+  const root = mkdtempSync(join(tmpdir(), "xw-m6-gate-f-cli-"));
+  const requests = [];
+  const server = createServer((request, response) => {
+    let body = "";
+    request.setEncoding("utf8");
+    request.on("data", (chunk) => { body += chunk; });
+    request.on("end", () => {
+      requests.push({
+        method: request.method,
+        path: request.url,
+        token: request.headers["x-control-token"],
+        body: JSON.parse(body || "{}"),
+      });
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify(request.url.endsWith("/preflight")
+        ? { preflight: { status: "SEALED_PREFLIGHT" } }
+        : { promotion: { phase: "GROUNDED_ACTION" } }));
+    });
+  });
+  try {
+    const epochPath = join(root, "signed-epoch.json");
+    const authorizationPath = join(root, "owner-authorization.json");
+    const tokenPath = join(root, "token.txt");
+    writeFileSync(epochPath, `${JSON.stringify({ schemaId: "xw.m6-live-gate.v2", epochHash: "a".repeat(64), proof: {} })}\n`);
+    writeFileSync(authorizationPath, `${JSON.stringify({ schemaId: "xw.m6-4-live-window-authorization.v1" })}\n`);
+    writeFileSync(tokenPath, "gate-f-cli-test-token-0000000000000001\n");
+    await new Promise((resolveListen, rejectListen) => {
+      server.once("error", rejectListen);
+      server.listen(0, "127.0.0.1", resolveListen);
+    });
+    const { port } = server.address();
+    const common = [
+      "m6", "gate-f", "activate",
+      "--control", `http://127.0.0.1:${port}`,
+      "--token-file", tokenPath,
+      "--epoch", epochPath,
+      "--authorization", authorizationPath,
+      "--phase", "GROUNDED_ACTION",
+      "--json",
+    ];
+    const dryRun = await runAsync(common);
+    assert.equal(dryRun.code, 0, dryRun.stderr);
+    assert.equal(dryRun.json.dryRun, true);
+    assert.equal(requests[0].path, "/control/v1/internal/m6/gate-f/preflight");
+    assert.equal(requests[0].token, "gate-f-cli-test-token-0000000000000001");
+    assert.equal(requests[0].body.operation, "ACTIVATE");
+
+    const applied = await runAsync([...common, "--yes"]);
+    assert.equal(applied.code, 0, applied.stderr);
+    assert.equal(applied.json.dryRun, false);
+    assert.equal(requests[1].path, "/control/v1/internal/m6/gate-f/activate");
+    assert.equal(existsSync(join(root, "control.db")), false);
+    assert.equal(existsSync(join(root, "current.json")), false);
+  } finally {
+    await new Promise((resolveClose) => server.close(resolveClose));
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("xw m6 gate-f rejects non-exact loopback URLs before reading operation inputs", () => {
+  const result = run(["m6", "gate-f", "status", "--control", "http://localhost:17920"]);
+  assert.equal(result.code, 2);
+  assert.match(result.stderr, /exact credential-free http:\/\/127\.0\.0\.1/iu);
 });
 
 test("xw m6 epoch status without --gate-id exits 2", () => {
@@ -151,6 +240,35 @@ test("xw m6 epoch activate refuses an explicitly tombstoned epoch before writing
     assert.equal(activated.code, 2);
     assert.match(activated.stderr, /not present in the active epochs directory.*tombstoned/);
     assert.equal(existsSync(join(gateRoot, "current.json")), false);
+  } finally {
+    rmSync(gate.m6Root, { recursive: true, force: true });
+  }
+});
+
+test("legacy xw m6 epoch activate refuses a v2 candidate and leaves current.json absent", () => {
+  const gate = makeGateRoot();
+  try {
+    const epochHash = "d".repeat(64);
+    const epochDir = join(gate.m6Root, "m6-gate", "gate-cli", "epochs");
+    mkdirSync(epochDir, { recursive: true });
+    writeFileSync(join(epochDir, `${epochHash}.json`), `${JSON.stringify({
+      schemaId: "xw.m6-live-gate.v2",
+      epochHash,
+      parentEpochHash: null,
+      proof: {},
+    })}\n`);
+    const activated = run([
+      "m6", "epoch", "activate",
+      "--m6-root", gate.m6Root,
+      "--gate-id", "gate-cli",
+      "--issuer-keys", gate.issuerKeysPath,
+      "--epoch-hash", epochHash,
+      "--yes",
+      "--json",
+    ]);
+    assert.equal(activated.code, 2);
+    assert.match(activated.stderr, /v2 epochs may be promoted only through xw m6 gate-f/iu);
+    assert.equal(existsSync(join(gate.m6Root, "m6-gate", "gate-cli", "current.json")), false);
   } finally {
     rmSync(gate.m6Root, { recursive: true, force: true });
   }

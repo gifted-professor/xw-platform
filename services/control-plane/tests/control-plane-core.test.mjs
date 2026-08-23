@@ -182,6 +182,82 @@ test("job result keeps bounded diagnostics and drops unrelated adapter output", 
   }
 });
 
+test("formal M6 environment qualification job preserves only the sealed bundle and releases resources", async () => {
+  const capturedAt = "2026-08-24T00:00:00.000Z";
+  const expiresAt = "2026-08-24T06:00:00.000Z";
+  const hash = "a".repeat(64);
+  const attestation = {
+    schemaId: "xw.m6-target-environment-attestation.v1",
+    capturedAt,
+    expiresAt,
+    accessibilityHash: hash,
+    accountIsolationHash: hash,
+    appBuildHash: hash,
+    appPackageHash: hash,
+    attestationHash: hash,
+    displayHash: hash,
+    imeHash: hash,
+    localeThemeHash: hash,
+    osBuildHash: hash,
+    signingHash: hash,
+  };
+  const qualification = {
+    schemaId: "xw.m6-environment-qualification.v1",
+    status: "QUALIFIED",
+    alias: "01",
+    capturedAt,
+    expiresAt,
+    sampleCount: 2,
+    actionCount: 0,
+    effectBoundary: "READ_ONLY",
+    gateFEligible: true,
+    secretMaterialPresent: false,
+    rawDeviceIdentityPresent: false,
+    commandRegistryHash: "b".repeat(64),
+    qualifiedAttestationHashes: [hash],
+  };
+  const adapter = {
+    id: "test",
+    async execute() {
+      return {
+        vendorCode: 10000,
+        output: {
+          m6EnvironmentQualification: { attestation, qualification },
+          privateRuntimeId: "must-not-persist",
+        },
+      };
+    },
+    async verify() { return { ok: true, mode: "state" }; },
+    async restore() { return { ok: true }; },
+  };
+  const f = fixture({ capabilities: [manifest("test.m6-environment-qualification")], adapter });
+  try {
+    const job = f.control.submitJob({
+      idempotencyKey: "m6-environment-qualification",
+      actorId: "m6-gate-f-operator",
+      deviceId: f.devices[0].deviceId,
+      capabilityId: "test.m6-environment-qualification",
+      params: {},
+      canary: true,
+    }).job;
+    const terminal = await f.control.waitForJob(job.jobId);
+    assert.equal(terminal.status, "succeeded");
+    assert.deepEqual(terminal.result.output, {
+      m6EnvironmentQualification: { attestation, qualification },
+    });
+    assert.doesNotMatch(JSON.stringify(terminal), /privateRuntimeId|must-not-persist/u);
+    await until(() => f.state.getM6GateFResourceCounts().leases === 0);
+    assert.deepEqual(f.state.getM6GateFResourceCounts(), {
+      jobs: 0,
+      leases: 0,
+      sessions: 0,
+      actionCount: 0,
+    });
+  } finally {
+    await f.close();
+  }
+});
+
 test("different devices run concurrently while one device remains FIFO", async () => {
   const gates = [];
   const starts = [];
@@ -685,7 +761,7 @@ test("nonpayment_v1: migrateLegacyPending frees a legacy waiting job and dispatc
     // 直接在 state 里种一个历史 waiting_approval job（submitJob 在 nonpayment_v1 不会产生 waiting）
     const legacy = f.state.createJob({
       idempotencyKey: "legacy-waiting-dispatch", actorId: "agent-a", authorityNodeId: "DESKTOP-3I1EVHE",
-      deviceId: f.devices[0].deviceId, capability: external, params: {},
+      deviceId: f.devices[0].deviceId, capability: f.registry.get(external.id), params: {},
       status: "waiting_approval", approvalRequired: true, externalEffect: true,
     }).job;
     const report = f.control.migrateLegacyPending();
@@ -1325,6 +1401,40 @@ test("E1 lab actions require an exclusive canary session and valid token", async
       { code: "CANARY_SESSION_REQUIRED", status: 403 },
     );
     assert.equal(f.control.releaseSession(nonCanarySession.sessionId, nonCanarySession.token).released, true);
+  } finally {
+    await f.close();
+  }
+});
+
+test("canary session cannot route the M6 production-entry-only capability", async () => {
+  let executions = 0;
+  const adapter = {
+    id: "test",
+    async execute() { executions += 1; return { vendorCode: 0 }; },
+    async verify() { return { ok: true, mode: "state" }; },
+    async restore() { return { ok: true }; },
+  };
+  const groundedRun = manifest("xiaowei.m6.grounded_run", {
+    maturity: "E1",
+    automationPolicy: { mode: "lab_only", canaryOnly: true },
+    availability: "canary_only",
+    exposure: "internal",
+    invocationPolicy: { allowedModes: ["composite_action"] },
+    effect: { class: "reversible", phase: "na", commitBoundary: "automatic" },
+  });
+  const f = fixture({ capabilities: [groundedRun], adapter });
+  try {
+    const session = f.control.createSession({ actorId: "agent-m6", deviceId: f.devices[0].deviceId, canary: true });
+    await assert.rejects(
+      f.control.executeSessionAction(session.sessionId, session.token, {
+        idempotencyKey: "generic-m6-bypass",
+        capabilityId: groundedRun.id,
+        params: {},
+      }),
+      { code: "CAPABILITY_INVOCATION_FORBIDDEN" },
+    );
+    assert.equal(executions, 0);
+    assert.equal(f.control.releaseSession(session.sessionId, session.token).released, true);
   } finally {
     await f.close();
   }

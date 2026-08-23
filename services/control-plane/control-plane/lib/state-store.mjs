@@ -2,8 +2,18 @@ import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 
+import {
+  deriveM64LiveWindowAuthorizationBodyHash,
+  deriveM64LiveWindowAuthorizationEnvelopeHash,
+  selectM64LiveWindowRuntimeBinding,
+} from "../../../../packages/kernel/lib/m6-4-live-window-authorization.mjs";
 import { canonicalJson, fingerprint, newId, sha256 } from "./canonical.mjs";
 import { ControlPlaneError } from "./errors.mjs";
+import {
+  deriveM6GateFSafetyClosePackageHash,
+  deriveM6GateFSafetyCloseProofHash,
+} from "./m6-gate-safety-close-arm.mjs";
+import { isM64LiveWindowAuthorizationVerification } from "./m6-live-window-authorization.mjs";
 import { isSoftBudgetAuthority } from "./mission-policy.mjs";
 import {
   normalizePlacementRequest,
@@ -15,10 +25,15 @@ import {
   consumeTransportActionAuthorization as consumeTransportAuthKernel,
 } from "./transport-action-authorization.mjs";
 
-export const CURRENT_CONTROL_SCHEMA_VERSION = 19;
+export const CURRENT_CONTROL_SCHEMA_VERSION = 20;
 
 const ACTIVE_JOB_STATES = new Set(["running", "verifying", "restoring"]);
 const TERMINAL_JOB_STATES = new Set(["succeeded", "failed", "ambiguous", "recovery_required", "cancelled"]);
+const M6_GROUNDED_RUN_CAPABILITY_ID = "xiaowei.m6.grounded_run";
+const M6_PRODUCTION_BROKER_ACTOR_ID = "agent:m6-production-broker";
+const M6_QUALIFICATION_CAPABILITY_ID = "xiaowei.m6.qualify_environment";
+const M6_QUALIFICATION_ACTOR_ID = "operator:m6-target-environment-qualification";
+const M6_QUALIFICATION_JOB_AUTHORITY = Symbol("m6-qualification-job-authority");
 const TRANSITIONS = {
   queued: new Set(["running", "cancelled"]),
   waiting_approval: new Set(["queued", "cancelled"]),
@@ -134,10 +149,14 @@ export function assertNodeSqliteRuntime() {
 }
 
 export class StateStore {
-  constructor({ dbPath = ":memory:", now = Date.now } = {}) {
+  constructor({ dbPath = ":memory:", now = Date.now, m6RuntimeMode = "STANDARD" } = {}) {
     assertNodeSqliteRuntime();
+    if (!["STANDARD", "QUALIFICATION_ONLY", "FINAL"].includes(m6RuntimeMode)) {
+      throw new ControlPlaneError("M6_RUNTIME_MODE_INVALID", "StateStore M6 runtime mode is not recognized", { status: 503 });
+    }
     this.dbPath = dbPath;
     this.now = now;
+    this.m6RuntimeMode = m6RuntimeMode;
     if (dbPath !== ":memory:") mkdirSync(dirname(dbPath), { recursive: true });
     this.db = new DatabaseSync(dbPath);
     try {
@@ -253,6 +272,90 @@ export class StateStore {
         updated_at INTEGER NOT NULL
       );
     `);
+  }
+
+  #ensureV19LiveWindowAuthorizationSchema() {
+    // Older production v19 databases may predate Gate-F owner authorization, so
+    // table creation remains idempotent while v20 adds the normal-close terminal
+    // proof binding through an explicit migration.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS m6_live_window_authorization_consumptions (
+        nonce_hash TEXT PRIMARY KEY,
+        authorization_id TEXT NOT NULL UNIQUE,
+        body_hash TEXT NOT NULL UNIQUE,
+        envelope_hash TEXT NOT NULL UNIQUE,
+        issuer TEXT NOT NULL,
+        key_id TEXT NOT NULL,
+        allowlist_version INTEGER NOT NULL CHECK(allowlist_version>=1),
+        gate_id TEXT NOT NULL,
+        gate_epoch_hash TEXT NOT NULL,
+        gate_generation INTEGER NOT NULL CHECK(gate_generation>=0),
+        purpose TEXT NOT NULL,
+        release_id TEXT NOT NULL,
+        source_commit TEXT NOT NULL,
+        locks_hash TEXT NOT NULL,
+        expires_at INTEGER NOT NULL,
+        consumed_at INTEGER NOT NULL,
+        consumption_receipt_json TEXT NOT NULL,
+        UNIQUE(gate_id, gate_generation)
+      );
+      CREATE INDEX IF NOT EXISTS m6_live_window_auth_gate_idx
+        ON m6_live_window_authorization_consumptions(gate_id, gate_generation);
+      CREATE TABLE IF NOT EXISTS m6_live_scenario_claims (
+        claim_hash TEXT PRIMARY KEY,
+        authorization_id TEXT NOT NULL,
+        authorization_hash TEXT NOT NULL,
+        manifest_hash TEXT NOT NULL,
+        scenario_key TEXT NOT NULL,
+        purpose TEXT NOT NULL,
+        gate_epoch_hash TEXT NOT NULL,
+        gate_generation INTEGER NOT NULL CHECK(gate_generation>=0),
+        status TEXT NOT NULL CHECK(status IN ('STARTED','FINALIZED')),
+        claimed_at INTEGER NOT NULL,
+        finalized_at INTEGER,
+        result_json TEXT,
+        UNIQUE(authorization_id, scenario_key),
+        UNIQUE(gate_epoch_hash, scenario_key)
+      );
+      CREATE INDEX IF NOT EXISTS m6_live_scenario_claims_auth_idx
+        ON m6_live_scenario_claims(authorization_id, claimed_at);
+      CREATE TABLE IF NOT EXISTS m6_gate_safety_close_arms (
+        active_epoch_hash TEXT PRIMARY KEY,
+        gate_id TEXT NOT NULL,
+        purpose TEXT NOT NULL,
+        close_epoch_hash TEXT NOT NULL UNIQUE,
+        package_hash TEXT NOT NULL UNIQUE,
+        activation_proof_hash TEXT NOT NULL,
+        proof_hash TEXT NOT NULL,
+        reason_code TEXT NOT NULL,
+        expires_at INTEGER NOT NULL,
+        authorization_expires_at INTEGER NOT NULL,
+        package_expires_at INTEGER NOT NULL,
+        package_json TEXT NOT NULL,
+        armed_generation INTEGER NOT NULL CHECK(armed_generation>=1),
+        status TEXT NOT NULL CHECK(status IN ('ARMED','CONSUMED','RELEASED')),
+        armed_at INTEGER NOT NULL,
+        terminal_epoch_hash TEXT,
+        terminal_proof_hash TEXT,
+        terminalized_at INTEGER
+      );
+      CREATE INDEX IF NOT EXISTS m6_gate_safety_close_arm_status_idx
+        ON m6_gate_safety_close_arms(status, active_epoch_hash);
+      CREATE UNIQUE INDEX IF NOT EXISTS m6_gate_safety_close_arm_terminal_idx
+        ON m6_gate_safety_close_arms(terminal_epoch_hash)
+        WHERE terminal_epoch_hash IS NOT NULL;
+    `);
+    this.#ensureColumn("m6_gate_safety_close_arms", "activation_proof_hash", "TEXT NOT NULL DEFAULT ''");
+    this.#ensureColumn("m6_gate_safety_close_arms", "terminal_proof_hash", "TEXT");
+  }
+
+  #migrateV19ToV20() {
+    // A normal close is signed independently from the activation-time emergency
+    // close package. Persist its exact proof hash with the terminal fence so a
+    // restarted process can validate a RELEASED CLOSED tail after issuer-key
+    // revocation without treating the emergency proof as interchangeable.
+    this.#ensureV19LiveWindowAuthorizationSchema();
+    this.#ensureColumn("m6_gate_safety_close_arms", "terminal_proof_hash", "TEXT");
   }
 
   #recoverInFlightActions() {
@@ -718,9 +821,11 @@ export class StateStore {
         if (current < 17) this.#migrateV16ToV17();
         if (current < 18) this.#migrateV17ToV18();
         if (current < 19) this.#migrateV18ToV19();
+        if (current < 20) this.#migrateV19ToV20();
         this.#setUserVersion(CURRENT_CONTROL_SCHEMA_VERSION);
       });
     }
+    this.#ensureV19LiveWindowAuthorizationSchema();
   }
 
   #ensureColumn(table, column, definition) {
@@ -1118,6 +1223,142 @@ export class StateStore {
     });
   }
 
+  #assertOrdinaryM6ResourceAllowedNoTransaction() {
+    const fence = this.getM6GateFence();
+    if (fence?.mode !== undefined && fence.mode !== "CLOSED") {
+      throw new ControlPlaneError(
+        "M6_GATE_ACTIVE_ISOLATION",
+        "ordinary jobs, leases, sessions, and runs are disabled while an M6 live gate is active",
+        { status: 423, details: { mode: fence.mode, generation: fence.generation } },
+      );
+    }
+    return fence;
+  }
+
+  #assertM6CompositeAuthorityNoTransaction({
+    actorId,
+    authority,
+    capability,
+    canary,
+    deviceId,
+    sessionId = null,
+    idempotencyKey = null,
+    operationKey = null,
+    params = null,
+    status = null,
+    approvalRequired = null,
+    externalEffect = null,
+    ttlMs = null,
+  }) {
+    const authorityKeys = ["authorizationConsumptionHash", "authorizationId", "binding", "fence", "scenarioClaimHash"];
+    if (!authority || typeof authority !== "object" || Array.isArray(authority)
+      || canonicalJson(Object.keys(authority).sort()) !== canonicalJson(authorityKeys)
+      || actorId !== M6_PRODUCTION_BROKER_ACTOR_ID || capability?.id !== M6_GROUNDED_RUN_CAPABILITY_ID
+      || canary !== true || typeof deviceId !== "string" || deviceId === "") {
+      throw new ControlPlaneError(
+        "M6_COMPOSITE_AUTHORITY_INVALID",
+        "composite_action requires the exact production broker authority envelope",
+        { status: 403 },
+      );
+    }
+    const binding = authority.binding;
+    const expectedBindingKeys = [
+      "alias", "bindingHash", "gateEpochHash", "generation", "liveWindowAuthorizationHash",
+      "processRef", "purpose", "runId", "scenarioManifestHash", "sessionId", "workerId",
+    ];
+    const claim = this.getM64LiveScenarioClaim(authority.scenarioClaimHash);
+    const consumption = claim ? this.getM64LiveWindowAuthorizationConsumption(claim.authorizationId) : null;
+    const fence = this.getM6GateFence();
+    const expectedMode = claim?.purpose === "M6_4_SHADOW" ? "OBSERVE_ONLY" : "GROUNDED_ACTION";
+    const deriveRef = (kind) => `${kind}:${sha256(`xw.m6-live-entry.v1:${kind}:${claim?.authorizationHash}:${claim?.scenarioKey}`)}`;
+    const bindingCore = binding && typeof binding === "object" && !Array.isArray(binding)
+      ? Object.fromEntries(expectedBindingKeys.filter((key) => key !== "bindingHash").map((key) => [key, binding[key]]))
+      : null;
+    const exactFence = fence && authority.fence && [
+      "gateId", "epochHash", "generation", "mode", "purpose", "expiresAt",
+      "releaseId", "sourceCommit", "locksHash",
+    ].every((key) => fence[key] === authority.fence[key])
+      && canonicalJson(fence.allowlist) === canonicalJson(authority.fence.allowlist);
+    const exactBinding = binding && typeof binding === "object" && !Array.isArray(binding)
+      && canonicalJson(Object.keys(binding).sort()) === canonicalJson(expectedBindingKeys)
+      && binding.alias === "01"
+      && binding.gateEpochHash === fence?.epochHash
+      && binding.generation === fence?.generation
+      && binding.purpose === fence?.purpose
+      && binding.runId === deriveRef("run")
+      && binding.workerId === deriveRef("worker")
+      && binding.sessionId === deriveRef("session")
+      && binding.processRef === deriveRef("process")
+      && binding.bindingHash === sha256(canonicalJson(bindingCore));
+    const exactClaim = claim?.status === "STARTED"
+      && claim.authorizationId === authority.authorizationId
+      && claim.authorizationHash === binding?.liveWindowAuthorizationHash
+      && claim.manifestHash === binding?.scenarioManifestHash
+      && claim.purpose === binding?.purpose
+      && claim.gateEpochHash === binding?.gateEpochHash
+      && claim.gateGeneration === binding?.generation;
+    const exactConsumption = consumption?.authorizationId === claim?.authorizationId
+      && consumption.envelopeHash === claim?.authorizationHash
+      && consumption.consumptionHash === authority.authorizationConsumptionHash
+      && consumption.gateId === fence?.gateId
+      && consumption.gateEpochHash === fence?.epochHash
+      && consumption.gateGeneration === fence?.generation
+      && consumption.purpose === fence?.purpose
+      && consumption.releaseId === fence?.releaseId
+      && consumption.sourceCommit === fence?.sourceCommit
+      && consumption.locksHash === fence?.locksHash
+      && Date.parse(consumption.expiresAt) > this.now();
+    const device = this.requireDevice(deviceId);
+    if (!exactFence || fence.mode !== expectedMode || canonicalJson(fence.allowlist) !== canonicalJson(["01"])
+      || Date.parse(fence.expiresAt) <= this.now() || !exactBinding || !exactClaim || !exactConsumption
+      || device.alias !== "01") {
+      throw new ControlPlaneError(
+        "M6_COMPOSITE_AUTHORITY_INVALID",
+        "composite_action authority is not bound to the current Gate, authorization, scenario claim, and alias 01",
+        { status: 403 },
+      );
+    }
+    if (sessionId === null && (!Number.isSafeInteger(ttlMs) || ttlMs < 1
+      || this.now() + ttlMs > Math.min(Date.parse(fence.expiresAt), Date.parse(consumption.expiresAt)))) {
+      throw new ControlPlaneError(
+        "M6_COMPOSITE_AUTHORITY_INVALID",
+        "composite_action session lifetime must remain inside the current Gate and authorization window",
+        { status: 403 },
+      );
+    }
+    if (sessionId !== null) {
+      const session = this.db.prepare("SELECT * FROM sessions WHERE session_id=?").get(sessionId);
+      const exactParams = params && canonicalJson(Object.keys(params).sort())
+        === canonicalJson(["grantRef", "runPacketRef", "scenarioManifestRef"])
+        && params.runPacketRef === binding.bindingHash
+        && params.grantRef === authority.authorizationConsumptionHash
+        && params.scenarioManifestRef === claim.manifestHash;
+      if (!session || session.actor_id !== M6_PRODUCTION_BROKER_ACTOR_ID || session.device_id !== deviceId
+        || session.canary !== 1 || session.scope_capability_id !== M6_GROUNDED_RUN_CAPABILITY_ID
+        || session.expires_at <= this.now() || idempotencyKey !== `m6-live:${binding.runId}`
+        || operationKey !== idempotencyKey || status !== "running" || approvalRequired !== false
+        || externalEffect !== true || !exactParams) {
+        throw new ControlPlaneError(
+          "M6_COMPOSITE_AUTHORITY_INVALID",
+          "composite_action job is not the exact broker-owned session/job binding",
+          { status: 403 },
+        );
+      }
+    }
+    return { binding, claim, consumption, fence, device };
+  }
+
+  createM6QualificationJob(input) {
+    if (this.m6RuntimeMode !== "QUALIFICATION_ONLY") {
+      throw new ControlPlaneError(
+        "M6_QUALIFICATION_ONLY_REQUIRED",
+        "formal target qualification jobs may only be created by the qualification-only runtime",
+        { status: 403 },
+      );
+    }
+    return this.createJob({ ...input, [M6_QUALIFICATION_JOB_AUTHORITY]: true });
+  }
+
   createJob({
     idempotencyKey,
     actorId,
@@ -1133,12 +1374,34 @@ export class StateStore {
     externalEffect = false,
     authorization = null,
     operationKey = null,
+    invocation = null,
+    m6CompositeAuthority = null,
+    [M6_QUALIFICATION_JOB_AUTHORITY]: qualificationJobAuthority = false,
   }) {
     if (typeof idempotencyKey !== "string" || idempotencyKey.trim() === "") {
       throw new ControlPlaneError("IDEMPOTENCY_REQUIRED", "idempotencyKey is required");
     }
     if (typeof actorId !== "string" || actorId.trim() === "") {
       throw new ControlPlaneError("ACTOR_REQUIRED", "actorId is required");
+    }
+    const invocationMode = invocation ?? (sessionId ? "session_action" : "job");
+    if (!["job", "session_action", "composite_action"].includes(invocationMode)) {
+      throw new ControlPlaneError("CAPABILITY_INVOCATION_FORBIDDEN", "unknown internal job invocation mode", { status: 403 });
+    }
+    if (invocationMode === "composite_action" && (!sessionId || canary !== true
+      || capability?.id !== M6_GROUNDED_RUN_CAPABILITY_ID)) {
+      throw new ControlPlaneError(
+        "CAPABILITY_INVOCATION_FORBIDDEN",
+        "composite_action jobs require the exact M6 grounded-run canary session",
+        { status: 403 },
+      );
+    }
+    if ((capability?.id === M6_QUALIFICATION_CAPABILITY_ID) !== (qualificationJobAuthority === true)) {
+      throw new ControlPlaneError(
+        "M6_QUALIFICATION_ONLY_REQUIRED",
+        "formal target qualification is unavailable through the ordinary job creator",
+        { status: 403 },
+      );
     }
     const opKey = (typeof operationKey === "string" && operationKey.trim()) ? operationKey.trim() : idempotencyKey;
     const placementRequest = normalizePlacementRequest({ deviceId, placement });
@@ -1149,6 +1412,7 @@ export class StateStore {
       params,
       canary,
       sessionId,
+      ...(invocationMode === "composite_action" ? { invocationMode } : {}),
     });
     const legacyFingerprint = placementRequest.mode === "pinned"
       ? fingerprint({ deviceId: placementRequest.deviceId, capabilityId: capability.id, params, canary, sessionId })
@@ -1158,6 +1422,67 @@ export class StateStore {
     const jobId = newId("job");
     const runId = newId("run");
     const result = this.transaction(() => {
+      const m6Fence = this.getM6GateFence();
+      const isM6Composite = invocationMode === "composite_action"
+        && canary === true
+        && capability?.id === M6_GROUNDED_RUN_CAPABILITY_ID;
+      if (isM6Composite) {
+        this.#assertM6CompositeAuthorityNoTransaction({
+          actorId,
+          authority: m6CompositeAuthority,
+          capability,
+          canary,
+          deviceId,
+          sessionId,
+          idempotencyKey,
+          operationKey: opKey,
+          params,
+          status,
+          approvalRequired,
+          externalEffect,
+        });
+      } else {
+        this.#assertOrdinaryM6ResourceAllowedNoTransaction();
+      }
+      if (capability?.id === M6_QUALIFICATION_CAPABILITY_ID) {
+        const resources = this.getM6GateFResourceCounts();
+        const qualificationDevice = typeof deviceId === "string" ? this.requireDevice(deviceId) : null;
+        const qualificationRequestHash = qualificationDevice ? sha256(`xw.m6-target-environment-job.v1:${canonicalJson({
+          accountIsolationBindingHash: params?.accountIsolationBindingHash,
+          deviceId: qualificationDevice.deviceId,
+          gateEpochHash: params?.gateEpochHash,
+          gateGeneration: params?.gateGeneration,
+          gateLocksHash: params?.gateLocksHash,
+        })}`) : null;
+        const qualificationBound = invocationMode === "job" && canary === true && sessionId === null
+          && this.m6RuntimeMode === "QUALIFICATION_ONLY"
+          && actorId === M6_QUALIFICATION_ACTOR_ID
+          && qualificationDevice?.alias === "01"
+          && canonicalJson(Object.keys(params || {}).sort()) === canonicalJson([
+            "accountIsolationBindingHash", "gateEpochHash", "gateGeneration", "gateLocksHash",
+          ])
+          && idempotencyKey === `m6-env-${qualificationRequestHash}`
+          && opKey === idempotencyKey
+          && m6Fence?.mode === "CLOSED"
+          && params?.gateEpochHash === m6Fence.epochHash
+          && params?.gateGeneration === m6Fence.generation
+          && params?.gateLocksHash === m6Fence.locksHash
+          && Object.values(resources).every((count) => count === 0);
+        if (!qualificationBound) {
+          throw new ControlPlaneError(
+            "M6_QUALIFICATION_GATE_REBOUND",
+            "target qualification job must atomically bind the current CLOSED zero-resource Gate-F generation",
+            {
+              status: 409,
+              details: {
+                mode: m6Fence?.mode ?? null,
+                generation: m6Fence?.generation ?? null,
+                resources,
+              },
+            },
+          );
+        }
+      }
       // Foundation: operations table is the unique owner of operation_key.
       const priorOp = this.db.prepare("SELECT * FROM operations WHERE operation_key=?").get(opKey);
       if (priorOp) {
@@ -1185,7 +1510,7 @@ export class StateStore {
         authorityNodeId,
         capability,
         placementRequest,
-        invocation: sessionId ? "session_action" : "job",
+        invocation: invocationMode,
         canary,
         advisory: false,
       });
@@ -1351,6 +1676,7 @@ export class StateStore {
     const now = this.now();
     const nextStatus = decision === "approve" ? "queued" : "cancelled";
     this.transaction(() => {
+      if (nextStatus === "queued") this.#assertOrdinaryM6ResourceAllowedNoTransaction();
       this.db.prepare(
         "INSERT INTO approvals (approval_id, job_id, decision, actor_id, reason, created_at) VALUES (?, ?, ?, ?, ?, ?)",
       ).run(newId("approval"), jobId, decision, actorId, reason, now);
@@ -1403,6 +1729,7 @@ export class StateStore {
       if (row.started_at !== null) {
         // 有 dispatch 痕迹：只 reconcile，不重发。
         this.transaction(() => {
+          this.#assertOrdinaryM6ResourceAllowedNoTransaction();
           this.db.prepare(
             "UPDATE jobs SET status='queued_migrated', error_code='MIGRATED_RECONCILE', updated_at=? WHERE job_id=?",
           ).run(now, row.job_id);
@@ -1422,6 +1749,7 @@ export class StateStore {
       const freshRunId = newId("run");
       const freshIdempotencyKey = `${row.idempotency_key}:migrated`;
       this.transaction(() => {
+        this.#assertOrdinaryM6ResourceAllowedNoTransaction();
         this.db.prepare(`
           INSERT INTO jobs (
             job_id, run_id, idempotency_key, request_fingerprint, actor_id, device_id,
@@ -1523,21 +1851,24 @@ export class StateStore {
       expires_at: now + ttlMs,
     };
     try {
-      this.db.prepare(`
-        INSERT INTO leases (
-          lease_id, device_id, kind, holder_id, job_id, token_hash, created_at, heartbeat_at, expires_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        row.lease_id,
-        row.device_id,
-        row.kind,
-        row.holder_id,
-        row.job_id,
-        tokenHash,
-        row.created_at,
-        row.heartbeat_at,
-        row.expires_at,
-      );
+      this.transaction(() => {
+        this.#assertOrdinaryM6ResourceAllowedNoTransaction();
+        this.db.prepare(`
+          INSERT INTO leases (
+            lease_id, device_id, kind, holder_id, job_id, token_hash, created_at, heartbeat_at, expires_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          row.lease_id,
+          row.device_id,
+          row.kind,
+          row.holder_id,
+          row.job_id,
+          tokenHash,
+          row.created_at,
+          row.heartbeat_at,
+          row.expires_at,
+        );
+      });
     } catch (error) {
       if (String(error?.message).includes("UNIQUE constraint failed: leases.device_id")) {
         const current = this.db.prepare("SELECT * FROM leases WHERE device_id=?").get(deviceId);
@@ -1620,6 +1951,8 @@ export class StateStore {
     sessionKind = "capability",
     recordCreatedEvent = false,
     faultAfter = null,
+    invocation = "session",
+    m6CompositeAuthority = null,
   }) {
     if (typeof actorId !== "string" || actorId.trim() === "") {
       throw new ControlPlaneError("ACTOR_REQUIRED", "actorId is required");
@@ -1653,6 +1986,15 @@ export class StateStore {
         { status: 409 },
       );
     }
+    if (!["session", "composite_action"].includes(invocation)
+      || (invocation === "composite_action" && (kind !== "capability" || canary !== true
+        || capability?.id !== M6_GROUNDED_RUN_CAPABILITY_ID))) {
+      throw new ControlPlaneError(
+        "CAPABILITY_INVOCATION_FORBIDDEN",
+        "composite_action sessions require the exact M6 grounded-run canary capability",
+        { status: 403 },
+      );
+    }
     const placementRequest = normalizePlacementRequest({ deviceId, placement });
     const sessionId = newId("session");
     const leaseId = newId("lease");
@@ -1660,16 +2002,37 @@ export class StateStore {
     const now = this.now();
     this.cleanupExpiredLeases();
     const result = this.transaction(() => {
+      const isM6Composite = invocation === "composite_action"
+        && kind === "capability"
+        && canary === true
+        && capability?.id === M6_GROUNDED_RUN_CAPABILITY_ID;
+      if (isM6Composite) {
+        this.#assertM6CompositeAuthorityNoTransaction({
+          actorId,
+          authority: m6CompositeAuthority,
+          capability,
+          canary,
+          deviceId,
+          ttlMs,
+        });
+      } else this.#assertOrdinaryM6ResourceAllowedNoTransaction();
       let routeDecision;
       if (capability) {
         routeDecision = this.#selectPlacementDecision({
           authorityNodeId,
           capability,
           placementRequest,
-          invocation: "session",
+          invocation: invocation === "composite_action" ? "composite_action_session" : invocation,
           canary,
           advisory: false,
         });
+        if (isM6Composite && routeDecision.selectedDeviceId !== deviceId) {
+          throw new ControlPlaneError(
+            "M6_COMPOSITE_AUTHORITY_INVALID",
+            "composite_action placement changed from its alias-01 authority binding",
+            { status: 403 },
+          );
+        }
       } else {
         const device = this.requireDevice(placementRequest.deviceId);
         const busy = this.db.prepare(
@@ -2082,6 +2445,28 @@ export class StateStore {
     return this.db.prepare("SELECT * FROM leases ORDER BY created_at").all().map((row) => publicLease(row));
   }
 
+  getM6GateFResourceCounts() {
+    const now = this.now();
+    const jobs = Number(this.db.prepare(`
+      SELECT COUNT(*) AS count
+      FROM jobs
+      WHERE status IN ('queued','waiting_approval','running','verifying','restoring')
+    `).get().count);
+    const sessions = Number(this.db.prepare(
+      "SELECT COUNT(*) AS count FROM sessions WHERE expires_at>?",
+    ).get(now).count);
+    const leases = Number(this.db.prepare(
+      "SELECT COUNT(*) AS count FROM leases WHERE expires_at>?",
+    ).get(now).count);
+    const actionCount = Number(this.db.prepare(`
+      SELECT COUNT(*) AS count
+      FROM device_session_actions
+      WHERE execution_mode='m6-grounded-live-v2'
+        AND status IN ('ASSESSED','EXECUTING','EXECUTED')
+    `).get().count);
+    return Object.freeze({ jobs, leases, sessions, actionCount });
+  }
+
   #recoverM6ActionLedger(now) {
     this.db.prepare(`
       UPDATE device_session_actions SET status='BLOCKED',
@@ -2121,6 +2506,300 @@ export class StateStore {
       locksHash: row.locks_hash,
       updatedAt: iso(row.updated_at),
     };
+  }
+
+  #consumeM64LiveWindowAuthorizationNoTransaction({ authorization, verification, fence }) {
+    const derivedBodyHash = deriveM64LiveWindowAuthorizationBodyHash(authorization);
+    const derivedEnvelopeHash = deriveM64LiveWindowAuthorizationEnvelopeHash(authorization);
+    const binding = selectM64LiveWindowRuntimeBinding(authorization);
+    const verified = isM64LiveWindowAuthorizationVerification(verification)
+      && verification.schemaId === "xw.m6-4-live-window-authorization-verification.v1"
+      && verification.authorizationId === authorization?.authorizationId
+      && verification.nonce === authorization?.nonce
+      && verification.bodyHash === authorization?.bodyHash
+      && verification.envelopeHash === authorization?.envelopeHash
+      && verification.issuer === authorization?.issuer
+      && verification.keyId === authorization?.keyId
+      && verification.allowlistVersion === authorization?.allowlistVersion
+      && canonicalJson(verification.runtimeBinding) === canonicalJson(binding)
+      && authorization?.bodyHash === derivedBodyHash
+      && authorization?.envelopeHash === derivedEnvelopeHash;
+    if (!verified) {
+      throw new ControlPlaneError("M64_LIVE_AUTH_UNVERIFIED", "only a production-verified live-window envelope may be consumed", { status: 403 });
+    }
+    const now = this.now();
+    const issuedAt = Date.parse(authorization.issuedAt);
+    const expiresAt = Date.parse(authorization.expiresAt);
+    if (!Number.isFinite(issuedAt) || !Number.isFinite(expiresAt) || issuedAt > now || expiresAt <= now || expiresAt <= issuedAt) {
+      throw new ControlPlaneError("M64_LIVE_AUTH_EXPIRED", "live-window authorization is not active at its consumption linearization point", { status: 409 });
+    }
+    const fenceMatches = fence
+      && fence.mode !== "CLOSED"
+      && authorization.gateId === fence.gateId
+      && authorization.gateEpochHash === fence.epochHash
+      && authorization.gateGeneration === fence.generation
+      && authorization.purpose === fence.purpose
+      && authorization.releaseId === fence.releaseId
+      && authorization.sourceCommit === fence.sourceCommit
+      && authorization.locksHash === fence.locksHash
+      && canonicalJson(fence.allowlist) === canonicalJson([authorization.alias]);
+    if (!fenceMatches) {
+      throw new ControlPlaneError("M64_LIVE_AUTH_GENERATION_CAS_MISMATCH", "live-window authorization does not match the current gate fence generation", {
+        status: 409,
+        details: {
+          expectedEpochHash: authorization.gateEpochHash,
+          expectedGeneration: authorization.gateGeneration,
+          actualEpochHash: fence?.epochHash ?? null,
+          actualGeneration: fence?.generation ?? null,
+        },
+      });
+    }
+    const nonceHash = sha256(`xw.m6-4-live-window-authorization.v1:nonce:${authorization.nonce}`);
+    const receiptRaw = {
+      schemaId: "xw.m6-4-live-window-authorization-consumption.v1",
+      authorizationId: authorization.authorizationId,
+      nonceHash,
+      bodyHash: authorization.bodyHash,
+      envelopeHash: authorization.envelopeHash,
+      issuer: authorization.issuer,
+      keyId: authorization.keyId,
+      allowlistVersion: authorization.allowlistVersion,
+      gateId: authorization.gateId,
+      gateEpochHash: authorization.gateEpochHash,
+      gateGeneration: authorization.gateGeneration,
+      purpose: authorization.purpose,
+      releaseId: authorization.releaseId,
+      sourceCommit: authorization.sourceCommit,
+      locksHash: authorization.locksHash,
+      expiresAt: authorization.expiresAt,
+      consumedAt: iso(now),
+    };
+    const receipt = {
+      ...receiptRaw,
+      consumptionHash: sha256(`xw.m6-4-live-window-authorization-consumption.v1:${canonicalJson(receiptRaw)}`),
+    };
+    try {
+      this.db.prepare(`
+        INSERT INTO m6_live_window_authorization_consumptions (
+          nonce_hash, authorization_id, body_hash, envelope_hash, issuer, key_id,
+          allowlist_version, gate_id, gate_epoch_hash, gate_generation, purpose,
+          release_id, source_commit, locks_hash, expires_at, consumed_at,
+          consumption_receipt_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        nonceHash,
+        authorization.authorizationId,
+        authorization.bodyHash,
+        authorization.envelopeHash,
+        authorization.issuer,
+        authorization.keyId,
+        authorization.allowlistVersion,
+        authorization.gateId,
+        authorization.gateEpochHash,
+        authorization.gateGeneration,
+        authorization.purpose,
+        authorization.releaseId,
+        authorization.sourceCommit,
+        authorization.locksHash,
+        expiresAt,
+        now,
+        canonicalJson(receipt),
+      );
+    } catch (error) {
+      if (/UNIQUE|PRIMARY KEY/i.test(String(error?.message || error))) {
+        throw new ControlPlaneError("M64_LIVE_AUTH_REPLAY", "live-window authorization nonce or gate generation was already consumed", { status: 409 });
+      }
+      throw error;
+    }
+    return receipt;
+  }
+
+  getM64LiveWindowAuthorizationConsumption(authorizationId) {
+    const row = this.db.prepare(`
+      SELECT consumption_receipt_json
+      FROM m6_live_window_authorization_consumptions
+      WHERE authorization_id=?
+    `).get(authorizationId);
+    return row ? parseJson(row.consumption_receipt_json) : null;
+  }
+
+  getM6LiveWindowAuthorizationConsumption(authorizationId) {
+    return this.getM64LiveWindowAuthorizationConsumption(authorizationId);
+  }
+
+  #mapM64LiveScenarioClaim(row) {
+    if (!row) return null;
+    return {
+      schemaId: "xw.m6-4-live-scenario-claim.v1",
+      claimHash: row.claim_hash,
+      authorizationId: row.authorization_id,
+      authorizationHash: row.authorization_hash,
+      manifestHash: row.manifest_hash,
+      scenarioKey: row.scenario_key,
+      purpose: row.purpose,
+      gateEpochHash: row.gate_epoch_hash,
+      gateGeneration: Number(row.gate_generation),
+      status: row.status,
+      claimedAt: iso(row.claimed_at),
+      finalizedAt: iso(row.finalized_at),
+      result: parseJson(row.result_json),
+    };
+  }
+
+  claimM64LiveScenarioStart({ verification, scenarioKey } = {}) {
+    if (!isM64LiveWindowAuthorizationVerification(verification)) {
+      throw new ControlPlaneError(
+        "M6_LIVE_SCENARIO_AUTH_UNVERIFIED",
+        "a process-local verified live-window authorization is required before claiming a scenario",
+        { status: 403 },
+      );
+    }
+    if (typeof scenarioKey !== "string" || !/^m6_4_[a-z_]+-[0-9]{2}$/u.test(scenarioKey)) {
+      throw new ControlPlaneError("M6_LIVE_SCENARIO_KEY_INVALID", "scenarioKey is not a frozen M6-4 scenario reference", { status: 409 });
+    }
+    const binding = verification.runtimeBinding;
+    const expectedPrefix = `${String(binding?.purpose || "").toLowerCase()}-`;
+    if (binding?.alias !== "01" || !scenarioKey.startsWith(expectedPrefix)
+      || !/^[0-9a-f]{64}$/u.test(binding?.scenarioManifestHash || "")
+      || !/^[0-9a-f]{64}$/u.test(binding?.gateEpochHash || "")
+      || !Number.isInteger(binding?.gateGeneration)) {
+      throw new ControlPlaneError("M6_LIVE_SCENARIO_BINDING_MISMATCH", "scenario claim is outside the verified cohort binding", { status: 409 });
+    }
+    return this.transaction(() => {
+      const now = this.now();
+      if (Date.parse(verification.expiresAt) <= now) {
+        throw new ControlPlaneError("M64_LIVE_AUTH_EXPIRED", "live-window authorization expired before scenario claim", { status: 409 });
+      }
+      const consumption = this.getM64LiveWindowAuthorizationConsumption(verification.authorizationId);
+      const fence = this.getM6GateFence();
+      const requiredFenceMode = binding.purpose === "M6_4_SHADOW" ? "OBSERVE_ONLY" : "GROUNDED_ACTION";
+      const activated = consumption
+        && consumption.authorizationId === verification.authorizationId
+        && consumption.bodyHash === verification.bodyHash
+        && consumption.envelopeHash === verification.envelopeHash
+        && consumption.gateId === binding.gateId
+        && consumption.gateEpochHash === binding.gateEpochHash
+        && consumption.gateGeneration === binding.gateGeneration
+        && consumption.purpose === binding.purpose
+        && fence?.mode === requiredFenceMode
+        && fence.gateId === binding.gateId
+        && fence.epochHash === binding.gateEpochHash
+        && fence.generation === binding.gateGeneration
+        && fence.purpose === binding.purpose
+        && canonicalJson(fence.allowlist) === canonicalJson(["01"])
+        && Date.parse(fence.expiresAt) > now;
+      if (!activated) {
+        throw new ControlPlaneError(
+          "M6_LIVE_SCENARIO_AUTH_NOT_ACTIVATED",
+          "scenario claim requires the exact currently activated Gate-F authorization and fence",
+          { status: 403 },
+        );
+      }
+      const claimRaw = {
+        schemaId: "xw.m6-4-live-scenario-claim.v1",
+        authorizationId: verification.authorizationId,
+        authorizationHash: verification.envelopeHash,
+        manifestHash: binding.scenarioManifestHash,
+        scenarioKey,
+        purpose: binding.purpose,
+        gateEpochHash: binding.gateEpochHash,
+        gateGeneration: binding.gateGeneration,
+        claimedAt: iso(now),
+      };
+      const claimHash = sha256(`xw.m6-4-live-scenario-claim.v1:${canonicalJson(claimRaw)}`);
+      try {
+        this.db.prepare(`
+          INSERT INTO m6_live_scenario_claims (
+            claim_hash, authorization_id, authorization_hash, manifest_hash, scenario_key,
+            purpose, gate_epoch_hash, gate_generation, status, claimed_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'STARTED', ?)
+        `).run(
+          claimHash,
+          verification.authorizationId,
+          verification.envelopeHash,
+          binding.scenarioManifestHash,
+          scenarioKey,
+          binding.purpose,
+          binding.gateEpochHash,
+          binding.gateGeneration,
+          now,
+        );
+      } catch (error) {
+        if (/UNIQUE|PRIMARY KEY/iu.test(String(error?.message || error))) {
+          throw new ControlPlaneError(
+            "M6_LIVE_SCENARIO_ALREADY_CLAIMED",
+            "this frozen scenario was already claimed and cannot be replaced or rerun",
+            { status: 409, details: { authorizationId: verification.authorizationId, scenarioKey } },
+          );
+        }
+        throw error;
+      }
+      return this.#mapM64LiveScenarioClaim(this.db.prepare("SELECT * FROM m6_live_scenario_claims WHERE claim_hash=?").get(claimHash));
+    });
+  }
+
+  getM64LiveScenarioClaim(claimHash) {
+    if (typeof claimHash !== "string") return null;
+    return this.#mapM64LiveScenarioClaim(this.db.prepare("SELECT * FROM m6_live_scenario_claims WHERE claim_hash=?").get(claimHash));
+  }
+
+  listM64LiveScenarioClaims(authorizationId) {
+    if (typeof authorizationId !== "string" || authorizationId === "") return [];
+    return this.db.prepare(`
+      SELECT * FROM m6_live_scenario_claims
+      WHERE authorization_id=?
+      ORDER BY claimed_at, scenario_key
+    `).all(authorizationId).map((row) => this.#mapM64LiveScenarioClaim(row));
+  }
+
+  finalizeM64LiveScenarioClaim({
+    claimHash,
+    outcome,
+    actionCount,
+    transportCount,
+    attemptEvidenceHash,
+    oracleObservationHash,
+    resetReceiptHash,
+    closeReceiptHash,
+  } = {}) {
+    const hashes = { attemptEvidenceHash, oracleObservationHash, resetReceiptHash, closeReceiptHash };
+    if (!/^[0-9a-f]{64}$/u.test(claimHash || "")
+      || !["SUCCEEDED", "FAILED", "ABORTED_PENDING_CLOSEOUT"].includes(outcome)
+      || !Number.isInteger(actionCount) || actionCount < 0
+      || !Number.isInteger(transportCount) || transportCount < 0 || transportCount !== actionCount
+      || Object.values(hashes).some((value) => !/^[0-9a-f]{64}$/u.test(value || ""))) {
+      throw new ControlPlaneError("M6_LIVE_SCENARIO_RESULT_INVALID", "scenario finalization requires closed, content-addressed evidence", { status: 409 });
+    }
+    return this.transaction(() => {
+      const current = this.getM64LiveScenarioClaim(claimHash);
+      if (!current) throw new ControlPlaneError("M6_LIVE_SCENARIO_CLAIM_NOT_FOUND", "scenario claim was not found", { status: 404 });
+      if (current.status !== "STARTED") {
+        throw new ControlPlaneError("M6_LIVE_SCENARIO_FINALIZE_REPLAY", "scenario claim is already finalized", { status: 409 });
+      }
+      const finalizedAt = this.now();
+      const resultRaw = {
+        schemaId: "xw.m6-4-live-scenario-result.v1",
+        claimHash,
+        outcome,
+        actionCount,
+        transportCount,
+        ...hashes,
+        finalizedAt: iso(finalizedAt),
+      };
+      const result = {
+        ...resultRaw,
+        resultHash: sha256(`xw.m6-4-live-scenario-result.v1:${canonicalJson(resultRaw)}`),
+      };
+      const updated = this.db.prepare(`
+        UPDATE m6_live_scenario_claims
+        SET status='FINALIZED', finalized_at=?, result_json=?
+        WHERE claim_hash=? AND status='STARTED'
+      `).run(finalizedAt, canonicalJson(result), claimHash);
+      if (!updated.changes) {
+        throw new ControlPlaneError("M6_LIVE_SCENARIO_FINALIZE_REPLAY", "scenario claim is already finalized", { status: 409 });
+      }
+      return this.getM64LiveScenarioClaim(claimHash);
+    });
   }
 
   seedM6GateFence({ epoch, locksHash }) {
@@ -2164,7 +2843,15 @@ export class StateStore {
     });
   }
 
-  promoteM6GateFence({ expectedEpochHash, expectedGeneration, next, emergencyCloseConsumption = null }) {
+  promoteM6GateFence({
+    expectedEpochHash,
+    expectedGeneration,
+    next,
+    emergencyCloseConsumption = null,
+    liveWindowAuthorizationConsumption = null,
+    safetyCloseArm = null,
+    safetyCloseArmTerminalization = null,
+  }) {
     if (!next || !/^[0-9a-f]{64}$/.test(next.epochHash || "") || !/^[0-9a-f]{64}$/.test(next.locksHash || "")
       || !Number.isFinite(Date.parse(next.expiresAt)) || !Array.isArray(next.allowlist) || next.allowlist.length === 0
       || !["CLOSED", "OBSERVE_ONLY", "GROUNDED_ACTION"].includes(next.mode)) {
@@ -2178,7 +2865,105 @@ export class StateStore {
           details: { expectedEpochHash, expectedGeneration, actualEpochHash: current?.epochHash || null, actualGeneration: current?.generation ?? null },
         });
       }
+      if (next.mode !== "CLOSED" && current.epochHash !== next.epochHash) {
+        const resources = this.getM6GateFResourceCounts();
+        if (Object.values(resources).some((count) => count !== 0)) {
+          throw new ControlPlaneError(
+            "M6_GATE_F_RESOURCES_NOT_ZERO",
+            "M6 gate activation requires an atomic zero-resource snapshot",
+            { status: 409, details: { resources } },
+          );
+        }
+      }
       const generation = current.generation + 1;
+      const armedSafetyClose = next.mode === "CLOSED"
+        ? this.db.prepare("SELECT active_epoch_hash FROM m6_gate_safety_close_arms WHERE active_epoch_hash=? AND status='ARMED'")
+          .get(current.epochHash)
+        : null;
+      if (armedSafetyClose && !safetyCloseArmTerminalization) {
+        throw new ControlPlaneError(
+          "M6_GATE_SAFETY_CLOSE_TERMINAL_REQUIRED",
+          "an active safety-close arm must be atomically consumed or released with the CLOSED fence",
+          { status: 409 },
+        );
+      }
+      if (safetyCloseArmTerminalization) {
+        const requestedStatus = safetyCloseArmTerminalization.status;
+        const hasEmergencyConsumption = emergencyCloseConsumption !== null;
+        if ((requestedStatus === "CONSUMED" && (!hasEmergencyConsumption
+          || next.epochHash !== safetyCloseArmTerminalization.armCloseEpochHash
+          || safetyCloseArmTerminalization.terminalProofHash !== null))
+          || (requestedStatus === "RELEASED" && (hasEmergencyConsumption
+            || !/^[0-9a-f]{64}$/.test(safetyCloseArmTerminalization.terminalProofHash || "")))) {
+          throw new ControlPlaneError(
+            "M6_GATE_SAFETY_CLOSE_TERMINAL_INVALID",
+            "safety-close consumption must use its exact armed epoch and emergency authorization; release must not consume emergency authority",
+            { status: 409 },
+          );
+        }
+      }
+      if (liveWindowAuthorizationConsumption) {
+        this.#consumeM64LiveWindowAuthorizationNoTransaction({
+          ...liveWindowAuthorizationConsumption,
+          fence: { ...next, generation },
+        });
+      }
+      if (safetyCloseArm) {
+        const armPackage = safetyCloseArm.package;
+        const valid = safetyCloseArm.schemaId === "xw.m6-gate-safety-close-arm.v1"
+          && safetyCloseArm.activeEpochHash === next.epochHash
+          && safetyCloseArm.gateId === next.gateId
+          && safetyCloseArm.purpose === next.purpose
+          && safetyCloseArm.closeEpochHash === armPackage?.epoch?.epochHash
+          && safetyCloseArm.activeEpochHash === armPackage?.epoch?.parentEpochHash
+          && safetyCloseArm.reasonCode === armPackage?.reasonCode
+          && safetyCloseArm.packageHash === deriveM6GateFSafetyClosePackageHash(armPackage)
+          && /^[0-9a-f]{64}$/.test(safetyCloseArm.activationProofHash || "")
+          && safetyCloseArm.proofHash === deriveM6GateFSafetyCloseProofHash(armPackage?.proof)
+          && [safetyCloseArm.packageHash, safetyCloseArm.proofHash,
+            safetyCloseArm.activeEpochHash, safetyCloseArm.closeEpochHash]
+            .every((value) => /^[0-9a-f]{64}$/.test(value || ""))
+          && [safetyCloseArm.expiresAtMs, safetyCloseArm.authorizationExpiresAtMs,
+            safetyCloseArm.packageExpiresAtMs].every(Number.isFinite)
+          && safetyCloseArm.expiresAtMs === Math.min(
+            safetyCloseArm.authorizationExpiresAtMs,
+            safetyCloseArm.packageExpiresAtMs,
+          )
+          && safetyCloseArm.expiresAtMs > this.now()
+          && next.mode !== "CLOSED";
+        if (!valid) {
+          throw new ControlPlaneError("M6_GATE_SAFETY_CLOSE_ARM_INVALID", "safety-close arm is incomplete or rebound", { status: 409 });
+        }
+        try {
+          this.db.prepare(`
+            INSERT INTO m6_gate_safety_close_arms (
+              active_epoch_hash, gate_id, purpose, close_epoch_hash, package_hash,
+              activation_proof_hash, proof_hash, reason_code, expires_at, authorization_expires_at,
+              package_expires_at, package_json, armed_generation, status, armed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ARMED', ?)
+          `).run(
+            safetyCloseArm.activeEpochHash,
+            safetyCloseArm.gateId,
+            safetyCloseArm.purpose,
+            safetyCloseArm.closeEpochHash,
+            safetyCloseArm.packageHash,
+            safetyCloseArm.activationProofHash,
+            safetyCloseArm.proofHash,
+            safetyCloseArm.reasonCode,
+            safetyCloseArm.expiresAtMs,
+            safetyCloseArm.authorizationExpiresAtMs,
+            safetyCloseArm.packageExpiresAtMs,
+            canonicalJson(armPackage),
+            generation,
+            this.now(),
+          );
+        } catch (error) {
+          if (/UNIQUE|PRIMARY KEY/i.test(String(error?.message || error))) {
+            throw new ControlPlaneError("M6_GATE_SAFETY_CLOSE_ARM_REPLAY", "safety-close package or active epoch was already armed", { status: 409 });
+          }
+          throw error;
+        }
+      }
       if (emergencyCloseConsumption) {
         if (typeof emergencyCloseConsumption.nonce !== "string" || emergencyCloseConsumption.nonce === ""
           || !/^[0-9a-f]{64}$/.test(emergencyCloseConsumption.authorizationHash || "")
@@ -2200,6 +2985,37 @@ export class StateStore {
             throw new ControlPlaneError("M6_GATE_EMERGENCY_CLOSE_REPLAY", "emergency-close authorization was already consumed", { status: 409 });
           }
           throw error;
+        }
+      }
+      if (safetyCloseArmTerminalization) {
+        const terminalStatus = safetyCloseArmTerminalization.status;
+        if (!["CONSUMED", "RELEASED"].includes(terminalStatus)
+          || !/^[0-9a-f]{64}$/.test(safetyCloseArmTerminalization.activeEpochHash || "")
+          || !/^[0-9a-f]{64}$/.test(safetyCloseArmTerminalization.armCloseEpochHash || "")
+          || !/^[0-9a-f]{64}$/.test(safetyCloseArmTerminalization.packageHash || "")
+          || (terminalStatus === "RELEASED"
+            ? !/^[0-9a-f]{64}$/.test(safetyCloseArmTerminalization.terminalProofHash || "")
+            : safetyCloseArmTerminalization.terminalProofHash !== null)
+          || safetyCloseArmTerminalization.activeEpochHash !== current.epochHash
+          || safetyCloseArmTerminalization.terminalEpochHash !== next.epochHash
+          || next.mode !== "CLOSED") {
+          throw new ControlPlaneError("M6_GATE_SAFETY_CLOSE_TERMINAL_INVALID", "safety-close arm terminalization is incomplete or rebound", { status: 409 });
+        }
+        const updated = this.db.prepare(`
+          UPDATE m6_gate_safety_close_arms
+          SET status=?, terminal_epoch_hash=?, terminal_proof_hash=?, terminalized_at=?
+          WHERE active_epoch_hash=? AND close_epoch_hash=? AND package_hash=? AND status='ARMED'
+        `).run(
+          terminalStatus,
+          next.epochHash,
+          safetyCloseArmTerminalization.terminalProofHash,
+          this.now(),
+          safetyCloseArmTerminalization.activeEpochHash,
+          safetyCloseArmTerminalization.armCloseEpochHash,
+          safetyCloseArmTerminalization.packageHash,
+        );
+        if (!updated.changes) {
+          throw new ControlPlaneError("M6_GATE_SAFETY_CLOSE_TERMINAL_MISMATCH", "no exact armed safety-close package was available to terminalize", { status: 409 });
         }
       }
       this.db.prepare(`
@@ -2375,6 +3191,52 @@ export class StateStore {
     `).get(actionId));
   }
 
+  getM6GateSafetyCloseArm(activeEpochHash) {
+    const row = this.db.prepare("SELECT * FROM m6_gate_safety_close_arms WHERE active_epoch_hash=?").get(activeEpochHash);
+    return this.#mapM6GateSafetyCloseArm(row);
+  }
+
+  getM6GateSafetyCloseArmByTerminalEpoch(terminalEpochHash) {
+    const row = this.db.prepare("SELECT * FROM m6_gate_safety_close_arms WHERE terminal_epoch_hash=?").get(terminalEpochHash);
+    return this.#mapM6GateSafetyCloseArm(row);
+  }
+
+  #mapM6GateSafetyCloseArm(row) {
+    return row ? Object.freeze({
+      schemaId: "xw.m6-gate-safety-close-arm.v1",
+      gateId: row.gate_id,
+      purpose: row.purpose,
+      activeEpochHash: row.active_epoch_hash,
+      closeEpochHash: row.close_epoch_hash,
+      packageHash: row.package_hash,
+      activationProofHash: row.activation_proof_hash,
+      proofHash: row.proof_hash,
+      reasonCode: row.reason_code,
+      expiresAt: iso(row.expires_at),
+      authorizationExpiresAt: iso(row.authorization_expires_at),
+      packageExpiresAt: iso(row.package_expires_at),
+      package: parseJson(row.package_json),
+      armedGeneration: row.armed_generation,
+      status: row.status,
+      armedAt: iso(row.armed_at),
+      terminalEpochHash: row.terminal_epoch_hash ?? null,
+      terminalProofHash: row.terminal_proof_hash ?? null,
+      terminalizedAt: iso(row.terminalized_at),
+    }) : null;
+  }
+
+  listM6ActionLedgersForRun(runId) {
+    if (typeof runId !== "string" || runId === "") return [];
+    return this.db.prepare(`
+      SELECT d.*, a.status, a.transport_called, a.effect_assessment_json, a.error_code,
+        a.created_at AS action_created_at, a.updated_at AS action_updated_at
+      FROM m6_grounded_action_details d
+      JOIN device_session_actions a ON a.action_id=d.action_id AND a.session_id=d.session_id
+      WHERE d.run_id=?
+      ORDER BY a.created_at, d.action_id
+    `).all(runId).map((row) => this.#mapM6ActionLedger(row));
+  }
+
   prepareM6GroundedAction({ decision, slot, timing, fence, actionId = newId("m6_action") }) {
     return this.transaction(() => {
       this.assertM6GateFence(fence);
@@ -2431,6 +3293,74 @@ export class StateStore {
       if (!ledger || ledger.status !== "ASSESSED" || ledger.transportCounter !== 0) {
         throw new ControlPlaneError("M6_ACTION_STATE_INVALID", "only ASSESSED zero-transport actions may authorize", { status: 409 });
       }
+      // Validate the entire M6 authority closure before either one-shot object
+      // is consumed. The transaction still protects the later dual consume,
+      // but a cross-binding mismatch must leave both nonces visibly untouched.
+      const permit = this.getM6GroundingPermit(ledger.permitId);
+      const typedAuthorizationId = typedAuthorization?.authorizationId || typedAuthorization?.authorization?.authorizationId;
+      const storedAuthorization = this.getTransportActionAuthorization(typedAuthorizationId);
+      const capabilityJob = storedAuthorization?.jobId ? this.getJob(storedAuthorization.jobId) : null;
+      const sessionRow = capabilityJob?.sessionId
+        ? this.db.prepare("SELECT * FROM sessions WHERE session_id=?").get(capabilityJob.sessionId)
+        : null;
+      const leaseRow = sessionRow
+        ? this.db.prepare("SELECT * FROM leases WHERE lease_id=?").get(sessionRow.lease_id)
+        : null;
+      const deviceRow = capabilityJob?.deviceId
+        ? this.db.prepare("SELECT * FROM devices WHERE device_id=?").get(capabilityJob.deviceId)
+        : null;
+      const currentCapability = this.getCapabilityRecord("xiaowei.m6.grounded_run");
+      const jobCapability = capabilityJob?.capability;
+      const jobClosureHash = jobCapability?.implementation?.implementationClosureHash ?? null;
+      const currentClosureHash = currentCapability?.implementation?.implementationClosureHash ?? null;
+      const expectedBinding = {
+        operationKey: expectedPermit?.operationKey,
+        target: expectedPermit?.target,
+        bindings: expectedPermit?.bindings,
+        slot: expectedPermit?.slot,
+      };
+      const permitBinding = permit && {
+        operationKey: permit.operationKey,
+        target: permit.target,
+        bindings: permit.bindings,
+        slot: permit.slot,
+      };
+      if (!storedAuthorization || storedAuthorization.kind !== "capability_job" || storedAuthorization.purpose !== "execute"
+        || storedAuthorization.source !== "m6-parent-broker"
+        || !permit || permit.consumedAt || canonicalJson(expectedBinding) !== canonicalJson(permitBinding)
+        || !storedAuthorization.jobId || storedAuthorization.runId !== permit.bindings.runId
+        || storedAuthorization.leaseId !== permit.bindings.leaseId || storedAuthorization.operationKey !== permit.operationKey
+        || !capabilityJob || capabilityJob.status !== "running" || capabilityJob.runId !== storedAuthorization.runId
+        || capabilityJob.sessionId !== ledger.sessionId || capabilityJob.deviceId !== storedAuthorization.deviceId
+        || capabilityJob.capabilityId !== "xiaowei.m6.grounded_run" || capabilityJob.canary !== true
+        || jobCapability?.id !== "xiaowei.m6.grounded_run"
+        || jobCapability?.implementation?.action !== "m6_grounded_run"
+        || !/^[0-9a-f]{64}$/.test(jobCapability?.capabilityContractHash || "")
+        || !/^[0-9a-f]{64}$/.test(jobClosureHash || "")
+        || storedAuthorization.capabilityContractHash !== jobCapability.capabilityContractHash
+        || storedAuthorization.implementationClosureHash !== jobClosureHash
+        || currentCapability?.enabled !== true
+        || currentCapability.capabilityContractHash !== jobCapability.capabilityContractHash
+        || currentClosureHash !== jobClosureHash
+        || !sessionRow || sessionRow.lease_id !== storedAuthorization.leaseId
+        || sessionRow.device_id !== storedAuthorization.deviceId || sessionRow.canary !== 1
+        || sessionRow.scope_capability_id !== "xiaowei.m6.grounded_run" || sessionRow.expires_at <= this.now()
+        || !leaseRow || leaseRow.device_id !== storedAuthorization.deviceId || leaseRow.expires_at <= this.now()
+        || !deviceRow || deviceRow.alias !== "01"
+        || canonicalJson(fence.allowlist) !== canonicalJson(["01"])
+        || permit.bindings.jobId !== storedAuthorization.jobId
+        || permit.bindings.deviceId !== storedAuthorization.deviceId
+        || permit.bindings.capabilityId !== "xiaowei.m6.grounded_run"
+        || permit.bindings.capabilityContractHash !== storedAuthorization.capabilityContractHash
+        || permit.bindings.implementationClosureHash !== storedAuthorization.implementationClosureHash
+        || permit.bindings.sessionScopeCapabilityId !== "xiaowei.m6.grounded_run"
+        || permit.bindings.canary !== true || permit.bindings.alias !== "01"
+        || permit.bindings.actionSlotSpecHash !== permit.slot.slotSpecHash
+        || permit.slot.slotSpecHash !== expectedPermit?.slot?.slotSpecHash
+        || permit.slot.primitive !== expectedPermit?.slot?.primitive
+        || permit.slot.targetKind !== permit.target?.kind) {
+        throw new ControlPlaneError("M6_TYPED_AUTH_BINDING_MISMATCH", "typed transport authorization is not bound to the exact grounded-run capability/session/alias/slot closure", { status: 409 });
+      }
       const permitReceipt = this.#consumeM6GroundingPermitNoTransaction({
         permitId: ledger.permitId,
         expected: expectedPermit,
@@ -2439,16 +3369,6 @@ export class StateStore {
       });
       if (permitReceipt.bindings.gateEpochHash !== fence.epochHash || permitReceipt.bindings.gateGeneration !== fence.generation) {
         throw new ControlPlaneError("M6_GATE_FENCE_MISMATCH", "permit consumption fence changed", { status: 423 });
-      }
-      const typedAuthorizationId = typedAuthorization?.authorizationId || typedAuthorization?.authorization?.authorizationId;
-      const storedAuthorization = this.getTransportActionAuthorization(typedAuthorizationId);
-      const capabilityJob = storedAuthorization?.jobId ? this.getJob(storedAuthorization.jobId) : null;
-      if (!storedAuthorization || storedAuthorization.kind !== "capability_job" || storedAuthorization.purpose !== "execute"
-        || !storedAuthorization.jobId || storedAuthorization.runId !== permitReceipt.bindings.runId
-        || storedAuthorization.leaseId !== permitReceipt.bindings.leaseId || storedAuthorization.operationKey !== permitReceipt.operationKey
-        || !capabilityJob || capabilityJob.status !== "running" || capabilityJob.runId !== storedAuthorization.runId
-        || capabilityJob.sessionId !== ledger.sessionId || capabilityJob.deviceId !== storedAuthorization.deviceId) {
-        throw new ControlPlaneError("M6_TYPED_AUTH_BINDING_MISMATCH", "typed transport authorization is not bound to the capability job/run/lease/operation", { status: 409 });
       }
       const typedReceipt = this.#consumeTransportActionAuthorizationNoTransaction({
         authorizationId: typedAuthorizationId,
@@ -2469,7 +3389,7 @@ export class StateStore {
     });
   }
 
-  markM6ActionTransportStart({ actionId, currentState, guardStartedMonoMs, writeReadyMonoMs }) {
+  markM6ActionTransportStart({ actionId, currentState, guardStartedMonoMs, writeReadyMonoMs, privateMaterialBinding }) {
     return this.transaction(() => {
       const ledger = this.getM6ActionLedger(actionId);
       if (!ledger || ledger.status !== "EXECUTING" || ledger.transportCounter !== 0 || !ledger.authorizationReceipt) {
@@ -2480,10 +3400,29 @@ export class StateStore {
         "uiStateGeneration", "appPackageHash", "focusHash", "pageFingerprint",
         "rotation", "displayHash", "environmentAttestationHash",
       ];
+      const currentStateHash = sha256(`xw.m6-current-state.v1:${canonicalJson(currentState)}`);
+      const { bindingHash: _ignoredBindingHash, ...privateBindingRaw } = privateMaterialBinding || {};
+      const privateBindingHashValid = privateMaterialBinding?.schemaId === "xw.m6-private-material-binding.v1"
+        && /^[0-9a-f]{64}$/.test(privateMaterialBinding?.privateMaterialHash || "")
+        && /^[0-9a-f]{64}$/.test(privateMaterialBinding?.bindingHash || "")
+        && privateMaterialBinding.bindingHash === sha256(`xw.m6-private-material-binding.v1:${canonicalJson(privateBindingRaw)}`);
+      const permit = ledger.authorizationReceipt.permit;
+      const privateBindingMatches = privateBindingHashValid
+        && privateMaterialBinding.operationKey === permit.operationKey
+        && privateMaterialBinding.decisionRef === permit.decisionRef
+        && privateMaterialBinding.slotSpecHash === slot.slotSpecHash
+        && privateMaterialBinding.primitive === slot.primitive
+        && canonicalJson(privateMaterialBinding.target) === canonicalJson(permit.target)
+        && privateMaterialBinding.trustedParameterHash === slot.trustedParameterHash
+        && privateMaterialBinding.currentStateHash === currentStateHash
+        && privateMaterialBinding.boundsRef === (slot.boundsRef ?? null)
+        && privateMaterialBinding.appRef === (slot.appRef ?? null)
+        && privateMaterialBinding.textRef === (slot.textRef ?? null);
       if (!Number.isFinite(guardStartedMonoMs) || !Number.isFinite(writeReadyMonoMs)
         || writeReadyMonoMs < guardStartedMonoMs || writeReadyMonoMs - guardStartedMonoMs > 250
         || writeReadyMonoMs >= ledger.authorizationReceipt.permit.dispatchDeadlineMonoMs
-        || comparableKeys.some((key) => currentState?.[key] !== slot?.[key])) {
+        || comparableKeys.some((key) => currentState?.[key] !== slot?.[key])
+        || !privateBindingMatches) {
         this.db.prepare(`
           UPDATE device_session_actions SET status='BLOCKED', effect_assessment_json='{"effectStatus":"GROUND_ACTION_ABORTED_NOT_SENT"}',
             error_code='M6_TCB_CURRENT_STATE_GUARD', updated_at=? WHERE action_id=? AND session_id=?
@@ -2494,8 +3433,16 @@ export class StateStore {
       const guardRaw = {
         schemaId: "xw.m6-tcb-current-state-guard.v1",
         actionId,
+        operationKey: permit.operationKey,
+        decisionRef: permit.decisionRef,
         slotSpecHash: slot.slotSpecHash,
-        stateHash: sha256(`xw.m6-current-state.v1:${canonicalJson(currentState)}`),
+        blockId: permit.target?.kind === "block" ? permit.target.blockId : null,
+        boundsRef: slot.boundsRef ?? null,
+        appRef: slot.appRef ?? null,
+        textRef: slot.textRef ?? null,
+        stateHash: currentStateHash,
+        privateMaterialHash: privateMaterialBinding.privateMaterialHash,
+        privateMaterialBindingHash: privateMaterialBinding.bindingHash,
         guardDelayMs: writeReadyMonoMs - guardStartedMonoMs,
         writeReadyMonoMs,
       };
@@ -2583,6 +3530,37 @@ export class StateStore {
       `).run(errorCode || "M6_ACTION_ABORTED", this.now(), actionId, ledger.sessionId);
       this.db.prepare("UPDATE m6_action_claims SET status='BLOCKED', updated_at=? WHERE action_id=?").run(this.now(), actionId);
       return this.getM6ActionLedger(actionId);
+    });
+  }
+
+  closeM6GroundedRunActions({ runId, sessionId, reasonCode = "M6_LIVE_RUN_CLOSED" } = {}) {
+    if (typeof runId !== "string" || runId === "" || typeof sessionId !== "string" || sessionId === ""
+      || typeof reasonCode !== "string" || !/^[A-Z0-9_]{3,96}$/u.test(reasonCode)) {
+      throw new ControlPlaneError("M6_ACTION_CLOSE_INPUT_INVALID", "grounded-run action close requires exact run/session/reason refs", { status: 409 });
+    }
+    return this.transaction(() => {
+      const now = this.now();
+      this.db.prepare(`
+        UPDATE device_session_actions
+        SET status=CASE WHEN transport_called=0 THEN 'BLOCKED' ELSE 'AMBIGUOUS' END,
+          effect_assessment_json=CASE WHEN transport_called=0
+            THEN '{"effectStatus":"GROUND_ACTION_ABORTED_NOT_SENT"}'
+            ELSE '{"effectStatus":"POSSIBLE_EFFECT"}' END,
+          error_code=COALESCE(error_code, ?), updated_at=?
+        WHERE session_id=? AND action_id IN (
+          SELECT action_id FROM m6_grounded_action_details WHERE run_id=? AND session_id=?
+        ) AND status NOT IN ('COMPLETED','BLOCKED','AMBIGUOUS')
+      `).run(reasonCode, now, sessionId, runId, sessionId);
+      this.db.prepare(`
+        UPDATE m6_action_claims
+        SET status=(SELECT a.status FROM device_session_actions a WHERE a.action_id=m6_action_claims.action_id), updated_at=?
+        WHERE action_id IN (
+          SELECT d.action_id FROM m6_grounded_action_details d
+          JOIN device_session_actions a ON a.action_id=d.action_id AND a.session_id=d.session_id
+          WHERE d.run_id=? AND d.session_id=? AND a.status IN ('BLOCKED','AMBIGUOUS')
+        )
+      `).run(now, runId, sessionId);
+      return this.listM6ActionLedgersForRun(runId);
     });
   }
 
@@ -3769,6 +4747,7 @@ export class StateStore {
     const now = this.now();
     this.cleanupExpiredLeases();
     return this.transaction(() => {
+      this.#assertOrdinaryM6ResourceAllowedNoTransaction();
       const grantRow = this.db.prepare("SELECT * FROM delegation_grants WHERE grant_id=?").get(grantId);
       if (!grantRow || grantRow.status !== "active") throw new ControlPlaneError("GRANT_NOT_ACTIVE", "DiscoveryRun requires an active Grant", { status: 409 });
       if (grantRow.grant_hash !== grantHash) throw new ControlPlaneError("GRANT_HASH_DRIFT", "DiscoveryRun Grant hash drifted", { status: 409 });
@@ -4178,6 +5157,7 @@ export class StateStore {
     const now = this.now();
     this.cleanupExpiredLeases();
     return this.transaction(() => {
+      this.#assertOrdinaryM6ResourceAllowedNoTransaction();
       const requestedNodeId = placementRequest.placement.nodeId || authorityNodeId;
       const node = this.getNode(requestedNodeId);
       if (!node || node.status !== "online" || node.dispatchMode !== "local") {

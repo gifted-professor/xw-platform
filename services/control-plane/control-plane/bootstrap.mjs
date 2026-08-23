@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { hostname } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { createDouyinAdapter } from "../apps/douyin/adapter.mjs";
@@ -9,6 +9,7 @@ import { createXhsAdapter } from "../apps/xhs/adapter.mjs";
 import { createXianyuAdapter } from "../apps/xianyu/adapter.mjs";
 import { createXiaoweiAdapter } from "../apps/xiaowei/adapter.mjs";
 import { createVisionAdapter } from "../apps/vision/adapter.mjs";
+import { createM6LiveWorkerDriver } from "../../../integrations/dsh-xw/src/live-worker-driver.mjs";
 import { XiaoweiTransport } from "./lib/xiaowei-transport.mjs";
 import { CapabilityRegistry } from "./lib/capability-registry.mjs";
 import { AdapterRegistry, ControlPlane } from "./lib/control-plane.mjs";
@@ -16,6 +17,11 @@ import { EvidenceStore } from "./lib/evidence-store.mjs";
 import { M6FrameEvidenceStore } from "./lib/m6-frame-evidence-store.mjs";
 import { createM6FrameCapture } from "./lib/m6-frame-capture.mjs";
 import { loadM6Gate } from "./lib/m6-gate-loader.mjs";
+import { createM6GateFOperations, loadM6GateFOperationsConfigFromEnv } from "./lib/m6-gate-f-operations.mjs";
+import { assertM6GateFSafetyCloseArmMatchesPackage } from "./lib/m6-gate-safety-close-arm.mjs";
+import { createM6LiveEntry, loadM6LiveEntryConfigFromEnv } from "./lib/m6-live-entry.mjs";
+import { createM6LiveProductionCallbacks } from "./lib/m6-live-production-callbacks.mjs";
+import { loadM64ProductionDependencies } from "./lib/m6-live-production-dependencies.mjs";
 import { loadReleaseIdentity } from "../../../packages/release/lib/release-identity.mjs";
 import { ControlPlaneError } from "./lib/errors.mjs";
 import { DelegationGrantRuntime } from "./lib/delegation-grant-runtime.mjs";
@@ -91,6 +97,190 @@ export function loadStandingGrantIssuer({ standingGrantEnabled, issuerKeysPath }
   return TrustedHumanIssuer.fromFile(issuerKeysPath);
 }
 
+export function assertM6AuthorityTokenSeparation({
+  runtimeMode,
+  liveEntryEnabled,
+  gateFOperationsEnabled,
+  liveEntryConfig,
+  gateFConfig,
+} = {}) {
+  if (runtimeMode !== "FINAL" || !liveEntryEnabled || !gateFOperationsEnabled) return true;
+  const liveToken = liveEntryConfig?.internalToken;
+  const gateToken = gateFConfig?.internalToken;
+  if (typeof liveToken === "string" && liveToken.length >= 32
+    && typeof gateToken === "string" && gateToken.length >= 32
+    && liveToken === gateToken) {
+    throw new ControlPlaneError(
+      "M6_AUTHORITY_TOKEN_SEPARATION_REQUIRED",
+      "M6 live-entry and Gate-F operations must use distinct authority credentials",
+      { status: 503, details: { resourceCount: 0 } },
+    );
+  }
+  return true;
+}
+
+export function assertM6QualificationBootstrapClosed({ gateOperations, state } = {}) {
+  const gate = gateOperations?.status?.();
+  const resources = state?.getM6GateFResourceCounts?.();
+  if (gate?.schemaId !== "xw.m6-gate-f-operations-status.v1"
+    || gate.mode !== "CLOSED" || gate.phase !== "CLOSED" || gate.purpose !== null
+    || gate.tripleConsistent !== true || !Array.isArray(gate.errors) || gate.errors.length !== 0
+    || gate.activeAuthorizationCount !== 0 || gate.actionCount !== 0
+    || !Number.isInteger(gate.generation) || gate.generation < 0
+    || !/^[0-9a-f]{64}$/u.test(gate.epochHash ?? "") || !/^[0-9a-f]{64}$/u.test(gate.locksHash ?? "")
+    || !resources || Object.values(resources).some((count) => !Number.isSafeInteger(count) || count !== 0)) {
+    throw new ControlPlaneError(
+      "M6_QUALIFICATION_BOOTSTRAP_NOT_CLOSED",
+      "qualification-only scheduler startup requires one triple-consistent CLOSED zero-resource Gate generation",
+      { status: 409 },
+    );
+  }
+  return Object.freeze({ epochHash: gate.epochHash, generation: gate.generation, locksHash: gate.locksHash });
+}
+
+const M6_ACTIVE_GATE_MODES = Object.freeze(new Set(["OBSERVE_ONLY", "GROUNDED_ACTION"]));
+
+// FINAL startup may open ordinary scheduling only from the never-used base
+// CLOSED generation.  Any ACTIVE generation, terminal canary arm, non-zero
+// resource, or inconsistent CLOSED triple is a failed canary and remains
+// recovery-only across every restart; recovery can reduce authority but can
+// never resume that canary.
+export function deriveM6StartupRecoveryLatch({
+  runtimeMode,
+  state,
+  gateOperations,
+} = {}) {
+  if (runtimeMode !== "FINAL") return null;
+  const fence = state?.getM6GateFence?.() ?? null;
+  if (fence?.mode === "CLOSED") {
+    let exactClosed = false;
+    let terminalArm = undefined;
+    try {
+      const gate = gateOperations?.status?.();
+      if (typeof state?.getM6GateSafetyCloseArmByTerminalEpoch !== "function") {
+        throw new TypeError("terminal-arm lookup is unavailable");
+      }
+      terminalArm = state.getM6GateSafetyCloseArmByTerminalEpoch(fence.epochHash);
+      const resourceCounts = gate?.resourceCounts;
+      const exactZeroResources = Boolean(resourceCounts && !Array.isArray(resourceCounts)
+        && Object.keys(resourceCounts).sort().join(",") === "jobs,leases,runs,sessions"
+        && resourceCounts.jobs === 0 && resourceCounts.leases === 0
+        && resourceCounts.runs === 0 && resourceCounts.sessions === 0);
+      exactClosed = gate?.schemaId === "xw.m6-gate-f-operations-status.v1"
+        && gate.mode === "CLOSED" && gate.phase === "CLOSED"
+        && gate.purpose === null && fence.purpose === null
+        && gate.generation === 0 && fence.generation === 0
+        && gate.epochHash === fence.epochHash && gate.generation === fence.generation
+        && gate.locksHash === fence.locksHash
+        && gate.tripleConsistent === true
+        && Array.isArray(gate.errors) && gate.errors.length === 0
+        && gate.activeAuthorizationCount === 0 && gate.actionCount === 0
+        && exactZeroResources && terminalArm === null;
+    } catch {
+      exactClosed = false;
+    }
+    if (!exactClosed) {
+      return Object.freeze({
+        schemaId: "xw.m6-startup-recovery-latch.v1",
+        required: true,
+        status: "UNSAFE_RECOVERY_ONLY",
+        reason: terminalArm ? "DURABLE_GATE_TERMINAL_CANARY" : "DURABLE_GATE_CLOSED_UNSAFE",
+        gateEpochHash: /^[0-9a-f]{64}$/u.test(fence.epochHash ?? "") ? fence.epochHash : null,
+        purpose: null,
+        schedulerAllowed: false,
+        externalResourceState: "NOT_ASSERTED",
+      });
+    }
+    return Object.freeze({
+      schemaId: "xw.m6-startup-recovery-latch.v1",
+      required: false,
+      status: "NORMAL",
+      reason: null,
+      gateEpochHash: null,
+      purpose: null,
+      schedulerAllowed: true,
+      externalResourceState: "NOT_ASSERTED",
+    });
+  }
+
+  if (!M6_ACTIVE_GATE_MODES.has(fence?.mode)) {
+    return Object.freeze({
+      schemaId: "xw.m6-startup-recovery-latch.v1",
+      required: true,
+      status: "UNSAFE_RECOVERY_ONLY",
+      reason: "DURABLE_GATE_STATE_UNSAFE",
+      gateEpochHash: /^[0-9a-f]{64}$/u.test(fence?.epochHash ?? "") ? fence.epochHash : null,
+      purpose: typeof fence?.purpose === "string" ? fence.purpose : null,
+      schedulerAllowed: false,
+      externalResourceState: "NOT_ASSERTED",
+    });
+  }
+
+  let exactActiveArm = false;
+  try {
+    const gate = gateOperations?.status?.();
+    const arm = state?.getM6GateSafetyCloseArm?.(fence.epochHash) ?? null;
+    assertM6GateFSafetyCloseArmMatchesPackage(arm, arm?.package, { allowStatuses: ["ARMED"] });
+    exactActiveArm = gate?.schemaId === "xw.m6-gate-f-operations-status.v1"
+      && gate.mode === fence.mode
+      && gate.phase === (fence.mode === "OBSERVE_ONLY" ? "GROUNDING_ONLY" : "GROUNDED_ACTION")
+      && gate.epochHash === fence.epochHash
+      && gate.generation === fence.generation
+      && gate.locksHash === fence.locksHash
+      && gate.purpose === fence.purpose
+      && gate.tripleConsistent === true
+      && Array.isArray(gate.errors) && gate.errors.length === 0
+      && gate.activeAuthorizationCount === 1
+      && arm.gateId === fence.gateId
+      && arm.purpose === fence.purpose
+      && arm.activeEpochHash === fence.epochHash
+      && arm.armedGeneration === fence.generation
+      && arm.package?.epoch?.parentEpochHash === fence.epochHash
+      && arm.package?.epoch?.gateId === fence.gateId
+      && arm.package?.epoch?.purpose === fence.purpose;
+  } catch {
+    // An ACTIVE fence with an unavailable or drifting arm is even less safe;
+    // keep serving only the explicit recovery surface so it fails visibly.
+    exactActiveArm = false;
+  }
+  return Object.freeze({
+    schemaId: "xw.m6-startup-recovery-latch.v1",
+    required: true,
+    status: exactActiveArm ? "RECOVERY_ONLY" : "UNSAFE_RECOVERY_ONLY",
+    reason: exactActiveArm ? "DURABLE_GATE_ACTIVE_ARMED" : "DURABLE_GATE_ACTIVE_ARM_UNSAFE",
+    gateEpochHash: /^[0-9a-f]{64}$/u.test(fence.epochHash ?? "") ? fence.epochHash : null,
+    purpose: typeof fence.purpose === "string" ? fence.purpose : null,
+    schedulerAllowed: false,
+    externalResourceState: "NOT_ASSERTED",
+  });
+}
+
+export function resolveM6LiveProductionDependencies({
+  runtimeMode,
+  callbackOptions = {},
+  productionConfig,
+  loader = loadM64ProductionDependencies,
+} = {}) {
+  const explicitCallbackDependencies = Boolean(
+    callbackOptions.environmentAttestation
+    && callbackOptions.environmentQualification
+    && callbackOptions.effectBoundary
+    && callbackOptions.independentOracle
+    && typeof callbackOptions.targetSelector === "function"
+    && (typeof callbackOptions.currentStateGuard === "function"
+      || typeof callbackOptions.createCurrentStateGuard === "function"),
+  );
+  if (callbackOptions.productionDependencies) return callbackOptions.productionDependencies;
+  if (runtimeMode !== "FINAL" || explicitCallbackDependencies) return Object.freeze({});
+  if (typeof loader !== "function") {
+    throw new TypeError("M6 FINAL production dependency loader is required");
+  }
+  return loader({
+    runtimeBinding: productionConfig?.productionDependencyRuntimeBinding,
+    now: callbackOptions.now ?? Date.now,
+  });
+}
+
 // The immutable release profile bit for M6: only legacy_compat with
 // agenticGroundingEnabled=true is admissible. Missing contract → null (fail
 // closed: the facade then rejects every capture with M6_PROFILE_DISABLED).
@@ -144,11 +334,54 @@ export function createControlPlaneRuntime({
   // XW_GATE_ID, so they are unaffected by the loader.
   m6GateId = process.env.XW_GATE_ID || null,
   m6IssuerAllowlistPath = process.env.XW_GATE_ISSUER_KEYS_PATH || null,
+  // M6-C1 production entry is independently opt-in. The environment supplies
+  // only sealed paths, content-addressed artifacts, and credential injection; there
+  // is deliberately no replay or fixture fallback. The production callback
+  // factory is mandatory unless a caller explicitly replaces the whole callback
+  // set (tests/embedding only).
+  m6LiveEntryEnabled = process.env.M6_LIVE_ENTRY_ENABLED === "1",
+  m6LiveEntryConfig = null,
+  m6LiveCallbacks = null,
+  m6LiveProductionCallbacksOptions = null,
+  m6LiveWorkerDriver = null,
+  m6LiveEntryFactories = null,
+  // Gate-F state changes are a separate, loopback-only operator surface. The
+  // CLI is a thin client and never opens the StateStore or edits current.json.
+  m6GateFOperationsEnabled = process.env.M6_GATE_F_OPERATIONS_ENABLED === "1",
+  m6GateFOperationsConfig = null,
+  m6GateFFaultAfterForOperation = () => null,
+  m6RuntimeMode = process.env.XW_M6_RUNTIME_MODE || "STANDARD",
 } = {}) {
+  if (!new Set(["STANDARD", "QUALIFICATION_ONLY", "FINAL"]).has(m6RuntimeMode)) {
+    throw new ControlPlaneError("M6_RUNTIME_MODE_INVALID", "M6 runtime mode is not recognized", { status: 503 });
+  }
+  if (m6RuntimeMode === "QUALIFICATION_ONLY"
+    && (m6Enabled || m6LiveEntryEnabled || !m6GateFOperationsEnabled)) {
+    throw new ControlPlaneError(
+      "M6_QUALIFICATION_BOOTSTRAP_UNSAFE",
+      "qualification-only mode requires the live facade and entry disabled with read-only Gate status installed",
+      { status: 503 },
+    );
+  }
+  if (m6RuntimeMode === "FINAL"
+    && (!m6Enabled || !m6LiveEntryEnabled || !m6GateFOperationsEnabled)) {
+    throw new ControlPlaneError(
+      "M6_FINAL_BOOTSTRAP_INCOMPLETE",
+      "final mode requires the M6 facade, live entry, and Gate-F operations",
+      { status: 503 },
+    );
+  }
   const defaults = defaultRuntimePaths();
   const resolvedDbPath = dbPath || process.env.CONTROL_PLANE_DB || defaults.dbPath;
   const resolvedRunsRoot = runsRoot || process.env.CONTROL_PLANE_RUNS_ROOT || defaults.runsRoot;
-  const runtimeState = state || new StateStore({ dbPath: resolvedDbPath });
+  const runtimeState = state || new StateStore({ dbPath: resolvedDbPath, m6RuntimeMode });
+  if (runtimeState.m6RuntimeMode !== m6RuntimeMode) {
+    throw new ControlPlaneError(
+      "M6_RUNTIME_MODE_STATE_MISMATCH",
+      "the injected StateStore M6 runtime mode does not match the runtime being bootstrapped",
+      { status: 503 },
+    );
+  }
   // An allowlist is optional while both standing-grant gates remain off. If an operator
   // explicitly supplies one, load and reconcile it before any scheduler can be started.
   const trustedIssuer = loadStandingGrantIssuer({ standingGrantEnabled, issuerKeysPath });
@@ -257,6 +490,81 @@ export function createControlPlaneRuntime({
     });
   }
 
+  const resolvedM6LiveEntryConfig = m6LiveEntryEnabled
+    ? (m6LiveEntryConfig ?? loadM6LiveEntryConfigFromEnv({ env: process.env }))
+    : null;
+  const resolvedM6GateFConfig = m6GateFOperationsEnabled
+    ? (m6GateFOperationsConfig ?? loadM6GateFOperationsConfigFromEnv({ env: process.env }))
+    : null;
+  assertM6AuthorityTokenSeparation({
+    runtimeMode: m6RuntimeMode,
+    liveEntryEnabled: m6LiveEntryEnabled,
+    gateFOperationsEnabled: m6GateFOperationsEnabled,
+    liveEntryConfig: resolvedM6LiveEntryConfig,
+    gateFConfig: resolvedM6GateFConfig,
+  });
+
+  let m6LiveEntry = null;
+  if (m6LiveEntryEnabled) {
+    const productionConfig = resolvedM6LiveEntryConfig;
+    const callbackOptions = m6LiveProductionCallbacksOptions ?? {};
+    const callbackRuntimeRoot = productionConfig.m6Root;
+    const productionFrameEvidence = callbackOptions.evidence
+      ?? (typeof callbackRuntimeRoot === "string" && isAbsolute(callbackRuntimeRoot)
+        ? new M6FrameEvidenceStore({ root: join(callbackRuntimeRoot, "m6-frames") })
+        : null);
+    const sealedProductionDependencies = resolveM6LiveProductionDependencies({
+      runtimeMode: m6RuntimeMode,
+      callbackOptions,
+      productionConfig,
+    });
+    const productionCallbacks = m6LiveCallbacks ?? createM6LiveProductionCallbacks({
+      ...sealedProductionDependencies,
+      ...callbackOptions,
+      state: runtimeState,
+      capabilities: registry,
+      transport: sharedXiaoweiTransport,
+      evidence: productionFrameEvidence,
+      evidenceDirectoryRoot: callbackOptions.evidenceDirectoryRoot
+        ?? (typeof callbackRuntimeRoot === "string" && isAbsolute(callbackRuntimeRoot)
+          ? join(callbackRuntimeRoot, "m6-action-evidence") : null),
+      auditRoot: callbackOptions.auditRoot
+        ?? (typeof callbackRuntimeRoot === "string" && isAbsolute(callbackRuntimeRoot)
+          ? join(callbackRuntimeRoot, "m6-audit") : null),
+      authorityNodeId: nodeId,
+    });
+    const persistenceRoot = productionConfig.runtimeEnv?.XW_DSH_PERSISTENCE_ROOT;
+    const productionWorkerDriver = m6LiveWorkerDriver
+      ?? (typeof persistenceRoot === "string" && isAbsolute(persistenceRoot)
+        ? createM6LiveWorkerDriver({ workingDirectory: persistenceRoot })
+        : null);
+    m6LiveEntry = createM6LiveEntry({
+      ...(m6LiveEntryFactories ?? {}),
+      state: runtimeState,
+      config: productionConfig,
+      callbacks: productionCallbacks,
+      workerDriver: productionWorkerDriver,
+    });
+  }
+
+  let m6GateFOperations = null;
+  if (m6GateFOperationsEnabled) {
+    m6GateFOperations = createM6GateFOperations({
+      state: runtimeState,
+      config: resolvedM6GateFConfig,
+      activeRunCount: () => m6LiveEntry?.health().activeRuns ?? 0,
+      faultAfterForOperation: m6GateFFaultAfterForOperation,
+    });
+  }
+  if (m6RuntimeMode === "QUALIFICATION_ONLY") {
+    assertM6QualificationBootstrapClosed({ gateOperations: m6GateFOperations, state: runtimeState });
+  }
+  const m6StartupRecovery = deriveM6StartupRecoveryLatch({
+    runtimeMode: m6RuntimeMode,
+    state: runtimeState,
+    gateOperations: m6GateFOperations,
+  });
+
   // Phase 4: optional generated recipe overlay. Never removes static capabilities;
   // never auto-executes recipes. Flag off → skip attach entirely.
   const overlayMode = resolveOverlayMode();
@@ -287,5 +595,9 @@ export function createControlPlaneRuntime({
     nodeId,
     policyMode: resolvedPolicyMode,
     m6,
+    m6GateFOperations,
+    m6LiveEntry,
+    m6RuntimeMode,
+    m6StartupRecovery,
   };
 }

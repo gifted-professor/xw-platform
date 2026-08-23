@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "xw.m6-4-production-dependency-binding.v1.schema.json",
+  "title": "M6-4 production callback dependency binding",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaId",
+    "bindingHash",
+    "releaseId",
+    "sourceCommit",
+    "environmentAttestation",
+    "environmentQualification",
+    "effectBoundary",
+    "independentOraclePolicy",
+    "targetSelectorPolicy",
+    "currentStateGuardPolicy"
+  ],
+  "properties": {
+    "schemaId": { "const": "xw.m6-4-production-dependency-binding.v1" },
+    "bindingHash": { "$ref": "#/$defs/hash" },
+    "releaseId": { "type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9._-]{1,128}$" },
+    "sourceCommit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "environmentAttestation": { "$ref": "#/$defs/artifactRef" },
+    "environmentQualification": { "$ref": "#/$defs/artifactRef" },
+    "effectBoundary": { "$ref": "#/$defs/artifactRef" },
+    "independentOraclePolicy": { "$ref": "#/$defs/artifactRef" },
+    "targetSelectorPolicy": { "$ref": "#/$defs/artifactRef" },
+    "currentStateGuardPolicy": { "$ref": "#/$defs/artifactRef" }
+  },
+  "$defs": {
+    "hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "artifactRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": { "type": "string", "minLength": 3, "pattern": "^(?:[A-Za-z]:\\\\|/)" },
+        "sha256": { "$ref": "#/$defs/hash" }
+      }
+    }
+  }
+}

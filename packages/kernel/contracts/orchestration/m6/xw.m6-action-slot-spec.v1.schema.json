@@ -4,7 +4,7 @@
   "title": "xw.m6-action-slot-spec.v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaId", "actionSlotSpecHash", "scenarioManifestHash", "scenarioId", "logicalStepId", "actionSlotOrdinal", "alias", "primitive", "actionFamily", "intentRef", "intentPolicyHash", "targetKind", "targetEligibilityHash", "trustedParameterHash", "allowedStateHash", "effectBoundaryHash", "budgetPolicyHash", "redlinePolicyHash", "verificationPolicyHash"],
+  "required": ["schemaId", "actionSlotSpecHash", "scenarioManifestHash", "scenarioId", "logicalStepId", "actionSlotOrdinal", "alias", "primitive", "actionFamily", "intentRef", "intentPolicyHash", "targetKind", "targetEligibilityHash", "trustedParameterHash", "allowedStateHash", "effectBoundaryHash", "budgetPolicyHash", "redlinePolicyHash", "resetPolicyHash", "oracleHash", "verificationPolicyHash"],
   "properties": {
     "schemaId": { "const": "xw.m6-action-slot-spec.v1" },
     "actionSlotSpecHash": { "$ref": "#/$defs/hash" },
@@ -24,6 +24,8 @@
     "effectBoundaryHash": { "$ref": "#/$defs/hash" },
     "budgetPolicyHash": { "$ref": "#/$defs/hash" },
     "redlinePolicyHash": { "$ref": "#/$defs/hash" },
+    "resetPolicyHash": { "$ref": "#/$defs/hash" },
+    "oracleHash": { "$ref": "#/$defs/hash" },
     "verificationPolicyHash": { "$ref": "#/$defs/hash" }
   },
   "$defs": { "hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" } }

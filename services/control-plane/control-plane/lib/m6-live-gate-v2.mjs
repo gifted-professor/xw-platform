@@ -21,7 +21,7 @@ export const M6_GATE_V2_LOCK_KINDS = Object.freeze([
   "runtimeProfile", "hardRedlinePolicy", "groundingRuntime",
   "dshSource", "dshProfile", "liveToolSpec", "modelProfile",
   "liveProvider", "grantActionPolicy", "brokerProtocol",
-  "typedTransport", "scenarioManifest",
+  "typedTransport", "scenarioManifest", "environmentQualification",
 ]);
 
 const HEX64 = /^[0-9a-f]{64}$/;

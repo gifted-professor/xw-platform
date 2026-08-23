@@ -16,7 +16,7 @@
         "runtimeProfile", "hardRedlinePolicy", "groundingRuntime",
         "dshSource", "dshProfile", "liveToolSpec", "modelProfile",
         "liveProvider", "grantActionPolicy", "brokerProtocol",
-        "typedTransport", "scenarioManifest"
+        "typedTransport", "scenarioManifest", "environmentQualification"
       ],
       "properties": {
         "runtimeProfile": { "$ref": "#/$defs/hash" },
@@ -30,7 +30,8 @@
         "grantActionPolicy": { "$ref": "#/$defs/hash" },
         "brokerProtocol": { "$ref": "#/$defs/hash" },
         "typedTransport": { "$ref": "#/$defs/hash" },
-        "scenarioManifest": { "$ref": "#/$defs/hash" }
+        "scenarioManifest": { "$ref": "#/$defs/hash" },
+        "environmentQualification": { "$ref": "#/$defs/hash" }
       }
     }
   },
