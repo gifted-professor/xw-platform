@@ -78,6 +78,7 @@ test("Windows ACL inspection uses only absolute system PowerShell and a sanitize
       assert.equal(Buffer.from(options.env.M64_AUDIT_ROOT_PATH_B64, "base64").toString("utf8"), ROOT_PATH);
       assert.equal(options.cwd, String.raw`C:\Windows\System32`);
       assert.equal(options.windowsHide, true);
+      assert.equal(options.timeout, 30_000);
       for (const inheritedSecret of [
         "DEEPSEEK_API_KEY", "XW_M6_GATE_F_OPERATIONS_TOKEN", "XW_M6_LIVE_ENTRY_TOKEN",
         "XW_M6_LIVE_PROVIDER_BASE_URL", "XW_M6_LIVE_MODEL_PROFILE_HASH",
@@ -151,6 +152,7 @@ test("Windows ACL validation rejects every writable-tree ambiguity", async (t) =
 test("Windows ACL validation hides process failures and malformed output behind a stable fail-closed code", () => {
   for (const processResult of [
     { status: 1, stdout: "", stderr: "sensitive error" },
+    { status: null, signal: null, error: Object.assign(new Error("sensitive timeout"), { code: "ETIMEDOUT" }), stdout: "", stderr: "" },
     { status: 0, stdout: "not-json", stderr: "" },
     { status: 0, stdout: JSON.stringify({ forged: true }), stderr: "" },
   ]) {
@@ -166,6 +168,7 @@ test("Windows .NET inspector executes read-only against a temporary inherited di
   const root = mkdtempSync(join(tmpdir(), "m64-acl-inspection-"));
   let inspectedProcess = null;
   let observedError = null;
+  const startedAt = Date.now();
   try {
     assert.throws(
       () => assertM64PrivateAuditRootAcl(root, {
@@ -179,7 +182,12 @@ test("Windows .NET inspector executes read-only against a temporary inherited di
         return error.code === "M64_AUDIT_ROOT_ACL_INVALID";
       },
     );
-    assert.equal(inspectedProcess?.status, 0, inspectedProcess?.stderr);
+    assert.equal(inspectedProcess?.status, 0, JSON.stringify({
+      errorCode: inspectedProcess?.error?.code ?? null,
+      elapsedMs: Date.now() - startedAt,
+      signal: inspectedProcess?.signal ?? null,
+      status: inspectedProcess?.status ?? null,
+    }));
     assert.match(observedError.message, /(?:ROOT_DACL_NOT_PROTECTED|DANGEROUS_ALLOW_NOT_ALLOWED)/u);
   } finally {
     rmSync(root, { recursive: true, force: true });
