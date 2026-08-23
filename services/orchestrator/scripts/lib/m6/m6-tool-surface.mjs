@@ -25,6 +25,10 @@ const OPAQUE_REF_PATTERN = /^[a-z0-9][a-z0-9:_-]{7,127}$/;
 const HASH64_PATTERN = /^[0-9a-f]{64}$/;
 const INTENT_PATTERN = /^[a-z][a-z0-9_-]{1,63}$/;
 const OUTCOMES = Object.freeze(["SUCCEEDED", "FAILED", "AMBIGUOUS"]);
+const VERDICTS = Object.freeze(["ALLOW_ONCE", "REPLAN", "HARD_STOP"]);
+const WORKER_STATUSES = Object.freeze(["STARTED", "CONTINUED", "COMPLETED", "WAITING"]);
+const MAX_VALUE_BYTES = 64 * 1024;
+const MAX_VALUE_DEPTH = 8;
 
 function checkField(kind, value, path, errors, code) {
   switch (kind) {
@@ -60,6 +64,21 @@ function checkField(kind, value, path, errors, code) {
         fail(errors, code, `${path} must be one of ${OUTCOMES.join("|")}`);
       }
       break;
+    case "verdict":
+      if (!VERDICTS.includes(value)) fail(errors, code, `${path} must be one of ${VERDICTS.join("|")}`);
+      break;
+    case "workerStatus":
+      if (!WORKER_STATUSES.includes(value)) fail(errors, code, `${path} must be one of ${WORKER_STATUSES.join("|")}`);
+      break;
+    case "booleanFalse":
+      if (value !== false) fail(errors, code, `${path} must be false`);
+      break;
+    case "zero":
+      if (value !== 0) fail(errors, code, `${path} must be zero`);
+      break;
+    case "count":
+      if (!Number.isSafeInteger(value) || value < 0 || value > 10000) fail(errors, code, `${path} must be a safe integer in 0..10000`);
+      break;
     default:
       fail(errors, code, `${path}: unknown field kind ${kind}`);
   }
@@ -78,6 +97,52 @@ const TOOL_ARG_SPECS = Object.freeze({
   worker_continue: Object.freeze({ workerRunRef: "opaqueRef", checkpointRef: "opaqueRef" }),
   worker_complete: Object.freeze({ workerRunRef: "opaqueRef", outcome: "outcome" }),
 });
+
+const TOOL_RESULT_SPECS = Object.freeze({
+  phone_observe: Object.freeze({ frameRef: "hash64", blockRefs: "refArray", externalEffect: "booleanFalse", actionCount: "zero" }),
+  phone_ground: Object.freeze({ groundingDecisionRef: "hash64", verdict: "verdict", externalEffect: "booleanFalse", actionCount: "zero" }),
+  phone_act: Object.freeze({ actionReceiptRef: "opaqueRef", outcome: "outcome", externalEffect: "booleanFalse", actionCount: "zero" }),
+  phone_verify: Object.freeze({ verificationRef: "opaqueRef", outcome: "outcome", externalEffect: "booleanFalse", actionCount: "zero" }),
+  checkpoint_save: Object.freeze({ checkpointRef: "opaqueRef", journalHash: "hash64", externalEffect: "booleanFalse", actionCount: "zero" }),
+  trace_query: Object.freeze({ traceRef: "opaqueRef", eventCount: "count", externalEffect: "booleanFalse", actionCount: "zero" }),
+  wait_human: Object.freeze({ waitRef: "opaqueRef", status: "workerStatus", externalEffect: "booleanFalse", actionCount: "zero" }),
+  worker_start: Object.freeze({ workerRunRef: "opaqueRef", status: "workerStatus", externalEffect: "booleanFalse", actionCount: "zero" }),
+  worker_continue: Object.freeze({ workerRunRef: "opaqueRef", status: "workerStatus", externalEffect: "booleanFalse", actionCount: "zero" }),
+  worker_complete: Object.freeze({ workerRunRef: "opaqueRef", status: "workerStatus", externalEffect: "booleanFalse", actionCount: "zero" }),
+});
+
+function jsonSchemaForKind(kind) {
+  switch (kind) {
+    case "opaqueRef":
+    case "hash64":
+    case "intent":
+    case "text": return { type: "string" };
+    case "refArray": return { type: "array", items: jsonSchemaForKind("opaqueRef") };
+    case "outcome": return { type: "string", enum: [...OUTCOMES] };
+    case "verdict": return { type: "string", enum: [...VERDICTS] };
+    case "workerStatus": return { type: "string", enum: [...WORKER_STATUSES] };
+    case "booleanFalse": return { type: "boolean", const: false };
+    case "zero": return { type: "integer", const: 0 };
+    case "count": return { type: "integer" };
+    default: throw new TypeError(`unknown M6 schema kind: ${kind}`);
+  }
+}
+
+function closedSchema(spec) {
+  return Object.freeze({
+    type: "object",
+    additionalProperties: false,
+    required: Object.freeze(Object.keys(spec)),
+    properties: Object.freeze(Object.fromEntries(Object.entries(spec).map(([name, kind]) => [name, Object.freeze(jsonSchemaForKind(kind))]))),
+  });
+}
+
+export const M6_TOOL_SPEC = Object.freeze(Object.fromEntries(Object.keys(TOOL_ARG_SPECS).map((name) => [name, Object.freeze({
+  name,
+  description: `XW replay-only ${name}`,
+  inputSchema: closedSchema(TOOL_ARG_SPECS[name]),
+  outputSchema: closedSchema(TOOL_RESULT_SPECS[name]),
+})])));
 
 export const M6_TOOL_SURFACE = Object.freeze(
   Object.fromEntries(Object.entries(TOOL_ARG_SPECS).map(([tool, spec]) => [tool, Object.freeze(Object.keys(spec))])),
@@ -98,7 +163,7 @@ const FORBIDDEN_KEY_PARTS = Object.freeze([
   "token", "secret", "password", "credential", "cookie",
   "lease",
   "db", "sql", "database", "query",
-  "payment", "amount", "price", "cardnumber",
+  "payment", "amount", "price", "cardnumber", "delete",
   "base64", "screenshot",
 ]);
 
@@ -117,9 +182,13 @@ function isForbiddenKey(key) {
   return FORBIDDEN_KEY_PARTS.some((part) => normalized.includes(part));
 }
 
-function scanForbidden(value, path, errors, code) {
+function scanForbidden(value, path, errors, code, depth = 0) {
+  if (depth > MAX_VALUE_DEPTH) {
+    fail(errors, code, `value exceeds maximum depth at ${path}`);
+    return;
+  }
   if (Array.isArray(value)) {
-    value.forEach((item, index) => scanForbidden(item, `${path}[${index}]`, errors, code));
+    value.forEach((item, index) => scanForbidden(item, `${path}[${index}]`, errors, code, depth + 1));
     return;
   }
   if (value && typeof value === "object") {
@@ -128,7 +197,7 @@ function scanForbidden(value, path, errors, code) {
         fail(errors, code, `forbidden field at ${path}: ${key}`);
         continue;
       }
-      scanForbidden(child, `${path}.${key}`, errors, code);
+      scanForbidden(child, `${path}.${key}`, errors, code, depth + 1);
     }
     return;
   }
@@ -163,5 +232,33 @@ export function validateToolCall({ tool, args } = {}) {
     checkField(spec[key], actualArgs[key], `$.args.${key}`, errors, code);
   }
   scanForbidden(actualArgs, "$.args", errors, code);
+  if (Buffer.byteLength(JSON.stringify(actualArgs)) > MAX_VALUE_BYTES) fail(errors, code, `args exceed ${MAX_VALUE_BYTES} serialized bytes`);
+  return { ok: errors.length === 0, errors };
+}
+
+export function validateToolResult({ tool, result } = {}) {
+  const code = "INVALID_M6_TOOL_RESULT";
+  const errors = [];
+  if (typeof tool !== "string" || !M6_TOOL_NAMES.includes(tool)) {
+    fail(errors, code, `tool is not in the M6 tool allowlist: ${tool}`);
+    return { ok: false, errors };
+  }
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    fail(errors, code, "result must be an object");
+    return { ok: false, errors };
+  }
+  const spec = TOOL_RESULT_SPECS[tool];
+  for (const key of Object.keys(spec)) {
+    if (result[key] === undefined) fail(errors, code, `missing required result for ${tool}: ${key}`);
+  }
+  for (const key of Object.keys(result)) {
+    if (!Object.hasOwn(spec, key)) {
+      fail(errors, code, `result field not allowed for ${tool}: ${key}`);
+      continue;
+    }
+    checkField(spec[key], result[key], `$.result.${key}`, errors, code);
+  }
+  scanForbidden(result, "$.result", errors, code);
+  if (Buffer.byteLength(JSON.stringify(result)) > MAX_VALUE_BYTES) fail(errors, code, `result exceeds ${MAX_VALUE_BYTES} serialized bytes`);
   return { ok: errors.length === 0, errors };
 }

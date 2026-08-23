@@ -27,6 +27,8 @@ export class DshXwAdapter {
       error.code = "DSH_LOCK_DRIFT";
       throw error;
     }
+    this.adapterKind = "fixture_in_process";
+    this.traceMarker = "xw.dsh.fixture-in-process.v1";
     this.lock = lock;
     this.runtime = new HarnessRuntime({
       harness: "deepseek-harness",

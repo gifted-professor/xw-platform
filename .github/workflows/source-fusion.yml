@@ -6,6 +6,41 @@ on:
   pull_request:
 
 jobs:
+  m6-3-replay:
+    name: M6-3 real replay ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    defaults:
+      run:
+        working-directory: integrations/dsh-xw
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: integrations/dsh-xw/package-lock.json
+
+      - name: Exact clean install
+        run: npm ci --ignore-scripts
+
+      - name: Inventory and lock gate
+        working-directory: .
+        run: node tools/m6/dsh-inventory-check.mjs
+
+      - name: Real child, resume, fault and cleanup gates
+        run: npm run check && npm run test:functional
+
+      - name: Gate E real-route and warm-ack hard SLO
+        run: npm run test:gate-e
+
   offline:
     name: offline ${{ matrix.os }}
     runs-on: ${{ matrix.os }}

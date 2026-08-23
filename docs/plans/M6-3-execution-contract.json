@@ -1,0 +1,116 @@
+{
+  "schema": "multi-model-execution-contract.v1",
+  "planSha256": "f1c6d321bd5fb2a7d8fe59ef859f286bbe8ac4894dc68cece4de5797defef803",
+  "authorizationMode": "close-accepted-blockers",
+  "budgets": {
+    "externalReviewWaves": 1,
+    "reviewerDrivenFixBatches": 1,
+    "localRepairTails": 1,
+    "targetedVerifications": 2
+  },
+  "execution": {
+    "runtime": "codex",
+    "primaryModel": "gpt-5",
+    "maxModelSwitches": 1,
+    "rehydrateOnContextChange": true
+  },
+  "items": [
+    {
+      "id": "M6-3-P1-F1",
+      "severity": "P1",
+      "invariant": "A checkpoint resume starts only after the prior process incarnation has a verified close receipt, reopens the exact durable DSH session through the public agents.resume path, preserves the independent transcript and replay state, and never substitutes a fresh session or fixture path.",
+      "riskClasses": [
+        "trust-boundary",
+        "independent-oracle",
+        "reproducible-artifact"
+      ],
+      "requiredArtifacts": [
+        "integrations/dsh-xw/test/cross-process-resume.real.spec.mjs",
+        "integrations/dsh-xw/test/checkpoint-faults.real.spec.mjs",
+        "C:/Users/Public/xw-runtime/m6-audit/m6-3-resume-evidence.json",
+        "C:/Users/Public/xw-runtime/m6-audit/m6-3-process-close-inventory.json"
+      ],
+      "forbiddenDependencies": [
+        "stock SDK server agents.create path used as an implicit resume",
+        "fresh DSH session id substituted for the persisted session",
+        "in-process fixture used as completion evidence",
+        "expected transcript or state hashes derived from the system-under-test trace",
+        "PID absence used without a matching process-closed receipt"
+      ],
+      "probes": [
+        {
+          "id": "M6-3-P1-F1-adversarial",
+          "kind": "adversarial",
+          "procedure": "Run the exact locked child twice as separate OS processes over one persistence root and session id; prove create succeeds only in process 1, resume succeeds only in process 2 after a valid close receipt, while same-id create, resume-without-receipt, and resume-while-old-incarnation-live all fail closed.",
+          "preFixExpected": "The Plan V1 stock server path calls agents.create and either collides with the persisted log or cannot prove that resume was exercised.",
+          "postFixExpected": "Only the explicit XW server agents.resume branch continues the prior session, and all three adversarial branches return their canonical failure codes without a new live writer.",
+          "pathExercise": "Assert branch counters or trace markers for public agents.create and agents.resume, the old and new processRef values, the identical session id, and the absence of an additional session directory."
+        },
+        {
+          "id": "M6-3-P1-F1-oracle",
+          "kind": "independent-oracle",
+          "procedure": "Compare the resumed transcript sequence, request/header tool inventory, replay journal prefix, synthetic state hash, and final route with separately version-controlled scenario expectations authored before the real run.",
+          "preFixExpected": "A test that only re-reads runtime output can pass even when a fresh session or altered replay state is used.",
+          "postFixExpected": "The resumed run matches every independent expected field and preserves the pre-crash durable prefix exactly.",
+          "pathExercise": "Assert the test loaded both the independent oracle file and the runtime evidence file, compared their canonical fields, and observed at least one event from before and after the process boundary."
+        },
+        {
+          "id": "M6-3-P1-F1-mutation",
+          "kind": "mutation",
+          "procedure": "Independently mutate the expected session id, event sequence, journal prefix hash, profile hash, and close-receipt hash, rerunning the resume verifier for each mutation.",
+          "preFixExpected": "A verifier coupled only to current runtime output can accept one or more mutations.",
+          "postFixExpected": "Every mutation fails at the named invariant before a resume prompt or synthetic transition is admitted.",
+          "pathExercise": "Record the mutated field and assert the verifier consumed that exact corrupted record and emitted the corresponding canonical rejection code."
+        },
+        {
+          "id": "M6-3-P1-F1-reproduction",
+          "kind": "reproduction",
+          "procedure": "From a clean worktree and standalone npm ci, regenerate the two-process create/checkpoint/close/resume/continue evidence bundle and deep-compare its canonical payload and hash ledger with the completion receipt.",
+          "preFixExpected": "Plan V1 has no reproducible cross-process resume artifact bound to the exact lock, config, child protocol server, and process identities.",
+          "postFixExpected": "The regenerated canonical payload is deeply equal and every referenced artifact SHA-256 verifies against the same final plan hash.",
+          "pathExercise": "Assert both fresh OS process launches occurred, the lock/profile hashes were read from disk, and the receipt references the generated evidence hashes rather than test constants."
+        }
+      ]
+    },
+    {
+      "id": "M6-3-P1-F3",
+      "severity": "P1",
+      "invariant": "Every supervisor-owned DSH process tree reaches a proven terminal state on Windows and POSIX, using verified process identity and a bounded platform-specific tree termination path; an unproven close can never authorize resume or completion.",
+      "riskClasses": [
+        "trust-boundary",
+        "reproducible-artifact"
+      ],
+      "requiredArtifacts": [
+        "integrations/dsh-xw/test/process-tree.real.spec.mjs",
+        "integrations/dsh-xw/test/stdio-supervisor.spec.mjs",
+        "C:/Users/Public/xw-runtime/m6-audit/m6-3-process-close-inventory.json",
+        "C:/Users/Public/xw-runtime/m6-audit/m6-3-fault-matrix.json"
+      ],
+      "forbiddenDependencies": [
+        "PID-only liveness or death proof",
+        "shell:true or shell-composed taskkill command",
+        "termination of a PID not bound to the supervisor live ChildProcess incarnation",
+        "successful completion or automatic resume while process tree state is unknown",
+        "ignored child or grandchild orphan"
+      ],
+      "probes": [
+        {
+          "id": "M6-3-P1-F3-adversarial",
+          "kind": "adversarial",
+          "procedure": "Spawn nonce-identifiable child and grandchild fixtures, exercise graceful close, hung shutdown, stdout protocol fault, timeout, and forced termination; on Windows force the shell:false System32 taskkill /PID /T /F fallback once, and on POSIX force the owned process-group KILL path once.",
+          "preFixExpected": "Plan V1 does not name an exact Windows primitive or identity proof, so a grandchild can survive or an unrelated reused PID can be mistaken for the owned child.",
+          "postFixExpected": "Every owned child and grandchild is absent or identity-changed after the deadline, the exact fallback path is evidenced, and any unverifiable state ends as ORPHAN_AUDIT_REQUIRED rather than completion.",
+          "pathExercise": "Assert the fixture nonces, spawn timestamps, processRef, live handle PID, platform branch marker, child close event, and post-tree probe are all present for each case."
+        },
+        {
+          "id": "M6-3-P1-F3-reproduction",
+          "kind": "reproduction",
+          "procedure": "Regenerate the normal and fault process-close inventory on the hard Windows and Ubuntu CI jobs and verify every process-closed receipt, artifact hash, case count, and tree-zero result from the committed runner.",
+          "preFixExpected": "No cross-platform reproducible artifact binds process identity, fallback execution, and tree-zero results to the exact candidate.",
+          "postFixExpected": "Both platform inventories reproduce with all required cases and hashes, and completion evidence references the verified files.",
+          "pathExercise": "Assert platform-specific cases ran on their intended OS, at least one child and grandchild were observed alive before cleanup, and receipt generation occurred only after the close and tree probes."
+        }
+      ]
+    }
+  ]
+}
