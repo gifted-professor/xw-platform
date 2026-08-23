@@ -60,6 +60,11 @@ jobs:
         with:
           node-version: "24"
 
+      - name: Windows M6-4 ACL inspector hard gate
+        if: runner.os == 'Windows'
+        timeout-minutes: 2
+        run: npm run test:m6-4:acl
+
       - name: Syntax check (no install, no workspaces)
         run: npm run check
 
@@ -107,7 +112,7 @@ jobs:
 
       - name: M6-4 grounded-action offline hard gate
         timeout-minutes: 6
-        run: npm run test:m6-4:offline
+        run: npm run ${{ runner.os == 'Windows' && 'test:m6-4:offline-core' || 'test:m6-4:offline' }}
 
       - name: M6-2 zero-live offline frame capture
         timeout-minutes: 6
