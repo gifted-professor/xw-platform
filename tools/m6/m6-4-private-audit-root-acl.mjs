@@ -9,6 +9,7 @@ const SID_PATTERN = /^S-\d+(?:-\d+)+$/u;
 const WINDOWS_ACL_SCHEMA = "xw.m6-4-private-audit-root-acl-inspection.v1";
 const MAX_ACL_OUTPUT_BYTES = 16 * 1024 * 1024;
 const MAX_AUDIT_ENTRIES = 100_000;
+const WINDOWS_ACL_INSPECTION_TIMEOUT_MS = 60_000;
 
 // FileSystemRights: write data, append/create directory, write extended
 // attributes, delete children, write attributes, delete, change DACL, owner.
@@ -194,7 +195,7 @@ function windowsInspection(path, processRunner) {
       encoding: "utf8",
       env: environment,
       maxBuffer: MAX_ACL_OUTPUT_BYTES,
-      timeout: 30_000,
+      timeout: WINDOWS_ACL_INSPECTION_TIMEOUT_MS,
       windowsHide: true,
     });
   } catch {

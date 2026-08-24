@@ -25,7 +25,7 @@ import {
 export const M6_LIVE_MODEL_QUALIFICATION_SCHEMA_ID = "xw.m6-live-model-qualification.v1";
 export const DEEPSEEK_OPENAI_BASE_URL = "https://api.deepseek.com";
 export const DEEPSEEK_OPENAI_CHAT_COMPLETIONS_ENDPOINT = "https://api.deepseek.com/chat/completions";
-export const DEEPSEEK_QUALIFIED_MODEL = "deepseek-chat";
+export const DEEPSEEK_QUALIFIED_MODEL = "deepseek-v4-flash";
 export const M6_LIVE_MODEL_WARM_SAMPLE_COUNT = 100;
 export const M6_LIVE_MODEL_FRAME_TTL_MS = 5_000;
 export const M6_LIVE_MODEL_MIN_REMAINING_TTL_MS = 1_000;
@@ -183,6 +183,7 @@ async function providerRequest({ fetchImpl, apiKey, model, kind, sample, monoton
         : `Reply with exactly XW_M6_QUALIFICATION_OK_${sample}.`,
     }],
     temperature: 0,
+    thinking: { type: "disabled" },
     max_tokens: isTool ? 128 : 32,
     stream: false,
     ...(isTool ? {

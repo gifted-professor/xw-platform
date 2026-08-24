@@ -78,7 +78,7 @@ test("Windows ACL inspection uses only absolute system PowerShell and a sanitize
       assert.equal(Buffer.from(options.env.M64_AUDIT_ROOT_PATH_B64, "base64").toString("utf8"), ROOT_PATH);
       assert.equal(options.cwd, String.raw`C:\Windows\System32`);
       assert.equal(options.windowsHide, true);
-      assert.equal(options.timeout, 30_000);
+      assert.equal(options.timeout, 60_000);
       for (const inheritedSecret of [
         "DEEPSEEK_API_KEY", "XW_M6_GATE_F_OPERATIONS_TOKEN", "XW_M6_LIVE_ENTRY_TOKEN",
         "XW_M6_LIVE_PROVIDER_BASE_URL", "XW_M6_LIVE_MODEL_PROFILE_HASH",
