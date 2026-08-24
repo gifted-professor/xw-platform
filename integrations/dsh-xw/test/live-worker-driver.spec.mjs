@@ -108,7 +108,7 @@ test("production worker driver initializes and prompts the already-owned child, 
         gateFEligible: true,
         contentHash: H("f"),
         provider: "deepseek-official",
-        model: "deepseek-chat",
+        model: "deepseek-v4-flash",
         maxTokens: 4096,
       },
     });
@@ -143,7 +143,7 @@ test("driver rejects duplicate ownership before a second protocol can reach the 
       gateFEligible: true,
       contentHash: H("f"),
       provider: "deepseek-official",
-      model: "deepseek-chat",
+      model: "deepseek-v4-flash",
       maxTokens: 4096,
     },
   };

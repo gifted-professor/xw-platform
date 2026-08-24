@@ -2,7 +2,7 @@
   "schemaId": "xhs.tcb.manifest.v1",
   "schemaVersion": 1,
   "manifestId": "xw.m6-grounded-run.tcb.v1",
-  "implementationClosureHash": "6980ecdd56e9e2a93fdae6faeaf3512f9fb10ec4cf2c073b307d0781383190cb",
+  "implementationClosureHash": "614f00e7d8176c2e56f47abeee028fc4097d5b8011dc52bb63b6260605aa11e3",
   "contentHashProfile": "xhs.m6-grounded-run-capability-self-binding.v1",
   "paths": [
     "artifacts/m6-4/cohort-manifests/m6_4_action_smoke.json",
@@ -239,7 +239,7 @@
       },
       {
         "path": "integrations/dsh-xw/src/live-model-profile.mjs",
-        "sha256": "b29c770062a5340e55acad96bd1932cd9551384e1b2d443fbc9c7d2b6f2679f3"
+        "sha256": "40f45e77cadf5d8ead058bc20d2f1a48348eb43a51889e613c81d60f5fd0f0de"
       },
       {
         "path": "integrations/dsh-xw/src/live-network-guard.mjs",

@@ -192,6 +192,7 @@ test("execute produces four independent health hashes and a validator-compatible
     assert.equal(options.redirect, "error");
     assert.equal(options.headers.authorization, `Bearer ${SECRET}`);
     assert.equal(request.model, DEEPSEEK_QUALIFIED_MODEL);
+    assert.deepEqual(request.thinking, { type: "disabled" });
   }
   const toolRequest = provider.requests.at(-1).request;
   assert.deepEqual(toolRequest.tool_choice, { type: "function", function: { name: M6_LIVE_MODEL_DUMMY_TOOL_NAME } });
