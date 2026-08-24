@@ -170,6 +170,9 @@ test("Windows .NET inspector executes read-only against a temporary inherited di
   let observedError = null;
   const startedAt = Date.now();
   try {
+    const nested = join(root, "nested");
+    mkdirSync(nested);
+    writeFileSync(join(nested, "artifact.json"), "{}\n");
     assert.throws(
       () => assertM64PrivateAuditRootAcl(root, {
         processRunner(...args) {
@@ -189,6 +192,7 @@ test("Windows .NET inspector executes read-only against a temporary inherited di
       status: inspectedProcess?.status ?? null,
     }));
     assert.match(observedError.message, /(?:ROOT_DACL_NOT_PROTECTED|DANGEROUS_ALLOW_NOT_ALLOWED)/u);
+    assert.doesNotMatch(observedError.message, /INSPECTION_PROCESS_FAILED/u);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

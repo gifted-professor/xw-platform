@@ -67,7 +67,7 @@ while ($pending.Count -gt 0) {
     if ($nodes.Count -gt ${MAX_AUDIT_ENTRIES}) { throw "M64_AUDIT_TREE_TOO_LARGE" }
     foreach ($child in @($directory.GetFileSystemInfos())) {
         if (($child.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw "M64_AUDIT_REPARSE_POINT" }
-        if ($child.PSIsContainer) {
+        if ($child -is [System.IO.DirectoryInfo]) {
             $pending.Push([System.IO.DirectoryInfo]$child)
         } elseif ($child -is [System.IO.FileInfo]) {
             $childRelative = $child.FullName.Substring($rootPrefix.Length)
