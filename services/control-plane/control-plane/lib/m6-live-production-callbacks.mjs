@@ -31,6 +31,7 @@ import {
   validateM64IndependentEffectObservation,
 } from "../../../../packages/kernel/lib/m6-live-evidence.mjs";
 import {
+  M64_CANARY_SEARCH_QUERY,
   deriveM6LogicalActionIdentity,
   deriveM6TrustedApplicationRef,
   deriveM6TrustedTextRef,
@@ -63,7 +64,11 @@ import { createM6TypedTransport } from "./m6-typed-transport.mjs";
 const HASH = /^[0-9a-f]{64}$/u;
 const TERMINAL_JOBS = new Set(["succeeded", "failed", "ambiguous", "cancelled", "recovery_required"]);
 const ZERO_ACTION_PURPOSES = new Set(["M6_4_SHADOW", "M6_4_HOT_CLOSE"]);
-const HARD_FORBIDDEN_ACTION = /(payment|pay|delete|publish|public|social|comment|follow|message|account|security|settings|draft)/iu;
+// Settings *effects* remain forbidden by the effect boundary and semantic
+// redlines. The frozen smooth cohort contains navigation-only settings slots,
+// so rejecting the word "settings" here made the exact 30-run cohort
+// structurally impossible before the effect firewall was consulted.
+const HARD_FORBIDDEN_ACTION = /(payment|pay|delete|publish|public|social|comment|follow|message|account|security|draft)/iu;
 const MATCH_KEYS = Object.freeze([
   "schemaId", "matched", "selfDerived", "expectedStateHash", "beforeObservationHash",
   "afterObservationHash", "slotAuthorityHash", "independentAuthorHash", "matchHash",
@@ -418,7 +423,9 @@ function privateMaterialFor({ capture, provider, candidateBlockId, manifestStep,
         : manifestStep.actionFamily.startsWith("text-input:") ? "input"
           : manifestStep.actionFamily.startsWith("form-edit:") ? "form" : null;
       if (!role) fail("M6_TCB_PRIVATE_MATERIAL_INVALID", "text material is outside the frozen canary roles");
-      const text = `m6-canary-${scenarioKey}-${role}`;
+      const text = role === "query"
+        ? M64_CANARY_SEARCH_QUERY
+        : `m6-canary-${scenarioKey}-${role}`;
       const textRef = deriveM6TrustedTextRef(text);
       if (textRef !== manifestStep.trustedParams.textRef) fail("M6_TCB_PRIVATE_MATERIAL_BINDING_MISMATCH", "trusted text ref changed");
       return Object.freeze({ text, textRef, bounds: region, boundsRef: selected.boundsRef });
@@ -870,6 +877,7 @@ export function createM6LiveProductionCallbacks({
       }, (signal) => targetSelector(Object.freeze({
         scenarioKey: runState.authority.scenarioKey,
         slotAuthority: call.slotAuthority,
+        candidateBlockId: call.params.candidateBlockId ?? null,
         blockSet: provider.blockSet,
         dumpXml: captureValue.dumpXml,
         signal,

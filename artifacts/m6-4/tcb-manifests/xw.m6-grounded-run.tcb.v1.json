@@ -2,7 +2,7 @@
   "schemaId": "xhs.tcb.manifest.v1",
   "schemaVersion": 1,
   "manifestId": "xw.m6-grounded-run.tcb.v1",
-  "implementationClosureHash": "614f00e7d8176c2e56f47abeee028fc4097d5b8011dc52bb63b6260605aa11e3",
+  "implementationClosureHash": "caef70605ea1158292c897060f0ffd0eacbd07847b6a18ffc25f9c9169870497",
   "contentHashProfile": "xhs.m6-grounded-run-capability-self-binding.v1",
   "paths": [
     "artifacts/m6-4/cohort-manifests/m6_4_action_smoke.json",
@@ -179,7 +179,7 @@
       },
       {
         "path": "artifacts/m6-4/cohort-manifests/m6_4_reliability.json",
-        "sha256": "564d0cd5ce8a83e7369e7f436edc1ff659147987ce3ba6d62553b98ced02890d"
+        "sha256": "da543292ede7cb7e48c67e6fadb98d9dca5c47406e6b9f328e4cea1de2885514"
       },
       {
         "path": "artifacts/m6-4/cohort-manifests/m6_4_shadow.json",
@@ -187,7 +187,7 @@
       },
       {
         "path": "artifacts/m6-4/cohort-manifests/m6_4_smooth.json",
-        "sha256": "8922009e542f62d3dd3675e7f30345ff2c4015026da532fa89ee3e30076c7731"
+        "sha256": "1a46a7aff00001d5eb6c6e9b0c4a59b672b5329e5570a2ebd9dfa82ba3c40c25"
       },
       {
         "path": "artifacts/m6-4/cohort-manifests/xw.m6-effect-boundary.v1.json",
@@ -359,7 +359,7 @@
       },
       {
         "path": "packages/kernel/lib/m6-action-slot.mjs",
-        "sha256": "dd0c1dc2dcd326ce18efbce550c40bc6141ea7d6f07587ddb3b621c25790b687"
+        "sha256": "ead6e5247a27748473fad8faac18dcf98e6fd2893003f3ae1a890388ef746e84"
       },
       {
         "path": "packages/kernel/lib/m6-aggregate-closeout.mjs",
@@ -615,11 +615,11 @@
       },
       {
         "path": "services/control-plane/control-plane/lib/m6-live-production-callbacks.mjs",
-        "sha256": "3e98e742b2c8cc9aedf7ac124ebf2bd39424d1850232c20c82425ed48d6d3dd2"
+        "sha256": "d6af320e4873b85b343323ba0a88ed747d12d901694ac14c61e2ebf67fb4d21e"
       },
       {
         "path": "services/control-plane/control-plane/lib/m6-live-production-dependencies.mjs",
-        "sha256": "af0faf12c2a9b4fddfe0d26d20ad36565636fa07716d71c7b327f0aaa3193d06"
+        "sha256": "449ed206c0f337adb7b0febb549a7cfda09d537f676697dd5fce638570fa7338"
       },
       {
         "path": "services/control-plane/control-plane/lib/m6-live-window-authorization.mjs",

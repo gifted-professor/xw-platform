@@ -16,6 +16,7 @@ import {
 } from "../../packages/kernel/lib/m6-4-cohort.mjs";
 import { deriveM64EffectBoundary, M6_4_EFFECT_FAMILIES, M6_4_FORBIDDEN_EFFECT_CLASSES, validateM64EffectBoundary } from "../../packages/kernel/lib/m6-effect-boundary.mjs";
 import {
+  M64_CANARY_SEARCH_QUERY,
   deriveM6TrustedApplicationRef,
   deriveM6TrustedParameterHash,
   deriveM6TrustedTextRef,
@@ -28,7 +29,11 @@ function familySequence(primaryFamily, scenarioKey, zeroAction) {
   const appRef = (role = "primary") => deriveM6TrustedApplicationRef({
     package: ["destination", "settings"].includes(role) ? "com.android.settings" : "com.xingin.xhs",
   });
-  const textRef = (role = "query") => deriveM6TrustedTextRef(`m6-canary-${scenarioKey}-${role}`);
+  const textRef = (role = "query") => deriveM6TrustedTextRef(
+    primaryFamily === "search" && role === "query"
+      ? M64_CANARY_SEARCH_QUERY
+      : `m6-canary-${scenarioKey}-${role}`,
+  );
   switch (primaryFamily) {
     case "app-launch":
       return [["open_app", "none", { appRef: appRef() }, "launch"], ["back", "none", {}, "reset-back"]];

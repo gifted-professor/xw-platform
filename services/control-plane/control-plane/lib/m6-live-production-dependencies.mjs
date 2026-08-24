@@ -970,7 +970,7 @@ function loadM64ProductionDependenciesInternal({
     },
   });
 
-  const targetSelector = async ({ scenarioKey, slotAuthority, blockSet }) => {
+  const targetSelector = async ({ scenarioKey, slotAuthority, candidateBlockId = null, blockSet }) => {
     assertBlockSet(blockSet);
     if (!slotAuthority || slotAuthority.targetKind !== "block" || !HASH.test(slotAuthority.slotAuthorityHash || "")
       || !HASH.test(slotAuthority.targetEligibilityHash || "")) {
@@ -986,6 +986,12 @@ function loadM64ProductionDependenciesInternal({
     const matches = blockSet.blocks.filter((block) => block.safeRegion === true
       && block.flags?.sensitive !== true && block.flags?.advertisement !== true && block.flags?.keyboard !== true
       && Object.entries(rule.requiredFeatures).every(([key, expected]) => block[key] === expected));
+    if (candidateBlockId !== null) {
+      if (!HASH.test(candidateBlockId || "") || !matches.some((block) => block.blockId === candidateBlockId)) {
+        fail("M6_LIVE_TARGET_SELECTOR_POLICY_MISMATCH", "model-selected target is outside the frozen safe semantic policy", { status: 409 });
+      }
+      return candidateBlockId;
+    }
     if (matches.length !== 1 || !HASH.test(matches[0].blockId || "")) {
       fail("M6_LIVE_TARGET_SELECTOR_AMBIGUOUS", "semantic target rule did not resolve exactly one safe block", { status: 409 });
     }

@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { deriveM6ActionSlotSpec, deriveM6LogicalActionIdentity, deriveM6TrustedParameterHash, assertM6ActionSlotDispatch } from "../lib/m6-action-slot.mjs";
+import {
+  M64_CANARY_SEARCH_QUERY,
+  deriveM6ActionSlotSpec,
+  deriveM6LogicalActionIdentity,
+  deriveM6TrustedParameterHash,
+  deriveM6TrustedTextRef,
+  assertM6ActionSlotDispatch,
+} from "../lib/m6-action-slot.mjs";
 import { m6LiveSha256 as H } from "../lib/m6-live-grounding.mjs";
 
 function slotInput() {
@@ -22,6 +29,14 @@ function manifestStep(spec, overrides = {}) {
 test("content-addressed action slot participates in stable logical action identity", () => {
   const spec = deriveM6ActionSlotSpec(slotInput());
   assert.deepEqual(deriveM6LogicalActionIdentity({ planHash: H("plan"), actionSlotSpec: spec }), deriveM6LogicalActionIdentity({ planHash: H("plan"), actionSlotSpec: spec }));
+});
+
+test("the owner-selected public canary search query has one stable trusted reference", () => {
+  assert.equal(M64_CANARY_SEARCH_QUERY, "韩系美女");
+  assert.equal(
+    deriveM6TrustedTextRef(M64_CANARY_SEARCH_QUERY),
+    "eb6e1b9f815c95c3b271e13f24c1ee3626653dcc85146e30e08aab59bd8b1b84",
+  );
 });
 
 test("same family primitive, intent, and trusted parameter substitutions fail before dispatch", () => {

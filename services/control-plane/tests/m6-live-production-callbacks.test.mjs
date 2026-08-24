@@ -202,6 +202,7 @@ test("production callbacks own one formal composite capability job/session/lease
     };
     let captures = 0;
     let rawWrites = 0;
+    let selectorInput = null;
     let mono = 40_000;
     const callbacks = createM6LiveProductionCallbacks({
       state,
@@ -212,7 +213,10 @@ test("production callbacks own one formal composite capability job/session/lease
       environmentQualification: qualification(env),
       effectBoundary,
       independentOracle,
-      targetSelector: ({ blockSet }) => blockSet.blocks[0].blockId,
+      targetSelector: (input) => {
+        selectorInput = input;
+        return input.blockSet.blocks[0].blockId;
+      },
       currentStateGuard: ({ expectedState }) => ({ ...expectedState }),
       evidenceDirectoryRoot,
       auditStore,
@@ -339,8 +343,16 @@ test("production callbacks own one formal composite capability job/session/lease
     assert.equal(observed.actionCount, 0);
     assert.equal(state.listLeases().length, 1);
     assert.equal(state.listLeases()[0].expiresAt, "2030-01-01T00:04:59.000Z");
-    const grounded = await callbacks.ground({ ...baseCall, params: { frameRef: observed.frameRef, intentRef: scenario.actionPlan.slots[0].intentRef }, slotAuthority: scenario.actionPlan.slots[0] });
+    const grounded = await callbacks.ground({
+      ...baseCall,
+      params: {
+        frameRef: observed.frameRef,
+        intentRef: scenario.actionPlan.slots[0].intentRef,
+      },
+      slotAuthority: scenario.actionPlan.slots[0],
+    });
     assert.equal(grounded.disposition, "ALLOW_ONCE");
+    assert.equal(selectorInput.candidateBlockId, null);
     const actionSlotResolution = resolveM64CohortActionSlot({
       manifest,
       scenarioId: scenario.scenarioKey,
