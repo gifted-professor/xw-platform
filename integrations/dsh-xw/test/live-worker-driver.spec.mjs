@@ -83,7 +83,10 @@ test("worker directive exposes only frozen opaque refs and an exact purpose-spec
   const action = buildM64LiveWorkerDirective(directiveFixture("M6_4_ACTION_SMOKE", [slot()]));
   assert.equal(action.mode, "BOUNDED_ACTION");
   assert.deepEqual(action.steps.map(({ primitive, targetKind }) => ({ primitive, targetKind })), [{ primitive: "tap", targetKind: "block" }]);
-  assert.match(renderM64LiveWorkerPrompt(action), /phone_verify/u);
+  const actionPrompt = renderM64LiveWorkerPrompt(action);
+  assert.match(actionPrompt, /phone_verify/u);
+  assert.match(actionPrompt, /exact blockRef returned by that observation as blockId/u);
+  assert.doesNotMatch(actionPrompt, /candidateBlockId/u);
 });
 
 test("production worker driver initializes and prompts the already-owned child, waits idle, and shuts it down", async () => {

@@ -877,13 +877,13 @@ export function createM6LiveProductionCallbacks({
       }, (signal) => targetSelector(Object.freeze({
         scenarioKey: runState.authority.scenarioKey,
         slotAuthority: call.slotAuthority,
-        candidateBlockId: call.params.candidateBlockId ?? null,
+        candidateBlockId: call.params.blockId ?? null,
         blockSet: provider.blockSet,
         dumpXml: captureValue.dumpXml,
         signal,
       })));
       if (!HASH.test(candidateBlockId || "") || !provider.blockSet.blocks.some((entry) => entry.blockId === candidateBlockId)
-        || (call.params.candidateBlockId !== undefined && call.params.candidateBlockId !== candidateBlockId)) {
+        || (call.params.blockId !== undefined && call.params.blockId !== candidateBlockId)) {
         runState.ground = null;
         return Object.freeze({
           externalEffect: false,

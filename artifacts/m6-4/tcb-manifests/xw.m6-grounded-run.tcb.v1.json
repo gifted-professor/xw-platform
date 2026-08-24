@@ -2,7 +2,7 @@
   "schemaId": "xhs.tcb.manifest.v1",
   "schemaVersion": 1,
   "manifestId": "xw.m6-grounded-run.tcb.v1",
-  "implementationClosureHash": "caef70605ea1158292c897060f0ffd0eacbd07847b6a18ffc25f9c9169870497",
+  "implementationClosureHash": "fc785420b5b86f20b44a2aa8bfab13d196b7ce192fe3054cd7c541cbc60288b7",
   "contentHashProfile": "xhs.m6-grounded-run-capability-self-binding.v1",
   "paths": [
     "artifacts/m6-4/cohort-manifests/m6_4_action_smoke.json",
@@ -271,7 +271,7 @@
       },
       {
         "path": "integrations/dsh-xw/src/live-worker-driver.mjs",
-        "sha256": "7bd49ffc7e361ff9a45b98fadd62f926aee1c00894d9e7c6f2a728c4c4d7d804"
+        "sha256": "6824fdce7ac78df3a2b0e8ec1c897c07fe3efee478bdfe851554c76bb8c5c932"
       },
       {
         "path": "integrations/dsh-xw/src/stdio-supervisor.mjs",
@@ -615,7 +615,7 @@
       },
       {
         "path": "services/control-plane/control-plane/lib/m6-live-production-callbacks.mjs",
-        "sha256": "d6af320e4873b85b343323ba0a88ed747d12d901694ac14c61e2ebf67fb4d21e"
+        "sha256": "e5fa78a2a7b902e5b4b530c195a4337ef29b04e12c641e4230621a79caf38e95"
       },
       {
         "path": "services/control-plane/control-plane/lib/m6-live-production-dependencies.mjs",
