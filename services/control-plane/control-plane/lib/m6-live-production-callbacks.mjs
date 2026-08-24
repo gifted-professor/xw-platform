@@ -481,6 +481,7 @@ export function createM6LiveProductionCallbacks({
   environmentQualification,
   effectBoundary,
   independentOracle,
+  independentObservationSurface = null,
   targetSelector,
   currentStateGuard,
   createCurrentStateGuard = null,
@@ -502,6 +503,8 @@ export function createM6LiveProductionCallbacks({
     || !independentOracle || typeof independentOracle.loadExpectation !== "function"
     || typeof independentOracle.observe !== "function" || typeof independentOracle.compare !== "function"
     || typeof targetSelector !== "function"
+    || (independentObservationSurface !== null
+      && (!["register", "complete"].every((method) => typeof independentObservationSurface?.[method] === "function")))
     || (typeof currentStateGuard !== "function" && typeof createCurrentStateGuard !== "function")
     || typeof tcbFactory !== "function" || typeof authorityNodeId !== "string" || authorityNodeId === ""
     || typeof evidenceDirectoryRoot !== "string" || !isAbsolute(evidenceDirectoryRoot)) {
@@ -702,6 +705,7 @@ export function createM6LiveProductionCallbacks({
       completion: null,
       resetReceipt: null,
       closeReceipt: null,
+      fence: call.fence,
       closed: false,
     };
     runs.set(authority.runId, runState);
@@ -752,11 +756,7 @@ export function createM6LiveProductionCallbacks({
   }
 
   async function observeOracle(runState, phase, signal = null) {
-    const value = await runExternalSeam({
-      seam: `oracle-observe-${phase}`,
-      signal,
-      timeoutMs: oracleTimeoutMs,
-    }, (signal) => independentOracle.observe(Object.freeze({
+    const oracleAuthority = Object.freeze({
       phase,
       manifestHash: runState.authority.manifestHash,
       scenarioKey: runState.authority.scenarioKey,
@@ -768,7 +768,56 @@ export function createM6LiveProductionCallbacks({
       expectedArtifactHash: runState.expectation.expectedArtifactHash,
       independentAuthorHash: runState.expectation.independentAuthorHash,
       signal,
-    })));
+    });
+    let requestHash = null;
+    if (independentObservationSurface) {
+      const ticket = independentObservationSurface.register({
+        authority: runState.authority,
+        expectation: runState.expectation,
+        phase,
+        gateEpochHash: runState.authority.gateEpochHash,
+        resetObligations: runState.authority.familyRule.resetObligations,
+        capture: async () => {
+          state.assertM6GateFence(runState.fence);
+          const fresh = await capture(runState, { fence: runState.fence, signal }, { commitAsLatest: false });
+          state.assertM6GateFence(runState.fence);
+          if (!HASH.test(fresh.frame?.manifestSha256 || "")) {
+            fail("M64_DEVICE_READ_CAPTURE_EVIDENCE_INVALID", "independent device read requires one hashed capture frame manifest");
+          }
+          return {
+            gateEpochHash: runState.authority.gateEpochHash,
+            frameRef: fresh.frameRef,
+            evidenceSha256: fresh.frame.manifestSha256,
+            capturedAt: fresh.frame.capturedAt,
+          };
+        },
+      });
+      requestHash = ticket.request.requestHash;
+    }
+    let value;
+    try {
+      value = await runExternalSeam({
+        seam: `oracle-observe-${phase}`,
+        signal,
+        timeoutMs: oracleTimeoutMs,
+      }, async (activeSignal) => {
+        for (;;) {
+          try { return await independentOracle.observe(Object.freeze({ ...oracleAuthority, signal: activeSignal })); }
+          catch (error) {
+            if (!independentObservationSurface || ![
+              "M6_LIVE_DEPENDENCY_ARTIFACT_UNAVAILABLE", "M6_LIVE_ORACLE_OBSERVATION_UNAVAILABLE",
+            ].includes(error?.code)) throw error;
+            await new Promise((resolveWait, rejectWait) => {
+              const timer = setTimeout(resolveWait, 25);
+              timer.unref?.();
+              activeSignal.addEventListener("abort", () => { clearTimeout(timer); rejectWait(activeSignal.reason); }, { once: true });
+            });
+          }
+        }
+      });
+    } finally {
+      if (requestHash) independentObservationSurface.complete(requestHash);
+    }
     const checked = assertIndependentObservation(value, {
       authority: runState.authority,
       expectation: runState.expectation,

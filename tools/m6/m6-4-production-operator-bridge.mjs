@@ -832,6 +832,7 @@ export function validateM64ExternalNormalCloseBundle(bundle, {
   aggregate,
   attemptEvidence = [],
   nowMs = Date.now(),
+  requestHash = null,
 } = {}) {
   const errors = [];
   const purpose = window?.manifest?.purpose;
@@ -851,6 +852,10 @@ export function validateM64ExternalNormalCloseBundle(bundle, {
     || canonical(bundle?.cohortAggregate) !== canonical(aggregate)
     || canonical(bundle?.aggregateSeal?.sealPayload?.cohortAggregate) !== canonical(aggregate)) {
     errors.push("M64_EXTERNAL_CLOSE_AGGREGATE_MISMATCH");
+  }
+  if (requestHash !== null && (!HASH.test(requestHash)
+    || bundle?.aggregateSeal?.sealPayload?.normalCloseRequestHash !== requestHash)) {
+    errors.push("M64_EXTERNAL_CLOSE_REQUEST_MISMATCH");
   }
   if (bundle?.package?.epoch?.parentEpochHash !== window?.authorization?.gateEpochHash
     || bundle?.package?.authorization?.envelopeHash !== window?.authorization?.envelopeHash
@@ -906,9 +911,12 @@ export function loadM64ExternalNormalCloseBundle(descriptor, {
   aggregate,
   attemptEvidence = [],
   nowMs = Date.now(),
+  requestHash = null,
 } = {}) {
   const bundle = loadM64SealedJsonArtifact(descriptor, `${window?.manifest?.purpose || "unknown"} external normal-close bundle`);
-  const validation = validateM64ExternalNormalCloseBundle(bundle, { window, aggregate, attemptEvidence, nowMs });
+  const validation = validateM64ExternalNormalCloseBundle(bundle, {
+    window, aggregate, attemptEvidence, nowMs, requestHash,
+  });
   if (!validation.ok) {
     fail("WAIT_EXTERNAL_AUTHORITY", "an exact externally signed normal-close bundle is not available", {
       reasons: validation.errors,
@@ -981,7 +989,7 @@ export function createM64NormalCloseInboxResolver({
       if (descriptor) {
         try {
           const bundle = loadM64ExternalNormalCloseBundle({ path: descriptor.path, sha256: descriptor.sha256 }, {
-            window, aggregate, attemptEvidence, nowMs: now(),
+            window, aggregate, attemptEvidence, nowMs: now(), requestHash,
           });
           if (Date.parse(bundle.package.epoch.issuedAt) < requestedAtMs
             || Date.parse(bundle.package.epoch.issuedAt) > deadline

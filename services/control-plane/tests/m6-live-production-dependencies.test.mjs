@@ -430,6 +430,11 @@ test("production dependency loader assembles sealed environment/oracle/selector/
   const dependencies = fixture.load();
   assert.equal(dependencies.environmentAttestation.attestationHash, fixture.environmentAttestation.attestationHash);
   assert.equal(dependencies.effectBoundary.boundaryHash, fixture.boundary.boundaryHash);
+  assert.equal(dependencies.independentObservationAuthority.keyId, "observer-1");
+  assert.match(dependencies.independentObservationAuthority.observerHash, /^[0-9a-f]{64}$/u);
+  assert.equal(dependencies.independentObservationAuthority.publicKey.asymmetricKeyType, "ed25519");
+  assert.equal(dependencies.independentObservationAuthority.maxAgeMs, 5_000);
+  assert.equal(typeof dependencies.independentObservationAuthority.observationRoot, "string");
   const expected = await dependencies.independentOracle.loadExpectation(fixture.authority);
   assert.equal(expected.expectedArtifactHash, fixture.expectation.expectedArtifactHash);
 

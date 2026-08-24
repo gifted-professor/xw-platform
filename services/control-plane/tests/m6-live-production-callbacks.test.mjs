@@ -130,6 +130,8 @@ test("production callbacks own one formal composite capability job/session/lease
     const env = environment();
     const auditStore = inMemoryAudit();
     let hangOracle = false;
+    let pendingObservationWork = null;
+    const completedObservationWork = [];
     const independentOracle = {
       async loadExpectation(authority) {
         return deriveM64OracleExpectation({
@@ -151,6 +153,13 @@ test("production callbacks own one formal composite capability job/session/lease
         });
       },
       async observe(authority) {
+        assert.ok(pendingObservationWork, "oracle lookup must be preceded by one PENDING work request");
+        const committedCapture = lastCapturedFrame;
+        const receipt = await pendingObservationWork.capture();
+        lastCapturedFrame = committedCapture;
+        assert.equal(receipt.gateEpochHash, fence.epochHash);
+        assert.match(receipt.frameRef, /^[0-9a-f]{64}$/u);
+        assert.match(receipt.evidenceSha256, /^[0-9a-f]{64}$/u);
         if (hangOracle) return new Promise(() => {});
         const familyRule = effectBoundary.families.find((entry) => entry.primaryFamily === authority.primaryFamily);
         return deriveM64IndependentEffectObservation({
@@ -215,6 +224,18 @@ test("production callbacks own one formal composite capability job/session/lease
       environmentQualification: qualification(env),
       effectBoundary,
       independentOracle,
+      independentObservationSurface: {
+        register(input) {
+          assert.equal(pendingObservationWork, null, "only one oracle phase may be pending");
+          pendingObservationWork = input;
+          return { request: { requestHash: H(`observation-work:${completedObservationWork.length}`) } };
+        },
+        complete(requestHash) {
+          assert.ok(pendingObservationWork, "completion requires one pending oracle phase");
+          completedObservationWork.push(requestHash);
+          pendingObservationWork = null;
+        },
+      },
       targetSelector: (input) => {
         selectorInput = input;
         return input.blockSet.blocks[0].blockId;
@@ -229,6 +250,7 @@ test("production callbacks own one formal composite capability job/session/lease
         const frameId = H(`frame:${captures}`);
         lastCapturedFrame = {
           frameId,
+          manifestSha256: H(`frame-manifest:${captures}`),
           width: 1080,
           height: 2400,
           focusHash: H("focus"),
@@ -421,6 +443,8 @@ test("production callbacks own one formal composite capability job/session/lease
     assert.equal(ledger.status, "COMPLETED");
     assert.equal(state.sessionExists(ledger.sessionId), false);
     assert.equal(state.getM64LiveScenarioClaim(scenarioClaimHash).status, "FINALIZED");
+    assert.equal(pendingObservationWork, null);
+    assert.ok(completedObservationWork.length >= 3, "before/after/final oracle work must reach terminal cleanup");
   } finally {
     state.close();
   }

@@ -16,6 +16,7 @@ import { AdapterRegistry, ControlPlane } from "./lib/control-plane.mjs";
 import { EvidenceStore } from "./lib/evidence-store.mjs";
 import { M6FrameEvidenceStore } from "./lib/m6-frame-evidence-store.mjs";
 import { createM6FrameCapture } from "./lib/m6-frame-capture.mjs";
+import { createM64DeviceReadSnapshotSurface } from "./lib/m6-device-read-snapshot.mjs";
 import { loadM6Gate } from "./lib/m6-gate-loader.mjs";
 import { createM6GateFOperations, loadM6GateFOperationsConfigFromEnv } from "./lib/m6-gate-f-operations.mjs";
 import { assertM6GateFSafetyCloseArmMatchesPackage } from "./lib/m6-gate-safety-close-arm.mjs";
@@ -505,6 +506,7 @@ export function createControlPlaneRuntime({
   });
 
   let m6LiveEntry = null;
+  let m6DeviceReadSnapshot = null;
   if (m6LiveEntryEnabled) {
     const productionConfig = resolvedM6LiveEntryConfig;
     const callbackOptions = m6LiveProductionCallbacksOptions ?? {};
@@ -518,6 +520,16 @@ export function createControlPlaneRuntime({
       callbackOptions,
       productionConfig,
     });
+    const observerAuthority = sealedProductionDependencies.independentObservationAuthority;
+    if (observerAuthority) {
+      m6DeviceReadSnapshot = createM64DeviceReadSnapshotSurface({
+        workRoot: join(observerAuthority.observationRoot, "work-requests"),
+        observerKeyId: observerAuthority.keyId,
+        observerPublicKey: observerAuthority.publicKey,
+        maxAgeMs: Math.min(observerAuthority.maxAgeMs, 5_000),
+        now: callbackOptions.now ?? Date.now,
+      });
+    }
     const productionCallbacks = m6LiveCallbacks ?? createM6LiveProductionCallbacks({
       ...sealedProductionDependencies,
       ...callbackOptions,
@@ -532,6 +544,7 @@ export function createControlPlaneRuntime({
         ?? (typeof callbackRuntimeRoot === "string" && isAbsolute(callbackRuntimeRoot)
           ? join(callbackRuntimeRoot, "m6-audit") : null),
       authorityNodeId: nodeId,
+      independentObservationSurface: m6DeviceReadSnapshot,
     });
     const persistenceRoot = productionConfig.runtimeEnv?.XW_DSH_PERSISTENCE_ROOT;
     const productionWorkerDriver = m6LiveWorkerDriver
@@ -595,6 +608,7 @@ export function createControlPlaneRuntime({
     nodeId,
     policyMode: resolvedPolicyMode,
     m6,
+    m6DeviceReadSnapshot,
     m6GateFOperations,
     m6LiveEntry,
     m6RuntimeMode,

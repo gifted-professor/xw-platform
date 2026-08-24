@@ -164,7 +164,7 @@ function publicGrantView(grant) {
 }
 
 export class ControlRouter {
-  constructor({ control, state, capabilities, evidence, delegationGrants = null, canaryEvidenceAuthorizer = null, nodeId = "DESKTOP-3I1EVHE", m6 = null, m6GateFOperations = null, m6LiveEntry = null, m6RuntimeMode = "STANDARD", m6StartupRecovery = null }) {
+  constructor({ control, state, capabilities, evidence, delegationGrants = null, canaryEvidenceAuthorizer = null, nodeId = "DESKTOP-3I1EVHE", m6 = null, m6DeviceReadSnapshot = null, m6GateFOperations = null, m6LiveEntry = null, m6RuntimeMode = "STANDARD", m6StartupRecovery = null }) {
     this.control = control;
     this.state = state;
     this.capabilities = capabilities;
@@ -173,6 +173,7 @@ export class ControlRouter {
     this.canaryEvidenceAuthorizer = canaryEvidenceAuthorizer;
     this.nodeId = nodeId;
     this.m6 = m6;
+    this.m6DeviceReadSnapshot = m6DeviceReadSnapshot;
     this.m6GateFOperations = m6GateFOperations;
     this.m6LiveEntry = m6LiveEntry;
     this.m6RuntimeMode = m6RuntimeMode;
@@ -817,6 +818,9 @@ export class ControlRouter {
     }
     if (this.m6 && method === "POST" && path === "/control/v1/m6/frames/closeout") {
       return { status: 200, body: this.m6.closeout(this.closedM6Input(body)) };
+    }
+    if (this.m6DeviceReadSnapshot && method === "POST" && path === "/control/v1/m6/device-read-snapshot") {
+      return { status: 200, body: { snapshot: await this.m6DeviceReadSnapshot.consume(requireBody(body)) } };
     }
     if (path.startsWith("/control/v1/m6/")) {
       throw new ControlPlaneError(

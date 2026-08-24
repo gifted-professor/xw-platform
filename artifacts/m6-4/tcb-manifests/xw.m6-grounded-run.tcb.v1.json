@@ -2,7 +2,7 @@
   "schemaId": "xhs.tcb.manifest.v1",
   "schemaVersion": 1,
   "manifestId": "xw.m6-grounded-run.tcb.v1",
-  "implementationClosureHash": "fc785420b5b86f20b44a2aa8bfab13d196b7ce192fe3054cd7c541cbc60288b7",
+  "implementationClosureHash": "ac79080ff7919c512bb3e2101229f938903026426dd6a040711a2e242540e0f6",
   "contentHashProfile": "xhs.m6-grounded-run-capability-self-binding.v1",
   "paths": [
     "artifacts/m6-4/cohort-manifests/m6_4_action_smoke.json",
@@ -100,6 +100,7 @@
     "services/control-plane/control-plane/lib/implementation-closure.mjs",
     "services/control-plane/control-plane/lib/json-schema-validator.mjs",
     "services/control-plane/control-plane/lib/m6-c1-runtime-owner-lock.mjs",
+    "services/control-plane/control-plane/lib/m6-device-read-snapshot.mjs",
     "services/control-plane/control-plane/lib/m6-frame-capture.mjs",
     "services/control-plane/control-plane/lib/m6-frame-evidence-store.mjs",
     "services/control-plane/control-plane/lib/m6-gate-f-operations.mjs",
@@ -467,7 +468,7 @@
       },
       {
         "path": "services/control-plane/control-plane/bootstrap.mjs",
-        "sha256": "9c3a6b4aadebfbeb4a01888ab0685207e8f0111bcb783445ce1aebcdfa8e83e5"
+        "sha256": "e6e93daee0c939800aaddc50158b73451764cf0c17384bd56e6a81de19ccc1e7"
       },
       {
         "path": "services/control-plane/control-plane/lib/authorization-decision.mjs",
@@ -550,6 +551,10 @@
         "sha256": "ef40c21fe68979150b3b30fc1f7374eaf8f31075c83020ca96d915350269d710"
       },
       {
+        "path": "services/control-plane/control-plane/lib/m6-device-read-snapshot.mjs",
+        "sha256": "b967b9c101745f4e00f958784c47fbb10249446ee8bc16dc5de64003a9de903b"
+      },
+      {
         "path": "services/control-plane/control-plane/lib/m6-frame-capture.mjs",
         "sha256": "6841a85cdc3e6012607459d5ae72dc70946c82debea945b7a381f36fb5d8ca1c"
       },
@@ -615,11 +620,11 @@
       },
       {
         "path": "services/control-plane/control-plane/lib/m6-live-production-callbacks.mjs",
-        "sha256": "e5fa78a2a7b902e5b4b530c195a4337ef29b04e12c641e4230621a79caf38e95"
+        "sha256": "ef62ab37c7ed5bee0e4d60e5caa739790a8abac9c285a9993703e90d6aebb034"
       },
       {
         "path": "services/control-plane/control-plane/lib/m6-live-production-dependencies.mjs",
-        "sha256": "449ed206c0f337adb7b0febb549a7cfda09d537f676697dd5fce638570fa7338"
+        "sha256": "7d6945684874ed92851d94f3af2776f3e2bb77e3d4df377a1d4964dc78652ea3"
       },
       {
         "path": "services/control-plane/control-plane/lib/m6-live-window-authorization.mjs",
@@ -715,7 +720,7 @@
       },
       {
         "path": "services/control-plane/control-plane/router.mjs",
-        "sha256": "30756c024993863f6d8a35e9eaa655ca005dcbb8317334b3e21174518ff267e5"
+        "sha256": "ce0e513ffae3768e681b85b20d53b6765964c1e2d700c15c9ff5f57503f2329f"
       },
       {
         "path": "services/control-plane/control-plane/schema/effect-intent.schema.json",

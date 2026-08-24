@@ -1028,6 +1028,13 @@ function loadM64ProductionDependenciesInternal({
     environmentQualification: environment.environmentQualification,
     effectBoundary,
     independentOracle,
+    independentObservationAuthority: Object.freeze({
+      keyId: oracle.policy.observationObserverKeyId,
+      observerHash: oracle.policy.independentObserverHash,
+      publicKey: oracle.observerKey,
+      maxAgeMs: oracle.policy.maxObservationAgeMs,
+      observationRoot: oracle.observationRoot,
+    }),
     targetSelector,
     currentStateGuard,
     createCurrentStateGuard,
