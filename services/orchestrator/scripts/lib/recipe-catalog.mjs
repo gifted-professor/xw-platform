@@ -36,6 +36,7 @@ export const RECIPE_PRIMITIVE_KINDS = Object.freeze([
   "input",
   "back",
   "launch",
+  "wait",
 ]);
 
 const PRIMITIVE_SET = new Set(RECIPE_PRIMITIVE_KINDS);
@@ -205,6 +206,7 @@ export function validateRecipeSteps(steps) {
       case "dump":
       case "screenshot":
       case "back":
+      case "wait":
         break;
       default:
         throw err(`step ${id}: unknown kind ${kind}`);

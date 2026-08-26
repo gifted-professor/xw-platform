@@ -383,5 +383,6 @@ test("Phase 5: validateRecipeExecutor keeps capability wrapper default", () => {
     "screenshot",
     "swipe",
     "tapSelector",
+    "wait",
   ]);
 });
