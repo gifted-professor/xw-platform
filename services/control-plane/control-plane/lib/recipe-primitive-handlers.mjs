@@ -30,7 +30,10 @@ function sleep(ms) {
 export function mapRecipeKindToPrimitiveParams(kind, args = {}) {
   switch (kind) {
     case "screenshot":
-      return { primitive: "screen", ...(args.label ? { label: args.label } : {}) };
+      // Explorer `screen` primitive does not accept a `label` param (its params
+      // schema is strict and rejects unknown keys). `label` stays a recipe-level
+      // annotation; evidence is labeled by stepId/jobId by the evidence system.
+      return { primitive: "screen" };
     case "dump":
       return { primitive: "dump_ui", ...(args.format ? { format: args.format } : {}) };
     case "focus":

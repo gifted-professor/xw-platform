@@ -166,3 +166,9 @@ test("input mapping: deferRestore passed through", () => {
 test("RECIPE_PRIMITIVE_KINDS includes wait", () => {
   assert.ok(RECIPE_PRIMITIVE_KINDS.includes("wait"));
 });
+
+test("screenshot mapping drops label (explorer screen primitive rejects unknown keys)", () => {
+  const p = mapRecipeKindToPrimitiveParams("screenshot", { label: "search-result" });
+  assert.equal(p.primitive, "screen");
+  assert.equal("label" in p, false, "label must not be forwarded to the screen primitive");
+});
