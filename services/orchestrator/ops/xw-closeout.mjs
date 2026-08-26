@@ -54,6 +54,15 @@ const DEFAULT_ROOTS = Object.freeze({
 const MODES = new Set(["explorer", "runner", "repair", "engineering", "recover"]);
 const STEP_KINDS = new Set(["script", "job", "decision", "blocker", "effect", "evidence"]);
 const STEP_STATUSES = new Set(["ok", "fail", "blocked", "skipped", "unverified"]);
+const ADAPTIVE_ROUTES = new Set(["RECIPE", "DUMP", "VISION", "STOP"]);
+const ADAPTIVE_REASON_CODES = new Set([
+  "EXACT_RECIPE", "UNIQUE_DUMP", "DUMP_SPARSE", "AMBIGUOUS",
+  "REDLINE", "SECOND_FAILURE", "DUMP_FAILED", "VISION_RUNTIME_UNAVAILABLE",
+  "PROFILE_DRIFT", "NOT_READY",
+]);
+const ADAPTIVE_PROFILE_KEYS = new Set([
+  "alias", "package", "activity", "width", "height", "orientation", "appVersion",
+]);
 const SECRET_KEY_RE =
   /(token|password|secret|authorization|api[_-]?key|cookie|credential)/i;
 
@@ -1934,6 +1943,92 @@ function normalizeStepEvidence(list) {
   return out;
 }
 
+/**
+ * Validate the optional adaptiveDecision object on a step (04 fast-lane).
+ * Strict whitelist: unknown keys fail closed. Returns a normalized object or null.
+ * Schema follows docs/plans/xhs-04-adaptive-xwskill-fast-plan-v2.md §5.1.
+ */
+function normalizeAdaptiveDecision(raw) {
+  if (raw == null) return null;
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    fail("adaptiveDecision must be a JSON object");
+  }
+  const allowed = new Set([
+    "goalSignature", "route", "reasonCode", "profile", "targetFailureCount",
+    "historyRefs", "evidenceRefs", "blockId", "assertion",
+  ]);
+  for (const key of Object.keys(raw)) {
+    if (!allowed.has(key)) fail(`adaptiveDecision unknown field: ${key}`);
+  }
+  const goalSignature = raw.goalSignature;
+  const route = raw.route;
+  const reasonCode = raw.reasonCode;
+  const profile = raw.profile;
+  const targetFailureCount = raw.targetFailureCount;
+  if (typeof goalSignature !== "string" || !goalSignature.trim()) {
+    fail("adaptiveDecision.goalSignature required (non-empty string)");
+  }
+  if (!ADAPTIVE_ROUTES.has(route)) {
+    fail(`adaptiveDecision.route must be one of ${[...ADAPTIVE_ROUTES].join("|")}`);
+  }
+  if (typeof reasonCode !== "string" || !reasonCode.trim()) {
+    fail("adaptiveDecision.reasonCode required (non-empty string)");
+  }
+  if (!ADAPTIVE_REASON_CODES.has(reasonCode)) {
+    fail(`adaptiveDecision.reasonCode not in whitelist: ${reasonCode}`);
+  }
+  if (typeof profile !== "object" || Array.isArray(profile) || profile == null) {
+    fail("adaptiveDecision.profile required (object)");
+  }
+  for (const key of Object.keys(profile)) {
+    if (!ADAPTIVE_PROFILE_KEYS.has(key)) fail(`adaptiveDecision.profile unknown field: ${key}`);
+  }
+  if (typeof profile.alias !== "string" || !profile.alias.trim()) {
+    fail("adaptiveDecision.profile.alias required");
+  }
+  const fc = Number(targetFailureCount);
+  if (!Number.isInteger(fc) || fc < 0 || fc > 2) {
+    fail("adaptiveDecision.targetFailureCount must be integer 0..2");
+  }
+  const out = {
+    goalSignature: goalSignature.trim(),
+    route,
+    reasonCode,
+    profile: {
+      alias: String(profile.alias),
+      package: profile.package == null ? null : String(profile.package),
+      activity: profile.activity == null ? null : String(profile.activity),
+      width: profile.width == null ? null : Number(profile.width),
+      height: profile.height == null ? null : Number(profile.height),
+      orientation: profile.orientation == null ? null : String(profile.orientation),
+      appVersion: profile.appVersion == null ? null : String(profile.appVersion),
+    },
+    targetFailureCount: fc,
+  };
+  if (raw.historyRefs != null) {
+    if (!Array.isArray(raw.historyRefs)) fail("adaptiveDecision.historyRefs must be array");
+    out.historyRefs = raw.historyRefs.map((r) => String(r));
+  }
+  if (raw.evidenceRefs != null) {
+    if (!Array.isArray(raw.evidenceRefs)) fail("adaptiveDecision.evidenceRefs must be array");
+    out.evidenceRefs = raw.evidenceRefs.map((r) => String(r));
+  }
+  if (raw.blockId != null) {
+    if (typeof raw.blockId !== "string") fail("adaptiveDecision.blockId must be string");
+    out.blockId = raw.blockId;
+  }
+  if (raw.assertion != null) {
+    if (typeof raw.assertion !== "object" || Array.isArray(raw.assertion)) {
+      fail("adaptiveDecision.assertion must be object");
+    }
+    const a = raw.assertion;
+    if (typeof a.name !== "string" || !a.name.trim()) fail("adaptiveDecision.assertion.name required");
+    if (typeof a.pass !== "boolean") fail("adaptiveDecision.assertion.pass must be boolean");
+    out.assertion = { name: a.name.trim(), pass: a.pass };
+  }
+  return out;
+}
+
 function cmdStep(args) {
   const runId = args.run;
   const inputPath = args.input;
@@ -1980,6 +2075,8 @@ function cmdStep(args) {
     blockerReason: raw.blockerReason == null ? null : String(raw.blockerReason),
     notes: raw.notes == null ? null : String(raw.notes),
   };
+  const adaptiveDecision = normalizeAdaptiveDecision(raw.adaptiveDecision);
+  if (adaptiveDecision) step.adaptiveDecision = adaptiveDecision;
   if (step.exitCode != null && !Number.isFinite(step.exitCode)) {
     fail("step.exitCode must be a number or null");
   }

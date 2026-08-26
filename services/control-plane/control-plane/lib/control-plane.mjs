@@ -44,6 +44,8 @@ import {
   requireActionRequest,
   requireActionResult,
 } from "./open-action-executor.mjs";
+import { SingleDeviceRecipeRunner, resolveFixedRpaAlias } from "./single-device-recipe-runner.mjs";
+import { filterOverlayRecipes, resolveOverlayMode } from "./generated-overlay.mjs";
 
 function ledgerView(row) {
   if (!row) return null;
@@ -335,6 +337,19 @@ export class ControlPlane {
       // and sinks the provenance debt; legacy stays fail-closed.
       ...(this.runtimePolicyMode ? { policyMode: this.runtimePolicyMode } : {}),
       ...(this.debtOnLowDisk ? { debtSink: (entry) => this.evidenceDebt.push(entry) } : {}),
+    });
+    // PR1 Single-Device Recipe Runner: fixed alias 01, one lease, no DeviceRun yet.
+    // recipeOverlay is attached later by bootstrap (load-only); resolveRecipe reads it live.
+    this.recipeOverlay = null;
+    this.recipeCatalogExtras = [];
+    this.rpaAlias = resolveFixedRpaAlias();
+    this.recipeRuns = new SingleDeviceRecipeRunner({
+      fixedAlias: this.rpaAlias,
+      createSession: (opts) => this.createSession(opts),
+      executeSessionAction: (sessionId, token, action) => this.executeSessionAction(sessionId, token, action),
+      heartbeatSession: (sessionId, token) => this.heartbeatSession(sessionId, token),
+      releaseSession: (sessionId, token) => this.releaseSession(sessionId, token),
+      resolveRecipe: (recipeId, revision) => this.resolveRecipeForRunner(recipeId, revision),
     });
     this.firewall = new EffectFirewall();
     this.discoveryProducer = typeof discoveryProducer === "function" ? discoveryProducer : null;
@@ -2935,5 +2950,89 @@ export class ControlPlane {
         } catch {}
       }
     }
+  }
+
+  /**
+   * Resolve a sealed recipe for the Single-Device Runner from overlay + extras.
+   * Overlay is attach-only at bootstrap; this is the first execute path that consumes it.
+   */
+  resolveRecipeForRunner(recipeId, revision = null) {
+    const id = String(recipeId || "").trim();
+    if (!id) return null;
+    const extras = Array.isArray(this.recipeCatalogExtras) ? this.recipeCatalogExtras : [];
+    const mode = this.recipeOverlay?.mode || resolveOverlayMode();
+    const overlayList = this.recipeOverlay?.ok && Array.isArray(this.recipeOverlay.recipes)
+      ? filterOverlayRecipes(this.recipeOverlay.recipes, {
+          mode,
+          alias: this.rpaAlias || resolveFixedRpaAlias(),
+          canaryAlias: this.rpaAlias || resolveFixedRpaAlias(),
+        })
+      : [];
+    const pool = [...extras, ...overlayList];
+    const matches = pool.filter((r) => r && r.recipeId === id);
+    if (matches.length === 0) return null;
+    if (revision != null) {
+      return matches.find((r) => r.revision === revision) || null;
+    }
+    return matches.reduce((best, r) => (!best || r.revision > best.revision ? r : best), null);
+  }
+
+  planRecipeRun(input = {}) {
+    try {
+      return this.recipeRuns.plan(input);
+    } catch (e) {
+      if (e instanceof ControlPlaneError) throw e;
+      throw new ControlPlaneError(
+        e?.code || "RECIPE_PLAN_FAILED",
+        e instanceof Error ? e.message : String(e),
+        { status: e?.status || 400, details: e?.details || {} },
+      );
+    }
+  }
+
+  async startRecipeRun(input = {}) {
+    const body = input && typeof input === "object" ? input : {};
+    try {
+      return await this.recipeRuns.start({
+        recipe: body.recipe ?? null,
+        recipeId: body.recipeId ?? null,
+        revision: body.revision ?? null,
+        params: body.params ?? {},
+        actorId: body.actorId,
+        dryRun: Boolean(body.dryRun),
+        live: body.live != null ? Boolean(body.live) : !body.dryRun,
+        canaryMode: Boolean(body.canaryMode),
+      });
+    } catch (e) {
+      if (e instanceof ControlPlaneError) throw e;
+      throw new ControlPlaneError(
+        e?.code || "RECIPE_RUN_FAILED",
+        e instanceof Error ? e.message : String(e),
+        { status: e?.status || 400, details: e?.details || {} },
+      );
+    }
+  }
+
+  getRecipeRun(recipeRunId) {
+    const run = this.recipeRuns.getRun(recipeRunId);
+    if (!run) {
+      throw new ControlPlaneError("RECIPE_RUN_NOT_FOUND", `recipe run ${recipeRunId} not found`, { status: 404 });
+    }
+    return run;
+  }
+
+  async cancelRecipeRun(recipeRunId) {
+    try {
+      return await this.recipeRuns.cancel(recipeRunId);
+    } catch (e) {
+      if (e?.code === "RECIPE_RUN_NOT_FOUND") {
+        throw new ControlPlaneError(e.code, e.message, { status: 404 });
+      }
+      throw e;
+    }
+  }
+
+  listRecipeRuns() {
+    return this.recipeRuns.listRuns();
   }
 }

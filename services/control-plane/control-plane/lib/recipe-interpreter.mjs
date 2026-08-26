@@ -11,6 +11,8 @@
  *
  * Semantic selectors preferred; x/y coords are device+version-bound fallbacks.
  */
+import { createHash } from "node:crypto";
+
 export const RECIPE_PRIMITIVE_KINDS = Object.freeze([
   "callCapability",
   "dump",
@@ -21,6 +23,19 @@ export const RECIPE_PRIMITIVE_KINDS = Object.freeze([
   "input",
   "back",
   "launch",
+  "wait",
+]);
+
+/** Max settle wait for fixed-script `wait` steps (ms). */
+export const RECIPE_WAIT_MS_MAX = 10_000;
+
+/** Assertion types evaluated by evaluateRecipeAssertion (PR1 sparse set). */
+export const RECIPE_ASSERTION_TYPES = Object.freeze([
+  "packageEquals",
+  "activityContains",
+  "activityMatches",
+  "textExists",
+  "resourceIdExists",
 ]);
 
 const PRIMITIVE_SET = new Set(RECIPE_PRIMITIVE_KINDS);
@@ -203,6 +218,8 @@ function validateParamsForKind(kind, params, stepId) {
         out.selector = typeof p.selector === "string" ? p.selector.trim() : { ...p.selector };
       }
       if (p.clear != null) out.clear = Boolean(p.clear);
+      if (p.enter != null) out.enter = Boolean(p.enter);
+      if (p.clearFirst != null) out.clearFirst = Boolean(p.clearFirst);
       return out;
     }
     case "back": {
@@ -219,9 +236,235 @@ function validateParamsForKind(kind, params, stepId) {
         ...(isNonEmptyString(p.activity) ? { activity: String(p.activity).trim() } : {}),
       };
     }
+    case "wait": {
+      const ms = p.ms ?? p.durationMs ?? p.timeoutMs;
+      if (!Number.isInteger(ms) || ms < 0) {
+        throw err(`step ${stepId}: wait requires params.ms as a non-negative integer`);
+      }
+      if (ms > RECIPE_WAIT_MS_MAX) {
+        throw err(`step ${stepId}: wait.ms exceeds max ${RECIPE_WAIT_MS_MAX}`);
+      }
+      return { ms };
+    }
     default:
       throw err(`step ${stepId}: unknown kind ${kind}`);
   }
+}
+
+/**
+ * Bind `$input.path` placeholders in recipe params (and assertion values).
+ * Only own properties of `input` are readable; missing paths throw.
+ * Literal dollar: use `$$` → `$`.
+ *
+ * @param {unknown} value
+ * @param {object} input
+ * @returns {unknown}
+ */
+export function bindRecipeInput(value, input = {}) {
+  if (!isObject(input)) throw err("bindRecipeInput: input must be an object", "RECIPE_INPUT_INVALID");
+  return bindValue(value, input);
+}
+
+function bindValue(value, input) {
+  if (typeof value === "string") return bindString(value, input);
+  if (Array.isArray(value)) return value.map((v) => bindValue(v, input));
+  if (isObject(value)) {
+    const out = {};
+    for (const [k, v] of Object.entries(value)) out[k] = bindValue(v, input);
+    return out;
+  }
+  return value;
+}
+
+function bindString(str, input) {
+  // Exact `$input.foo.bar` → typed value (number/bool preserved).
+  const exact = /^\$input(?:\.([A-Za-z_][A-Za-z0-9_]*))+$/.exec(str);
+  if (exact) {
+    return readInputPath(str.slice("$input.".length), input);
+  }
+  // Embedded: replace `$input.foo` segments; `$$` → `$`.
+  return str.replace(/\$\$|\$input(?:\.[A-Za-z_][A-Za-z0-9_]*)+/g, (match) => {
+    if (match === "$$") return "$";
+    const path = match.slice("$input.".length);
+    const v = readInputPath(path, input);
+    return v == null ? "" : String(v);
+  });
+}
+
+function readInputPath(path, input) {
+  const parts = String(path).split(".").filter(Boolean);
+  if (parts.length === 0) {
+    throw err("bindRecipeInput: empty $input path", "RECIPE_INPUT_PATH");
+  }
+  let cur = input;
+  for (const part of parts) {
+    if (!isObject(cur) || !Object.prototype.hasOwnProperty.call(cur, part)) {
+      throw err(`bindRecipeInput: missing input path ${parts.join(".")}`, "RECIPE_INPUT_PATH");
+    }
+    cur = cur[part];
+  }
+  return cur;
+}
+
+/**
+ * Validate params against a minimal JSON-schema-like inputSchema (PR1 subset).
+ * Supports: type object, required[], properties{type,minLength,maxLength,minimum,maximum}, additionalProperties:false.
+ *
+ * @param {object|null|undefined} schema
+ * @param {object} params
+ */
+export function validateRecipeInputParams(schema, params) {
+  if (schema == null) {
+    if (params != null && (!isObject(params) || Object.keys(params).length > 0)) {
+      throw err("recipe has no inputSchema but params were provided", "RECIPE_INPUT_UNEXPECTED");
+    }
+    return {};
+  }
+  if (!isObject(schema)) throw err("inputSchema must be an object", "RECIPE_INPUT_SCHEMA");
+  if (!isObject(params)) throw err("params must be an object", "RECIPE_INPUT_INVALID");
+  if (schema.type != null && schema.type !== "object") {
+    throw err("inputSchema.type must be object", "RECIPE_INPUT_SCHEMA");
+  }
+  const props = isObject(schema.properties) ? schema.properties : {};
+  const required = Array.isArray(schema.required) ? schema.required : [];
+  if (schema.additionalProperties === false) {
+    for (const key of Object.keys(params)) {
+      if (!Object.prototype.hasOwnProperty.call(props, key)) {
+        throw err(`params.${key} is not allowed`, "RECIPE_INPUT_ADDITIONAL");
+      }
+    }
+  }
+  for (const key of required) {
+    if (!Object.prototype.hasOwnProperty.call(params, key)) {
+      throw err(`params.${key} is required`, "RECIPE_INPUT_REQUIRED");
+    }
+  }
+  for (const [key, propSchema] of Object.entries(props)) {
+    if (!Object.prototype.hasOwnProperty.call(params, key)) continue;
+    assertParamProperty(key, params[key], propSchema);
+  }
+  return { ...params };
+}
+
+function assertParamProperty(key, value, propSchema) {
+  if (!isObject(propSchema)) return;
+  const t = propSchema.type;
+  if (t === "string") {
+    if (typeof value !== "string") throw err(`params.${key} must be string`, "RECIPE_INPUT_TYPE");
+    if (propSchema.minLength != null && value.length < propSchema.minLength) {
+      throw err(`params.${key} shorter than minLength`, "RECIPE_INPUT_RANGE");
+    }
+    if (propSchema.maxLength != null && value.length > propSchema.maxLength) {
+      throw err(`params.${key} exceeds maxLength`, "RECIPE_INPUT_RANGE");
+    }
+  } else if (t === "integer") {
+    if (!Number.isInteger(value)) throw err(`params.${key} must be integer`, "RECIPE_INPUT_TYPE");
+    if (propSchema.minimum != null && value < propSchema.minimum) {
+      throw err(`params.${key} below minimum`, "RECIPE_INPUT_RANGE");
+    }
+    if (propSchema.maximum != null && value > propSchema.maximum) {
+      throw err(`params.${key} above maximum`, "RECIPE_INPUT_RANGE");
+    }
+  } else if (t === "number") {
+    if (typeof value !== "number" || !Number.isFinite(value)) {
+      throw err(`params.${key} must be number`, "RECIPE_INPUT_TYPE");
+    }
+    if (propSchema.minimum != null && value < propSchema.minimum) {
+      throw err(`params.${key} below minimum`, "RECIPE_INPUT_RANGE");
+    }
+    if (propSchema.maximum != null && value > propSchema.maximum) {
+      throw err(`params.${key} above maximum`, "RECIPE_INPUT_RANGE");
+    }
+  } else if (t === "boolean") {
+    if (typeof value !== "boolean") throw err(`params.${key} must be boolean`, "RECIPE_INPUT_TYPE");
+  }
+}
+
+/**
+ * Evaluate one PR1 assertion against an observation bundle.
+ * Observation shape (any subset):
+ *   { package?, activity?, focus?: { package?, activity? }, dumpXml?, text?, resourceIds? }
+ *
+ * @param {object|string} assertion
+ * @param {object} observation
+ * @returns {{ ok: boolean, type: string, message?: string }}
+ */
+export function evaluateRecipeAssertion(assertion, observation = {}) {
+  const a = typeof assertion === "string"
+    ? { type: "textExists", value: assertion }
+    : assertion;
+  if (!isObject(a) || !isNonEmptyString(a.type)) {
+    return { ok: false, type: "unknown", message: "assertion must be string or {type,...}" };
+  }
+  const type = String(a.type).trim();
+  const obs = isObject(observation) ? observation : {};
+  const pkg = obs.package ?? obs.focus?.package ?? null;
+  const activity = obs.activity ?? obs.focus?.activity ?? null;
+  const dumpXml = typeof obs.dumpXml === "string" ? obs.dumpXml : "";
+  const blob = `${dumpXml}\n${obs.text ?? ""}`;
+
+  switch (type) {
+    case "packageEquals": {
+      const expected = String(a.value ?? a.package ?? "").trim();
+      if (!expected) return { ok: false, type, message: "packageEquals requires value" };
+      if (pkg == null) return { ok: false, type, message: "observation missing package" };
+      return pkg === expected
+        ? { ok: true, type }
+        : { ok: false, type, message: `package ${pkg} !== ${expected}` };
+    }
+    case "activityContains": {
+      const needle = String(a.value ?? a.activity ?? "").trim();
+      if (!needle) return { ok: false, type, message: "activityContains requires value" };
+      if (activity == null) return { ok: false, type, message: "observation missing activity" };
+      return String(activity).includes(needle)
+        ? { ok: true, type }
+        : { ok: false, type, message: `activity ${activity} missing ${needle}` };
+    }
+    case "activityMatches": {
+      const pattern = String(a.value ?? a.pattern ?? "").trim();
+      if (!pattern) return { ok: false, type, message: "activityMatches requires value" };
+      if (activity == null) return { ok: false, type, message: "observation missing activity" };
+      let re;
+      try {
+        re = new RegExp(pattern);
+      } catch (e) {
+        return { ok: false, type, message: `invalid regex: ${e.message}` };
+      }
+      return re.test(String(activity))
+        ? { ok: true, type }
+        : { ok: false, type, message: `activity ${activity} !~ /${pattern}/` };
+    }
+    case "textExists": {
+      const needle = String(a.value ?? a.text ?? "").trim();
+      if (!needle) return { ok: false, type, message: "textExists requires value" };
+      return blob.includes(needle)
+        ? { ok: true, type }
+        : { ok: false, type, message: `text not found: ${needle}` };
+    }
+    case "resourceIdExists": {
+      const rid = String(a.value ?? a.resourceId ?? "").trim();
+      if (!rid) return { ok: false, type, message: "resourceIdExists requires value" };
+      const hit = dumpXml.includes(`resource-id="${rid}"`)
+        || dumpXml.includes(`resource-id='${rid}'`)
+        || (Array.isArray(obs.resourceIds) && obs.resourceIds.includes(rid));
+      return hit
+        ? { ok: true, type }
+        : { ok: false, type, message: `resource-id not found: ${rid}` };
+    }
+    default:
+      return { ok: false, type, message: `unsupported assertion type: ${type}` };
+  }
+}
+
+/**
+ * @param {Array<object|string>} assertions
+ * @param {object} observation
+ * @returns {{ ok: boolean, results: object[] }}
+ */
+export function evaluateRecipeAssertions(assertions, observation = {}) {
+  const list = Array.isArray(assertions) ? assertions : [];
+  const results = list.map((a) => evaluateRecipeAssertion(a, observation));
+  return { ok: results.every((r) => r.ok), results };
 }
 
 /**
@@ -347,6 +590,46 @@ export function resolveRecipeExecutor(executor) {
     capabilityId: String(capabilityId).trim(),
     paramsTemplate,
   };
+}
+
+/**
+ * Content-addressed descriptor hash for a sealed recipe spec.
+ * Hashes the canonical (sorted-key) JSON of recipeId + revision + status +
+ * eligibleAliases + executor (kind + primitive steps' id/kind/params/assertions)
+ * + inputSchema. Used to bind a Runner receipt to an exact, server-sealed spec
+ * so a client cannot silently mutate a live recipe's coordinates or steps.
+ * @param {object} recipe
+ * @returns {string} "rh_" + 24 hex chars
+ */
+export function computeDescriptorHash(recipe) {
+  if (!isObject(recipe)) throw err("computeDescriptorHash: recipe must be an object");
+  const exec = isObject(recipe.executor) ? recipe.executor : {};
+  const stepsCanonical = Array.isArray(exec.steps)
+    ? exec.steps.map((s) => ({
+        id: s?.id ?? null,
+        kind: s?.kind ?? null,
+        params: s?.params ?? null,
+        preAssertions: s?.preAssertions ?? null,
+        postAssertions: s?.postAssertions ?? null,
+      }))
+    : null;
+  const canonical = {
+    recipeId: recipe.recipeId ?? null,
+    revision: recipe.revision ?? null,
+    status: recipe.status ?? null,
+    eligibleAliases: Array.isArray(recipe.eligibleAliases) ? recipe.eligibleAliases : null,
+    executor: { kind: exec.kind ?? null, steps: stepsCanonical, capabilityId: exec.capabilityId ?? null },
+    inputSchema: recipe.inputSchema ?? null,
+  };
+  const json = JSON.stringify(canonical, (_, v) => {
+    if (v && typeof v === "object" && !Array.isArray(v)) {
+      const out = {};
+      for (const k of Object.keys(v).sort()) out[k] = v[k];
+      return out;
+    }
+    return v;
+  });
+  return "rh_" + createHash("sha256").update(json).digest("hex").slice(0, 24);
 }
 
 function sessionLooksLeased(session) {

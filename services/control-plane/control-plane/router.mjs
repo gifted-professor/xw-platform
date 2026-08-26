@@ -802,6 +802,34 @@ export class ControlRouter {
       return { status: 200, body: { paymentCommit: result } };
     }
 
+    // PR1 Single-Device Recipe Runner — server-side recipe-runs (no Agent Gateway yet).
+    if (method === "POST" && path === "/control/v1/recipe-runs") {
+      const input = requireBody(body);
+      const run = await this.control.startRecipeRun(input);
+      return { status: 201, body: { recipeRun: run } };
+    }
+    if (method === "POST" && path === "/control/v1/recipe-runs/plan") {
+      const input = requireBody(body);
+      return { status: 200, body: { plan: this.control.planRecipeRun(input) } };
+    }
+    if (method === "GET" && path === "/control/v1/recipe-runs") {
+      return { status: 200, body: { recipeRuns: this.control.listRecipeRuns() } };
+    }
+    match = path.match(/^\/control\/v1\/recipe-runs\/([^/]+)\/cancel$/);
+    if (method === "POST" && match) {
+      return {
+        status: 200,
+        body: { recipeRun: await this.control.cancelRecipeRun(decodeURIComponent(match[1])) },
+      };
+    }
+    match = path.match(/^\/control\/v1\/recipe-runs\/([^/]+)$/);
+    if (method === "GET" && match) {
+      return {
+        status: 200,
+        body: { recipeRun: this.control.getRecipeRun(decodeURIComponent(match[1])) },
+      };
+    }
+
     // M6-2 W5 — the ONLY M6 public surface: closed observe capture. These four
     // routes accept no coordinates, shell text, URLs, device ids, session ids,
     // or tokens; the facade resolves the alias server-side and every other

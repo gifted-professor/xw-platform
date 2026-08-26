@@ -60,6 +60,26 @@ description: >-
   检查通过后直接执行，不再重复问一次。
 - 支付、真实外发、删除、账号安全和其他不可逆动作始终单独等人确认。
 
+## `/xw` 04 快车道 — 自主选路（RECIPE / DUMP / VISION / STOP）
+
+当目标是 alias `04` 的普通 R0/可逆小红书任务（搜索、浏览、dump、截图、输入、滑动、返回、启动 App）时，
+Claude **不逐步问人选路**，自行按下列顺序选择并执行；完整状态机、失败计数、视觉单击与沉淀规则见
+[references/adaptive-04.md](references/adaptive-04.md)。
+
+```text
+exact 04 Recipe + 画像/页面断言匹配  -> RECIPE
+否则 fresh dump 唯一目标            -> DUMP
+dump 空/稀疏/歧义 -> fresh screenshot -> VISION
+任一路径撞红线或同一目标累计两次失败 -> STOP
+```
+
+- 只碰 alias `04`；01–03 仍只读，不自动切换。
+- 碰机只走正式 Explorer session/lease（`xw-explore-session acquire` → `--session-file`）；禁止裸 ADB / 直连 22222。
+- 每次 run 仍走强制 closeout 生命周期；关键 decision step 带 `adaptiveDecision`（route / reasonCode / profile / targetFailureCount / assertion）。
+- VISION 单击用 `ops/xw-adaptive-visual-tap.mjs`：先 `--probe` 验证本 runtime 能读 PNG 出结构化块（不能则 `STOP/VISION_RUNTIME_UNAVAILABLE`），再在同 session、同新鲜截图上校验块（越界/低置信/同名歧义/系统区/红线 label 全拒）并执行一次 tap，只回 blockId/jobId/evidence ref，不回可复用坐标。
+- 同一 `goalSignature + observed profile` 成功两次后自动生成 `candidate` Recipe（离线校验后进服务端 04-only extras；客户端 inline Recipe 禁 live）。正式 Catalog 晋级仍走原 `evaluatePromotion()` 阈值，不混为一谈。
+- 支付/转账/充值、删除/注销/改密、系统权限、验证码/风控/登录墙立即 `STOP`；这些永远不进快车道，仍单独等人确认。
+
 ## Task closeout 生命周期（强制）
 
 每次由 `/xw start|task|balance|messages|session|locator|run|explore|repair|recover` 启动的业务任务必须绑定唯一 `runId`，结束时落盘；
