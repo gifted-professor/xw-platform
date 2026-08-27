@@ -266,3 +266,17 @@
 - 结束状态：leases=0。**R0 只读 inbox/read live 闭环**（W3 四入口中 search@2/browse/inbox/read 全部 live 通过）。
 
 - end 2026-08-27（W3b live）—— **W3 全部 live canary 完成**。
+
+## W4 — like/collect/follow strict-mission live canary（F3 live）— done 2026-08-27（follow 部分挂起）
+
+- **新沉淀 driver**：`ops/xw-xhs-social-live.mjs`（like|collect|follow 子命令，`--dry-run`）——Explorer session acquire（含 stale-context 自清理）→ launch force-stop → dump feed → `parseFeedCards`+`pickFeedCard` → tap 卡片 → dump 详情 → 定位按钮 → **stateVerifier before-state 三态门**（already-true=skip transport 0；unknown/missing=UNKNOWN_STATE_NO_BLIND_TAP 拒绝盲点）→ **strict ECP mission**（totalCount=1, perTargetCount=1, frequency 10/1h, expiresAt+30min, controllers agent:xw-xhs-social-live）→ beginMissionEffect → 恰一次 tap → dump after → verifier → recordMissionEffectOutcome → back。
+- **live 结果（alias 04，actor claude-pilot-20260809）**：
+  - **like ✓**：点赞 19 → 已点赞20，effect_663b0baf **verified**（targetHash 037dd10a…）。
+  - **collect ✓**：收藏 0 → 已收藏1，effect_dfa6f027 **verified**（targetHash 6702c6bb…）。
+  - **follow ✗（账号风控，挂起）**：4 次真实 tap（3×detail 头部 TextView + 1×profile 主 CTA `findProfileFollowBtn`，坐标正确/CTA 可点）全部**静默无效**——按钮不变、`我→关注` 列表计数稳定 **我的关注（20）** 不增。同机制 like/collect 均成功 → 判定 **XHS 账号级风控对 follow 静默拦截**（新账号/自动化特征分层：赞/收藏放行、关注不放行），非代码缺陷。4 个 follow effect 全部按 ECP 语义记录 **ambiguous**（transport happened but unverified → retry_blocked fence 正确生效，目标指纹被 fence 挡重试 ✓）。
+- **关键修复（本次最大坑，全库性）**：`new StateStore({dbPath})` **默认构造即清空全库 sessions+leases** —— constructor（STANDARD 模式）跑 `recoverInterruptedWork()`，无中断 job 也执行 `DELETE FROM sessions; DELETE FROM leases;`。前 3 次 like TAP_FAILED 的根因就是 Phase B 的 openState() 把自己正在用的 explorer 会话（连同全库租约）抹掉，15 秒内 404 SESSION_NOT_FOUND（非 TTL 问题）。修复：driver 以 `m6RuntimeMode:"QUALIFICATION_ONLY"` 打开（只影响 qualification-job 准入，mission/deviceRun/effect 路径不变，但跳过构造期清库）。**教训：任何直连 live control.db 的 StateStore 实例必须显式 QUALIFICATION_ONLY**。
+- **配套修复**：Phase C transport 前显式 heartbeat 续期（ECP 建档阶段无 primitive 心跳，60s TTL 窗口风险）；tap 失败路径补 `tapR.out` 诊断（首次误把 transport-0 记成 ambiguous 的修复在前序会话已完成，not_sent 语义正确）；follow 的 target 指纹从 note 改绑 **作者**（`xw.xhs.author:<author>`，profile 路径下语义正确）；follow 定位走 profile CTA fail-closed 选择器（`findProfileFollowBtn`：exact-set + clickable 容器几何 + 歧义拒点），detail 头部宽匹配 fallback 已移除（防"关注的话题"假阳）。
+- **遗留**：4 次 follow 尝试各留 1 个 phase=running 的 orphan device_run（finishDeviceRun 因 tuple 已被清拒绝）——下次 CP 重启时 `#recoverInterruptedDeviceRuns` 自愈标 paused_control_lost，不手工干预。follow canary 需**人工真机手动关注一次**验证账号是否被标记，或等账号信任度提升后重跑（一次 dry-run+一次 run 即可）。
+- 一次性诊断脚本（runtime 目录，不入库）：`C:\Users\Public\xw-runtime\qualification-bootstrap\trace-follow.mjs`（详情页关注节点形状）、`check-following.mjs`（我→关注列表只读核对）。
+
+- end 2026-08-27（W4 live）—— **like/collect live 闭环；follow 账号风控挂起（留痕待人工验证）**。
