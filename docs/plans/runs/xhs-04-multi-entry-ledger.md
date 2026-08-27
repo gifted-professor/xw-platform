@@ -287,3 +287,18 @@
 - **打断时现场处置（只读核实）**：attempt-3 driver 进程已死；只读 dump 屏幕显示**评论输入框仍开且输入为空**（占位符+发送按钮在，无文本）→ 该次发送未发生；back 关闭遗留 composer、release session。
 - **ECP 账务修正**（无传输）：effect_ec38d20c（重构前 dry-run 残留）+ effect_00f2a60d（attempt-3，死于 composer prep）补记 `not_sent`。当前 comment 状态：2 次 ambiguous（effect_996529fa 嗖嗖嗖笔记 / effect_9e7396a9 好萌一豆笔记，两次发送 tap 均已发生、composer 关闭，但三因子观测不足），2 次 not_sent。
 - **W5 live 状态冻结**：comment 驱动 `ops/xw-xhs-comment-live.mjs` 已建好并可用（三因子验证 + observe() 已修），留待恢复授权后继续；DM reply live 未开始。
+
+## VISION 只读导航 live canary（Fast-1 lane, Hop1 DUMP + Hop2 VISION）— done 2026-08-27
+
+- **范围合规**：全程只读（launch/dump/back/screenshot + 2 次导航 tap：搜索入口 + 底部"我" tab），零社交传输，符合用户"只做只读"指令。
+- **Phase A（单进程 driver `qualification-bootstrap/vision-nav-phase-a.mjs`）— Hop1 DUMP 路由 PASS**：acquire（session_18799eaa）→ launch force-stop → dump → `content-desc="搜索"` **唯一命中** (1009,136) → tap → fresh dump postcondition（猜你想搜/搜索发现）PASS → back → 截图留证（SHOT+SHA256+capturedAt 三元组打印）。
+- **Phase B — Hop2 VISION 路由 PASS**（`ops/xw-adaptive-visual-tap.mjs`）：
+  - Claude 读截图标注 blocks → 工具校验（bounds/confidence/歧义/系统区/红线）→ blockId 内容寻址 `blk_87bdefebab5638…` → 恰一次 actionRef（act_f09c39b7）消费 → tap (972,2300)。
+  - **两个工具契约发现**：① bounds 必须是 `{x,y,w,h}` **对象**，数组 `[x,y,w,h]` 报 VISION_OUT_OF_BOUNDS（误导演示）；② 截图 TTL 180s（VISUAL_STALE_SCREENSHOT）——"标注-执行"间隔必须 <3min，截图→哈希→tap 要一条链跑完。
+  - **isSystemArea 语义确认**：只挡顶部 72px / 底部 96px（y≥2304）；tab 栏整体高于该线，"我"文本节点 [951,2276][993,2324] 中心 (972,2300) 在可点区——底部 tab 导航 tap 是 VISION 路由的合法目标（NAV_RE→system-navigation 类别）。
+- **postcondition PASS**：个人主页完整呈现（小红薯6A90EA25/编辑主页/获赞与收藏/粉丝/笔记/IP：广东）。
+- **发现（与 W4 follow 挂起互证）**：进我页瞬间弹**账号风控弹窗**（"检测到你的账号存在异常行为风险，部分功能暂时使用受限。点击下方按钮完成安全验证可解除"）。按只读原则**未点"解除限制"**（会进安全验证流程），back 关闭，页面正常。→ XHS 已给 04 账号挂异常行为风险标记，与 follow 静默拦截一致；后续任何写动作授权恢复前需把这条报给用户，账号可能需要人工安全验证。
+- 收尾：back 回首页 → release（lease_73d44d39 释放，leases=0）→ keepalive 自动退出。
+- 一次性标注产物：`qualification-bootstrap/vision-nav-hop2-blocks.json`（blocks {x,y,w,h} 对象形状留样）。
+
+- end 2026-08-27（VISION live）—— **只读导航 canary 闭环：Hop1 DUMP + Hop2 VISION 双路由 live PASS；04 账号风控弹窗留痕**。
