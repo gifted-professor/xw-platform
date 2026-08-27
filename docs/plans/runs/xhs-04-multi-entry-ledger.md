@@ -242,3 +242,13 @@
 - **结束状态**：leases=0、4 设备在线、disk 46GB。W1 live done —— **F1（canonical hash 统一 + @2 晋级）合同项完整闭环**（catalog/overlay/dispatcher/晋级 receipt 四消费者同 hash；Runner receipt 留部署 gap 已留痕）。
 
 - end 2026-08-27（W1 live）。
+
+## W3a — browse@1 live 晋级（合同 VISION live 部分·read-only 入口 1/4）— done 2026-08-27
+
+- 同 W1 模式（seed overlay 视图 → 重启 CP → 2× live run → 晋级链 → 复核）。recovery 脚本已参数化（`--stamp` 命名快照/receipt，pid/hash 从 lock 文件自取，pid-dead + port-closed + lock-record 断言保留）。
+- **live runs（3 次，全部 SUCCEEDED 13/13，alias 04）**：`rr_ec326c4dc0934b03`、`rr_36431b227dae421e`（晋级）+ `rr_c5e63252623c4800`（switch-alias 后复核 ✓）。
+- **晋级链**：INGEST_IDEMPOTENT → 2×RECORDED → candidate→canary_only（2 independent，changed=true）→ SWITCH_ALIAS browse@1 gate=browse:on（runtime + repo 双面）→ OVERLAY_EMIT（5 recipes，sha256 351966fb）。
+- **dispatcher 面**：`xw-xhs.mjs browse --execute` gateOk=true rev=1 effect=none（read-only ✓）。
+- 结束状态：leases=0。**read-only 入口 browse live 闭环**；inbox/read live（W3b）与 vision 实时导航 live 仍待后续。
+
+- end 2026-08-27（W3a live）。

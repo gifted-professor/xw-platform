@@ -4,6 +4,7 @@
     "xhs.browse.fixed": 1
   },
   "liveGates": {
-    "search": true
+    "search": true,
+    "browse": true
   }
 }
