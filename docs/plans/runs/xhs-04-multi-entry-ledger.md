@@ -226,3 +226,19 @@
 - **待办（live，需用户明确授权）**：最终 publish canary **需用户另行明确授权具体发布内容**（V2 §10.5，唯一保留人工点）——离线 machinery 全就绪（envelope + handler + 三 probe），但 live publish 必须用户亲自授权 content + screenshot + target，非 operator 可代决。其他 wave 的 live canary 待 operator 设备驱动；publish live 待用户内容授权。
 
 - end 2026-08-27（离线部分）。**W6 离线 done——全 7 波 W0-W6 离线部分全部完成**。`npm run test:xhs-pack` 131/131 绿。合同 5 个 P1 item（F1/F2/F3/VISION/PUBLISH）离线全绿。剩余纯 live canary（W1/W3/W4/W5 待 operator 设备 + W6 待用户内容授权），无更多离线工作。
+
+## W1 — search@2 live 晋级全链（合同 F1 live 部分）— done 2026-08-27
+
+用户授权（2026-08-27）：除支付外全部 wave 授权（W1-W6），执行方案由 agent 决定；唯一保留点 = W6 publish 内容本人过目后一键 approve。
+
+- **live 前置状态核实**：CP live（17920，releaseId xw-m6-c1-fadb449，c7b0695 血系 schema 20 ✓）；4 设备全在线、04 未隔离、activeLeases=0；overlay mode=canary（XHS_RPA_ALIAS=04）；runtime registry.db 只有 @1 canary_only（Fast-2 产物）。
+- **发现：@2 首跑 bootstrap 缺口**——catalog ingest 只产 candidate、`buildOverlayDocument` 只发 canary_only/implemented、runner（部署 release）只从 overlay 解析（"server-extras candidate" 钩子在 fadb449 未接线，repo 也无人填 `recipeCatalogExtras`）→ @2 live run 无法解析。解法与 Fast-2 给 @1 手写 overlay 同构：**只 seed runtime overlay 视图**（临时置 canary_only → emit → 还原 candidate，try/finally 保证还原），catalog 阶梯保持干净。
+- **发现：CP 无优雅停机通道**——进程由计划任务 `XW Platform Control Plane`（SYSTEM, BootTrigger）经 launch-control-plane.simple.ps1 拉起，console-less（AttachConsole err=203），CTRL_C/SIGINT 不可达，无 shutdown HTTP 路由。重启 = `Stop-ScheduledTask`（硬停）→ **audited stale-lock recovery**（照 cbe741e 先例写 `recover-stale-owner-lock-w1seed.mjs`：pid 死+端口关+lock hash/pid 校验 → db/-wal/-shm 快照 → lock 归档 → integrity_check+wal_checkpoint(TRUNCATE) → receipt 落 `m6-c1-owner-recovery-w1seed.json`）→ `Start-ScheduledTask`。integrity ok，schema 20 保持。
+- **live runs（3 次，全部 SUCCEEDED 9/9，alias 04，actor claude-pilot-20260809）**：
+  - `rr_4c16261d1e424d19`（晋级 1）、`rr_30eef8324d574ddc`（晋级 2，receipt ok/serverVerified/live 9/9）、`rr_3739a4c43151444f`（**switch-alias 后复核**，验收项 ✓）。
+- **晋级链**（`node ops/xw-xhs-promote.mjs --recipe xhs.search.fixed --runs rr_4c…,rr_30… --action search --runtime`）：INGEST_IDEMPOTENT → 2×RECORDED → PROMOTION candidate→replay_verified→promotable→canary_only（2 independent，changed=true，receiptHash b668d57e 绑定）→ SWITCH_ALIAS @2 gate=search:on（runtime state）→ OVERLAY_EMIT（4 recipes，sha256 3ed12c25）。审计行 4 条全带 receiptHash（transitions 表）。
+- **dispatcher 面**：repo dispatch-state 同步 search→2 + liveGates.search=true（switch-alias --db runtime + repo 路径）；`xw-xhs.mjs search --execute` gateOk=true rev=2。
+- **发现（F1 部署 gap，遗留项）**：部署 release fadb449 的 Runner receipt 仍产 legacy `rh_`+24hex（W1 的 canonical-v2 runner 代码只在 repo，未随 release 部署）；且部署 runner 对 canonical-v2 provided hash 的 tamper 校验静默放行（isCanonicalV2Recipe 不识别）。五消费者中 Runner receipt/CP plan 两个运行时消费者在部署面上暂未统一 64-hex。**桥与 catalog 对 receipt hash 只透传不比对，晋级不受阻；catalog（权威）+ overlay 是 canonical-v2 ✓**。后续：下次 release 刷新（建议并入 W3 live 阶段）后五消费者运行时全同 hash；本次 3 次 run 的 receipt 保留 rh_ 原样（不回填伪造）。
+- **结束状态**：leases=0、4 设备在线、disk 46GB。W1 live done —— **F1（canonical hash 统一 + @2 晋级）合同项完整闭环**（catalog/overlay/dispatcher/晋级 receipt 四消费者同 hash；Runner receipt 留部署 gap 已留痕）。
+
+- end 2026-08-27（W1 live）。

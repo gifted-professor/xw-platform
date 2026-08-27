@@ -1,7 +1,9 @@
 {
   "recipeRevisions": {
-    "xhs.search.fixed": 1,
+    "xhs.search.fixed": 2,
     "xhs.browse.fixed": 1
   },
-  "liveGates": {}
+  "liveGates": {
+    "search": true
+  }
 }
