@@ -280,3 +280,10 @@
 - 一次性诊断脚本（runtime 目录，不入库）：`C:\Users\Public\xw-runtime\qualification-bootstrap\trace-follow.mjs`（详情页关注节点形状）、`check-following.mjs`（我→关注列表只读核对）。
 
 - end 2026-08-27（W4 live）—— **like/collect live 闭环；follow 账号风控挂起（留痕待人工验证）**。
+
+## 用户指令变更（2026-08-27，W5 进行中）— 社交动作暂停，只做只读
+
+- 用户中途打断 W5 comment canary 第 3 次尝试：**"现在暂时先不做 点赞关注评论什么的 我们主要就在app做只读"** — 所有社交写动作（赞/关注/评论/DM/publish）暂停，app 内只做只读，恢复需用户再授权。
+- **打断时现场处置（只读核实）**：attempt-3 driver 进程已死；只读 dump 屏幕显示**评论输入框仍开且输入为空**（占位符+发送按钮在，无文本）→ 该次发送未发生；back 关闭遗留 composer、release session。
+- **ECP 账务修正**（无传输）：effect_ec38d20c（重构前 dry-run 残留）+ effect_00f2a60d（attempt-3，死于 composer prep）补记 `not_sent`。当前 comment 状态：2 次 ambiguous（effect_996529fa 嗖嗖嗖笔记 / effect_9e7396a9 好萌一豆笔记，两次发送 tap 均已发生、composer 关闭，但三因子观测不足），2 次 not_sent。
+- **W5 live 状态冻结**：comment 驱动 `ops/xw-xhs-comment-live.mjs` 已建好并可用（三因子验证 + observe() 已修），留待恢复授权后继续；DM reply live 未开始。
