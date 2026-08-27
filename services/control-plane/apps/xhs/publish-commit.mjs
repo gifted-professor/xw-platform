@@ -70,9 +70,16 @@ export class PublishCommitHandler {
    * @param {string} input.deviceFingerprint   - device fingerprint.
    * @param {string} input.accountFingerprint  - account fingerprint.
    * @param {string} input.targetFingerprint   - target fingerprint.
+   * @param {object} [input.tuple]             - control tuple (real ECP.prepare
+   *   asserts it: deviceRunId/leaseId/sessionId/controllerEpoch). Optional for
+   *   stub-ECP offline tests, required on the live wiring.
+   * @param {string} [input.idempotencyKey]    - effect idempotency key (real
+   *   state.beginMissionEffect requires it; stub-ECP offline tests omit it).
+   * @param {object} [input.intent]            - free-form effect intent (live
+   *   wiring passes the editor surface proof).
    * @returns {Promise<{commitId, status, envelope, envelopeHash}>}
    */
-  async beginPublish({ mission, target, prepareRunId, planHash, content, screenshot, deviceFingerprint, accountFingerprint, targetFingerprint }) {
+  async beginPublish({ mission, target, prepareRunId, planHash, content, screenshot, deviceFingerprint, accountFingerprint, targetFingerprint, tuple = undefined, idempotencyKey = undefined, intent = undefined }) {
     const createdAt = new Date(this.now()).toISOString();
     const expiresAt = new Date(this.now() + this.approvalTtlMs).toISOString();
     const envelope = buildPublishEnvelope({
@@ -86,7 +93,12 @@ export class PublishCommitHandler {
     if (!verifyEnvelopeIntegrity(envelope)) {
       return { status: "blocked", code: "PUBLISH_ENVELOPE_INTEGRITY_FAILED" };
     }
-    const begun = await this.phc.begin({ mission, action: "publish", target, envelope });
+    const begun = await this.phc.begin({
+      mission, action: "publish", target, envelope,
+      ...(tuple !== undefined ? { tuple } : {}),
+      ...(idempotencyKey !== undefined ? { idempotencyKey } : {}),
+      ...(intent !== undefined ? { intent } : {}),
+    });
     if (begun.status !== "waiting_authorization") {
       return begun; // PHC blocked (scope / readiness / etc.) — surface as-is.
     }

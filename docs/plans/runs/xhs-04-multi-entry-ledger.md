@@ -341,3 +341,13 @@
 - 节奏账本：本轮写传输 = DM reply ×1。
 
 - end 2026-08-27（W5 DM 03）—— **W5 comment+DM 双闭环；发送后渲染滞后定论**。
+
+## W6 publish live prep + draft-save closeout (2026-08-27, alias 03)
+
+- Driver `ops/xw-xhs-publish-live.mjs` (NEW): strict ECP/PHC publish chain — draft nav (transport-0) → editor caption → editor screenshot (frozen proof) → Mission(publish)+EffectLedger+EffectCommitProtocol+ProtectedHumanCommit+PublishCommitHandler.beginPublish → waiting_authorization → approval-file poll (session heartbeated, `--review-minutes`, default 30) → approve: live content drift re-hash → exactly one 发布笔记 tap → post-verify; deny/timeout/drift/handle-lost → no tap.
+- `PublishCommitHandler.beginPublish` additive passthrough: `tuple` (real ECP.prepare asserts CONTROL_TUPLE; stub-ECP offline tests unaffected) + `idempotencyKey` (real state.beginMissionEffect requires it) + `intent`.
+- Offline: 137/137 green (`npm run test:xhs-pack`).
+- Dry-run green on 03: 发布tab→从相册选择→thumb→下一步×2→editor→caption landed→IME collapse→screenshot; draft discarded, zero effect records.
+- Live (03): envelope frozen commit=protected_commit_e65adcb2 envelope=3f4e1bc9 effect=effect_058dbd05 pending_authorization; review window elapsed (no approval file) → fail-closed auto-deny → cancelPrepared → **no publish tap, zero transport**. Chain proven end-to-end except the release tap.
+- **User directive: 不点发布,点存草稿** — dialog "继续编辑图文笔记吗?" 存草稿(374,1635) tapped once, verified in 本地草稿箱: content text exact match, timestamp 今天 下午11:37. Draft retained; publish held until user says it is time.
+- Findings: (a) real publish control = "发布笔记" bottom-bar Button (701,2227) + 存草稿 (188,2227); two 下一步 screens before editor; (b) IME covers 发布笔记 → collapse keyboard (back) before effect chain, guard the exit dialog; (c) deny/timeout restore's exit dialog is 存草稿/去编辑 (no 放弃) — draft SURVIVES a denied commit; (d) cold-start NO_CARD race → warm retry; (e) explorer session TTL 60s re-arm every script.
