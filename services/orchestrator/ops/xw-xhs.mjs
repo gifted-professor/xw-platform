@@ -1,0 +1,153 @@
+#!/usr/bin/env node
+/**
+ * xw-xhs.mjs — single adaptive dispatcher for the 04 小红书 multi-entry
+ * script pack (plan V2). The only execution surface for /xw xhs <action>.
+ *
+ *   node ops/xw-xhs.mjs <action> [flags] --plan        # plan-only (default)
+ *   node ops/xw-xhs.mjs <action> [flags] --json        # plan as JSON
+ *   node ops/xw-xhs.mjs <action> [flags] --execute      # fail-closed per gate
+ *   node ops/xw-xhs.mjs catalog                         # list actions
+ *
+ * Three entry surfaces converge here (plan V2 §1):
+ *   /xw xhs <action>            -> this CLI
+ *   /xw task "..." (xhs-compose) -> compiles to this action catalog
+ *   RPA/agent                    -> this CLI with --json
+ *
+ * /xw messages is the compat alias for `inbox`.
+ *
+ * 04-only: non-04 aliases are rejected at plan stage (XHS_ALIAS_NOT_04) before
+ * any device I/O. --execute is gated per action.gate until each wave promotes it.
+ *
+ * Console: console.log only (Windows bridge treats stderr as fatal).
+ */
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+import {
+  planAction,
+  resolveAction,
+  listActions,
+  evaluateExecuteGate,
+  PlanError,
+  FORCED_ALIAS,
+} from "../scripts/lib/xw-xhs-dispatcher.mjs";
+
+function parseArgs(argv) {
+  const out = { _: [] };
+  for (let i = 0; i < argv.length; i += 1) {
+    const a = argv[i];
+    if (a.startsWith("--") && i + 1 < argv.length && !argv[i + 1].startsWith("--")) {
+      out[a.slice(2)] = argv[++i];
+    } else if (a.startsWith("--")) {
+      out[a.slice(2)] = true;
+    } else {
+      out._.push(a);
+    }
+  }
+  return out;
+}
+
+function usage() {
+  return `usage:
+  node ops/xw-xhs.mjs <action> [params] --plan|--json|--execute
+  node ops/xw-xhs.mjs catalog
+  node ops/xw-xhs.mjs --help
+
+actions (04-only):
+  search --keyword <词> [--pages 1]
+  browse [--minutes 10] [--swipes 5]
+  inbox                      (/xw messages compat alias)
+  read --thread <会话标识>
+  like [--keyword 词] [--count 1]
+  collect [--keyword 词] [--count 1]
+  follow [--keyword 词] [--count 1]
+  nurture --minutes 20 [--likes 2] [--collects 1] [--follows 0]
+  comment --keyword <词> --text <评论> [--count 1]
+  reply --thread <会话标识> --text <回复>
+  publish prepare --title <标题> --body <正文> [--tags a,b] [--images x,y]
+  publish send --run <prepareRunId>
+
+--plan (default) never touches a device. --execute fails closed until the
+action's wave promotes it via the live canary chain.`;
+}
+
+function toParams(action, args) {
+  const spec = action.params || {};
+  const params = {};
+  for (const key of Object.keys(spec)) {
+    if (args[key] !== undefined) params[key] = args[key];
+  }
+  return params;
+}
+
+async function main() {
+  const args = parseArgs(process.argv.slice(2));
+  if (args.help || args.h) { console.log(usage()); return; }
+
+  if (args._[0] === "catalog") {
+    const actions = listActions();
+    console.log(JSON.stringify({ ok: true, command: "catalog", alias: FORCED_ALIAS, perDeviceConcurrency: 1, actions }, null, 2));
+    return;
+  }
+
+  // "publish prepare" / "publish send" arrive as two positional tokens.
+  let actionId = args._.join(" ").trim();
+  if (!actionId) { console.log(usage()); process.exitCode = 4; return; }
+
+  const action = resolveAction(actionId);
+  if (!action) {
+    console.log(JSON.stringify({ ok: false, error: { code: "ACTION_UNKNOWN", message: `unknown xhs action: ${actionId}` } }));
+    process.exitCode = 4;
+    return;
+  }
+
+  const alias = args.alias || FORCED_ALIAS;
+  const actor = args.actor || null;
+  const params = toParams(action, args);
+
+  let plan;
+  try {
+    plan = planAction({ actionId: action.id, params, alias, actor });
+  } catch (e) {
+    if (e instanceof PlanError) {
+      console.log(JSON.stringify({ ok: false, error: { code: e.code, message: e.message, alias } }));
+      process.exitCode = e.code === "XHS_ALIAS_NOT_04" ? 3 : 4;
+      return;
+    }
+    throw e;
+  }
+
+  const asJson = Boolean(args.json) || Boolean(args.execute);
+  if (args.execute) {
+    const gate = evaluateExecuteGate(plan, {}); // no action promoted in W0
+    const payload = { ok: gate.ok, command: "execute", plan, gate: gate.reason || null };
+    if (!gate.ok) {
+      payload.message = `live execution is fail-closed for ${plan.action} until wave ${plan.gate} promotes it via the canary chain`;
+    }
+    console.log(JSON.stringify(payload, null, 2));
+    process.exitCode = gate.ok ? 0 : 4;
+    return;
+  }
+
+  if (asJson || args.plan) {
+    console.log(JSON.stringify(plan, null, 2));
+    return;
+  }
+  // default: human-readable plan summary
+  console.log(`action:     ${plan.action}`);
+  console.log(`actionRunId ${plan.actionRunId}`);
+  console.log(`planHash:   ${plan.planHash}`);
+  console.log(`alias:      ${plan.alias} (perDeviceConcurrency=${plan.perDeviceConcurrency})`);
+  console.log(`backend:    ${plan.backend}${plan.recipeId ? ` -> ${plan.recipeId}` : ""}${plan.capabilityId ? ` -> ${plan.capabilityId}` : ""}`);
+  console.log(`effect:     ${plan.effectClass}  gate: ${plan.gate}  route: ${plan.adaptiveRoute}`);
+  console.log(`params:     ${JSON.stringify(plan.params)}`);
+  console.log(`budget:     ${JSON.stringify(plan.budget)}`);
+  console.log(`stop:       ${plan.stopConditions.join(" | ")}`);
+  console.log(`execute:    ${plan.executionReady ? "ready" : "plan-only (fail-closed)"}`);
+}
+
+if (import.meta.url === pathToFileURL(process.argv[1] || "").href) {
+  main().catch((error) => {
+    console.log(JSON.stringify({ ok: false, error: { code: "XHS_DISPATCH_FAILED", message: String(error?.message || error) } }));
+    process.exit(2);
+  });
+}
