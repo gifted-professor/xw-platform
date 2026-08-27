@@ -302,3 +302,18 @@
 - 一次性标注产物：`qualification-bootstrap/vision-nav-hop2-blocks.json`（blocks {x,y,w,h} 对象形状留样）。
 
 - end 2026-08-27（VISION live）—— **只读导航 canary 闭环：Hop1 DUMP + Hop2 VISION 双路由 live PASS；04 账号风控弹窗留痕**。
+
+## 03 通道开通 + W5 comment live VERIFIED（03 首个社交传输闭环）— 2026-08-27
+
+- **计划修订（用户指令）**：04 账号风控验证后，用户改令"用 03 号机……03号机账号自由度高一些"，并加持久约束"不要一次性点太多，太多可能触发风控"（每轮写传输 ≤2、动作间隔数分钟；已入 memory `xhs-social-pacing-limit`）。
+- **03 通道开通（commit 817e113）**：`xw-xhs-capabilities.mjs` 参数化 `--alias`（默认 04）；能力同步改为**定向 additive upsert**（旧全量 syncCapabilities 会 disable+重写全表，且撞 live manifest 未知字段 wechat.observe.main capabilityContractHash 校验）→ 03 routing profile +5 包内能力（共 20），01/02/04 字节不动。两个 live driver alias 门放开为 {03,04}，account 绑定 `local-alias-${alias}`。capabilities StateStore 补 QUALIFICATION_ONLY。test:xhs-pack 131/131。
+- **W5 comment canary（03，actor claude-pilot-20260809）**：
+  - run1：NO_CARD（冷启动 dump 竞态，零传输）；run2：SEND_BTN_MISSING（composer 未弹出，effect 记 not_sent，transport-0）——单进程诊断 `peek-03-composer.mjs` 证明 03 composer 机制正常（EditText (540,1963) + 发送 (967,2128)，底栏评论框 desc 是"说点什么..."非"评论框"）。
+  - **run3 = 传输 1 次**：CARD=为啥还有这么多人买呢/猫猫绒，COUNT_BEFORE=347，文本落地 TEXT_LANDED=true，发送 tap 完成 → 详情页观测 COUNT_AFTER=347 无 delta、列表未见已发文本 → verifier 判 composer-closed-weak **ambiguous**（三因子观测不足）。
+  - **只读定论（用户教的路径：我→评论）**：`check-03-comments.mjs` 走 我 tab→评论 tab，评论列表出现 **"学到了，说得很清楚👍 来自笔记·为啥还有这么多人买呢 2分钟前 广东"** → 评论确已发出。证据固化 `xw-runtime/evidence/w5-comment-03-verify/comment-list-dump.xml`，effect_b513696c 补记 **verified**（consumed=1，retry_blocked 清除，effect.verified 事件留痕）。
+- **发现/坑**：
+  - **详情页发送后观测不可靠是系统性缺口**（04×2 + 03×1 同模式 composer-closed-weak）：composer 关闭动画藏底栏 + 评论列表懒加载 → 计数 delta 观测窗口必失。**"我→评论"tab 是可靠的发送后验证面**（本人评论列表、带笔记绑定+时间戳）。W5 DM/publish 前应把 driver 的 verify 回退路径改为 profile 评论列表（离线改动，下次传输前落）。
+  - 交互式步进（跨工具调用）在 60s TTL 下不可行，03 诊断也全部走单进程脚本。
+- 节奏账本：本轮写传输 = comment×1（03）。follow canary 待间隔后执行。
+
+- end 2026-08-27（W5 comment 03）—— **评论 live 闭环 VERIFIED；观测缺口定论 + 可靠验证面沉淀**。
