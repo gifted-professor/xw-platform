@@ -14,6 +14,7 @@ import { join } from "node:path";
 
 const CLI = new URL("../ops/xw-xhs-routine.mjs", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1");
 const FAKE_DRIVER = new URL("./fixtures/xhs-routine-fake-driver.mjs", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1");
+const FAKE_BRIDGE = new URL("./fixtures/xhs-routine-effect-bridge-fixture.mjs", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1");
 
 function runCli(argv) {
   return new Promise((resolve) => {
@@ -119,4 +120,32 @@ test("tampered sealed plan-file -> ROUTINE_PLAN_TAMPERED before any I/O", async 
   assert.equal(code, 4);
   const out = JSON.parse(stdout);
   assert.equal(out.error.code, "ROUTINE_PLAN_TAMPERED");
+});
+
+test("S2: canary-authorized social run without a bridge fails closed ROUTINE_EFFECT_BRIDGE_REQUIRED", async () => {
+  const { code, stdout } = await runCli([
+    "run", "--template", "nurture-lite", "--items", "2",
+    "--execute", "--canary-authorized", "--driver-module", FAKE_DRIVER,
+  ]);
+  assert.equal(code, 4);
+  const out = JSON.parse(stdout);
+  assert.equal(out.error.code, "ROUTINE_EFFECT_BRIDGE_REQUIRED");
+  assert.ok(!("receipt" in out), "no receipt is emitted — a social run never executes without its bridge");
+});
+
+test("S2: canary-authorized social run with a bridge module commits the like through the ledger", async () => {
+  const { code, stdout } = await runCli([
+    "run", "--template", "nurture-lite", "--items", "2", "--like-max", "1", "--dwell", "2:3",
+    "--execute", "--canary-authorized", "--driver-module", FAKE_DRIVER, "--effect-bridge-module", FAKE_BRIDGE,
+  ]);
+  assert.equal(code, 0);
+  const out = JSON.parse(stdout);
+  assert.equal(out.ok, true);
+  assert.equal(out.receipt.status, "SUCCEEDED");
+  assert.equal(out.receipt.transport.count, 1, "likeMax=1: exactly one transport via the CP ledger");
+  assert.equal(out.receipt.cleanup.activeLeases, 0);
+  const liked = out.receipt.items.find((it) => it.effects.like === "verified");
+  assert.ok(liked, "exactly one item reports a verified like");
+  const capped = out.receipt.items.filter((it) => /cap_reached/.test(it.effects.like));
+  assert.ok(capped.length >= 1, "remaining items are capped, not re-attempted");
 });

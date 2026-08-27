@@ -299,18 +299,24 @@ export function createRoutineRun({ plan, driver, clock = defaultClock(), effects
         if (run.closedActions.has("like") || likeRemaining <= 0) {
           item.effects.like = likeRemaining <= 0 ? "cap_reached" : "closed:ambiguous";
         } else if (item.detailPage === PAGE_CLASS.IMAGE_NOTE || item.detailPage === PAGE_CLASS.VIDEO_NOTE) {
-          const intent = { action: "like", targetFingerprint, observationHash: detailDump?.hash ?? null };
-          const res = await effects.commitRoutineEffect({ plan, run: { routineRunId: run.routineRunId, seed: run.seed }, item, intent });
-          const outcome = res?.outcome ?? "bridge_error";
-          item.effects.like = outcome;
-          if (res?.transported) {
-            run.transport.count += 1;
-            run.effects.like.transported += 1;
-            run.effects.like.remaining = Math.max(0, run.effects.like.remaining - 1);
-          }
-          if (outcome === "ambiguous") {
-            // slot consumed (transported), no retry, action closed for the run
-            run.closedActions.add("like");
+          if (!detailDump?.hash) {
+            // §7.2: routineRunId+action+target+observationHash must bind before
+            // reservation — an unbound observation can never transport
+            item.effects.like = "stopped:observation_unbound";
+          } else {
+            const intent = { action: "like", targetFingerprint, observationHash: detailDump.hash };
+            const res = await effects.commitRoutineEffect({ plan, run: { routineRunId: run.routineRunId, seed: run.seed }, item, intent });
+            const outcome = res?.outcome ?? "bridge_error";
+            item.effects.like = outcome;
+            if (res?.transported) {
+              run.transport.count += 1;
+              run.effects.like.transported += 1;
+              run.effects.like.remaining = Math.max(0, run.effects.like.remaining - 1);
+            }
+            if (outcome === "ambiguous" || outcome === "ambiguous_no_retry") {
+              // slot consumed (transported), no retry, action closed for the run
+              run.closedActions.add("like");
+            }
           }
         } else {
           item.effects.like = "skipped:surface_not_effect_capable";

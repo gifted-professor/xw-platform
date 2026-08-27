@@ -174,7 +174,38 @@ async function main() {
       process.exitCode = 4;
       return;
     }
-    const exec = createRoutineRun({ plan, driver });
+    // S2: the effect bridge is the ONLY path for social effects (nurture-*).
+    // Offline tests inject a bridge module; the live CP transport is wired at
+    // the S5 deployment freeze. A canary-authorized social run without a
+    // bridge fails closed — a like can never go through the raw driver, and
+    // "deferred" is only an S1 offline observation, never a live outcome.
+    if (plan.effectClass === "social" && !args["effect-bridge-module"]) {
+      console.log(JSON.stringify({
+        ok: false,
+        command: "execute",
+        planHash: plan.planHash,
+        error: { code: "ROUTINE_EFFECT_BRIDGE_REQUIRED", message: "social templates require --effect-bridge-module (live CP transport is wired at the S5 deployment freeze)" },
+      }));
+      process.exitCode = 4;
+      return;
+    }
+    let effects = null;
+    if (args["effect-bridge-module"]) {
+      const bridgeMod = await import(pathToFileURL(String(args["effect-bridge-module"])).href);
+      const factory = bridgeMod.createMachineEffects || bridgeMod.default;
+      if (typeof factory !== "function") {
+        console.log(JSON.stringify({ ok: false, error: { code: "ROUTINE_EFFECT_BRIDGE_INVALID", message: "effect bridge module must export createMachineEffects()/default(plan, owner)" } }));
+        process.exitCode = 4;
+        return;
+      }
+      effects = factory({ plan, args });
+      if (!effects || typeof effects.commitRoutineEffect !== "function") {
+        console.log(JSON.stringify({ ok: false, error: { code: "ROUTINE_EFFECT_BRIDGE_INVALID", message: "effect bridge factory must return { commitRoutineEffect }" } }));
+        process.exitCode = 4;
+        return;
+      }
+    }
+    const exec = createRoutineRun({ plan, driver, effects });
     const receipt = await exec.execute();
     const okTerminal = receipt.status === "SUCCEEDED";
     const payload = {

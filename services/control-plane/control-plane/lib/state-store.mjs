@@ -794,6 +794,40 @@ export class StateStore {
         created_at TEXT NOT NULL
       );
     `);
+    // Direct-routine plan V2 §7: server-hard routine effect ledger. mode=hard —
+    // the budget here is enforced in the same SQLite transaction as the slot
+    // reservation and has NO soft path: nonpayment-autonomy policyMode can never
+    // soften it into a budget debt. Dynamic targets are bound to the CP-owned
+    // observation hash; the caller may not self-report a fingerprint.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS routine_effects (
+        effect_id TEXT PRIMARY KEY,
+        routine_run_id TEXT NOT NULL,
+        plan_hash TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL UNIQUE,
+        action TEXT NOT NULL,
+        target_hash TEXT NOT NULL,
+        observation_hash TEXT,
+        payload_hash TEXT,
+        intent_json TEXT NOT NULL,
+        status TEXT NOT NULL,
+        reservation_consumed INTEGER NOT NULL DEFAULT 0,
+        retry_blocked INTEGER NOT NULL DEFAULT 0,
+        evidence_refs_json TEXT NOT NULL DEFAULT '[]',
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        finished_at INTEGER
+      );
+      CREATE INDEX IF NOT EXISTS routine_effects_budget_idx
+        ON routine_effects(routine_run_id, action, target_hash, created_at);
+      CREATE TABLE IF NOT EXISTS routine_run_closures (
+        routine_run_id TEXT NOT NULL,
+        action TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (routine_run_id, action)
+      );
+    `);
     this.#ensureColumn("jobs", "operation_key", "TEXT");
     this.#ensureColumn("jobs", "authorization_snapshot_json", "TEXT");
     // Foundation PR3: one-time transport action authorizations (INV-02).
@@ -4383,6 +4417,145 @@ export class StateStore {
       "SELECT * FROM mission_effects WHERE mission_id=? ORDER BY created_at, effect_id",
     ).all(missionId).map((row) => this.#publicMissionEffect(row));
   }
+
+  // --- Direct-routine plan V2 §7: server-hard routine effect ledger ----------
+  //
+  // Enforced in the same SQLite transaction as the slot reservation. There is
+  // deliberately NO softScope/softBudget/debtSink parameter on this path: the
+  // nonpayment-autonomy policyMode must never be able to soften a routine
+  // budget into a debt (§7.3). The absolute per-action caps (like<=1,
+  // comment<=2) are re-validated here so even a mis-wired bridge caller cannot
+  // raise them.
+
+  static ROUTINE_BUDGET_ABSOLUTE_CAPS = Object.freeze({ like: 1, comment: 2 });
+
+  #publicRoutineEffect(row) {
+    if (!row) return null;
+    return {
+      effectId: row.effect_id,
+      routineRunId: row.routine_run_id,
+      planHash: row.plan_hash,
+      idempotencyKey: row.idempotency_key,
+      action: row.action,
+      targetFingerprint: row.target_hash,
+      observationHash: row.observation_hash,
+      payloadHash: row.payload_hash,
+      intent: parseJson(row.intent_json, {}),
+      status: row.status,
+      reservationConsumed: Boolean(row.reservation_consumed),
+      retryBlocked: Boolean(row.retry_blocked),
+      evidenceRefs: parseJson(row.evidence_refs_json, []),
+      createdAt: iso(row.created_at),
+      updatedAt: iso(row.updated_at),
+      finishedAt: row.finished_at ? iso(row.finished_at) : null,
+    };
+  }
+
+  beginRoutineEffect({ routineRunId, planHash, action, targetFingerprint, observationHash = null, payloadHash = null, intent = {}, idempotencyKey, budget }) {
+    if (!routineRunId || !planHash || !action || !targetFingerprint || !idempotencyKey) {
+      throw new TypeError("routineRunId, planHash, action, targetFingerprint, idempotencyKey are required");
+    }
+    if (!budget || budget.mode !== "hard") {
+      throw new ControlPlaneError("ROUTINE_BUDGET_MODE_HARD_REQUIRED", "routine effect budget must be mode=hard (soft budgets have no path here)", { status: 400 });
+    }
+    const cap = budget.actions?.[action];
+    if (!cap || !Number.isInteger(cap.max) || cap.max < 0 || !Number.isInteger(cap.perTarget) || cap.perTarget < 0) {
+      throw new ControlPlaneError("ROUTINE_BUDGET_ACTION_UNKNOWN", `no hard budget configured for routine action ${action}`, { status: 400 });
+    }
+    const absolute = StateStore.ROUTINE_BUDGET_ABSOLUTE_CAPS[action];
+    if (absolute === undefined) {
+      throw new ControlPlaneError("ROUTINE_BUDGET_ACTION_UNKNOWN", `routine action ${action} has no schema cap`, { status: 400 });
+    }
+    if (cap.max > absolute) {
+      throw new ControlPlaneError("ROUTINE_BUDGET_CAP_EXCEEDED", `routine budget max for ${action} exceeds the schema cap ${absolute}`, { status: 400 });
+    }
+    const now = this.now();
+    return this.transaction(() => {
+      const existing = this.db.prepare("SELECT * FROM routine_effects WHERE idempotency_key=?").get(idempotencyKey);
+      if (existing) return { effect: this.#publicRoutineEffect(existing), reused: true };
+      const closed = this.db.prepare("SELECT reason FROM routine_run_closures WHERE routine_run_id=? AND action=?").get(routineRunId, action);
+      if (closed) {
+        throw new ControlPlaneError("ROUTINE_ACTION_CLOSED", `action ${action} is closed for this routine run (${closed.reason})`, { status: 409 });
+      }
+      const blockedRetry = this.db.prepare(`
+        SELECT effect_id FROM routine_effects
+        WHERE routine_run_id=? AND action=? AND target_hash=? AND retry_blocked=1
+        LIMIT 1
+      `).get(routineRunId, action, targetFingerprint);
+      if (blockedRetry) {
+        throw new ControlPlaneError("AMBIGUOUS_NO_RETRY", "an ambiguous routine effect for this target cannot be retried", {
+          status: 409, details: { effectId: blockedRetry.effect_id },
+        });
+      }
+      // a slot stays consumed once transported: reserved/verified/ambiguous all
+      // count against max; only a pre-transport stop (not_sent/cancelled) releases
+      const live = this.db.prepare(`
+        SELECT target_hash FROM routine_effects
+        WHERE routine_run_id=? AND action=? AND status NOT IN ('not_sent','cancelled')
+      `).all(routineRunId, action);
+      if (live.length >= cap.max) {
+        throw new ControlPlaneError("ROUTINE_BUDGET_EXCEEDED", `routine hard budget for ${action} (max ${cap.max}) is exhausted`, { status: 409 });
+      }
+      if (live.filter((row) => row.target_hash === targetFingerprint).length >= cap.perTarget) {
+        throw new ControlPlaneError("ROUTINE_BUDGET_PER_TARGET_EXCEEDED", `routine hard per-target budget for ${action} is exhausted`, { status: 409 });
+      }
+      const effectId = newId("routine-effect");
+      this.db.prepare(`
+        INSERT INTO routine_effects (
+          effect_id, routine_run_id, plan_hash, idempotency_key, action, target_hash,
+          observation_hash, payload_hash, intent_json, status, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'reserved', ?, ?)
+      `).run(
+        effectId, routineRunId, planHash, idempotencyKey, action, targetFingerprint,
+        observationHash, payloadHash, canonicalJson(redactEffectIntent(intent)), now, now,
+      );
+      return { effect: this.#publicRoutineEffect(this.db.prepare("SELECT * FROM routine_effects WHERE effect_id=?").get(effectId)), reused: false };
+    });
+  }
+
+  recordRoutineEffectOutcome(effectId, { status, evidenceRefs = [] } = {}) {
+    if (!["verified", "ambiguous", "not_sent", "cancelled"].includes(status)) {
+      throw new TypeError("unsupported routine effect outcome");
+    }
+    const now = this.now();
+    return this.transaction(() => {
+      const row = this.db.prepare("SELECT * FROM routine_effects WHERE effect_id=?").get(effectId);
+      if (!row) throw new ControlPlaneError("ROUTINE_EFFECT_NOT_FOUND", `unknown routine effect ${effectId}`, { status: 404 });
+      // ambiguous consumes its slot (§7.6) — only a pre-transport stop releases it
+      const consumed = status !== "not_sent" && status !== "cancelled";
+      const retryBlocked = status === "ambiguous";
+      this.db.prepare(`
+        UPDATE routine_effects SET
+          status=?, reservation_consumed=?, retry_blocked=?, evidence_refs_json=?,
+          updated_at=?, finished_at=?
+        WHERE effect_id=?
+      `).run(status, consumed ? 1 : 0, retryBlocked ? 1 : 0, canonicalJson(evidenceRefs), now, now, effectId);
+      return this.#publicRoutineEffect(this.db.prepare("SELECT * FROM routine_effects WHERE effect_id=?").get(effectId));
+    });
+  }
+
+  closeRoutineRunAction({ routineRunId, action, reason }) {
+    if (!routineRunId || !action || !reason) {
+      throw new TypeError("routineRunId, action, reason are required");
+    }
+    this.db.prepare(`
+      INSERT INTO routine_run_closures (routine_run_id, action, reason, created_at)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(routine_run_id, action) DO NOTHING
+    `).run(routineRunId, action, reason, this.now());
+  }
+
+  isRoutineRunActionClosed(routineRunId, action) {
+    return Boolean(this.db.prepare("SELECT 1 FROM routine_run_closures WHERE routine_run_id=? AND action=?").get(routineRunId, action));
+  }
+
+  listRoutineEffects(routineRunId) {
+    return this.db.prepare(
+      "SELECT * FROM routine_effects WHERE routine_run_id=? ORDER BY created_at, effect_id",
+    ).all(routineRunId).map((row) => this.#publicRoutineEffect(row));
+  }
+
+  // --- Mission effects (ECP) -------------------------------------------------
 
   // REX Phase 5 §8.4 (P5b): softBudget (set by the ledger under nonpayment_v1) turns an
   // exhausted count/frequency budget into a durable budget_debt instead of throwing — a
