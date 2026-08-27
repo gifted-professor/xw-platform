@@ -172,3 +172,27 @@
 - **待办（live，需设备/operator）**：每 cap（like/collect/follow）一次有界 04 canary（before/after state + exactly-once transport + ledger 核对）。nurture live= browse-only 默认 + 显式 counts 各建严格 Mission。离线 machinery 全就绪（effect-budget + social-verifiers + social-action-run 三测试 + capabilities mission_only），只差 live canary。
 
 - end 2026-08-27（离线部分）。W4 离线 done（F3 strict-mission budget + already-true skip + no-retry fence 全绿），live canary 待 operator。下一波 W5：comment + DM（S3，formalize last-message fingerprint）。
+
+## W5 — comment + DM（S3）— 离线 done 2026-08-27
+
+- **产物**：
+  - `services/control-plane/apps/xhs/comment-verifier.mjs` — 纯 comment-send 验证，替换旧 `xhs-comment-one.mjs:301-322` 弱验证（"composer closed after send"=pass）。三因子强证明：(1) exactTextHashPresent——note 已发评论含 text hash === commentTextHash(sentText)（文本须是**已发评论**非 composer 输入）；(2) countDelta——评论数严格递增 after>before；(3) ownLatestComment——最新评论（postedComments[0] newest-first）是我的且 text hash 匹配。三因子全中→verified；弱"composer-closed"（composer 关但无已发评论+无 count delta）→**降为 ambiguous**（不再 verified，no-blind-retry fence 适用）；text-present-no-count-delta→ambiguous（stale/replay）；count-delta-text-missing→ambiguous（别人评论了）；composer 仍开/发送键在→not_sent。text+count 但 peer 抢发新评论（ownLatest false）→仍 verified（ownLatest 是强化非硬门，我的评论确实发了）。`commentTextHash`=sha256(`xw.xhs.comment.text:`+text)（node:crypto，零三方）。`extractPostedComments` 滤 UI 标签（评论/点赞/收藏/纯数字）留正文。
+  - `services/control-plane/apps/xhs/dm-verifier.mjs` — 纯 DM reply 验证，替换旧 `xhs-dm-user.mjs:216-221` 模糊用户名阶梯 + `:340-344` 弱验证（"tapped-send"/"input-cleared"=pass）：
+    - `usernameMatch(target, observed)`：exact/`fuzzy`/none。fuzzy = target 是 observed 子串 OR 4-char 前缀碰撞（旧 `.includes(user)`/`user.slice(0,4)` 阶梯命中类）→**禁发**。
+    - `decideDmReplySend`（pre-send 三门）：USERNAME_FUZZY/USERNAME_NONE→不 send；THREAD_NOT_UNIQUE(0)/THREAD_AMBIGUOUS(>1)→不 send（W3"唯一才进"gate 绑入 DM 决策）；LAST_MESSAGE_DRIFT（observed last-msg fp ≠ expected，peer 插话）→不 send；全过→proceed。
+    - `verifyDmReplySend`（post-send）：thread 新 last-msg fp === expectedReplyLastMessageFingerprint(sentText)=`lastMessageFingerprintOf({snippet:sentText})`→verified；弱"tapped-send"（composer 关但最新消息非我）→ambiguous（不再 verified）；composer 仍开→not_sent。
+    - **关键复用**：post-send 用 W3 `lastMessageFingerprintOf`（`xw.xhs.lastmsg:` namespace）算期望 fp——pre-send drift 检查与 post-send verify 共享**同一身份层**，非两套 hash。import 自 `xhs-thread-fingerprint.mjs`。这是计划"inbox/read thread fingerprint 补齐（W3 部分的正式化）"——W3 模块正式作为 DM 绑定身份层。
+  - `services/control-plane/tests/xhs-comment-dm-bound.test.mjs` — 21 测试：comment 强验证/弱验证拒（composer-closed→ambiguous, text-no-delta, count-no-text, composer-open→not_sent, peer-interleaved→verified）/hash 确定性/extractPostedComments；dm usernameMatch exact/fuzzy/none、decideDmReplySend 四门（USERNAME_FUZZY/USERNAME_NONE/THREAD_NOT_UNIQUE+AMBIGUOUS/LAST_MESSAGE_DRIFT/proceed）、verifyDmReplySend（verified/弱 tapped-send→ambiguous/not_sent）、thread+last-msg fp 组合身份；**F3 fence**：ambiguous comment/reply outcome→recordMissionEffectOutcome retry_blocked→同 triple 重试 AMBIGUOUS_NO_RETRY(409)（real StateStore，fence 在 budget 前），不同 target 不 fence（per-triple）。idempotencyKey 经 bindOperationKey 派生（payloadHash=commentTextHash）。
+  - 顺带修 `xw-xhs-dispatcher.mjs`：W1 引入的 2 个 raw null byte（join 分隔符）替换为 `\0` 转义（运行时等价，文本安全——grep 不再误判 binary）。behavior-preserving（40/40 dispatcher+budget 测试绿）。
+
+- **测试（全绿）**：`npm run test:xhs-pack` = 117/117 绿（96 + 21 comment-dm-bound）。新测试已加入聚合脚本。
+
+- **决定/坑**：
+  - **弱验证降级是 W5 核心**：旧 "composer closed" / "tapped-send" / "input-cleared" 把"发送键消失/输入框清空"当成功——但那只能证明 composer 关了，不能证明评论/私信发出。W5 全降为 ambiguous，触发 AMBIGUOUS_NO_RETRY fence（W4 probe 2 同一机制），杜绝瞎重试。强验证须"我的文本作为已发内容出现 + 计数递增 + 最新是我"三重证。
+  - **fuzzy username 禁发**：旧阶梯 `exact→includes(user)→user.slice(0,4)` 会把"天才"匹配到"天才较瘦"（target 是 observed 子串）或 4-char 前缀碰撞。W5 usernameMatch 把这些标 fuzzy，decideDmReplySend 直接禁发（USERNAME_FUZZY）——防回错人。
+  - **last-message drift 禁发**：read 与 send 之间 peer 插话→thread 最新消息变→lastMessageFingerprintOf 变→LAST_MESSAGE_DRIFT 禁发。防 stale-context reply。pre-send drift 检查与 post-send verify 共享 W3 `lastMessageFingerprintOf`（同 namespace）——一套身份层，不漂移。
+  - **F3 fence 对 comment/reply 同样适用**：ambiguous comment/reply outcome 经 recordMissionEffectOutcome(status="ambiguous")→retry_blocked=1 on (mission,action,target)；同 triple 新 idk 重试→AMBIGUOUS_NO_RETRY（fence 在 budget gate 前检查，W4 probe 2 同机制）。不同 target 不 fence（per-triple）。
+
+- **待办（live，需设备/operator）**：comment + reply 各一次 04 canary（comment: before/after 评论数 + 本人最新评论 hash；reply: exact username + thread unique + last-msg 无漂移 + 发后 last-msg 是我）。inbox/read thread fingerprint W3 已初版，W5 已 formalize 为 DM 身份层。离线 machinery 全就绪，只差 live canary。
+
+- end 2026-08-27（离线部分）。W5 离线 done（comment 强验证 + DM fuzzy/drift 禁发 + F3 fence 全绿），live canary 待 operator。下一波 W6：publish protected commit（合同 PUBLISH，唯一保留人工点）。

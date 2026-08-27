@@ -309,7 +309,7 @@ export function effectBudget(action, params) {
   const count = Number.isInteger(params.count) ? params.count : 1;
   const payloadKeys = action.id === "comment" ? ["text"] : action.id === "reply" ? ["text", "thread"] : [];
   const payloadHash = payloadKeys.length
-    ? sha256Hex(payloadKeys.map((k) => String(params[k] ?? "")).join(" "))
+    ? sha256Hex(payloadKeys.map((k) => String(params[k] ?? "")).join("\0"))
     : null;
   missions.push(Object.freeze({
     action: action.id,
@@ -331,7 +331,7 @@ export function bindOperationKey({ actionRunId, action, targetFingerprint, paylo
   if (!actionRunId || !action || !targetFingerprint) {
     throw new PlanError("OPERATION_KEY_INCOMPLETE", "actionRunId/action/targetFingerprint required");
   }
-  return sha256Hex([actionRunId, action, targetFingerprint, payloadHash || ""].join(" "));
+  return sha256Hex([actionRunId, action, targetFingerprint, payloadHash || ""].join("\0"));
 }
 
 /**
