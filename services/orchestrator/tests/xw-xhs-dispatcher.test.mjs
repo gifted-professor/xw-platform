@@ -168,9 +168,14 @@ test("adaptive route hint matches backend", () => {
 });
 
 test("normalizeParams applies defaults and rejects unknown keys", () => {
+  // S0 truth fix: browse is a fixed 5-swipe sealed recipe — it takes no params
+  // (the old minutes/swipes inputs never bound to an execution step).
   const p = normalizeParams(XHS_ACTION_CATALOG.browse, {});
-  assert.equal(p.minutes, 10);
-  assert.equal(p.swipes, 5);
+  assert.deepEqual(p, {});
+  assert.throws(
+    () => normalizeParams(XHS_ACTION_CATALOG.browse, { minutes: 10 }),
+    (e) => e.code === "PARAMS_UNKNOWN",
+  );
   assert.throws(
     () => normalizeParams(XHS_ACTION_CATALOG.search, { keyword: "x", bogus: 1 }),
     (e) => e.code === "PARAMS_UNKNOWN",

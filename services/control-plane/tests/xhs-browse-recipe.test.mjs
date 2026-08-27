@@ -75,11 +75,18 @@ test("browse@1: mutation of a swipe coordinate changes the canonical hash", () =
 });
 
 test("browse@1: dispatcher plans browse -> xhs.browse.fixed@1 (R0, route RECIPE)", () => {
-  const plan = planAction({ actionId: "browse", params: { minutes: 10, swipes: 5 } });
+  // S0 truth fix: the plan takes no params — recipe@1 performs exactly 5 sealed
+  // static swipes; the old minutes/swipes inputs never bound to a step.
+  const plan = planAction({ actionId: "browse", params: {} });
   assert.equal(plan.recipeId, "xhs.browse.fixed");
   assert.equal(plan.recipeRevision, 1);
   assert.equal(plan.effectClass, "none");
   assert.equal(plan.adaptiveRoute, "RECIPE");
   assert.equal(plan.gate, "W3");
   assert.equal(plan.alias, "04");
+  assert.throws(
+    () => planAction({ actionId: "browse", params: { minutes: 10, swipes: 3 } }),
+    (e) => e.code === "PARAMS_UNKNOWN",
+    "unbound minutes/swipes inputs must be rejected at plan stage",
+  );
 });

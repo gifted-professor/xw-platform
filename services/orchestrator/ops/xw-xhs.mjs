@@ -29,6 +29,7 @@ import {
   resolveAction,
   listActions,
   evaluateExecuteGate,
+  resolveExecuteOutcome,
   PlanError,
   FORCED_ALIAS,
 } from "../scripts/lib/xw-xhs-dispatcher.mjs";
@@ -76,7 +77,7 @@ function usage() {
 
 actions (04-only):
   search --keyword <词> [--pages 1]
-  browse [--minutes 10] [--swipes 5]
+  browse                      # recipe@1 performs exactly 5 static swipes (no params)
   inbox                      (/xw messages compat alias)
   read --thread <会话标识>
   like [--keyword 词] [--count 1]
@@ -141,13 +142,26 @@ async function main() {
 
   const asJson = Boolean(args.json) || Boolean(args.execute);
   if (args.execute) {
+    // S0 execution truth (plan V2 §3.4/§6.6): gate pass alone is never success.
+    // The CP routine executor is not wired into this CLI yet (S1); even with
+    // the live gate open, --execute fails closed with XHS_EXECUTE_NOT_WIRED
+    // instead of printing a gate-only ok:true.
     const gate = evaluateExecuteGate(plan, liveGates);
-    const payload = { ok: gate.ok, command: "execute", plan, gate: gate.reason || null };
-    if (!gate.ok) {
-      payload.message = `live execution is fail-closed for ${plan.action} until wave ${plan.gate} promotes it via the canary chain`;
+    const outcome = resolveExecuteOutcome(plan, liveGates, null);
+    const payload = {
+      ok: outcome.ok,
+      command: "execute",
+      plan,
+      gate: gate.ok ? null : gate.reason || null,
+    };
+    if (!outcome.ok) {
+      payload.error = { code: outcome.code, message: outcome.message || outcome.reason };
+      if (outcome.code === "ACTION_GATED") {
+        payload.message = `live execution is fail-closed for ${plan.action} until wave ${plan.gate} promotes it via the canary chain`;
+      }
     }
     console.log(JSON.stringify(payload, null, 2));
-    process.exitCode = gate.ok ? 0 : 4;
+    process.exitCode = outcome.ok ? 0 : 4;
     return;
   }
 

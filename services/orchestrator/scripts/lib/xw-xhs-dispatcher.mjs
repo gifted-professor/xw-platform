@@ -88,7 +88,12 @@ export const XHS_ACTION_CATALOG = Object.freeze({
     recipeId: "xhs.browse.fixed",
     effectClass: EFFECT_CLASS.NONE,
     gate: "W3",
-    params: { minutes: { type: "integer", min: 1, max: 60, default: 10 }, swipes: { type: "integer", min: 0, max: 50, default: 5 } },
+    // S0 truth fix (plan V2 §3.3): recipe@1 performs exactly 5 sealed static
+    // swipes and has no time-bound loop — the old `minutes`/`swipes` inputs
+    // validated fine but never bound to any execution step. This action now
+    // takes no params; parameterized feed behavior arrives with the S1 routine
+    // machine (xhs.feed-play.v1 --items), not by lying in this plan.
+    params: {},
     stopConditions: ["any interaction attempted", "feed empty", "package drift"],
   }),
   inbox: Object.freeze({
@@ -405,6 +410,81 @@ export function planAction({ actionId, params = {}, alias = FORCED_ALIAS, actor 
     planHash,
     ...planBody,
   });
+}
+
+/**
+ * S0 execution truth (plan V2 §3.4/§6.6/§10.2): a live-gate pass alone is NEVER
+ * execute success. The pre-S0 `--execute` printed `{ok:true, plan, gate}` when
+ * the gate was open without any device execution — the fake-execution gap.
+ *
+ * `--execute` may only report ok:true when a Control-Plane-authoritative
+ * terminal receipt is present and bound to the same planHash:
+ *   { schemaId, runId, planHash, status, transport:{count}, cleanup }
+ * Until the routine executor is wired into the CLI (S1), every --execute fails
+ * closed with XHS_EXECUTE_NOT_WIRED even when the action's live gate is open.
+ */
+export const EXECUTE_RECEIPT_SCHEMA_ID = "xw.xhs.execute-receipt.v1";
+
+export const EXECUTE_TERMINAL_STATUSES = Object.freeze([
+  "SUCCEEDED",
+  "FAILED",
+  "CANCELLED",
+  "BLOCKED",
+]);
+
+/**
+ * Validate a candidate execute receipt against the authoritative shape.
+ * Returns { ok, reason } — rejects the gate-only fake-success shape.
+ */
+export function isAuthoritativeExecuteReceipt(receipt, planHash = null) {
+  if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)) {
+    return { ok: false, reason: "receipt_missing" };
+  }
+  if (receipt.schemaId !== EXECUTE_RECEIPT_SCHEMA_ID) {
+    return { ok: false, reason: "receipt_schema" };
+  }
+  if (typeof receipt.runId !== "string" || !receipt.runId.trim()) {
+    return { ok: false, reason: "receipt_runId" };
+  }
+  if (planHash != null && receipt.planHash !== planHash) {
+    return { ok: false, reason: "receipt_planHash_mismatch" };
+  }
+  if (!EXECUTE_TERMINAL_STATUSES.includes(receipt.status)) {
+    return { ok: false, reason: "receipt_not_terminal" };
+  }
+  const transport = receipt.transport;
+  if (!transport || typeof transport !== "object" || Array.isArray(transport)) {
+    return { ok: false, reason: "receipt_transport" };
+  }
+  if (!Number.isInteger(transport.count) || transport.count < 0) {
+    return { ok: false, reason: "receipt_transport_count" };
+  }
+  return { ok: true };
+}
+
+/**
+ * Resolve the --execute outcome for a plan given live gates and an (optional)
+ * authoritative executor receipt. Pure + deterministic.
+ *   gate closed                        -> ACTION_GATED (fail-closed, unchanged)
+ *   gate open, receipt missing/invalid -> XHS_EXECUTE_NOT_WIRED (S0 truth fix)
+ *   gate open, authoritative receipt   -> ok with the receipt echoed
+ */
+export function resolveExecuteOutcome(plan, liveGates = {}, receipt = null) {
+  const gate = evaluateExecuteGate(plan, liveGates);
+  if (!gate.ok) {
+    return { ok: false, code: "ACTION_GATED", reason: gate.reason };
+  }
+  const v = isAuthoritativeExecuteReceipt(receipt, plan ? plan.planHash : null);
+  if (!v.ok) {
+    return {
+      ok: false,
+      code: "XHS_EXECUTE_NOT_WIRED",
+      reason: v.reason,
+      message:
+        "gate status alone is not execution evidence; --execute succeeds only with a CP-authoritative terminal receipt (runId + transport + terminal status) bound to the same planHash",
+    };
+  }
+  return { ok: true, receipt };
 }
 
 /**
