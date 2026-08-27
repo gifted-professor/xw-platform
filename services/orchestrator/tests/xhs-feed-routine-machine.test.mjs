@@ -1,0 +1,269 @@
+/**
+ * xhs-feed-routine-machine.test.mjs — deterministic state-machine invariants
+ * (direct-routine plan V2 §4/§6/§10.4): per-item single open, video comment
+ * swipe = 0, bounded dwell/screens/skips, semantic back confirm, UNKNOWN skip,
+ * forbidden-surface freeze, seeded replay determinism, deferred/capped effects
+ * (transport 0 above plan caps), cleanup always activeLeases=0.
+ */
+import test from "node:test";
+import assert from "node:assert/strict";
+
+import { planRoutine } from "../scripts/lib/xhs-routine-plan.mjs";
+import { createRoutineRun } from "../scripts/lib/xhs-feed-routine-machine.mjs";
+import { PAGE_CLASS } from "../scripts/lib/xhs-feed-surface.mjs";
+
+const FEED_FOCUS = "com.xingin.xhs/com.xingin.xhs.index.v2.IndexActivityV2";
+const NOTE_FOCUS = "com.xingin.xhs/com.xingin.xhs.note.NoteDetailActivity";
+const VIDEO_FOCUS = "com.xingin.xhs/com.xingin.xhs.note.DetailFeedActivity";
+
+const NOTE_DESC = "笔记 攀岩入门三条路线 来自小岩 123赞";
+const VIDEO_DESCS = ["视频 日落 来自u 5赞", "视频 海边 来自u 6赞"];
+
+const NOTE_DETAIL_XML = '<node class="android.widget.TextView" content-desc="点赞" text="" bounds="[40,2200][140,2300]"/>'
+  + '<node class="android.widget.TextView" content-desc="评论" text="" bounds="[240,2200][340,2300]"/>'
+  + '<node class="android.widget.TextView" text="小岩" bounds="[40,600][120,660]"/>'
+  + '<node class="android.widget.TextView" text="这条路线讲解得非常清楚，收藏了" bounds="[40,680][900,740]"/>';
+const VIDEO_XML = '<node class="android.view.TextureView" content-desc="" text="" bounds="[0,180][1080,1500]"/>'
+  + '<node class="android.widget.TextView" content-desc="评论" text="" bounds="[860,2200][940,2260]"/>';
+const EMPTY_INDEX_XML = '<node class="android.widget.TextView" text="网络不给力，点击重试" bounds="[0,0][1080,2400]"/>';
+
+function feedCardXml(desc, bounds) {
+  return `<node class="android.widget.ImageView" content-desc="${desc}" text="" clickable="true" bounds="${bounds}"/>`;
+}
+
+function feedXml(count) {
+  // distinct positions (distinct target fingerprints), one media kind — the
+  // default detailDump asserts IMAGE_NOTE; video paths override detailDump.
+  const cols = ["[40,400][500,900]", "[560,400][1020,900]", "[40,1000][500,1500]", "[560,1000][1020,1500]", "[40,1600][500,2000]"];
+  let out = "";
+  for (let i = 0; i < count; i += 1) {
+    out += feedCardXml(NOTE_DESC, cols[i % cols.length]);
+  }
+  return out;
+}
+
+const FEED_DUMP = { xml: feedXml(4), focus: FEED_FOCUS, pkg: "com.xingin.xhs" };
+
+/** Fake session-bound driver with call recording — the machine's only I/O seam. */
+function fakeDriver({
+  feedDump = FEED_DUMP,
+  detailDump = { xml: NOTE_DETAIL_XML, focus: NOTE_FOCUS, pkg: "com.xingin.xhs" },
+  ensureFeedOk = true,
+  dumpOk = true,
+  tapOk = true,
+  backOk = true,
+  swipeCommentsOk = true,
+} = {}) {
+  const calls = { ensureFeed: 0, dump: [], tap: [], back: 0, swipeComments: [], waitFor: [] };
+  return {
+    calls,
+    async ensureFeed() {
+      calls.ensureFeed += 1;
+      return { ok: ensureFeedOk, activity: FEED_FOCUS };
+    },
+    async dump({ label } = {}) {
+      calls.dump.push(label || "");
+      const base = (label || "").startsWith("detail") ? detailDump : feedDump;
+      return { ...base, hash: `dh_${label}` };
+    },
+    async tapAt({ x, y }) {
+      calls.tap.push({ x, y });
+      return { ok: tapOk, activity: detailDump.focus };
+    },
+    async back() {
+      calls.back += 1;
+      return { ok: backOk, focusVerified: backOk };
+    },
+    async swipeComments({ screens }) {
+      calls.swipeComments.push(screens);
+      return { ok: swipeCommentsOk };
+    },
+    async waitFor(ms) {
+      calls.waitFor.push(ms);
+      return { ok: true };
+    },
+  };
+}
+
+const CLOCK = { nowMs: () => 0, sleep: async () => {} };
+
+test("happy path: feed-play completes all items with zero transport and clean cleanup", async () => {
+  const plan = planRoutine({ templateId: "xhs.feed-play.v1", params: { items: 3, commentScreens: 1, seed: "s1" } });
+  const driver = fakeDriver({});
+  const receipt = await createRoutineRun({ plan, driver, clock: CLOCK }).execute();
+  assert.equal(receipt.status, "SUCCEEDED");
+  assert.equal(receipt.template, "xhs.feed-play.v1");
+  assert.equal(receipt.items.length, 3);
+  assert.ok(receipt.items.every((it) => it.opened === true && it.openAttempts === 1));
+  assert.ok(receipt.items.every((it) => it.detailPage === PAGE_CLASS.IMAGE_NOTE));
+  assert.equal(receipt.transport.count, 0);
+  assert.equal(receipt.cleanup.activeLeases, 0);
+  assert.ok(receipt.items.every((it) => it.commentScreens === 1 && it.commentsRead === 1));
+});
+
+test("invariant: each item opened at most once — no target fingerprint repeats", async () => {
+  const plan = planRoutine({ templateId: "xhs.feed-play.v1", params: { items: 4, seed: "s2" } });
+  const driver = fakeDriver({});
+  const receipt = await createRoutineRun({ plan, driver }).execute();
+  assert.equal(driver.calls.tap.length, 4);
+  const fps = receipt.picks.map((p) => p.targetFingerprint);
+  assert.equal(new Set(fps).size, fps.length, "no target opened twice");
+});
+
+test("invariant: video note never swipes for comments (swipe = 0 on video surfaces)", async () => {
+  const plan = planRoutine({ templateId: "xhs.feed-play.v1", params: { items: 2, commentScreens: 3, seed: "s3" } });
+  const driver = fakeDriver({ detailDump: { xml: VIDEO_XML, focus: VIDEO_FOCUS, pkg: "com.xingin.xhs" } });
+  const receipt = await createRoutineRun({ plan, driver }).execute();
+  assert.equal(receipt.status, "SUCCEEDED");
+  for (const it of receipt.items) {
+    assert.equal(it.detailPage, PAGE_CLASS.VIDEO_NOTE);
+    assert.equal(it.commentScreens, 0, "video main surface comment swipe = 0");
+    assert.equal(it.commentsRead, 0);
+    assert.equal(it.commentStop, "COMMENT_PANEL_ASSERTION_PENDING_S1");
+  }
+  assert.equal(driver.calls.swipeComments.length, 0, "no swipeComments call on video surfaces");
+});
+
+test("invariant: dwell bounded by plan range", async () => {
+  const plan = planRoutine({ templateId: "xhs.feed-play.v1", params: { items: 3, dwell: "2:3", seed: "s4" } });
+  const driver = fakeDriver({});
+  await createRoutineRun({ plan, driver }).execute();
+  for (const ms of driver.calls.waitFor) {
+    assert.ok(ms >= 2000 && ms <= 3000, `dwell ${ms}ms outside 2:3s`);
+  }
+});
+
+test("unknown feed -> skip; >2 consecutive skips -> FAILED closeout", async () => {
+  const plan = planRoutine({ templateId: "xhs.feed-play.v1", params: { items: 5, seed: "s5" } });
+  const driver = fakeDriver({ feedDump: { xml: EMPTY_INDEX_XML, focus: FEED_FOCUS, pkg: "com.xingin.xhs" } });
+  const receipt = await createRoutineRun({ plan, driver }).execute();
+  assert.equal(receipt.status, "FAILED");
+  assert.equal(receipt.stopReason, "FEED_RECOGNITION_EXHAUSTED");
+});
+
+test("ensure-feed failure -> BLOCKED closeout, no item loop", async () => {
+  const plan = planRoutine({ templateId: "xhs.feed-play.v1", params: { items: 3, seed: "s6" } });
+  const driver = fakeDriver({ ensureFeedOk: false });
+  const receipt = await createRoutineRun({ plan, driver }).execute();
+  assert.equal(receipt.status, "BLOCKED");
+  assert.equal(receipt.stopReason, "ENSURE_FEED_FAILED");
+  assert.equal(receipt.items.length, 1);
+  assert.equal(driver.calls.tap.length, 0);
+});
+
+test("back not semantically confirmed -> BLOCKED (restoration failure)", async () => {
+  const plan = planRoutine({ templateId: "xhs.feed-play.v1", params: { items: 2, seed: "s7" } });
+  const driver = fakeDriver({ backOk: false });
+  const receipt = await createRoutineRun({ plan, driver }).execute();
+  assert.equal(receipt.status, "BLOCKED");
+  assert.equal(receipt.stopReason, "BACK_FEED_NOT_CONFIRMED");
+});
+
+test("open failure bounded: skip + restore feed; exhaustion -> FAILED", async () => {
+  const plan = planRoutine({ templateId: "xhs.feed-play.v1", params: { items: 4, seed: "s8" } });
+  const driver = fakeDriver({ tapOk: false });
+  const receipt = await createRoutineRun({ plan, driver }).execute();
+  assert.equal(receipt.status, "FAILED");
+  assert.equal(receipt.stopReason, "OPEN_EXHAUSTED");
+  assert.ok(receipt.items.every((it) => it.opened === false));
+});
+
+test("forbidden surface (captcha) -> back out, BLOCKED, transport increment = 0", async () => {
+  const plan = planRoutine({ templateId: "xhs.nurture-lite.v1", params: { items: 3, likeMax: 1, seed: "s9" } });
+  const driver = fakeDriver({ detailDump: { xml: '<node text="安全验证" bounds="[0,0][1080,2400]"/>', focus: NOTE_FOCUS, pkg: "com.xingin.xhs" } });
+  const receipt = await createRoutineRun({ plan, driver }).execute();
+  assert.equal(receipt.status, "BLOCKED");
+  assert.equal(receipt.stopReason, "FORBIDDEN_SURFACE");
+  assert.equal(receipt.transport.count, 0, "risk page: social transport increment = 0");
+});
+
+test("S1 effect boundary: social template without bridge -> deferred, transport 0", async () => {
+  const plan = planRoutine({ templateId: "xhs.nurture-grounded.v1", params: { items: 2, likeMax: 1, commentMax: 2, seed: "s10" } });
+  const driver = fakeDriver({});
+  const receipt = await createRoutineRun({ plan, driver }).execute();
+  assert.equal(receipt.status, "SUCCEEDED");
+  assert.equal(receipt.transport.count, 0);
+  for (const it of receipt.items) {
+    assert.match(it.effects.like, /deferred:effect_bridge_not_wired/);
+    assert.match(it.effects.comment, /deferred:effect_bridge_not_wired/);
+  }
+});
+
+test("none template never routes effects even with a bridge present", async () => {
+  const plan = planRoutine({ templateId: "xhs.feed-play.v1", params: { items: 1, seed: "s11" } });
+  let bridgeCalls = 0;
+  const effects = { commitRoutineEffect: async () => { bridgeCalls += 1; return { outcome: "verified", transported: true }; } };
+  await createRoutineRun({ plan, driver: fakeDriver({}), effects }).execute();
+  assert.equal(bridgeCalls, 0, "effectClass none must not call the effect bridge");
+});
+
+test("S2 seam: bridge intents capped by plan likeMax (cap, not quota)", async () => {
+  const plan = planRoutine({ templateId: "xhs.nurture-lite.v1", params: { items: 3, likeMax: 1, seed: "s12" } });
+  const intents = [];
+  const effects = {
+    commitRoutineEffect: async ({ intent }) => {
+      intents.push(intent);
+      return { outcome: "verified", transported: true };
+    },
+  };
+  const receipt = await createRoutineRun({ plan, driver: fakeDriver({}), effects }).execute();
+  assert.equal(intents.length, 1, "likeMax=1: exactly one bridge intent for the whole run");
+  assert.equal(intents[0].action, "like");
+  assert.equal(receipt.transport.count, 1);
+  assert.match(receipt.items[1].effects.like, /cap_reached/);
+});
+
+test("ambiguous like consumes the slot and closes remaining like attempts", async () => {
+  const plan = planRoutine({ templateId: "xhs.nurture-lite.v1", params: { items: 3, likeMax: 1, seed: "s13" } });
+  const effects = { commitRoutineEffect: async () => ({ outcome: "ambiguous", transported: true }) };
+  const receipt = await createRoutineRun({ plan, driver: fakeDriver({}), effects }).execute();
+  assert.equal(receipt.transport.count, 1);
+  for (let i = 1; i < receipt.items.length; i += 1) {
+    assert.match(receipt.items[i].effects.like, /cap_reached/);
+  }
+});
+
+test("seeded replay: same seed + same observations -> identical picks and dwell", async () => {
+  const mk = () => createRoutineRun({
+    plan: planRoutine({ templateId: "xhs.feed-play.v1", params: { items: 3, seed: "replay" } }),
+    driver: fakeDriver({}),
+  });
+  const a = await mk().execute();
+  const b = await mk().execute();
+  assert.deepEqual(a.picks, b.picks);
+  assert.deepEqual(
+    a.items.map((i) => [i.dwellMs, i.targetFingerprint]),
+    b.items.map((i) => [i.dwellMs, i.targetFingerprint]),
+  );
+});
+
+test("different seeds diverge on multi-card feeds (sampling recorded in receipt)", async () => {
+  const mk = (seed) => createRoutineRun({
+    plan: planRoutine({ templateId: "xhs.feed-play.v1", params: { items: 3, seed } }),
+    driver: fakeDriver({ feedDump: { xml: feedXml(5), focus: FEED_FOCUS, pkg: "com.xingin.xhs" } }),
+  });
+  const a = await mk("seedA").execute();
+  const b = await mk("seedB").execute();
+  assert.notDeepEqual(a.picks.map((p) => p.targetFingerprint), b.picks.map((p) => p.targetFingerprint));
+});
+
+test("unrecognized detail -> back out, skip; exhaustion -> FAILED", async () => {
+  const plan = planRoutine({ templateId: "xhs.feed-play.v1", params: { items: 4, seed: "s14" } });
+  const driver = fakeDriver({ detailDump: { xml: "", focus: "com.xingin.xhs/com.xingin.xhs.some.WeirdActivity", pkg: "com.xingin.xhs" } });
+  const receipt = await createRoutineRun({ plan, driver }).execute();
+  assert.equal(receipt.status, "FAILED");
+  assert.equal(receipt.stopReason, "DETAIL_RECOGNITION_EXHAUSTED");
+});
+
+test("dump unavailable -> FAILED closeout", async () => {
+  const plan = planRoutine({ templateId: "xhs.feed-play.v1", params: { items: 2, seed: "s15" } });
+  const driver = { ...fakeDriver({}), async dump() { return { xml: "", focus: FEED_FOCUS, pkg: "com.xingin.xhs" }; } };
+  const receipt = await createRoutineRun({ plan, driver }).execute();
+  assert.equal(receipt.status, "FAILED");
+  assert.equal(receipt.stopReason, "DUMP_UNAVAILABLE");
+});
+
+test("machine rejects a non-sealed plan object", () => {
+  assert.throws(() => createRoutineRun({ plan: { ok: true }, driver: fakeDriver({}) }), TypeError);
+  assert.throws(() => createRoutineRun({ plan: planRoutine({ templateId: "xhs.feed-play.v1" }), driver: null }), TypeError);
+});
