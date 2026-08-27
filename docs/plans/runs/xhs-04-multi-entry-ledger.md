@@ -196,3 +196,33 @@
 - **待办（live，需设备/operator）**：comment + reply 各一次 04 canary（comment: before/after 评论数 + 本人最新评论 hash；reply: exact username + thread unique + last-msg 无漂移 + 发后 last-msg 是我）。inbox/read thread fingerprint W3 已初版，W5 已 formalize 为 DM 身份层。离线 machinery 全就绪，只差 live canary。
 
 - end 2026-08-27（离线部分）。W5 离线 done（comment 强验证 + DM fuzzy/drift 禁发 + F3 fence 全绿），live canary 待 operator。下一波 W6：publish protected commit（合同 PUBLISH，唯一保留人工点）。
+
+## W6 — publish protected commit（合同 PUBLISH，S4）— 离线 done 2026-08-27
+
+- **Spike 结论（2-4h 核验 PHC 现有公开面，payment-only 程度）**：`ProtectedHumanCommit`（`control-plane/lib/protected-human-commit.mjs`）是 **payment-specialized 但非 payment-only**：
+  - `route({mission,action,target})` → `evaluateMissionEffect`：`action==="publish"` **永远**返回 `decision:"phc"`（mission-policy.mjs:326-328，Foundation Freeze INV-01——publish/delete final 永久 protected，`allow_within_scope` 不能释放）。所以 publish 路由进 PHC 是内核既定行为，无需新代码。
+  - `begin(input)`：payment 专属逻辑（`PAYMENT_BINDING_INCOMPLETE` 必填校验 line 37-52 + 冻结 `approvalBinding` line 61-77）**仅在 `action==="payment" && approvalVerifier` 时触发**。非 payment action（publish）只走通用 prepare→markWaitingAuthorization→入 `pending` Map→`addProtectedCommit` 落库。无 approvalVerifier 时 publish 不需任何 crypto approval。
+  - `decide(commitId,{decision,actorId,approval})`：`approvalVerifier.verify` **仅 `decision==="approve" && pending.action==="payment"` 时调**（line 126-132）。publish 的 approve 不走 crypto verify——人工 `decide("approve")` 调用本身就是 gate（plan V2 §10.5 唯一保留人工点）。deny 走 cancelPrepared/restore。
+  - **结论**：PHC 的 route/begin/decide 生命周期是 action-agnostic 的；payment 的 crypto approvalBinding + verifier 是 payment 专属叠加层。publish 作为非 payment protected commit 直接复用 PHC 内核，人工 decide("approve") 即唯一 gate。W6 只需在 PHC 之上叠 publish 专属的 envelope drift fail-closed + restart-lost-handle fail-closed。
+
+- **产物**：
+  - `services/control-plane/apps/xhs/publish-envelope.mjs` — 纯 `xhs.publish.commit-envelope.v1`：`buildPublishEnvelope({prepareRunId, planHash, contentHash, screenshotHash, deviceFingerprint, accountFingerprint, targetFingerprint, expiresAt})` → 冻结 envelope + `envelopeHash`（64-hex canonical）。`canonicalEnvelopeHash` = sha256(canonicalJson of BINDING_FIELDS only)——**排除 envelopeHash + status**（bookkeeping 非 binding，同 W1 canonical-v2 思路）。`verifyEnvelopeIntegrity`（重算 hash 比 envelopeHash，篡改→false）。`detectEnvelopeDrift(frozen, observed)`（content/screenshot 重 hash 比，fingerprints/planHash 直比，返漂移字段名或 null）。`contentHashOf`/`screenshotHashOf` namespaced sha256。必填字段缺→throw（partial binding 不许建——人工 gate 须建在 COMPLETE tamper-evident binding 上）。
+  - `services/control-plane/apps/xhs/publish-commit.mjs` — `PublishCommitHandler` 包 PHC 内核，叠 publish 专属 fail-closed：
+    - `beginPublish(...)`: 建 envelope（冻结 publish context）→ `phc.begin({action:"publish", envelope})` → waiting_authorization。**prepare=transport=0**（envelope 是 proof 非 send；execute 不在 begin 调）。envelope 存 in-process `envelopes` Map（drift reference）。
+    - `decidePublish(commitId,{decision,actorId,observed})`: **restart-lost-handle fail-closed**（envelopes.get 失败→PUBLISH_HANDLE_LOST，不 execute）；**drift fail-closed**（approve 时 `detectEnvelopeDrift(frozen, observed)` 返字段→PUBLISH_ENVELOPE_DRIFT，不 execute；observed 必填否则 PUBLISH_OBSERVED_STATE_REQUIRED）；**expiry fail-closed**（PHC 内核已强制 expiresAt→cancelled）；deny→cancel 不查 drift；approve 全过→`phc.decide("approve")`→executePrepared（one-tap publish，恰一次 execute）。envelope 自身 tamper→PUBLISH_ENVELOPE_TAMPERED。
+  - `services/control-plane/tests/xhs-publish-protected-commit.test.mjs` — PUBLISH 三 probe 共 14 测试（real PHC 内核 + stub ECP）：
+    1. **envelope integrity + drift**（1a-1e）：冻结/64-hex hash/self-consistent；canonical hash 排除 envelopeHash+status（status 篡改 hash 不变，binding 字段篡改 hash 变）；六字段 drift 全检出；frozen envelope 篡改 binding 字段+留旧 hash→integrity false；缺字段→throw。
+    2. **prepare=transport=0**（2a-2b）：dispatcher `publish prepare` effectClass=none/missions=[]/operationKeyDeferred（transport=0 dry-run）；beginPublish 调 prepare+waiting 一次，**execute 零调**（envelope 是 proof）。
+    3. **approve/deny + fail-closed**（3a-3g）：approve+identical observed→恰一次 execute（verified）；drift→PUBLISH_ENVELOPE_DRIFT 不 execute；restart-lost-handle（envelopes.clear）→PUBLISH_HANDLE_LOST 不 execute（防 silent publish）；expiry（clock+120s 过 60s 窗）→不 verified 不 execute；deny→cancelled 不 execute；approve 无 observed→PUBLISH_OBSERVED_STATE_REQUIRED；bogus decision→PUBLISH_DECISION_INVALID。
+
+- **测试（全绿）**：`npm run test:xhs-pack` = 131/131 绿（117 + 14 publish-protected-commit）。新测试已加入聚合脚本。
+
+- **决定/坑**：
+  - **PHC 复用边界**：publish 走 PHC 的 route/begin/decide 生命周期（action-agnostic），不碰 payment 专属的 approvalVerifier/approvalBinding。人工 `decidePublish("approve")` 调用 = plan V2 §10.5 唯一人工点；W6 叠加的 envelope drift + restart-lost-handle 是 publish 专属 fail-closed，PHC 内核不管。
+  - **canonical hash 排除 envelopeHash+status**（同 W1 canonical-v2）：status 跨 lifecycle 变（pending→approved/denied/expired），envelopeHash 是 hash 自身——都非 binding field，排除以免自指 + 状态变更假漂移。binding fields = 8 个身份字段（prepareRunId/planHash/contentHash/screenshotHash/device/account/target fingerprint/expiresAt）。
+  - **restart-lost-handle 是 in-process 限制**：envelopes Map + PHC pending 都 in-process，重启丢。这是有意的 fail-closed——重启后 decide→PUBLISH_HANDLE_LOST，绝不 silent publish。durable 落库（state.addProtectedCommit）只让 pending 可观测，不能恢复 handle（控制已丢）。计划"重启丢 handle fail-closed"=此设计。
+  - **prepare=transport=0**：`publish prepare`（edit_dry_run）effectClass=none，不 transport；envelope 是 proof。真正 send 只在 `decidePublish("approve")` 后 executePrepared 一次（one-tap）。两段式防误发。
+
+- **待办（live，需用户明确授权）**：最终 publish canary **需用户另行明确授权具体发布内容**（V2 §10.5，唯一保留人工点）——离线 machinery 全就绪（envelope + handler + 三 probe），但 live publish 必须用户亲自授权 content + screenshot + target，非 operator 可代决。其他 wave 的 live canary 待 operator 设备驱动；publish live 待用户内容授权。
+
+- end 2026-08-27（离线部分）。**W6 离线 done——全 7 波 W0-W6 离线部分全部完成**。`npm run test:xhs-pack` 131/131 绿。合同 5 个 P1 item（F1/F2/F3/VISION/PUBLISH）离线全绿。剩余纯 live canary（W1/W3/W4/W5 待 operator 设备 + W6 待用户内容授权），无更多离线工作。
