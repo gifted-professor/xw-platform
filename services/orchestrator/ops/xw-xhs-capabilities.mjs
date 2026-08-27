@@ -26,7 +26,6 @@
  */
 import { fileURLToPath } from "node:url";
 import { join, resolve } from "node:path";
-import { DatabaseSync } from "node:sqlite";
 
 import { StateStore } from "../../control-plane/control-plane/lib/state-store.mjs";
 import { CapabilityRegistry } from "../../control-plane/control-plane/lib/capability-registry.mjs";
