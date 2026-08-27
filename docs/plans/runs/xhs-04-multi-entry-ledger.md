@@ -252,3 +252,17 @@
 - 结束状态：leases=0。**read-only 入口 browse live 闭环**；inbox/read live（W3b）与 vision 实时导航 live 仍待后续。
 
 - end 2026-08-27（W3a live）。
+
+## W3b — inbox/read live canary（R0 只读入口 2/4）— done 2026-08-27
+
+- **新沉淀 driver**：`ops/xw-xhs-r0-inbox.mjs`（inbox|read 子命令）——Explorer session acquire→launch→dump 动态找 消息 tab（无硬编码坐标，cy>=屏高-320 且唯一）→ tap → dump → `extractConversationEntries` 指纹汇总 → release（finally 保证）；read 子命令走 `resolveUniqueThreadByLabel` 唯一性门（UNIQUE=1 才进入，否则 STOP 只上报）+ 进入后 dump 会话 + lastMessageFingerprintOf + back。全程只读（无 input/send/follow 原语）。
+- **live 结果（alias 04，actor claude-pilot-20260809）**：
+  - inbox：SESSION acquire/release 干净、tab=(756,2300) 唯一命中、55 节点指纹化（真会话如 Bape后花园/活动消息/系统消息 + UI 标签噪音并存）→ R0_INBOX_OK。
+  - read：--thread 'Bape后花园&#129313;' → UNIQUE=1（fp 3d38ec1f1c48）→ 进入 → dump 会话 → back → READ_OK。
+- **发现/坑**：
+  - explorer session context 必须在 `.xhs-explorer-sessions` 根下且 acquire 拒绝覆盖已有 context；release 不删文件 → driver 加 stale-context 自清理（release + rmSync + 重试 acquire）。
+  - extractConversationEntries 是**节点级**非行级：会话列表的 peer/snippet/时间是分离节点，产出含 UI 标签（消息/创建按钮/赞和收藏）噪音 + 复合串。R0 汇总可用；**W5 DM pre-send 门需行级 row 归组后再做唯一性判断**（记入 W5 live 前置）。
+  - 会话页 LAST_MSG_FP=none（extractConversationEntries 的 inbox 形状不匹配会话页气泡结构）——last-msg 指纹的 live 采集需会话页专用解析，W5 live 前补。
+- 结束状态：leases=0。**R0 只读 inbox/read live 闭环**（W3 四入口中 search@2/browse/inbox/read 全部 live 通过）。
+
+- end 2026-08-27（W3b live）—— **W3 全部 live canary 完成**。
