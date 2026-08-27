@@ -150,3 +150,116 @@ export function resolveUniqueThreadByLabel(entries, targetLabel) {
     entry: matches.length === 1 ? matches[0] : null,
   };
 }
+
+/**
+ * Row-level inbox thread grouping (W5 live prerequisite — the node-level
+ * extractConversationEntries mixes UI-label noise and split peer/snippet/time
+ * nodes; XHS's inbox list rows already carry the joined shape in their row
+ * container's content-desc: "peer，，，snippet，date" (three fullwidth commas
+ * between peer and snippet, one before the date). Parse THAT — no y-proximity
+ * heuristics needed on real dumps.
+ *
+ * Returns rows with { peer, snippet, date, cx, cy, resourceId } plus the two
+ * fingerprints (threadFingerprint / lastMessageFingerprint), sorted top-first.
+ * Only clickable row containers whose desc matches the three-part shape are
+ * returned — system banners ("系统消息，,，...") use the same shape and are
+ * legitimately threads, but section labels / notice bars never match.
+ */
+export function groupInboxRows(dumpXml) {
+  const nodes = parseDumpNodes(dumpXml);
+  const rows = [];
+  const ROW_DESC_RE = /^(?<peer>.+?)，，，(?<snippet>.+)，(?<date>[^，]{4,12})$/s;
+  // Re-parse with coordinates: parseDumpNodes drops position; run a light
+  // second pass over the raw XML for bounds+resource-id of desc-bearing nodes.
+  const re = /<node\b([^>]*?)\/?>/g;
+  let m;
+  const raw = [];
+  while ((m = re.exec(dumpXml)) !== null) {
+    const attrs = parseNodeAttributes(m[1]);
+    const desc = attrs["content-desc"] || "";
+    if (!desc || !desc.includes("，，，")) continue;
+    const b = String(attrs.bounds || "").match(/\[(\d+),(\d+)\]\[(\d+),(\d+)\]/);
+    if (!b) continue;
+    raw.push({
+      desc,
+      cx: Math.round((+b[1] + +b[3]) / 2),
+      cy: Math.round((+b[2] + +b[4]) / 2),
+      resourceId: attrs["resource-id"] || "",
+      clickable: attrs.clickable === "true",
+    });
+  }
+  for (const r of raw) {
+    const mm = r.desc.match(ROW_DESC_RE);
+    if (!mm) continue;
+    const entry = {
+      peer: normalizeLabel(mm.groups.peer),
+      snippet: normalizeLabel(mm.groups.snippet),
+      date: normalizeLabel(mm.groups.date),
+      cx: r.cx,
+      cy: r.cy,
+      resourceId: r.resourceId,
+      clickable: r.clickable,
+    };
+    rows.push({
+      ...entry,
+      threadFingerprint: threadFingerprintOf({ peer: entry.peer, resourceId: r.resourceId }),
+      lastMessageFingerprint: lastMessageFingerprintOf({ snippet: entry.snippet }),
+    });
+  }
+  return rows.sort((a, b) => a.cy - b.cy);
+}
+
+/**
+ * Conversation-page state extraction (W5 live prerequisite): on an open DM
+ * thread, identify the thread title (observed username) and the LAST message
+ * bubble. XHS lays out the peer's bubbles on the LEFT (cx < 540 on a 1080px
+ * screen) and mine on the RIGHT (cx > 540); the profile card / action row
+ * (拉黑/举报/删除对话) and composer live outside the bubble y-band.
+ *
+ * Returns { username, lastMessage: { text, mine, cx, cy } | null }.
+ * `mine` is a GEOMETRY classification (left=peer, right=mine) — combined with
+ * the fingerprint equality check in dm-verifier it stays fail-closed: a wrong
+ * side guess yields a fingerprint mismatch (ambiguous), never a false verified.
+ */
+export function extractConversationState(dumpXml, { screenWidth = 1080, bubbleTopY = 700, bubbleBottomY = 2100 } = {}) {
+  const nodes = parseDumpNodes(dumpXml);
+  const withPos = [];
+  const re = /<node\b([^>]*?)\/?>/g;
+  let m;
+  while ((m = re.exec(dumpXml)) !== null) {
+    const attrs = parseNodeAttributes(m[1]);
+    const text = attrs.text || attrs["content-desc"] || "";
+    if (!text) continue;
+    const b = String(attrs.bounds || "").match(/\[(\d+),(\d+)\]\[(\d+),(\d+)\]/);
+    if (!b) continue;
+    withPos.push({
+      text,
+      cx: Math.round((+b[1] + +b[3]) / 2),
+      cy: Math.round((+b[2] + +b[4]) / 2),
+      resourceId: attrs["resource-id"] || "",
+    });
+  }
+  // username: topmost text node in the title band (y < 620), centered
+  const titleBand = withPos.filter((n) => n.cy < 620 && n.cx > 300 && n.cx < 800)
+    .sort((a, b) => a.cy - b.cy);
+  const username = titleBand[0]?.text ?? "";
+  // last bubble: lowest-y text node in the bubble band, excluding the
+  // action row (拉黑/举报/删除对话) and anything on the center line (timestamps)
+  const bubbles = withPos.filter((n) =>
+    n.cy > bubbleTopY && n.cy < bubbleBottomY
+    && !/^(拉黑|举报|删除对话|复制微信号)$/.test(n.text)
+    && Math.abs(n.cx - screenWidth / 2) > 60,
+  );
+  const last = bubbles.length ? bubbles.reduce((a, b) => (b.cy > a.cy ? b : a)) : null;
+  return {
+    username: normalizeLabel(username),
+    lastMessage: last
+      ? {
+          text: normalizeLabel(last.text),
+          mine: last.cx > screenWidth / 2,
+          cx: last.cx,
+          cy: last.cy,
+        }
+      : null,
+  };
+}

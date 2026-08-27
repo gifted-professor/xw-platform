@@ -9,6 +9,8 @@ import test from "node:test";
 
 import {
   extractConversationEntries,
+  extractConversationState,
+  groupInboxRows,
   lastMessageFingerprintOf,
   parseDumpNodes,
   resolveUniqueThread,
@@ -168,4 +170,75 @@ test("dispatcher: 'messages' alias resolves to the inbox action", () => {
   const msg = planAction({ actionId: "messages" });
   assert.equal(msg.action, "inbox");
   assert.equal(msg.backend, "r0_workflow");
+});
+// ── W5 live prerequisites: row-level inbox grouping + conversation state ──
+
+test("groupInboxRows: parses the real row-desc shape (peer，，，snippet，date), skips non-row nodes", () => {
+  const dump =
+    '<node content-desc="弥诉雪，，，[谢谢你的赞H]谢谢你的赞，06月25号" resource-id="com.xingin.xhs:id/0_resource_name_obfuscated" clickable="true" bounds="[0,1160][1080,1298]"/>' +
+    '<node content-desc="婷姐说流量，，，你好，简单的看了一下你的笔记&#10;1:帐号定位和封面都需要调整&#10;2:，06月22号" clickable="true" bounds="[0,1358][1080,1496]"/>' +
+    '<node text="消息" bounds="[0,2260][300,2330]"/>' +
+    '<node text="打开通知，不再错过互动消息" bounds="[100,2110][800,2146]"/>';
+  const rows = groupInboxRows(dump);
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].peer, "弥诉雪");
+  assert.equal(rows[0].snippet, "[谢谢你的赞H]谢谢你的赞");
+  assert.equal(rows[0].date, "06月25号");
+  // sorted top-first
+  assert.ok(rows[0].cy < rows[1].cy);
+  // snippet containing internal fullwidth commas still splits correctly
+  assert.equal(rows[1].peer, "婷姐说流量");
+  assert.ok(rows[1].snippet.includes("帐号定位"));
+  assert.equal(rows[1].date, "06月22号");
+  // fingerprints flow through
+  assert.match(rows[0].threadFingerprint, /^[0-9a-f]{64}$/);
+  assert.equal(
+    rows[0].threadFingerprint,
+    threadFingerprintOf({ peer: "弥诉雪", resourceId: "com.xingin.xhs:id/0_resource_name_obfuscated" }),
+  );
+  assert.equal(rows[0].lastMessageFingerprint, lastMessageFingerprintOf({ snippet: "[谢谢你的赞H]谢谢你的赞" }));
+});
+
+test("groupInboxRows: empty/garbage dump -> [] (fail-closed, no fabricated rows)", () => {
+  assert.deepEqual(groupInboxRows(""), []);
+  assert.deepEqual(groupInboxRows(null), []);
+  assert.deepEqual(groupInboxRows("<node text=\"首页\" bounds=\"[0,0][100,100]\"/>"), []);
+});
+
+test("groupInboxRows + resolveUniqueThreadByLabel: unique/ambiguous/absent gate", () => {
+  const dump =
+    '<node content-desc="小书童，，，在吗，08月01号" clickable="true" bounds="[0,600][1080,738]"/>' +
+    '<node content-desc="小书童，，，在吗，08月20号" clickable="true" bounds="[0,800][1080,938]"/>' +
+    '<node content-desc="弥诉雪，，，赞了你的笔记，06月25号" clickable="true" bounds="[0,1000][1080,1138]"/>';
+  const rows = groupInboxRows(dump);
+  // same peer in two slots: label resolution is ambiguous (do not enter)
+  assert.equal(resolveUniqueThreadByLabel(rows, "小书童").unique, false);
+  assert.equal(resolveUniqueThreadByLabel(rows, "小书童").count, 2);
+  assert.equal(resolveUniqueThreadByLabel(rows, "弥诉雪").unique, true);
+  assert.equal(resolveUniqueThreadByLabel(rows, "不存在").unique, false);
+});
+
+test("extractConversationState: username from title band, last bubble by geometry, excludes action row and timestamps", () => {
+  const conv =
+    '<node text="奥莱斯卡曼鞋服" bounds="[300,540][780,582]"/>' +
+    '<node text="07-21 下午4:42" bounds="[410,780][670,800]"/>' +
+    '<node text="粉丝 45 " bounds="[150,1220][400,1250]"/>' +
+    '<node text="[谢谢你的赞H]谢谢你的赞" bounds="[200,1900][468,1958]"/>' +
+    '<node text="拉黑" bounds="[150,2130][312,2162]"/>' +
+    '<node text="举报" bounds="[495,2130][657,2162]"/>' +
+    '<node text="删除对话" bounds="[840,2130][1002,2162]"/>';
+  const st = extractConversationState(conv);
+  assert.equal(st.username, "奥莱斯卡曼鞋服");
+  assert.equal(st.lastMessage.text, "[谢谢你的赞H]谢谢你的赞");
+  assert.equal(st.lastMessage.mine, false); // left side (cx 334 < 540)
+  // a right-side (mine) bubble BELOW the peer bubble becomes the last message
+  const mineDump = conv + '<node text="不客气呀～" bounds="[700,1980][1000,2038]"/>';
+  assert.equal(extractConversationState(mineDump).lastMessage.mine, true);
+  assert.equal(extractConversationState(mineDump).lastMessage.text, "不客气呀～");
+});
+
+test("extractConversationState: no bubble in band -> lastMessage null (fail-closed)", () => {
+  const st = extractConversationState('<node text="某人" bounds="[300,540][780,582]"/>');
+  assert.equal(st.username, "某人");
+  assert.equal(st.lastMessage, null);
 });
