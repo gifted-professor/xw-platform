@@ -68,3 +68,34 @@
 - **待办（live，需设备/operator）**：两次独立 04 live @2 recipe-run → `xw-xhs-promote.mjs --recipe xhs.search.fixed --runs <a>,<b> --action search --runtime` → canary_only → switch-alias → alias 切 @2 后一次 @2 live search 复核。离线 machinery 全就绪，只差 live canary。
 
 - end 2026-08-27（离线部分）。W1 离线 done，live canary 待 operator。
+
+## W2 — 04-only placement 证明（合同 F2，S2 前置）
+
+- start 2026-08-27。
+
+- **探索结论（placement/routing infra）**：
+  - 过滤核心 `placement.mjs:127`：`if (!profile.enabled || !profile.capabilityIds.includes(capability.id)) return false`。`routing_json` 存 `devices` 表（control.db），shape `{enabled, tags, capabilityIds}`。写经 `StateStore.upsertDevice({alias, routingProfile})`；读经 `getDevice(id,{includeRuntime:true}).routingProfile`。
+  - `assertCapabilityRoutable` 先于 device 过滤：`ROUTABLE_AVAILABILITY={implemented,approval_gated}`，不可路由 → `NO_ELIGIBLE_DEVICE`(409) 在 device filter 前。capability manifest 的 `automationPolicy.mode`（lab_only/automatic/approval_required/disabled）影响 authorization 不影响 routability。
+  - `selectPlacement`：session/composite_action 的 `eligible = matching.filter(effectiveLoad===0)`；`selected` 空时 `acquiringSession && matching.length>0` → `DEVICE_BUSY`(423)，否则 `NO_ELIGIBLE_DEVICE`(409)。job 的 `eligible=matching`（busy 不排除，job 排队）。
+  - `syncCapabilities(registry)` 全量同步（先 `UPDATE enabled=0` 再 upsert 供给的）——会 disable 未供给的 cap，additive 注册需先读现有 enabled caps union 再 sync。
+  - `planRoute` advisory 错误返回 `{decision:"blocked",error:{code,message,details}}`（无 status 字段）；`createJob`/`createSession` throw `{code,status}`。
+
+- **产物**：
+  - `services/control-plane/tests/xhs-04-placement-boundary.test.mjs` — 6 测试全绿（合同 F2）：
+    1. 每 social cap（like/collect/follow）+ alias 01/02/03 → `planRoute` error NO_ELIGIBLE_DEVICE + `createJob` throw NO_ELIGIBLE_DEVICE(409)，且 jobs/sessions/leases/transport 四项 delta=0（transport 用 adapter execute 计数器）。
+    2. 无 alias → plan 只解析 04（01-03 不带 social caps）。
+    3. 无 alias createJob → assigned to 04。
+    4. 04 busy（持有 session）→ createSession DEVICE_BUSY(423) 不 fallback 01-03；显式 alias 01-03 → NO_ELIGIBLE_DEVICE。
+    5. quarantine 04 → NO_ELIGIBLE_DEVICE 不 fallback。
+    6. 01-03 routingProfile 不含任何 social capId，04 含全部三个。
+  - `services/orchestrator/ops/xw-xhs-capabilities.mjs` — 沉淀的可重放注册脚本（apply/diff，--runtime/--db）：additive sync（读现有 enabled caps union xhs 集，避免 disable 其他 app）+ 只把 capIds merge 进 04 的 routingProfile（01-03 不动）。idempotent：re-apply no-op。smoke 验证 apply→seed 04 5 caps、diff→no change、apply2→IDEMPOTENT。
+
+- **验收（W2）**：`npm run test:xhs-pack` 59/59 绿（53 + 6 F2）。此测试是 W4 social live canary 的硬前置（脚本 gate，非人工）。
+
+- **决定/坑**：
+  - `planRoute` error 对象无 `status` 字段（advisory 返回 `{code,message,details}`），与 `createJob`/`createSession` throw 的 `{code,status}` 不同——测试分别断言。
+  - `getDevice(id).routingProfile` 默认不返回（`includeRuntime:false`）；要读 routingProfile 须 `getDevice(id,{includeRuntime:true})`。
+  - capabilities 用 `availability:"implemented"` + `automationPolicy:"approval_required"` —— routable 但 social 需审批；placement 边界与 automation mode 无关（placement 先于 authorization）。
+  - W2 注册 5 个 social cap（like/collect/follow/comment/dm），W4/W5 绑 adapter 时用同 id。
+
+- end 2026-08-27。W2 完成（全离线，无需 live）。下一波 W3：R0 browse/inbox/read + 真实 vision 导航（VISION）。
