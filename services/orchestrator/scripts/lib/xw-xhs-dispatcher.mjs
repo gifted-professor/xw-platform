@@ -27,6 +27,35 @@ export const DISPATCHER_SCHEMA_VERSION = 1;
 export const FORCED_ALIAS = "04";
 export const PER_DEVICE_CONCURRENCY = 1;
 
+/**
+ * Default recipe revision map (plan V2 §11 rollback boundary). The CLI loads
+ * the live map from a state file and passes it as `recipeRevisions`; this frozen
+ * default is the pre-promotion baseline (search@1) so the pure module is
+ * testable without fs. `switch-alias` bumps an entry only after the Catalog
+ * promotes that revision to canary_only/implemented — the plan then binds the
+ * new revision in planHash, making the rollback boundary explicit and the plan
+ * reproducible per revision.
+ */
+export const DEFAULT_RECIPE_REVISIONS = Object.freeze({
+  "xhs.search.fixed": 1,
+  "xhs.browse.fixed": 1,
+});
+
+/**
+ * Resolve the recipe revision a fixed_recipe action targets, given the live
+ * override map. Falls back to the frozen default, then null (unknown recipe).
+ */
+export function resolveRecipeRevision(recipeId, recipeRevisions = {}) {
+  if (!recipeId) return null;
+  if (Object.prototype.hasOwnProperty.call(recipeRevisions, recipeId)) {
+    const r = Number(recipeRevisions[recipeId]);
+    if (Number.isInteger(r) && r >= 1) return r;
+    // invalid override (0/NaN/negative) -> fall back to default so a typo cannot
+    // silently unbind a known recipe (fail-safe to last known good revision).
+  }
+  return DEFAULT_RECIPE_REVISIONS[recipeId] ?? null;
+}
+
 const EFFECT_CLASS = Object.freeze({
   NONE: "none",
   SOCIAL: "social",
@@ -331,7 +360,7 @@ export function adaptiveRouteHint(action) {
  * @param {string} [input.goalSignature] - NL goal signature (compose surface)
  * @returns {object} frozen action plan
  */
-export function planAction({ actionId, params = {}, alias = FORCED_ALIAS, actor = null, goalSignature = null } = {}) {
+export function planAction({ actionId, params = {}, alias = FORCED_ALIAS, actor = null, goalSignature = null, recipeRevisions = {} } = {}) {
   const action = resolveAction(actionId);
   if (!action) throw new PlanError("ACTION_UNKNOWN", `unknown xhs action: ${actionId}`);
 
@@ -343,6 +372,8 @@ export function planAction({ actionId, params = {}, alias = FORCED_ALIAS, actor 
 
   const normParams = normalizeParams(action, params);
   const budget = effectBudget(action, normParams);
+  const recipeRevision =
+    action.backend === "fixed_recipe" ? resolveRecipeRevision(action.recipeId, recipeRevisions) : null;
 
   const planBody = {
     schemaId: DISPATCHER_SCHEMA_ID,
@@ -352,6 +383,7 @@ export function planAction({ actionId, params = {}, alias = FORCED_ALIAS, actor 
     perDeviceConcurrency: PER_DEVICE_CONCURRENCY,
     backend: action.backend,
     recipeId: action.recipeId || null,
+    recipeRevision, // null for non-fixed_recipe; bound into planHash (§11)
     capabilityId: action.capabilityId || null,
     effectClass: action.effectClass,
     gate: action.gate,

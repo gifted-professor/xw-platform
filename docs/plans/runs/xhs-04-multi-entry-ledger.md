@@ -34,3 +34,37 @@
   - W0 全动作 `--execute` fail-closed；search live 晋级在 W1 开闸（届时 `evaluateExecuteGate(plan,{search:true})`）。
 
 - end 2026-08-27。W0 完成。下一波 W1：canonical 64-hex 统一 + `xhs.search.fixed@2` 晋级（合同 F1）。
+## W1 — canonical 64-hex 统一 + xhs.search.fixed@2 晋级（合同 F1）
+
+- start 2026-08-27。
+
+- **F1 canonical hash 统一（离线 machinery，已验证）**：
+  - 新增 `services/control-plane/control-plane/lib/recipe-descriptor.mjs` — 单一 canonical 源。`canonicalDescriptorHash(spec)` = sha256(canonicalJson(spec 去掉 `descriptorHash`+`status`+`originRunId`))。三字段排除理由：descriptorHash 自引用；status 跨 promotion lifecycle 变化（candidate→canary_only，overlay≠Registry 会破 byte-identical 不变量 plan V2 §7.4）；originRunId 是 Catalog provenance bookkeeping（手写 spec 不带、ingest 时塞入 spec JSON + 独立 DB 列），非执行坐标。导出：canonicalize/canonicalJson/isCanonicalV2/DESCRIPTOR_HASH_SCHEME_V2="canonical-v2"。
+  - `recipe-catalog.mjs`：import 共享源并 re-export；`descriptorHashOf` 委托 `canonicalDescriptorHash`（无 status 的 spec 值不变）；`buildOverlayDocument` 改为 spread `canonicalize(spec)` 全 sealed spec + override recipeId/revision/status/descriptorHash + passthrough descriptorHashScheme → overlay 可独立复算 hash。
+  - `recipe-interpreter.mjs`：`computeDescriptorHash` scheme-aware（isCanonicalV2 → 64-hex；否则 legacy rh_+24）；导出 `isCanonicalV2Recipe`。
+  - `single-device-recipe-runner.mjs`：seal/tamper block 改为 `computedHash = computeDescriptorHash(loaded)`；placeholder(0×64) 接受、rh_ 旧 spec 和 v2 spec 都走 mismatch 拒绝、sealed 覆写 computedHash。
+  - 生产 spec `services/control-plane/config/recipes/xhs.search.fixed@2.json` — canonical-v2，descriptorHash `6b7a505e…`，含 noRefocus/clearFirst/pages max=1/完整 restoration+failurePolicy。fixture 不再是生产真源。
+  - **坑（关键）**：初版 canonicalDescriptorHash 含 status → overlay(canary_only) hash ≠ Registry(candidate) hash，破不变量。改为排除 status 后重 stamp @2（f7aa537f… → 6b7a505e…）。之后发现 ingest 把 `originRunId:null` 塞进 spec JSON（手写 spec 无此字段）→ overlay entry hash 偏移（d3088191…）。再排除 originRunId 后五消费者字节一致。
+
+- **dispatcher 版本地图 + 晋级桥（离线 machinery，已验证）**：
+  - `xw-xhs-dispatcher.mjs`：新增 `DEFAULT_RECIPE_REVISIONS`（search@1/browse@1 冻结基线）+ `resolveRecipeRevision(recipeId, overrides)`（override 优先，0/NaN 回退 default）；`planAction` 接受 `recipeRevisions` 参数，fixed_recipe plan 输出 `recipeRevision` 并绑入 planHash（§11 rollback boundary，search@1 ≠ search@2 的 planHash）。
+  - `services/control-plane/config/xhs-dispatch-state.json` — dispatcher 可部署状态（recipeRevisions + liveGates），`switch-alias` 原子更新。
+  - `ops/xw-xhs.mjs`：启动加载 `xhs-dispatch-state.json`（env `XHS_DISPATCH_STATE` 可覆盖），传 `recipeRevisions` 给 `planAction`、`liveGates` 给 `evaluateExecuteGate`。
+  - `ops/xw-recipe-promote.mjs`：`loadFixtureSpec` 改为 production-first（`config/recipes/<id>@<rev>.json` 最高 revision，回退 fixture @1）；`cmdIngest` 幂等改为 per (recipeId,revision)（@2 新 revision 不被 @1 idempotent 挡）；新增 `switch-alias`（fail-closed：仅 canary_only/implemented 才改 dispatch state + flip liveGate，返回 {ok} 而非 process.exit 便于测试）+ `emit-overlay`（buildOverlayDocument→原子写）。
+  - `ops/xw-xhs-promote.mjs` — 一键晋级链（sedimented fixed task）：ingest production spec → 逐 recipeRunId 从 CP fetch + promote → evaluate → switch-alias(fail-closed) → emit-overlay。live recipe-run 在设备侧跑，此脚本吃 server-verified recipeRunId。
+
+- **测试（全绿）**：
+  - `recipe-descriptor-hash-v2.test.mjs` — 12 测试：@2 是 canonical-v2/64-hex、独立 oracle 字节一致 stamped hash、Catalog=shared=stamped、CP scheme-aware（@2 64-hex / @1 rh_+24 回归保护）、Runner plan-mode seal、Catalog ingest+overlay+promotion receipt 同 hash、clearFirst/pages/postAssertion 三点 mutation、tamper 拒绝、placeholder 接受、path exercise。
+  - `xhs-promote-chain.test.mjs` — 4 测试：ingest @2 via loader、两次 live @2→canary_only→switch-alias→overlay 带 @2、switch-alias fail-closed(candidate)、re-promote 幂等。
+  - `xw-xhs-dispatcher.test.mjs` — 31 测试（+6 版本地图：resolveRecipeRevision default/override、plan 带 recipeRevision、planHash 随 revision 变、非 fixed_recipe=null、frozen 基线）。
+  - `recipe-promote.test.mjs` — 6 测试（Fast-2 桥回归无破）。
+  - `npm run test:xhs-pack` = 53/53 绿。hash 回归套件（catalog/spec/runner-fast2/overlay）31/31 绿。
+
+- **决定/坑**：
+  - canonical hash 排除三字段（descriptorHash/status/originRunId）而非两字段——originRunId 是 ingest 时塞入 spec JSON 的 provenance bookkeeping（手写 spec 不带），不排除则 overlay entry hash 偏移。已写进 recipe-descriptor.mjs 注释。
+  - `cmdSwitchAlias` 返回 `{ok:false}` 而非 `process.exit`——CLI main 转 fail()，测试可断言返回。`--state-path` override 便于测试用 temp 文件。
+  - @1 legacy 完全不动（rh_+24 投影 + immutable receipt evidence），F1 只管 @2+。
+
+- **待办（live，需设备/operator）**：两次独立 04 live @2 recipe-run → `xw-xhs-promote.mjs --recipe xhs.search.fixed --runs <a>,<b> --action search --runtime` → canary_only → switch-alias → alias 切 @2 后一次 @2 live search 复核。离线 machinery 全就绪，只差 live canary。
+
+- end 2026-08-27（离线部分）。W1 离线 done，live canary 待 operator。

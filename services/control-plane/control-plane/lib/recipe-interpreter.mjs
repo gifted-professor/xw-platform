@@ -12,6 +12,13 @@
  * Semantic selectors preferred; x/y coords are device+version-bound fallbacks.
  */
 import { createHash } from "node:crypto";
+import {
+  canonicalDescriptorHash,
+  isCanonicalV2,
+  DESCRIPTOR_HASH_SCHEME_V2,
+} from "./recipe-descriptor.mjs";
+
+export { DESCRIPTOR_HASH_SCHEME_V2 };
 
 export const RECIPE_PRIMITIVE_KINDS = Object.freeze([
   "callCapability",
@@ -594,15 +601,27 @@ export function resolveRecipeExecutor(executor) {
 
 /**
  * Content-addressed descriptor hash for a sealed recipe spec.
- * Hashes the canonical (sorted-key) JSON of recipeId + revision + status +
- * eligibleAliases + executor (kind + primitive steps' id/kind/params/assertions)
- * + inputSchema. Used to bind a Runner receipt to an exact, server-sealed spec
- * so a client cannot silently mutate a live recipe's coordinates or steps.
+ *
+ * Two schemes (F1 canonical hash migration, plan V2 §7):
+ *   - canonical-v2 (spec.descriptorHashScheme === "canonical-v2"): the FULL
+ *     sealed spec is bound via the shared canonicalDescriptorHash() 64-hex.
+ *     Every sealed field (failurePolicy/deviceProfile/inputSchema/...) participates,
+ *     and the value is byte-identical to the Catalog/overlay/promotion hash.
+ *     Used from `xhs.search.fixed@2` onward.
+ *   - legacy (no marker): the projection hash below ("rh_" + 24 hex) over
+ *     recipeId/revision/status/eligibleAliases/executor/inputSchema. Existing
+ *     @1 receipts keep this and are never rewritten.
+ *
+ * Used to bind a Runner receipt to an exact, server-sealed spec so a client
+ * cannot silently mutate a live recipe's coordinates or steps.
  * @param {object} recipe
- * @returns {string} "rh_" + 24 hex chars
+ * @returns {string} 64 hex chars (canonical-v2) or "rh_" + 24 hex chars (legacy)
  */
 export function computeDescriptorHash(recipe) {
   if (!isObject(recipe)) throw err("computeDescriptorHash: recipe must be an object");
+  if (isCanonicalV2(recipe)) {
+    return canonicalDescriptorHash(recipe);
+  }
   const exec = isObject(recipe.executor) ? recipe.executor : {};
   const stepsCanonical = Array.isArray(exec.steps)
     ? exec.steps.map((s) => ({
@@ -630,6 +649,14 @@ export function computeDescriptorHash(recipe) {
     return v;
   });
   return "rh_" + createHash("sha256").update(json).digest("hex").slice(0, 24);
+}
+
+/**
+ * Whether a recipe spec uses the canonical-v2 full-spec 64-hex hash scheme.
+ * Legacy specs (without the marker) use the rh_ projection and stay as-is.
+ */
+export function isCanonicalV2Recipe(recipe) {
+  return isObject(recipe) && isCanonicalV2(recipe);
 }
 
 function sessionLooksLeased(session) {

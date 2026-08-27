@@ -10,6 +10,8 @@ import {
   bindOperationKey,
   adaptiveRouteHint,
   evaluateExecuteGate,
+  resolveRecipeRevision,
+  DEFAULT_RECIPE_REVISIONS,
   FORCED_ALIAS,
   PlanError,
 } from "../scripts/lib/xw-xhs-dispatcher.mjs";
@@ -238,4 +240,45 @@ test("golden planHash stability (regression guard)", () => {
   const again = planAction({ actionId: "search", params: { keyword: "深圳攀岩" }, actor: "agent:test" });
   assert.equal(plan.planHash, again.planHash);
   assert.match(plan.planHash, /^[0-9a-f]{64}$/);
+});
+// --- recipe revision map (W1 §11 rollback boundary) -------------------------
+
+test("resolveRecipeRevision: default map returns @1 for search", () => {
+  assert.equal(resolveRecipeRevision("xhs.search.fixed"), 1);
+  assert.equal(resolveRecipeRevision("xhs.browse.fixed"), 1);
+  assert.equal(resolveRecipeRevision("xhs.unknown.fixed"), null);
+  assert.equal(resolveRecipeRevision(null), null);
+});
+
+test("resolveRecipeRevision: override map takes precedence over default", () => {
+  assert.equal(resolveRecipeRevision("xhs.search.fixed", { "xhs.search.fixed": 2 }), 2);
+  // override null/0 falls back to default (fail-closed against bad input)
+  assert.equal(resolveRecipeRevision("xhs.search.fixed", { "xhs.search.fixed": 0 }), 1);
+  // unknown recipe with explicit override
+  assert.equal(resolveRecipeRevision("xhs.new.fixed", { "xhs.new.fixed": 3 }), 3);
+});
+
+test("planAction: fixed_recipe plan carries recipeRevision from the map", () => {
+  const p1 = planAction({ actionId: "search", params: { keyword: "x" } });
+  assert.equal(p1.recipeRevision, 1, "default -> search@1");
+  const p2 = planAction({ actionId: "search", params: { keyword: "x" }, recipeRevisions: { "xhs.search.fixed": 2 } });
+  assert.equal(p2.recipeRevision, 2, "override -> search@2");
+});
+
+test("planAction: planHash changes when recipeRevision changes (rollback boundary)", () => {
+  const p1 = planAction({ actionId: "search", params: { keyword: "攀岩" } });
+  const p2 = planAction({ actionId: "search", params: { keyword: "攀岩" }, recipeRevisions: { "xhs.search.fixed": 2 } });
+  assert.notEqual(p1.planHash, p2.planHash, "search@1 and search@2 must have distinct planHash");
+});
+
+test("planAction: non-fixed_recipe actions have recipeRevision=null (no recipe)", () => {
+  const p = planAction({ actionId: "like", params: { keyword: "x" } });
+  assert.equal(p.recipeRevision, null);
+  const p2 = planAction({ actionId: "inbox", params: {} });
+  assert.equal(p2.recipeRevision, null);
+});
+
+test("DEFAULT_RECIPE_REVISIONS is frozen and matches the config baseline", () => {
+  assert.ok(Object.isFrozen(DEFAULT_RECIPE_REVISIONS));
+  assert.equal(DEFAULT_RECIPE_REVISIONS["xhs.search.fixed"], 1);
 });

@@ -34,20 +34,29 @@ import { DatabaseSync } from "node:sqlite";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { join, resolve } from "node:path";
+import { readdirSync, readFileSync, writeFileSync, existsSync, unlinkSync } from "node:fs";
 import {
   ensureRecipeTables,
   ingestRecipeCandidate,
   recordVerifiedAttempt,
   evaluatePromotion,
   getRecipe,
+  buildOverlayDocument,
+  writeOverlayAtomically,
   canonicalJson,
 } from "../scripts/lib/recipe-catalog.mjs";
 
 const HERE = fileURLToPath(new URL(".", import.meta.url));
 const ROOT = resolve(HERE, "..");
 const DEFAULT_DB = join(ROOT, "registry.db");
-const RUNTIME_DB = "C:\\Users\\Public\\xw-runtime\\state\\orchestrator\\registry.db";
+export const RUNTIME_DB = "C:\\Users\\Public\\xw-runtime\\state\\orchestrator\\registry.db";
 const CONTROL_BASE = (process.env.XHS_CONTROL_BASE || "http://127.0.0.1:17920").replace(/\/$/, "");
+// Production recipe specs (F1: fixtures are no longer the production source).
+const PRODUCTION_RECIPE_DIR = resolve(HERE, "..", "..", "control-plane", "config", "recipes");
+// Dispatcher state (recipe revisions + live gates) — switch-alias updates this.
+const DEFAULT_DISPATCH_STATE = resolve(HERE, "..", "..", "control-plane", "config", "xhs-dispatch-state.json");
+const RUNTIME_DISPATCH_STATE = "C:\\Users\\Public\\xw-runtime\\state\\xhs-dispatch-state.json";
+const DISPATCH_STATE_PATH = process.env.XHS_DISPATCH_STATE || DEFAULT_DISPATCH_STATE;
 
 export const RUNNER_ATTEMPT_RECEIPT_SCHEMA = "xhs.runner-attempt-receipt.v1";
 
@@ -71,7 +80,7 @@ function fail(msg, code = 2) {
   process.exit(code);
 }
 
-function openDb(dbPath) {
+export function openDb(dbPath) {
   const db = new DatabaseSync(dbPath);
   db.exec("PRAGMA journal_mode=WAL;");
   db.exec("PRAGMA busy_timeout=5000;");
@@ -224,14 +233,39 @@ async function fetchRecipeRun(recipeRunId) {
   return res.json();
 }
 
-async function loadFixtureSpec(recipeId) {
+export async function loadFixtureSpec(recipeId) {
+  // F1: production specs live in config/recipes/<recipeId>@<rev>.json and are the
+  // authoritative source. Try the production directory first (highest revision
+  // matching recipeId), then fall back to the legacy test fixture for @1.
+  const production = loadProductionRecipe(recipeId);
+  if (production) return production.spec;
   if (recipeId === "xhs.search.fixed") {
     const mod = await import(
       new URL("../../control-plane/tests/fixtures/xhs-search-fixed.recipe.mjs", import.meta.url).href
     );
     return mod.XHS_SEARCH_FIXED_RECIPE;
   }
-  throw Object.assign(new Error(`no fixture for ${recipeId}; pass --spec <file>`), { code: "NO_FIXTURE" });
+  throw Object.assign(new Error(`no recipe for ${recipeId}; pass --spec <file>`), { code: "NO_RECIPE" });
+}
+
+/**
+ * Load the highest-revision production spec for a recipeId from config/recipes/.
+ * Returns { spec, revision } or null if none found. F1: production recipes carry
+ * the canonical-v2 descriptorHash; fixtures are legacy @1 only.
+ */
+function loadProductionRecipe(recipeId) {
+  if (!existsSync(PRODUCTION_RECIPE_DIR)) return null;
+  const files = readdirSync(PRODUCTION_RECIPE_DIR)
+    .filter((f) => f.startsWith(`${recipeId}@`) && f.endsWith(".json"))
+    .map((f) => {
+      const rev = Number(f.slice(recipeId.length + 1, -5));
+      return { file: f, rev };
+    })
+    .filter((e) => Number.isInteger(e.rev) && e.rev >= 1)
+    .sort((a, b) => b.rev - a.rev);
+  if (!files.length) return null;
+  const spec = JSON.parse(readFileSync(join(PRODUCTION_RECIPE_DIR, files[0].file), "utf8"));
+  return { spec, revision: files[0].rev };
 }
 
 function recipeExists(db, recipeId) {
@@ -246,15 +280,27 @@ function recipeExists(db, recipeId) {
 async function cmdIngest(db, args) {
   let spec;
   if (args.spec) {
-    const { readFileSync } = await import("node:fs");
     spec = JSON.parse(readFileSync(args.spec, "utf8"));
-  } else if (args.fixture) {
-    spec = await loadFixtureSpec(String(args.fixture));
+  } else if (args.fixture || args.recipe) {
+    spec = await loadFixtureSpec(String(args.fixture || args.recipe));
   } else {
-    fail("ingest requires --fixture <recipeId> or --spec <file>");
+    fail("ingest requires --recipe <recipeId> or --spec <file>");
   }
   const recipeId = String(spec.recipeId);
-  if (recipeExists(db, recipeId)) {
+  const revision = Number.isInteger(spec.revision) ? spec.revision : null;
+  // Idempotency is per (recipeId, revision): ingesting @2 when @1 exists is a new
+  // version, not a no-op. Only skip if the exact revision is already present.
+  if (revision != null) {
+    const dup = db
+      .prepare(`SELECT revision FROM recipe_versions WHERE recipe_id=? AND revision=?`)
+      .get(recipeId, revision);
+    if (dup) {
+      const g = getRecipe(db, recipeId);
+      const v = g.versions.find((x) => x.revision === revision);
+      console.log(`INGEST_IDEMPOTENT ${recipeId}@${revision} status=${v?.status || "?"} hash=${(v?.descriptorHash || "").slice(0, 16)}`);
+      return;
+    }
+  } else if (recipeExists(db, recipeId)) {
     const g = getRecipe(db, recipeId);
     console.log(`INGEST_IDEMPOTENT ${recipeId}@${g.latest.revision} status=${g.latest.status}`);
     return;
@@ -311,6 +357,71 @@ async function cmdEvaluate(db, args) {
   printEval(ev);
 }
 
+/**
+ * switch-alias — atomically switch the dispatcher's recipe revision map to a
+ * promoted revision (plan V2 §11 rollback boundary). Fail-closed: the target
+ * revision MUST be canary_only or implemented in the Catalog DB before the
+ * dispatch state is touched. Optionally flips the liveGate for an action so
+ * --execute passes for that action. Idempotent.
+ *
+ *   node ops/xw-recipe-promote.mjs switch-alias --recipe xhs.search.fixed --revision 2 [--action search] [--runtime]
+ */
+export async function cmdSwitchAlias(db, args) {
+  const recipeId = args.recipe;
+  const revision = args.revision != null ? Number(args.revision) : null;
+  const actionId = args.action || null;
+  if (!recipeId || !Number.isInteger(revision)) {
+    return { ok: false, code: "ARGS", message: "switch-alias requires --recipe <id> --revision <n>" };
+  }
+  // Fail-closed: verify the revision is promoted in the Catalog.
+  const g = getRecipe(db, recipeId);
+  const v = g.versions.find((x) => x.revision === revision);
+  if (!v) return { ok: false, code: "NOT_IN_CATALOG", message: `switch-alias: ${recipeId}@${revision} not found in Catalog` };
+  if (v.status !== "canary_only" && v.status !== "implemented") {
+    return { ok: false, code: "NOT_PROMOTED", message: `switch-alias: ${recipeId}@${revision} status=${v.status}; must be canary_only or implemented` };
+  }
+  const statePath = args["state-path"] || (args.runtime ? RUNTIME_DISPATCH_STATE : DISPATCH_STATE_PATH);
+  const state = readDispatchState(statePath);
+  const prev = state.recipeRevisions[recipeId] ?? null;
+  state.recipeRevisions[recipeId] = revision;
+  if (actionId) {
+    state.liveGates = state.liveGates || {};
+    state.liveGates[actionId] = true;
+  }
+  writeDispatchState(statePath, state);
+  console.log(`SWITCH_ALIAS ${recipeId}@${revision} (was ${prev ?? "?"}) status=${v.status}${actionId ? ` gate=${actionId}:on` : ""} -> ${statePath}`);
+  return { ok: true, recipeId, revision, prev, status: v.status, actionId };
+}
+
+/**
+ * emit-overlay — write the overlay document from the Catalog DB to a path.
+ * Default: the runtime overlay; --path overrides. Includes all canary_only +
+ * implemented recipes (so @2 appears once promoted).
+ */
+export async function cmdEmitOverlay(db, args) {
+  const doc = buildOverlayDocument(db);
+  const outPath = args.path || (args.runtime
+    ? "C:\\Users\\Public\\xw-runtime\\recipe-overlay\\xhs-search-fixed.overlay.v1.json"
+    : join(ROOT, "xhs-search-fixed.overlay.v1.json"));
+  const written = writeOverlayAtomically(doc, { path: outPath });
+  console.log(`OVERLAY_EMIT recipes=${written.recipeCount} sha256=${written.sha256.slice(0, 16)} -> ${written.path}`);
+}
+
+function readDispatchState(path) {
+  try {
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    return { recipeRevisions: {}, liveGates: {} };
+  }
+}
+
+function writeDispatchState(path, state) {
+  const tmp = `${path}.tmp`;
+  writeFileSync(tmp, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+  writeFileSync(path, readFileSync(tmp, "utf8"), "utf8");
+  try { unlinkSync(tmp); } catch { /* best-effort */ }
+}
+
 async function cmdStatus(db, args) {
   const recipeId = args.recipe;
   if (!recipeId) fail("status requires --recipe <id>");
@@ -330,11 +441,11 @@ async function cmdStatus(db, args) {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help || args.h) {
-    console.log("usage: xw-recipe-promote.mjs <ingest|promote|record|evaluate|status> ...");
+    console.log("usage: xw-recipe-promote.mjs <ingest|promote|record|evaluate|status|switch-alias|emit-overlay> ...");
     process.exit(0);
   }
   const cmd = args._[0];
-  if (!cmd) fail("no command; one of ingest|promote|record|evaluate|status");
+  if (!cmd) fail("no command; one of ingest|promote|record|evaluate|status|switch-alias|emit-overlay");
   const dbPath = args.db || (args["runtime"] ? RUNTIME_DB : DEFAULT_DB);
   const db = openDb(dbPath);
   try {
@@ -344,6 +455,12 @@ async function main() {
       case "record": return await cmdRecord(db, args);
       case "evaluate": return await cmdEvaluate(db, args);
       case "status": return await cmdStatus(db, args);
+      case "switch-alias": {
+        const r = await cmdSwitchAlias(db, args);
+        if (!r.ok) fail(r.message);
+        return;
+      }
+      case "emit-overlay": return await cmdEmitOverlay(db, args);
       default: fail(`unknown command ${cmd}`);
     }
   } finally {

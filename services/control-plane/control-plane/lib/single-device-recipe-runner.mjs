@@ -16,6 +16,7 @@ import { randomUUID } from "node:crypto";
 import {
   bindRecipeInput,
   computeDescriptorHash,
+  isCanonicalV2Recipe,
   evaluateRecipeAssertions,
   executeRecipeInSession,
   planRecipeFromExecutor,
@@ -294,15 +295,21 @@ export class SingleDeviceRecipeRunner {
 
     const loaded = this.#loadRecipe({ recipe, recipeId, revision, requireLiveStatus: isLive, allowCandidate: isLive && canaryMode });
     // descriptor hash：绑定 exact server-sealed spec；客户端不得静默改坐标/步骤。
-    // 仅对服务端封存的 rh_ 哈希做 tamper 校验；inline/测试 fixture 的占位值只重算覆盖。
+    // - legacy rh_ spec：仅对服务端封存的 rh_ 哈希做 tamper 校验；占位值只重算覆盖。
+    // - canonical-v2 spec (descriptorHashScheme=canonical-v2)：对 64-hex 哈希做
+    //   tamper 校验（占位零哈希除外），sealed 用 64-hex，与 Catalog/overlay 字节一致。
     // 不原地改 frozen 入参，用浅拷贝携带 computedHash。
     const computedHash = computeDescriptorHash(loaded);
-    if (typeof loaded.descriptorHash === "string" && loaded.descriptorHash.startsWith("rh_") && loaded.descriptorHash !== computedHash) {
+    const providedHash = typeof loaded.descriptorHash === "string" ? loaded.descriptorHash : null;
+    const isV2 = isCanonicalV2Recipe(loaded);
+    const PLACEHOLDER_HASH = "0".repeat(64);
+    if (providedHash && providedHash !== computedHash && providedHash !== PLACEHOLDER_HASH
+        && (providedHash.startsWith("rh_") || isV2)) {
       throw err(
         "RECIPE_DESCRIPTOR_HASH_MISMATCH",
-        `descriptorHash tamper: expected ${computedHash}, got ${loaded.descriptorHash}`,
+        `descriptorHash tamper: expected ${computedHash}, got ${providedHash}`,
         409,
-        { expected: computedHash, actual: loaded.descriptorHash },
+        { expected: computedHash, actual: providedHash, scheme: isV2 ? "canonical-v2" : "legacy" },
       );
     }
     const sealed = { ...loaded, descriptorHash: computedHash };

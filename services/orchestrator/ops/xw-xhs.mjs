@@ -21,6 +21,8 @@
  * Console: console.log only (Windows bridge treats stderr as fatal).
  */
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { readFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 
 import {
   planAction,
@@ -30,6 +32,26 @@ import {
   PlanError,
   FORCED_ALIAS,
 } from "../scripts/lib/xw-xhs-dispatcher.mjs";
+
+const HERE = fileURLToPath(new URL(".", import.meta.url));
+// Default dispatch state (recipe revisions + live gates). The runtime override
+// is XHS_DISPATCH_STATE; switch-alias updates this file in place after promotion.
+const DEFAULT_STATE_PATH = join(HERE, "..", "..", "control-plane", "config", "xhs-dispatch-state.json");
+const STATE_PATH = process.env.XHS_DISPATCH_STATE || DEFAULT_STATE_PATH;
+
+function loadDispatchState() {
+  try {
+    const raw = readFileSync(STATE_PATH, "utf8");
+    const s = JSON.parse(raw);
+    return {
+      recipeRevisions: s.recipeRevisions || {},
+      liveGates: s.liveGates || {},
+    };
+  } catch {
+    // Missing/unreadable state -> fall back to dispatcher defaults (search@1, no gates).
+    return { recipeRevisions: {}, liveGates: {} };
+  }
+}
 
 function parseArgs(argv) {
   const out = { _: [] };
@@ -103,10 +125,11 @@ async function main() {
   const alias = args.alias || FORCED_ALIAS;
   const actor = args.actor || null;
   const params = toParams(action, args);
+  const { recipeRevisions, liveGates } = loadDispatchState();
 
   let plan;
   try {
-    plan = planAction({ actionId: action.id, params, alias, actor });
+    plan = planAction({ actionId: action.id, params, alias, actor, recipeRevisions });
   } catch (e) {
     if (e instanceof PlanError) {
       console.log(JSON.stringify({ ok: false, error: { code: e.code, message: e.message, alias } }));
@@ -118,7 +141,7 @@ async function main() {
 
   const asJson = Boolean(args.json) || Boolean(args.execute);
   if (args.execute) {
-    const gate = evaluateExecuteGate(plan, {}); // no action promoted in W0
+    const gate = evaluateExecuteGate(plan, liveGates);
     const payload = { ok: gate.ok, command: "execute", plan, gate: gate.reason || null };
     if (!gate.ok) {
       payload.message = `live execution is fail-closed for ${plan.action} until wave ${plan.gate} promotes it via the canary chain`;
@@ -137,7 +160,7 @@ async function main() {
   console.log(`actionRunId ${plan.actionRunId}`);
   console.log(`planHash:   ${plan.planHash}`);
   console.log(`alias:      ${plan.alias} (perDeviceConcurrency=${plan.perDeviceConcurrency})`);
-  console.log(`backend:    ${plan.backend}${plan.recipeId ? ` -> ${plan.recipeId}` : ""}${plan.capabilityId ? ` -> ${plan.capabilityId}` : ""}`);
+  console.log(`backend:    ${plan.backend}${plan.recipeId ? ` -> ${plan.recipeId}@${plan.recipeRevision ?? "?"}` : ""}${plan.capabilityId ? ` -> ${plan.capabilityId}` : ""}`);
   console.log(`effect:     ${plan.effectClass}  gate: ${plan.gate}  route: ${plan.adaptiveRoute}`);
   console.log(`params:     ${JSON.stringify(plan.params)}`);
   console.log(`budget:     ${JSON.stringify(plan.budget)}`);
