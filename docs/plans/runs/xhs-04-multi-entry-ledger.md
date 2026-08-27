@@ -317,3 +317,12 @@
 - 节奏账本：本轮写传输 = comment×1（03）。follow canary 待间隔后执行。
 
 - end 2026-08-27（W5 comment 03）—— **评论 live 闭环 VERIFIED；观测缺口定论 + 可靠验证面沉淀**。
+
+## W4 follow live VERIFIED（03，一次通过）— 2026-08-27
+
+- `xw-xhs-social-live.mjs --alias 03 follow`：CARD=#穿搭爱好者 AUTHOR=两颗鱼蛋 → 详情 → profile CTA（findProfileFollowBtn，AUTHOR_MATCH=true）→ before=关注(unfollowed) → **恰一次 tap** → after=**已关注 VERIFIED=true**。effect_40cd0503 **verified**（targetHash 9f3f2f9c…）。
+- **定论**：同一段 driver/选择器在 04 上 4 次 tap 全静默无效、在 03 上一次通过 → 04 的 follow 失败是**账号级风控**（非代码缺陷）最终坐实。03 账号赞/收藏（04 已证）/评论/follow 全链路通畅。
+- 节奏账本：本轮写传输合计 = comment×1 + follow×1（均 03，间隔 ~20min），符合用户 ≤2/轮约束。本轮到此收线。
+- **04 遗留**：04 账号仍带"异常行为风险"限制标记（我页弹窗，用户已人工验证解除一次）；04 后续写动作建议低频+观察，或暂以 03 为社交主通道。
+
+- end 2026-08-27（W4 follow 03）—— **03 通道 comment+follow 双 verified；04 风控定论**。
