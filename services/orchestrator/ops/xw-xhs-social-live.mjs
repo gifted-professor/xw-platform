@@ -46,7 +46,8 @@ if (flag("--help") || flag("-h") || !["like", "collect", "follow"].includes(acti
 }
 
 const alias = opt("--alias") || "04";
-if (alias !== "04") { console.log(JSON.stringify({ ok: false, code: "XHS_ALIAS_NOT_04", alias })); process.exit(3); }
+// 04 + 03 only (2026-08-27 user amendment: 03 lane opened, 01/02 stay out of scope)
+if (alias !== "04" && alias !== "03") { console.log(JSON.stringify({ ok: false, code: "XHS_ALIAS_NOT_04", alias })); process.exit(3); }
 const actor = opt("--actor") || "claude-pilot-20260809";
 const noteFilter = opt("--note-desc-contains") || null;
 const DRY_RUN = flag("--dry-run");
@@ -233,7 +234,7 @@ async function main() {
       issuer: { actorId: "human:operator" },
       idempotencyKey: `xhs-${action}-${targetHash.slice(0, 16)}-${Date.now()}`,
       app: "xhs",
-      account: "local-alias-04",
+      account: `local-alias-${alias}`,
       parallelism: 1,
       controllers: ["agent:xw-xhs-social-live"],
       scope: {

@@ -1,19 +1,22 @@
 #!/usr/bin/env node
 /**
- * xw-xhs-capabilities.mjs — idempotent 04-only capability + routing-profile
+ * xw-xhs-capabilities.mjs — idempotent capability + routing-profile
  * registration for the XHS multi-entry script pack (plan V2 §2.1; W2 sedimented
  * fixed task). Writes the XHS social/interaction capabilities into control.db
- * and adds their IDs ONLY to device alias 04's routing profile — 01-03 are
- * never given these capability IDs, which is the placement boundary the W2
- * test (xhs-04-placement-boundary.test.mjs) and placement.mjs:127 enforce.
+ * and adds their IDs to the target device's routing profile. The pack launched
+ * 04-only (the W2 test xhs-04-placement-boundary.test.mjs uses self-contained
+ * fixtures and still proves that boundary); on 2026-08-27 the user amended the
+ * plan to also allow alias 03 (账号自由度更高), so the script takes --alias
+ * (default 04) and merges capIds into that device only — other devices are
+ * never touched.
  *
- *   node ops/xw-xhs-capabilities.mjs apply  [--runtime] [--db <path>]
- *   node ops/xw-xhs-capabilities.mjs diff   [--runtime] [--db <path>]
+ *   node ops/xw-xhs-capabilities.mjs apply  [--runtime] [--db <path>] [--alias 03]
+ *   node ops/xw-xhs-capabilities.mjs diff   [--runtime] [--db <path>] [--alias 03]
  *
  * `apply` is idempotent: re-running is a no-op (merges, never removes existing
- * capabilityIds from 04; never touches 01-03). `diff` prints what would change
- * without writing. Console: console.log only (Windows bridge treats stderr as
- * fatal).
+ * capabilityIds from the target; never touches other devices). `diff` prints
+ * what would change without writing. Console: console.log only (Windows bridge
+ * treats stderr as fatal).
  *
  * NOTE: this script operates on control.db directly (the control-plane's device
  * + capabilities tables). The live runtime control.db is at
@@ -28,12 +31,13 @@ import { DatabaseSync } from "node:sqlite";
 import { StateStore } from "../../control-plane/control-plane/lib/state-store.mjs";
 import { CapabilityRegistry } from "../../control-plane/control-plane/lib/capability-registry.mjs";
 import { normalizeRoutingProfile } from "../../control-plane/control-plane/lib/placement.mjs";
+import { canonicalJson } from "../../control-plane/control-plane/lib/canonical.mjs";
 
 const HERE = fileURLToPath(new URL(".", import.meta.url));
 const REPO_DEFAULT_DB = resolve(HERE, "..", "..", "control-plane", "control-plane", "runtime", "control.db");
 const RUNTIME_DB = "C:\\Users\\Public\\xw-runtime\\state\\control-plane\\control.db";
 const AUTHORITY_NODE = process.env.XHS_AUTHORITY_NODE || "DESKTOP-3I1EVHE";
-const TARGET_ALIAS = "04";
+const DEFAULT_ALIAS = "04";
 
 /** The XHS capabilities this pack registers. W4 binds the adapters; W2 only
  * proves the 04-only placement boundary. Keep this in sync with the W4/W5
@@ -100,19 +104,22 @@ function fail(msg, code = 2) {
 }
 
 function openState(dbPath) {
-  const store = new StateStore({ dbPath });
+  // QUALIFICATION_ONLY is load-bearing (W4 lesson): a STANDARD-mode constructor
+  // runs recoverInterruptedWork(), which wipes ALL sessions+leases from the
+  // live db at construction time even on a clean job queue.
+  const store = new StateStore({ dbPath, m6RuntimeMode: "QUALIFICATION_ONLY" });
   store.upsertNode({ nodeId: AUTHORITY_NODE, authority: true });
   return store;
 }
 
 /**
- * Read 04's current routing profile (normalized), or null if the device isn't
- * seeded yet. The apply step seeds it if missing.
+ * Read the target device's current routing profile (normalized), or null if
+ * the device isn't seeded yet. The apply step seeds it if missing.
  */
-function getDevice04(state) {
+function getTargetDevice(state, targetAlias) {
   const row = state.db
     .prepare("SELECT * FROM devices WHERE node_id=? AND alias=?")
-    .get(AUTHORITY_NODE, TARGET_ALIAS);
+    .get(AUTHORITY_NODE, targetAlias);
   if (!row) return null;
   return {
     deviceId: row.device_id,
@@ -128,102 +135,119 @@ function desiredCapIds() {
 }
 
 /**
- * Compute the diff: which capIds are new for 04, and which capabilities would
- * be newly synced. Returns { capIdsToAdd, existing04, missingDevice }.
+ * Compute the diff: which capIds are new for the target device, and which
+ * capabilities would be newly synced. Returns { capIdsToAdd, existingDevice, missingDevice }.
  */
-function computeDiff(state) {
-  const dev = getDevice04(state);
+function computeDiff(state, targetAlias) {
+  const dev = getTargetDevice(state, targetAlias);
   if (!dev) {
-    return { capIdsToAdd: desiredCapIds(), existing04: null, missingDevice: true };
+    return { capIdsToAdd: desiredCapIds(), existingDevice: null, missingDevice: true };
   }
   const have = new Set(dev.routingProfile.capabilityIds);
   const add = desiredCapIds().filter((id) => !have.has(id));
-  return { capIdsToAdd: add, existing04: dev, missingDevice: false };
+  return { capIdsToAdd: add, existingDevice: dev, missingDevice: false };
 }
 
-function cmdDiff(state) {
-  const { capIdsToAdd, existing04, missingDevice } = computeDiff(state);
+function cmdDiff(state, targetAlias) {
+  const { capIdsToAdd, existingDevice, missingDevice } = computeDiff(state, targetAlias);
   if (missingDevice) {
-    console.log(`DIFF: device ${TARGET_ALIAS} not seeded on ${AUTHORITY_NODE}; apply will create it with capabilityIds=[${desiredCapIds().join(",")}]`);
+    console.log(`DIFF: device ${targetAlias} not seeded on ${AUTHORITY_NODE}; apply will create it with capabilityIds=[${desiredCapIds().join(",")}]`);
     return;
   }
   if (!capIdsToAdd.length) {
-    console.log(`DIFF: device ${TARGET_ALIAS} already carries all XHS caps (${existing04.routingProfile.capabilityIds.length} ids); no change`);
+    console.log(`DIFF: device ${targetAlias} already carries all XHS caps (${existingDevice.routingProfile.capabilityIds.length} ids); no change`);
     return;
   }
-  console.log(`DIFF: device ${TARGET_ALIAS} +${capIdsToAdd.length} capIds [${capIdsToAdd.join(",")}]`);
-  console.log(`  current (${existing04.routingProfile.capabilityIds.length}): ${existing04.routingProfile.capabilityIds.join(",") || "(none)"}`);
+  console.log(`DIFF: device ${targetAlias} +${capIdsToAdd.length} capIds [${capIdsToAdd.join(",")}]`);
+  console.log(`  current (${existingDevice.routingProfile.capabilityIds.length}): ${existingDevice.routingProfile.capabilityIds.join(",") || "(none)"}`);
 }
 
-function cmdApply(state) {
-  const { capIdsToAdd, existing04, missingDevice } = computeDiff(state);
+function cmdApply(state, targetAlias) {
+  const { capIdsToAdd, existingDevice, missingDevice } = computeDiff(state, targetAlias);
 
-  // 1. Sync capabilities into the capabilities table. syncCapabilities disables
-  //    any cap not in the registry, so we pass the FULL XHS set each run — but
-  //    to avoid clobbering OTHER apps' capabilities, we merge with what's
-  //    already enabled. Read existing enabled caps and union with ours.
-  const existingRows = state.db
-    .prepare("SELECT capability_id FROM capabilities WHERE enabled=1")
-    .all().map((r) => r.capability_id);
-  const xhsIds = new Set(XHS_CAPABILITIES.map((c) => c.id));
-  // Keep existing non-xhs caps; for xhs caps, the registry manifest wins.
-  const keptManifests = state.db
-    .prepare("SELECT capability_id, manifest_json FROM capabilities WHERE enabled=1")
-    .all()
-    .filter((r) => !xhsIds.has(r.capability_id))
-    .map((r) => JSON.parse(r.manifest_json));
-  const fullSet = [...keptManifests, ...XHS_CAPABILITIES];
-  const registry = new CapabilityRegistry(fullSet);
-  state.syncCapabilities(registry);
-  console.log(`SYNC capabilities: ${XHS_CAPABILITIES.length} xhs (+${keptManifests.length} existing kept) enabled`);
+  // 1. Sync ONLY the XHS pack capabilities into the capabilities table —
+  //    targeted additive upserts. The old path (syncCapabilities with a merged
+  //    full-set registry) disables and rewrites every cap row, which both
+  //    clobbers other apps' manifests and trips registry validation on live
+  //    manifests carrying fields this repo's schema doesn't know (e.g.
+  //    wechat.observe.main's capabilityContractHash). Other caps stay
+  //    byte-identical. CapabilityRegistry(XHS_CAPABILITIES) still validates
+  //    OUR five manifests before anything is written.
+  new CapabilityRegistry(XHS_CAPABILITIES);
+  const upsert = state.db.prepare(`
+    INSERT INTO capabilities (
+      capability_id, app_id, maturity, risk, enabled, manifest_json, updated_at
+    ) VALUES (?, ?, ?, ?, 1, ?, ?)
+    ON CONFLICT(capability_id) DO UPDATE SET
+      app_id=excluded.app_id,
+      maturity=excluded.maturity,
+      risk=excluded.risk,
+      enabled=1,
+      manifest_json=excluded.manifest_json,
+      updated_at=excluded.updated_at
+  `);
+  const now = new Date().toISOString();
+  for (const capability of XHS_CAPABILITIES) {
+    upsert.run(
+      capability.id,
+      capability.appId,
+      capability.maturity,
+      capability.risk,
+      canonicalJson(capability),
+      now,
+    );
+  }
+  console.log(`SYNC capabilities: ${XHS_CAPABILITIES.length} xhs upserted (other caps untouched)`);
 
-  // 2. Add capIds ONLY to 04's routing profile (merge, never remove).
+  // 2. Add capIds ONLY to the target device's routing profile (merge, never remove).
   if (missingDevice) {
     state.upsertDevice({
-      alias: TARGET_ALIAS,
-      physicalLabel: `rack-${TARGET_ALIAS}`,
+      alias: targetAlias,
+      physicalLabel: `rack-${targetAlias}`,
       nodeId: AUTHORITY_NODE,
-      routingProfile: { enabled: true, tags: [`slot:${TARGET_ALIAS}`], capabilityIds: desiredCapIds() },
+      routingProfile: { enabled: true, tags: [`slot:${targetAlias}`], capabilityIds: desiredCapIds() },
     });
-    console.log(`SEEDED device ${TARGET_ALIAS} with ${desiredCapIds().length} capIds`);
+    console.log(`SEEDED device ${targetAlias} with ${desiredCapIds().length} capIds`);
     return;
   }
 
   if (!capIdsToAdd.length) {
-    console.log(`IDEMPOTENT device ${TARGET_ALIAS} already carries all XHS caps; no routing change`);
+    console.log(`IDEMPOTENT device ${targetAlias} already carries all XHS caps; no routing change`);
     return;
   }
 
-  const merged = [...new Set([...existing04.routingProfile.capabilityIds, ...capIdsToAdd])].sort();
+  const merged = [...new Set([...existingDevice.routingProfile.capabilityIds, ...capIdsToAdd])].sort();
   state.upsertDevice({
-    deviceId: existing04.deviceId,
-    alias: existing04.alias,
-    physicalLabel: existing04.physicalLabel,
+    deviceId: existingDevice.deviceId,
+    alias: existingDevice.alias,
+    physicalLabel: existingDevice.physicalLabel,
     nodeId: AUTHORITY_NODE,
-    runtimeId: existing04.runtimeId || undefined,
+    runtimeId: existingDevice.runtimeId || undefined,
     routingProfile: {
       enabled: true,
-      tags: existing04.routingProfile.tags.length ? existing04.routingProfile.tags : [`slot:${TARGET_ALIAS}`],
+      tags: existingDevice.routingProfile.tags.length ? existingDevice.routingProfile.tags : [`slot:${targetAlias}`],
       capabilityIds: merged,
     },
   });
-  console.log(`APPLIED device ${TARGET_ALIAS} +${capIdsToAdd.length} capIds [${capIdsToAdd.join(",")}] -> ${merged.length} total`);
+  console.log(`APPLIED device ${targetAlias} +${capIdsToAdd.length} capIds [${capIdsToAdd.join(",")}] -> ${merged.length} total`);
 }
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help || args.h) {
-    console.log("usage: xw-xhs-capabilities.mjs <apply|diff> [--runtime] [--db <path>]");
+    console.log("usage: xw-xhs-capabilities.mjs <apply|diff> [--runtime] [--db <path>] [--alias 03|04]");
     process.exit(0);
   }
   const cmd = args._[0];
   if (!cmd) fail("no command; one of apply|diff");
+  const targetAlias = String(args.alias || DEFAULT_ALIAS);
+  if (!/^\d{2}$/.test(targetAlias)) fail(`bad --alias ${targetAlias}`);
   const dbPath = args.db || (args.runtime ? RUNTIME_DB : REPO_DEFAULT_DB);
   const state = openState(dbPath);
   try {
     switch (cmd) {
-      case "apply": return cmdApply(state);
-      case "diff": return cmdDiff(state);
+      case "apply": return cmdApply(state, targetAlias);
+      case "diff": return cmdDiff(state, targetAlias);
       default: fail(`unknown command ${cmd}`);
     }
   } finally {
