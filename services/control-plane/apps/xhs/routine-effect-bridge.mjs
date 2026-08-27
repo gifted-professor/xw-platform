@@ -30,6 +30,11 @@
 import { ControlPlaneError } from "../../control-plane/lib/errors.mjs";
 import { likeState } from "./social-verifiers.mjs";
 import { bindOperationKey } from "../../../orchestrator/scripts/lib/xw-xhs-dispatcher.mjs";
+import {
+  sealDraftFromReceipt,
+  reconcileAmbiguousComment,
+  COMMENT_DRAFT_TTL_MS,
+} from "./routine-comment-chain.mjs";
 
 export const ROUTINE_EFFECT_BUDGET = Object.freeze({
   mode: "hard",
@@ -61,9 +66,12 @@ function code(name, message, status = 409, details = undefined) {
  *   ledger reservation token:
  *     observe({ reason })  -> { hash, targetFingerprint, likeLabel, observedAt }
  *     commitLike({ operationKey, reservationToken }) -> { ok }
+ * @param {object} [input.llm] - grounded draft provider: `draft({ receipt })`
+ *   -> { text, modelId?, promptHash? }. Only `text` + metadata are read — the
+ *   LLM structurally cannot output tap/coordinates/send decisions (plan V2 §8.5).
  * @param {object} [input.clock] - { nowMs(), sleep(ms) } (tests inject)
  */
-export function createRoutineEffectBridge({ state, owner, transport, clock = { nowMs: () => Date.now(), sleep: () => Promise.resolve() } } = {}) {
+export function createRoutineEffectBridge({ state, owner, transport, llm = null, clock = { nowMs: () => Date.now(), sleep: () => Promise.resolve() } } = {}) {
   if (!state) throw new TypeError("createRoutineEffectBridge: state store required");
   if (!owner || !owner.sessionId || !owner.leaseRef || !owner.leaseAuthorization || !owner.routineRunId || !owner.planHash) {
     throw new TypeError("createRoutineEffectBridge: owner tuple (sessionId/leaseRef/leaseAuthorization/routineRunId/planHash) required");
@@ -78,6 +86,185 @@ export function createRoutineEffectBridge({ state, owner, transport, clock = { n
     routineRunId: owner.routineRunId,
     planHash: owner.planHash,
   });
+
+  // run-level comment text hashes — duplicate-text dedup for the draft validator
+  const commentTextHashes = new Set();
+
+  /**
+   * Grounded comment path (plan V2 §8): note-context receipt -> LLM draft
+   * (text only) -> deterministic validator -> bound_send of the server-sealed
+   * draftId -> single transport -> strict verifier. Ambiguous closes the
+   * remaining comments of the run and freezes the triple.
+   */
+  async function commitCommentEffect(routineContext) {
+    if (typeof transport.observeNoteContext !== "function" || typeof transport.commitComment !== "function"
+      || typeof transport.observeCommentPanel !== "function") {
+      throw code("ROUTINE_ACTION_NOT_WIRED", "comment requires the typed note-context transport { observeNoteContext, commitComment, observeCommentPanel }", 400);
+    }
+    if (!llm || typeof llm.draft !== "function") {
+      // model unavailable/timeout never affects the routine's read-only part
+      return { outcome: "stopped:llm_unavailable", transported: false };
+    }
+
+    // --- note-context observation (server-built receipt) ---------------------
+    let ctxObs = await observeNoteContextFresh(routineContext);
+    if (!ctxObs) {
+      return { outcome: "stopped:observation_stale", transported: false };
+    }
+    if (ctxObs.targetFingerprint !== routineContext.targetFingerprint) {
+      throw code("TARGET_BINDING_MISMATCH", "note context is not bound to the claimed target");
+    }
+
+    // --- server receipt + LLM draft (text only) + deterministic validator ----
+    const receipt = state.recordNoteContextReceipt({
+      receiptHash: ctxObs.hash,
+      routineRunId: routineContext.routineRunId,
+      planHash: routineContext.planHash,
+      targetFingerprint: ctxObs.targetFingerprint,
+      detailStateVersion: ctxObs.detailStateVersion ?? ctxObs.hash,
+      accountFingerprint: ctxObs.accountFingerprint ?? null,
+      pageFingerprint: ctxObs.pageFingerprint ?? null,
+      titleExcerpt: ctxObs.title ?? null,
+      bodyExcerpt: ctxObs.body ?? null,
+      commentDigest: ctxObs.commentDigest ?? [],
+      evidenceHashes: [ctxObs.hash],
+      observedAt: ctxObs.observedAt,
+    });
+    const llmResult = await llm.draft({ receipt });
+    const sealed = sealDraftFromReceipt({
+      state,
+      receipt,
+      llmResult,
+      recentTextHashes: [...commentTextHashes],
+    });
+    if (!sealed.ok) {
+      // 草稿失败或不合格直接 skip — never send to fill the quota
+      return { outcome: `skipped:${sealed.reason}`, transported: false };
+    }
+    const draft = sealed.draft;
+
+    // --- server-hard reservation (same transaction, mode=hard) --------------
+    const operationKey = bindOperationKey({
+      actionRunId: routineContext.routineRunId,
+      action: "comment",
+      targetFingerprint: routineContext.targetFingerprint,
+      payloadHash: draft.textHash,
+    });
+    let reservation;
+    let reused = false;
+    try {
+      ({ effect: reservation, reused } = state.beginRoutineEffect({
+        routineRunId: routineContext.routineRunId,
+        planHash: routineContext.planHash,
+        action: "comment",
+        targetFingerprint: routineContext.targetFingerprint,
+        observationHash: routineContext.observationHash,
+        payloadHash: draft.textHash,
+        intent: { surface: "xhs-routine", sessionId: routineContext.sessionId, draftId: draft.draftId },
+        idempotencyKey: operationKey,
+        budget: ROUTINE_EFFECT_BUDGET,
+      }));
+    } catch (e) {
+      if (e instanceof ControlPlaneError && e.code === "ROUTINE_BUDGET_EXCEEDED") {
+        return { outcome: "cap_reached", transported: false };
+      }
+      if (e instanceof ControlPlaneError && e.code === "ROUTINE_BUDGET_PER_TARGET_EXCEEDED") {
+        return { outcome: "cap_reached:per_target", transported: false };
+      }
+      if (e instanceof ControlPlaneError && e.code === "AMBIGUOUS_NO_RETRY") {
+        return { outcome: "ambiguous_no_retry", transported: false };
+      }
+      if (e instanceof ControlPlaneError && e.code === "ROUTINE_ACTION_CLOSED") {
+        return { outcome: "closed:ambiguous", transported: false };
+      }
+      throw e;
+    }
+    if (reused) {
+      return { outcome: "replayed", transported: false, effectId: reservation.effectId };
+    }
+
+    // --- bound_send pre-checks: TTL + state drift (§8.4) ---------------------
+    const current = await observeNoteContextFresh(routineContext);
+    const expired = clock.nowMs() > draft.expiresAt;
+    const drifted = !current
+      || current.hash !== draft.sourceObservationHash
+      || (current.detailStateVersion ?? null) !== draft.detailStateVersion;
+    if (expired || drifted) {
+      state.setCommentDraftStatus(draft.draftId, "invalidated");
+      // pre-transport invalidation releases the slot (not_sent)
+      state.recordRoutineEffectOutcome(reservation.effectId, { status: "not_sent" });
+      return { outcome: "stopped:draft_stale", transported: false };
+    }
+
+    // --- single transport of the sealed draft -------------------------------
+    commentTextHashes.add(draft.textHash);
+    state.setCommentDraftStatus(draft.draftId, "consumed");
+    let commitOk = false;
+    try {
+      const res = await transport.commitComment({
+        operationKey,
+        reservationToken: reservation.effectId,
+        draftId: draft.draftId,
+        textHash: draft.textHash,
+      });
+      commitOk = res?.ok === true;
+    } catch {
+      commitOk = false;
+    }
+
+    // --- strict verifier ------------------------------------------------------
+    let panel = null;
+    try {
+      panel = await transport.observeCommentPanel({ targetFingerprint: routineContext.targetFingerprint });
+    } catch {
+      panel = null;
+    }
+    const found = Array.isArray(panel?.texts) && panel.texts.some((t) => t === draft.text);
+    if (commitOk && found) {
+      state.recordRoutineEffectOutcome(reservation.effectId, { status: "verified", evidenceRefs: [operationKey, draft.draftId] });
+      return { outcome: "verified", transported: true, effectId: reservation.effectId };
+    }
+    // strict verifier evidence insufficient: ambiguous — consumes the slot,
+    // closes ALL remaining comments this run, freezes the triple
+    state.recordRoutineEffectOutcome(reservation.effectId, { status: "ambiguous", evidenceRefs: [operationKey, draft.draftId] });
+    state.closeRoutineRunAction({ routineRunId: routineContext.routineRunId, action: "comment", reason: "ambiguous" });
+    return { outcome: "ambiguous", transported: true, effectId: reservation.effectId };
+  }
+
+  async function observeNoteContextFresh(routineContext) {
+    const raw = await transport.observeNoteContext({ targetFingerprint: routineContext.targetFingerprint });
+    if (!raw || !raw.hash || typeof raw.observedAt !== "number") {
+      throw code("ROUTINE_OBSERVATION_INVALID", "note-context observation is not a fresh same-session dump");
+    }
+    const age = clock.nowMs() - raw.observedAt;
+    if (!Number.isFinite(age) || age < 0 || age > LIKE_OBSERVATION_MAX_AGE_MS) {
+      return null; // stale — callers fail closed rather than ground on old state
+    }
+    return raw;
+  }
+
+  /**
+   * Read-only comment reconcile (§8 tail): appends verified_late or
+   * unresolved_final; never re-sends, never restores a slot.
+   */
+  async function reconcileComment(routineContext) {
+    if (typeof transport.observeCommentPanel !== "function") {
+      throw code("ROUTINE_ACTION_NOT_WIRED", "comment reconcile requires observeCommentPanel", 400);
+    }
+    const effects = state.listRoutineEffects(routineContext.routineRunId)
+      .filter((e) => e.action === "comment" && e.status === "ambiguous");
+    const results = [];
+    for (const e of effects) {
+      const textHash = e.payloadHash;
+      results.push(await reconcileAmbiguousComment({
+        state,
+        effectId: e.effectId,
+        observeCommentPanel: (args) => transport.observeCommentPanel(args),
+        textHash,
+      }));
+    }
+    return results;
+  }
 
   async function observeFresh(reason, targetFingerprint = null) {
     const obs = await transport.observe({ reason, targetFingerprint });
@@ -127,9 +314,17 @@ export function createRoutineEffectBridge({ state, owner, transport, clock = { n
       throw code("EFFECT_TAP_SURFACE_REJECTED", "effect taps are not expressible through the classifier/control surface");
     }
     const action = String(effectIntent?.action || "");
-    if (action !== "like") {
-      // S3 wires comment through the same bridge; nothing else exists
+    if (action !== "like" && action !== "comment") {
+      // nothing else exists — publish/DM/follow/collect have no bridge path at all
       throw code("ROUTINE_ACTION_NOT_WIRED", `routine action ${action || "(none)"} is not wired through this bridge`, 400);
+    }
+    // a run action closed by an earlier ambiguity never re-opens: fail closed
+    // BEFORE any grounding/LLM work (no draft, no observation spend)
+    if (state.isRoutineRunActionClosed(routineContext.routineRunId, action)) {
+      return { outcome: "closed:ambiguous", transported: false };
+    }
+    if (action === "comment") {
+      return commitCommentEffect(routineContext);
     }
 
     // --- fresh like pre-state (§7.7) ----------------------------------------
@@ -231,7 +426,7 @@ export function createRoutineEffectBridge({ state, owner, transport, clock = { n
     return { outcome: "ambiguous", transported: true, effectId: reservation.effectId };
   }
 
-  return Object.freeze({ commitRoutineEffect, owner: ownerTuple, budget: ROUTINE_EFFECT_BUDGET });
+  return Object.freeze({ commitRoutineEffect, reconcileComment, owner: ownerTuple, budget: ROUTINE_EFFECT_BUDGET });
 }
 
 /**

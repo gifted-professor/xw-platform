@@ -330,6 +330,36 @@ export function createRoutineRun({ plan, driver, clock = defaultClock(), effects
       item.effects.comment = "frozen:forbidden_surface";
     }
 
+    // --- MAYBE_DRAFT_COMMENT: grounded comment chain (S3) ----------------------
+    // Fired only when the machine actually read the comment rows (grounding),
+    // the plan still has comment budget, and the action is not closed — a
+    // closed comment (ambiguous) never re-opens, but read-only browsing continues.
+    if (effectCapable && !run.socialTransportFrozen
+      && effects && typeof effects.commitRoutineEffect === "function"
+      && item.commentsRead > 0
+      && detailDump?.hash
+      && (item.detailPage === PAGE_CLASS.IMAGE_NOTE || item.detailPage === PAGE_CLASS.VIDEO_NOTE)) {
+      if (run.closedActions.has("comment")) {
+        // §7.6: comment ambiguous closes ALL remaining comments this run
+        item.effects.comment = "closed:ambiguous";
+      } else if ((run.effects.comment.remaining ?? 0) <= 0) {
+        item.effects.comment = "cap_reached";
+      } else {
+        const intent = { action: "comment", targetFingerprint, observationHash: detailDump.hash };
+        const res = await effects.commitRoutineEffect({ plan, run: { routineRunId: run.routineRunId, seed: run.seed }, item, intent });
+        const outcome = res?.outcome ?? "bridge_error";
+        item.effects.comment = outcome;
+        if (res?.transported) {
+          run.transport.count += 1;
+          run.effects.comment.transported += 1;
+          run.effects.comment.remaining = Math.max(0, run.effects.comment.remaining - 1);
+        }
+        if (outcome === "ambiguous" || outcome === "ambiguous_no_retry") {
+          run.closedActions.add("comment");
+        }
+      }
+    }
+
     // --- BACK_VERIFY_FEED ------------------------------------------------------
     let backOk = false;
     for (let b = 0; b < MAX_BACK_ATTEMPTS && !backOk; b += 1) {

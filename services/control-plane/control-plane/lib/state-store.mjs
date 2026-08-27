@@ -827,6 +827,52 @@ export class StateStore {
         created_at INTEGER NOT NULL,
         PRIMARY KEY (routine_run_id, action)
       );
+      CREATE TABLE IF NOT EXISTS note_context_receipts (
+        receipt_id TEXT PRIMARY KEY,
+        receipt_hash TEXT NOT NULL,
+        routine_run_id TEXT NOT NULL,
+        plan_hash TEXT NOT NULL,
+        target_fingerprint TEXT NOT NULL,
+        detail_state_version TEXT NOT NULL,
+        account_fingerprint TEXT,
+        page_fingerprint TEXT,
+        title_excerpt TEXT,
+        body_excerpt TEXT,
+        comment_digest_json TEXT NOT NULL DEFAULT '[]',
+        evidence_hashes_json TEXT NOT NULL DEFAULT '[]',
+        observed_at INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        UNIQUE (receipt_hash, routine_run_id, target_fingerprint)
+      );
+      CREATE TABLE IF NOT EXISTS comment_drafts (
+        draft_id TEXT PRIMARY KEY,
+        draft_hash TEXT NOT NULL UNIQUE,
+        receipt_hash TEXT NOT NULL,
+        routine_run_id TEXT NOT NULL,
+        plan_hash TEXT NOT NULL,
+        target_fingerprint TEXT NOT NULL,
+        detail_state_version TEXT NOT NULL,
+        text TEXT NOT NULL,
+        text_hash TEXT NOT NULL,
+        source_observation_hash TEXT NOT NULL,
+        evidence_refs_json TEXT NOT NULL DEFAULT '[]',
+        model_id TEXT,
+        prompt_hash TEXT,
+        risk_flags_json TEXT NOT NULL DEFAULT '[]',
+        validation_json TEXT,
+        status TEXT NOT NULL DEFAULT 'sealed',
+        expires_at INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS comment_reconciles (
+        reconcile_id TEXT PRIMARY KEY,
+        effect_id TEXT NOT NULL,
+        routine_run_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        evidence_hash TEXT,
+        created_at INTEGER NOT NULL
+      );
     `);
     this.#ensureColumn("jobs", "operation_key", "TEXT");
     this.#ensureColumn("jobs", "authorization_snapshot_json", "TEXT");
@@ -4553,6 +4599,137 @@ export class StateStore {
     return this.db.prepare(
       "SELECT * FROM routine_effects WHERE routine_run_id=? ORDER BY created_at, effect_id",
     ).all(routineRunId).map((row) => this.#publicRoutineEffect(row));
+  }
+
+  // --- Direct-routine plan V2 §8: grounded comment chain storage -------------
+  // Receipts/drafts/reconciles are durable and server-sealed: bound_send only
+  // ever accepts a draftId that the SERVER stored, never caller-supplied text.
+
+  recordNoteContextReceipt({ receiptHash, routineRunId, planHash, targetFingerprint, detailStateVersion, accountFingerprint = null, pageFingerprint = null, titleExcerpt = null, bodyExcerpt = null, commentDigest = [], evidenceHashes = [], observedAt }) {
+    const receiptId = newId("ncr");
+    const now = this.now();
+    // content-addressed per (run, target): re-observing identical note state
+    // within the same run+target is idempotent (bound_send re-check
+    // re-observes); the same content bound to another target is its own receipt
+    this.db.prepare(`
+      INSERT OR IGNORE INTO note_context_receipts (
+        receipt_id, receipt_hash, routine_run_id, plan_hash, target_fingerprint,
+        detail_state_version, account_fingerprint, page_fingerprint,
+        title_excerpt, body_excerpt, comment_digest_json, evidence_hashes_json,
+        observed_at, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      receiptId, receiptHash, routineRunId, planHash, targetFingerprint,
+      detailStateVersion, accountFingerprint, pageFingerprint,
+      titleExcerpt, bodyExcerpt, canonicalJson(commentDigest), canonicalJson(evidenceHashes),
+      observedAt, now,
+    );
+    const row = this.db.prepare("SELECT * FROM note_context_receipts WHERE receipt_hash=? AND routine_run_id=? AND target_fingerprint=?").get(receiptHash, routineRunId, targetFingerprint);
+    if (!row) return null;
+    return {
+      receiptId: row.receipt_id,
+      receiptHash: row.receipt_hash,
+      routineRunId: row.routine_run_id,
+      planHash: row.plan_hash,
+      targetFingerprint: row.target_fingerprint,
+      detailStateVersion: row.detail_state_version,
+      accountFingerprint: row.account_fingerprint,
+      pageFingerprint: row.page_fingerprint,
+      titleExcerpt: row.title_excerpt,
+      bodyExcerpt: row.body_excerpt,
+      commentDigest: parseJson(row.comment_digest_json, []),
+      evidenceHashes: parseJson(row.evidence_hashes_json, []),
+      observedAt: row.observed_at,
+    };
+  }
+
+  getNoteContextReceipt(receiptHash) {
+    const row = this.db.prepare("SELECT * FROM note_context_receipts WHERE receipt_hash=?").get(receiptHash);
+    if (!row) return null;
+    return {
+      receiptId: row.receipt_id,
+      receiptHash: row.receipt_hash,
+      routineRunId: row.routine_run_id,
+      planHash: row.plan_hash,
+      targetFingerprint: row.target_fingerprint,
+      detailStateVersion: row.detail_state_version,
+      accountFingerprint: row.account_fingerprint,
+      pageFingerprint: row.page_fingerprint,
+      titleExcerpt: row.title_excerpt,
+      bodyExcerpt: row.body_excerpt,
+      commentDigest: parseJson(row.comment_digest_json, []),
+      evidenceHashes: parseJson(row.evidence_hashes_json, []),
+      observedAt: row.observed_at,
+    };
+  }
+
+  recordCommentDraft(draft) {
+    const now = this.now();
+    this.db.prepare(`
+      INSERT INTO comment_drafts (
+        draft_id, draft_hash, receipt_hash, routine_run_id, plan_hash, target_fingerprint,
+        detail_state_version, text, text_hash, source_observation_hash, evidence_refs_json,
+        model_id, prompt_hash, risk_flags_json, validation_json, status, expires_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'sealed', ?, ?, ?)
+    `).run(
+      draft.draftId, draft.draftHash, draft.receiptHash, draft.routineRunId, draft.planHash,
+      draft.targetFingerprint, draft.detailStateVersion, draft.text, draft.textHash,
+      draft.sourceObservationHash, canonicalJson(draft.evidenceRefs ?? []), draft.modelId ?? null,
+      draft.promptHash ?? null, canonicalJson(draft.riskFlags ?? []), canonicalJson(draft.validation ?? {}),
+      draft.expiresAt, now, now,
+    );
+    return this.getCommentDraft(draft.draftId);
+  }
+
+  getCommentDraft(draftId) {
+    const row = this.db.prepare("SELECT * FROM comment_drafts WHERE draft_id=?").get(draftId);
+    if (!row) return null;
+    return {
+      draftId: row.draft_id,
+      draftHash: row.draft_hash,
+      receiptHash: row.receipt_hash,
+      routineRunId: row.routine_run_id,
+      planHash: row.plan_hash,
+      targetFingerprint: row.target_fingerprint,
+      detailStateVersion: row.detail_state_version,
+      text: row.text,
+      textHash: row.text_hash,
+      sourceObservationHash: row.source_observation_hash,
+      evidenceRefs: parseJson(row.evidence_refs_json, []),
+      modelId: row.model_id,
+      promptHash: row.prompt_hash,
+      riskFlags: parseJson(row.risk_flags_json, []),
+      validation: parseJson(row.validation_json, {}),
+      status: row.status,
+      expiresAt: row.expires_at,
+    };
+  }
+
+  setCommentDraftStatus(draftId, status) {
+    if (!["sealed", "consumed", "invalidated"].includes(status)) {
+      throw new TypeError("unsupported comment draft status");
+    }
+    this.db.prepare("UPDATE comment_drafts SET status=?, updated_at=? WHERE draft_id=?")
+      .run(status, this.now(), draftId);
+    return this.getCommentDraft(draftId);
+  }
+
+  recordCommentReconcile({ effectId, routineRunId, status, evidenceHash = null }) {
+    if (!["verified_late", "unresolved_final"].includes(status)) {
+      throw new TypeError("unsupported comment reconcile status");
+    }
+    // append-only: a new row per reconcile — the original ambiguous effect row
+    // is never rewritten and the slot is never restored
+    const reconcileId = newId("reconcile");
+    this.db.prepare(`
+      INSERT INTO comment_reconciles (reconcile_id, effect_id, routine_run_id, status, evidence_hash, created_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(reconcileId, effectId, routineRunId, status, evidenceHash, this.now());
+    return { reconcileId, effectId, routineRunId, status, evidenceHash };
+  }
+
+  listCommentReconciles(effectId) {
+    return this.db.prepare("SELECT * FROM comment_reconciles WHERE effect_id=? ORDER BY created_at").all(effectId);
   }
 
   // --- Mission effects (ECP) -------------------------------------------------
