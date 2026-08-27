@@ -99,3 +99,47 @@
   - W2 注册 5 个 social cap（like/collect/follow/comment/dm），W4/W5 绑 adapter 时用同 id。
 
 - end 2026-08-27。W2 完成（全离线，无需 live）。下一波 W3：R0 browse/inbox/read + 真实 vision 导航（VISION）。
+
+## W3 — R0 browse/inbox/read + 真实 vision 导航（合同 VISION，S1 后半）
+
+- start 2026-08-27。
+
+- **探索结论（vision/explorer infra，Explore agent 全量回报）**：
+  - `m6-grounding-runtime.mjs` provider pin 接口 = 构造期冻结 `{id, version, modelSha256(64-hex), segment(frame,evidence)->rawBlocks[]}`；pinnedProvider 写进每个 blockSet 的 `segmentation` 字段，per-call override 被忽略。blockId 由 runtime 经 `deriveBlockId` 派生（非 provider）；坐标只进 evidence store bounds blob，block surface 无坐标泄漏。
+  - `segmentBlocks` 输出 `xw.visual-block-set.v1`，schema 要求 `blocks.minItems:1` → **空标注 → segmentBlocks fail-closed（ok:false, blockSet:null）**，decide 根本无法触达。这是 vision 不可用时的最强"不瞎点"契约。
+  - `decide()` 六项 grounding check：freshness/focus/ambiguity(同 label 兄弟>0 → REPLAN)/safe-region/sensitive-label(category payment|delete → FAIL→HARD_STOP)/confidence(>=0.8)；+ hard-redline firewall（独立扫 blockSignals ocrText/semanticLabel 的 payment/delete 词，DSH/grant 不可覆盖）；+ REDLINE_EFFECT_CLASSES（effectClass payment|delete → HARD_STOP）。
+  - offline（m6-grounding-runtime，HERMETIC_FIXTURE_PROVIDER）与 live（packages/kernel/lib/m6-live-grounding.mjs，parseUiTree+deriveLiveVisualBlockSet）是**结构性分离**（version-boundary test 字节 pin），不是 runtime guard。计划要求"live mode 显式拒绝 HERMETIC_FIXTURE_PROVIDER" → 需新增显式 guard（本次实现）。
+  - Explorer session 生命周期：`_explore-lease.mjs` acquire（POST /control/v1/sessions，binding 全字段校验，ACL 硬化 context 文件）→ verify→release。bounded primitives（`_explore-session-action.mjs`）：screen/dump_ui/focus/tap/swipe/back/launch_app/input_text，shell 被拒。dump=dump_ui → dump-ui.xml（Android hierarchy）。
+  - `ops/screenshot-and-analyze.mjs` 已包装 analyze.py（→ .elements.json），但是 CLI 形态，**没有 provider-pin adapter**。analyze.py 输出元素 shape `{label, bounds, center, conf, source}`。
+  - thread fingerprint **无任何现存实现**（仅计划文档），dispatcher catalog 已定义 stop condition `thread fingerprint not unique`，`operationKey=sha256(actionRunId+action+targetFingerprint+payloadHash)`。
+
+- **产物（离线 machinery，全绿）**：
+  - `xhs.browse.fixed@1` 生产 spec（13 步 R0 只读：launch→settle→swipe×5+wait×5→screenshot→back，无 tap/input/callCapability）canonical-v2 hash `494773e9…`，eligibleAliases ["04"]，riskCeiling R0，inputSchema swipes/minutes。fixture 不再是生产真源。
+  - `services/control-plane/tests/xhs-browse-recipe.test.mjs` — 7 测试：canonical-v2/64-hex、13 步全在 primitive 白名单且 R0 无互动、validateRecipeExecutor 接受、五消费者同 hash、Runner plan-mode seal、swipe 坐标 mutation 改 hash、dispatcher browse→xhs.browse.fixed@1(R0,RECIPE,gate W3)。
+  - `services/orchestrator/scripts/lib/m6/real-vision-provider.mjs` — 真实 vision provider adapter（合同 VISION）：
+    - `createRealVisionProvider({loader, modelSha256, version})`：把 analyze.py（或等价真实像素）的标注 loader 注入 provider-pin shape（id `xhs-real-vision-v1`）。`segment(frame,evidence)` 调 loader→标注[]，每标注映射成 raw block（regionHash=`sha256("xw.region.rv:"+canonicalJson({frameId,stableIndex,label,category,bounds}))`，blockId 经 deriveBlockId，geometry+signals 进 evidence.bounds blob，category 经 classifyCategory）。loader 返回 []/null/throw → 返回 []（**永不伪造导航块**；配合 schema minItems:1 → segmentBlocks fail-closed）。
+    - `classifyCategory(label)`：PAYMENT_RE/DELETE_RE/NAV_RE → payment/delete/system-navigation/content。classifier 准确分类，redline firewall 独立扫 signals 做兜底（双层）。
+    - `assertLiveGroundingProvider(provider)`：显式 live guard（计划要求）——provider.id===HERMETIC_FIXTURE_PROVIDER.id → throw `LIVE_GROUNDING_REJECTS_HERMETIC`；modelSha256 非 64-hex → throw；segment 非函数 → throw。live 误配 fail-closed 而非静默跑 fixture。
+  - `services/control-plane/tests/xhs-visual-navigation-boundary.test.mjs` — VISION 三 probe 共 6 测试：
+    1. 独立标注 oracle：oracle 用同公式（m6-contracts）重算每块 regionHash+blockId，与 provider 输出字节一致；block surface 无坐标泄漏；blockSet.segmentation=REAL_VISION_PROVIDER_ID（非 fixture）；determinism（重 segment 同 integritySha256）。
+    2. block mutation：改 block.category=payment → integritySha256 mismatch → decide ok:false；provider 正确分类"确认支付"=payment → decide HARD_STOP（sensitive-label + redline 双层）。
+    3. dump fallback 阶梯：empty/throwing/null loader → segmentBlocks fail-closed（ok:false, blockSet:null，无法 decide）；唯一 R0 导航（一个"返回"system-navigation，in-bounds geometry，conf 0.95）→ ALLOW_ONCE + resolveInternalPoint 一次性点（replay 拒绝）；重复 label（两个"返回"）→ ambiguity FAIL → REPLAN（不唯一 stop）；live guard 拒 HERMETIC_FIXTURE_PROVIDER、接受 real provider、非 64-hex modelSha256 双层拒。
+  - `services/orchestrator/scripts/lib/xhs-thread-fingerprint.mjs` — inbox/read R0 唯一性 gate（"唯一才进，不唯一 stop"）：
+    - `threadFingerprintOf(entry)`=sha256("xw.xhs.thread:"+normalize(peer)+"|"+resourceId)——stable identity（peer+slot），**排除 snippet**（last message 每 msg 变，W5 用 lastMessageFingerprintOf 单独 hash 漂移检测）。
+    - `resolveUniqueThread(entries,fp)`/`resolveUniqueThreadByLabel(entries,label)`：恰好 1 match → unique（进）；0 或 >1 → 不 unique（stop）。mirror decide() ambiguity check。
+    - `parseDumpNodes(dumpXml)`：轻量提取 dump-ui.xml 的 text-bearing node（text/resourceId/bounds/className），空/垃圾输入安全。
+    - `extractConversationEntries(dumpOrNodes)`：dump 字符串或预 shape entry[] → 带 threadFingerprint+lastMessageFingerprint 的 entries。
+  - `services/control-plane/tests/xhs-thread-fingerprint.test.mjs` — 10 测试：deterministic/stable、同名不同 slot→不同 fp、boundary 空格归一化（内部 CJK 空格不剥离——"小 书童"≠"小书童"是合法区分）、thread fp 排除 snippet/lastMsg fp 随 snippet 变、resolveUniqueThread 唯一/0/多、resolveUniqueThreadByLabel、parseDumpNodes、extractConversationEntries、dispatcher inbox/read=r0_workflow/gate W3/adaptiveRoute DUMP/read 必填 thread、messages→inbox 别名。
+
+- **测试（全绿）**：`npm run test:xhs-pack` = 82/82 绿（59 + 7 browse + 6 vision + 10 thread-fingerprint）。新增三测试文件已加入聚合脚本。
+
+- **决定/坑**：
+  - **schema minItems:1 是契约而非 bug**：empty 标注 → segmentBlocks 直接 fail-closed（blockSet:null），decide 不可达。比"0 块但 ok"更强——workflow 根本拿不到可决策面，杜绝瞎点。测试 3a 改为断言 ok:false + blockSet:null。
+  - real provider 的 `segment` 不用 `this`（loader 经闭包），`pinnedProvider.segment.bind(provider)` 安全。modelSha256 注入式（live 部署 pin 真 analyze.py 模型 hash，测试用 FIXTURE_MODEL_SHA256="a"×64）。
+  - **CJK 空格归一化边界**：normalizeLabel 只 trim+collapse 空白 run，**不剥离内部 CJK 空格**——"小 书童"（内部空格）与"小书童"是不同显示串，fingerprint 不应静默合并。测试用 boundary-only 空格证归一化，内部空格的区分性单独留痕。这是有意的（避免误合并不同条目）。
+  - vision adapter **不复用** live kernel 的 deriveLiveVisualBlockSet（那是 dump XML 路径，结构性分离）；real-vision-provider 是 grounding runtime 的 provider-pin 实现，analyze.py 路径与 dump 路径并存（dump fallback ladder：vision 不可用→无块→stop，不回退 fixture）。
+  - inbox/read 是 `r0_workflow` backend（Explorer acquire→dump→只读采集→release），**W3 不 tap**（read-only collection 止于 dump）；进 thread（tap）是 W5 reply 的 effect。thread fingerprint W3 做初版，W5 formalize last-message fingerprint 漂移检测。
+
+- **待办（live，需设备/operator）**：search@2 / browse / inbox / read 各 2 次独立 04 receipt（probe+tap 原子执行坑已知）。browse live 晋级走 `xw-xhs-promote.mjs --recipe xhs.browse.fixed --runs <a>,<b> --action browse --runtime`（桥已就绪，@1 hash 494773e9）。inbox/read 是 r0_workflow 非 fixed_recipe，不走 recipe 晋级桥——live 执行经 Explorer session + real-vision provider adapter（live 部署需 pin 真 analyze.py modelSha256 + 接 screenshot-and-analyze 输出）。离线 machinery 全就绪，只差 live canary。
+
+- end 2026-08-27（离线部分）。W3 离线 done（browse+vision+thread-fingerprint 全绿），live canary 待 operator。下一波 W4：like/collect/follow + nurture（合同 F3）。
