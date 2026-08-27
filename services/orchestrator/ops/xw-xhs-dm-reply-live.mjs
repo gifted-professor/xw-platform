@@ -277,8 +277,11 @@ async function main() {
     await sleep(3000);
 
     // ── Phase F: post-send verification (last bubble is my text) ──
+    // Render lag is systematic (comment x3, DM x1): the sent bubble takes
+    // several seconds to appear in the dump — observe patiently before
+    // demoting to ambiguous (a read-only re-open settles it either way).
     let verdict = null;
-    for (let i = 0; i < 3 && !verdict; i += 1) {
+    for (let i = 0; i < 5 && !verdict; i += 1) {
       const afterXml = await dumpXml(`after-${i}`);
       const after = extractConversationState(afterXml);
       const afterFp = after.lastMessage ? lastMessageFingerprintOf({ snippet: after.lastMessage.text }) : "none";
@@ -293,7 +296,7 @@ async function main() {
         composerOpen: Boolean(editAfter?.text && decodeXmlText(editAfter.text).includes(text)),
         sendButtonPresent: Boolean(sendAfter),
       });
-      if (verdict.status === "ambiguous" && i < 2) { verdict = null; await sleep(2000); }
+      if (verdict.status === "ambiguous" && i < 4) { verdict = null; await sleep(3000); }
     }
     if (!verdict) verdict = { status: "ambiguous", reason: "post-send-observe-exhausted", evidence: [] };
     console.log(`VERIFY=${verdict.status} REASON=${verdict.reason} EVIDENCE=${(verdict.evidence || []).join(",")}`);

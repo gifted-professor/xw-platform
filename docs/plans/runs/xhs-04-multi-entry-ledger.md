@@ -326,3 +326,18 @@
 - **04 遗留**：04 账号仍带"异常行为风险"限制标记（我页弹窗，用户已人工验证解除一次）；04 后续写动作建议低频+观察，或暂以 03 为社交主通道。
 
 - end 2026-08-27（W4 follow 03）—— **03 通道 comment+follow 双 verified；04 风控定论**。
+
+## W5 DM reply live VERIFIED（03，S3 最后一项）— 2026-08-27
+
+- **离线前置补齐（commits b474a01 + af39e68）**：
+  - `groupInboxRows`：行级归组不需要启发式 —— XHS 收件行容器 desc 自带三段式 **"peer，，，snippet，date"**，直接解析（测试含真实 dump 形状 + 空/垃圾 fail-closed + 唯一性门）。
+  - `extractConversationState`：会话页标题 + 最后气泡。**v1 用 y 带(700-2100)按长会话标定 → 短会话(2 条消息,气泡 y 365-601)漏检 fail-closed**；v2 改结构排除法（居中时间戳 |cx-540|≤60 / 标题带 / 底部快捷回复+动作行 y≥2100），mine 按几何（左=对方,右=我）。
+  - `ops/xw-xhs-dm-reply-live.mjs`：严格 ECP（action=reply, totalCount=1）+ decideDmReplySend 三道 pre-send 门（精确名/会话唯一/发送前漂移复查,全在 ECP 之前 fail-closed）+ verifyDmReplySend 发送后验证（持久 composer 语义：composer-open 指**我的文本还在输入框**,非输入框可见）。
+  - 修 driver arg 解析 opt/flag slice(2) bug（dry-run flag 曾被静默忽略）。
+- **live（03,--thread "Lucky-pinkpie" --text "不客气呀～[飞吻R]"）**：dry-run 唯一命中零传输 → run1 y 带漏检 transport-0 → 解析器修复后 **run2 全链走通**：7 rows → 唯一 → 进会话 → GATE=proceed → 文本落地 → 发送 tap（**传输 1 次**）→ 发送后 3 轮观测 last-msg 指纹不匹配 → ambiguous。
+- **只读定论**：重开会话页显示 **"刚刚" + (747,837)"不客气呀～[飞吻R]"（右侧=我）** → 回复确已送达。证据 `xw-runtime/evidence/w5-dm-reply-03-verify/conv-last-bubble-dump.xml`，effect_4339ea7b 补记 **verified**。根因：**发送后渲染滞后**（气泡数秒后才进 dump）—— driver 观测循环已加长到 5×3s。
+- **系统性结论（4 案例）**：comment×3(04×2,03×1) + DM×1 全是"发送成功但发送后观测窗口抓不到"→ 任何 bound-send 的发送后观测都要**耐心循环 + 只读复查兜底**，weak 判 ambiguous 是正确保守语义（ECP fence 生效,事后证据足则升级）。
+- **W5 S3 状态：comment ✓ + DM reply ✓ 双 verified（均 03）**。W5 全部 live 项闭环。
+- 节奏账本：本轮写传输 = DM reply ×1。
+
+- end 2026-08-27（W5 DM 03）—— **W5 comment+DM 双闭环；发送后渲染滞后定论**。
