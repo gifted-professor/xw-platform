@@ -37,7 +37,14 @@ const TARGET_ALIAS = "04";
 
 /** The XHS capabilities this pack registers. W4 binds the adapters; W2 only
  * proves the 04-only placement boundary. Keep this in sync with the W4/W5
- * dispatcher catalog (xw-xhs-dispatcher.mjs capabilityId fields). */
+ * dispatcher catalog (xw-xhs-dispatcher.mjs capabilityId fields).
+ *
+ * invocationPolicy: { allowedModes: ["mission_effect"] } is the canonical
+ * mission-only gate (authorization-decision.mjs:55, placement.mjs:78) — every
+ * XHS social effect is a strict-Mission external_effect, never a free job. The
+ * plan's "invocationPolicy=mission_only" maps to this existing object form, not
+ * a new string. exposure=public so the dispatcher can route to them, but the
+ * allowedModes gate is what keeps them mission-bound. */
 const XHS_CAPABILITIES = [
   xhsSocialCapability("xhs.like.ensure", "like"),
   xhsSocialCapability("xhs.collect.ensure", "collect"),
@@ -67,6 +74,8 @@ function xhsSocialCapability(id, action) {
     implementation: { adapter: "xhs", action },
     evidence: [],
     availability: "implemented",
+    exposure: "public",
+    invocationPolicy: { allowedModes: ["mission_effect"] },
   };
 }
 

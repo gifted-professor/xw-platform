@@ -143,3 +143,32 @@
 - **待办（live，需设备/operator）**：search@2 / browse / inbox / read 各 2 次独立 04 receipt（probe+tap 原子执行坑已知）。browse live 晋级走 `xw-xhs-promote.mjs --recipe xhs.browse.fixed --runs <a>,<b> --action browse --runtime`（桥已就绪，@1 hash 494773e9）。inbox/read 是 r0_workflow 非 fixed_recipe，不走 recipe 晋级桥——live 执行经 Explorer session + real-vision provider adapter（live 部署需 pin 真 analyze.py modelSha256 + 接 screenshot-and-analyze 输出）。离线 machinery 全就绪，只差 live canary。
 
 - end 2026-08-27（离线部分）。W3 离线 done（browse+vision+thread-fingerprint 全绿），live canary 待 operator。下一波 W4：like/collect/follow + nurture（合同 F3）。
+
+## W4 — like/collect/follow + nurture（合同 F3，S2）— 离线 done 2026-08-27
+
+- **产物**：
+  - `services/orchestrator/tests/xw-xhs-effect-budget.test.mjs` — F3 严格 Mission 预算纯 plan-time 不变量（9 测试）：perTargetCount=1（每 target 恰一次 transport）/ like/collect/follow count bounded 1..20（参数边界 pre-budget 拒）/ comment capped count=1 / operationKey 计划期 deferred（target 未知）但绑定后 deterministic——(action,target,payload) 碰撞即 replay 边界 / payloadHash content-bound（comment=sha256(text), reply=sha256(text+thread), like/collect/follow=null）/ nurture 默认 browse-only + 每 explicit social count 一 Mission + ceiling 20 / budget+mission frozen（tamper-evident）/ none+publish 不变量。从 dispatcher 抽 bindOperationKey/effectBudget/normalizeParams/planAction/XHS_ACTION_CATALOG 直接验证。
+  - `services/control-plane/apps/xhs/social-verifiers.mjs` — 纯 state classifier（无 fs/net/device IO），从旧 ops 脚本抽出为单一真相源：
+    - `likeState`（faithful _xhs-parse.mjs:136-142）：已点赞→liked（terminal，先于 点赞 检查因含子串）/ 点赞→unliked / ""→missing / else unknown。
+    - `collectState`（faithful xhs-collect-one.mjs:88-93）：已收藏→collected / 收藏→uncollected。
+    - `followState`（faithful _xhs-parse.mjs:503-509）：已关注|相互关注→followed（先检查避免 关注 子串假阳）/ 关注|回关→unfollowed。注意：substring classifier，调用方须用 exact-set locator（FOLLOW_LABELS）防"关注的话题"假阳——classifier 自身文档为 substring-only。
+    - `socialEffectDecision({action, beforeState})` → {skip, reason, transport}：already-true（liked/collected/followed）→ skip=true, transport=0（不进 ECP，不耗 perTargetCount）；actionable pre-state（unliked/uncollected/unfollowed）→ proceed, transport=1；missing/unknown → unknown-state, transport=0（**不瞎点，REPLAN 而非 skip**）。这是 run-time ladder 在 beginMissionEffect 之前的决策——已完成的 target 永不进 ECP，perTargetCount=1 只守真正的状态转换。
+    - `isAlreadyTrue(action, beforeState)` / `ALREADY_TRUE_STATE` / `STATE_CLASSIFIER` frozen 映射。
+  - `services/control-plane/tests/xhs-social-action-run.test.mjs` — F3 三 probe run-time 不变量（5 测试，对真实 StateStore+MissionRuntime+DeviceRunRuntime，无 mock）：
+    1. **并发 reservation 竞争**（perTargetCount=1）：首个 like fp-a reserve 成功；第二个 like 同 fp-a（不同 idk）→ BUDGET_PER_TARGET_EXCEEDED(409)——每 target 恰一次 transport，即便首个未 release；不同 target fp-b proceed；totalCount=2 满后 follow fp-c → BUDGET_EXCEEDED(409)。blocked attempt 不泄漏 reservation（effects 恰 2 条）。
+    2. **伪造绑定/禁盲重试 fence**（AMBIGUOUS_NO_RETRY）：ambiguous outcome → recordMissionEffectOutcome retry_blocked=1 on (mission,action,target)；同 triple 新 idk 重试 → AMBIGUOUS_NO_RETRY(409)（retry-block fence 在 budget gate 之前检查，新 idk 无法绕过）；不同 target（fp-y）同 action proceed；不同 action（collect）+新 target（fp-z）proceed——fence 是 per-triple 非 mission-wide。
+    3. **replay + already-true skip**：(3a) 同 idempotencyKey → reused:true, 同 effectId, 无新行（重跑 no-op 非 double-send）；(3b) social-verifiers classifier 忠实性 + socialEffectDecision already-true skip / proceed / unknown-state（不瞎点）/ unknown-action；(3c) 已 liked target 经 socialEffectDecision skip → 不调 beginMissionEffect → 预算未耗（effects=0）；真转换 unliked→proceed 才开 reservation（effects=1）。
+  - idempotencyKey 经 `bindOperationKey({actionRunId, action, targetFingerprint, payloadHash})` 派生——W4 wiring（operationKey→ECP idempotencyKey），live canary 实跑此链。
+  - `services/orchestrator/ops/xw-xhs-capabilities.mjs` — 5 个 XHS social cap 加 `exposure:"public"` + `invocationPolicy:{allowedModes:["mission_effect"]}`（canonical mission-only gate，authorization-decision.mjs:55 / placement.mjs:78 消费的对象形式，非新 string）。apply 经 syncCapabilities→validateCapability 验证通过，幂等 re-apply no-op。W2 离线 placement 测试用自含 fixture（自带 SOCIAL_CAPS manifest，无 invocationPolicy），不受影响——invocationPolicy 只作用于 live apply 路径（xw-xhs-capabilities.mjs apply --runtime 写真 control.db）。
+
+- **测试（全绿）**：`npm run test:xhs-pack` = 96/96 绿（82 + 9 effect-budget + 5 social-action-run）。两新测试文件已加入聚合脚本。
+
+- **决定/坑**：
+  - **invocationPolicy=mission_only 用对象形式 `{allowedModes:["mission_effect"]}`**：计划写 "invocationPolicy=mission_only"（string）是 NEW，但仓库既有 mission-only cap（xhs.collect.standing_grant）用对象形式 allowedModes。authorization-decision.mjs:55-56 + placement.mjs:78-79 都读 `capability.invocationPolicy?.allowedModes`（array includes 检查），没有读 string 形式。复用对象形式 = 复用既有 enforcement path，不造新分支。
+  - **W2 placement 测试不受 invocationPolicy 影响**：W2 测试自含 fixture（自带 SOCIAL_CAPS manifest 无 invocationPolicy），不走 xw-xhs-capabilities.mjs 的 manifest。invocationPolicy 只经 live apply 路径写真 control.db。两路径分离——离线 placement boundary proof 与 live mission_only enforcement 各自独立可验。
+  - **assertCapabilityRoutable 在 device-capability filter 之前**（placement.mjs:113 先于 :127）：mission_only cap 经 planRoute(job)/createSession(session) 会被 CAPABILITY_INVOCATION_FORBIDDEN(403) 挡在 device filter 之前。这是对的——social effect 不走 job/session，走 mission_effect（ECP）。W2 的 planRoute/createSession 代理只对自含 fixture（无 invocationPolicy）有效；live social effect 必经 ECP mission_effect 路径，F3 三 probe 已证此路径的预算/重试/fence。
+  - **already-true skip 是预算守门的关键**：已 liked/collected/followed 的 target 经 socialEffectDecision skip → 不进 beginMissionEffect → perTargetCount=1 不被已完成 target 消耗。这让重跑已完成的 like 是 zero-effect no-op 而非 double-send，且预算只守真正状态转换。socialEffectDecision 在 ECP reservation 之前执行（run-time ladder），F3 probe 3c 证此。
+
+- **待办（live，需设备/operator）**：每 cap（like/collect/follow）一次有界 04 canary（before/after state + exactly-once transport + ledger 核对）。nurture live= browse-only 默认 + 显式 counts 各建严格 Mission。离线 machinery 全就绪（effect-budget + social-verifiers + social-action-run 三测试 + capabilities mission_only），只差 live canary。
+
+- end 2026-08-27（离线部分）。W4 离线 done（F3 strict-mission budget + already-true skip + no-retry fence 全绿），live canary 待 operator。下一波 W5：comment + DM（S3，formalize last-message fingerprint）。
