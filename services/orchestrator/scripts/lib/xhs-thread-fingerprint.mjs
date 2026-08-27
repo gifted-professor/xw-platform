@@ -213,19 +213,24 @@ export function groupInboxRows(dumpXml) {
  * Conversation-page state extraction (W5 live prerequisite): on an open DM
  * thread, identify the thread title (observed username) and the LAST message
  * bubble. XHS lays out the peer's bubbles on the LEFT (cx < 540 on a 1080px
- * screen) and mine on the RIGHT (cx > 540); the profile card / action row
- * (拉黑/举报/删除对话) and composer live outside the bubble y-band.
+ * screen) and mine on the RIGHT (cx > 540). Structural elements are excluded
+ * by position/shape instead of a y-band (a short 2-message thread puts bubbles
+ * near the TOP at y≈365-600; a long one with a profile card puts the last
+ * bubble near y≈1900 — no single band fits both):
+ *   * timestamps + section headers sit on the center line (|cx-540| small);
+ *   * the title is above y 300;
+ *   * the quick-reply chips / action row (拉黑/举报/删除对话) and composer are
+ *     at y >= 2100 (chips strip y≈2125, composer y≈2273, actions y≈2146).
  *
  * Returns { username, lastMessage: { text, mine, cx, cy } | null }.
  * `mine` is a GEOMETRY classification (left=peer, right=mine) — combined with
  * the fingerprint equality check in dm-verifier it stays fail-closed: a wrong
  * side guess yields a fingerprint mismatch (ambiguous), never a false verified.
  */
-export function extractConversationState(dumpXml, { screenWidth = 1080, bubbleTopY = 700, bubbleBottomY = 2100 } = {}) {
-  const nodes = parseDumpNodes(dumpXml);
-  const withPos = [];
+export function extractConversationState(dumpXml, { screenWidth = 1080 } = {}) {
   const re = /<node\b([^>]*?)\/?>/g;
   let m;
+  const withPos = [];
   while ((m = re.exec(dumpXml)) !== null) {
     const attrs = parseNodeAttributes(m[1]);
     const text = attrs.text || attrs["content-desc"] || "";
@@ -239,14 +244,15 @@ export function extractConversationState(dumpXml, { screenWidth = 1080, bubbleTo
       resourceId: attrs["resource-id"] || "",
     });
   }
-  // username: topmost text node in the title band (y < 620), centered
+  // username: topmost text node in the title band (y < 300 is the app bar; the
+  // title is the first centered-ish text below it)
   const titleBand = withPos.filter((n) => n.cy < 620 && n.cx > 300 && n.cx < 800)
     .sort((a, b) => a.cy - b.cy);
   const username = titleBand[0]?.text ?? "";
-  // last bubble: lowest-y text node in the bubble band, excluding the
-  // action row (拉黑/举报/删除对话) and anything on the center line (timestamps)
+  // last bubble: lowest-y text node, excluding center-line timestamps/headers,
+  // the title band, and the bottom chips/action/composer strip (y >= 2100)
   const bubbles = withPos.filter((n) =>
-    n.cy > bubbleTopY && n.cy < bubbleBottomY
+    n.cy > 300 && n.cy < 2100
     && !/^(拉黑|举报|删除对话|复制微信号)$/.test(n.text)
     && Math.abs(n.cx - screenWidth / 2) > 60,
   );

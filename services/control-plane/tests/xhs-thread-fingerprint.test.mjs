@@ -242,3 +242,23 @@ test("extractConversationState: no bubble in band -> lastMessage null (fail-clos
   assert.equal(st.username, "某人");
   assert.equal(st.lastMessage, null);
 });
+
+test("extractConversationState: short 2-message thread (real Lucky-pinkpie shape) — bubbles near top, chips/composer excluded", () => {
+  // Real recon dump: title 145, timestamps 247/483 (center), my bubble 365,
+  // peer bubble 601, quick-reply chips y≈2125, composer y≈2273.
+  const conv =
+    '<node text="Lucky-pinkpie" bounds="[220,125][510,165]"/>' +
+    '<node text="06-15 下午8:44" bounds="[410,237][670,269]"/>' +
+    '<node text="不会特别热" bounds="[700,340][856,398]"/>' +
+    '<node text="06-15 下午8:58" bounds="[410,467][670,499]"/>' +
+    '<node text="啊哈哈哈谢谢姐妹！[飞吻R][飞吻R][飞吻R] " bounds="[180,570][766,632]"/>' +
+    '<node text="hello" bounds="[120,2105][206,2145]"/>' +
+    '<node text="谢谢宝" bounds="[330,2105][442,2145]"/>' +
+    '<node text="发消息…" bounds="[220,2250][756,2300]"/>';
+  const st = extractConversationState(conv);
+  assert.equal(st.username, "Lucky-pinkpie");
+  assert.equal(st.lastMessage.text, "啊哈哈哈谢谢姐妹！[飞吻R][飞吻R][飞吻R]");
+  assert.equal(st.lastMessage.mine, false);
+  // the quick-reply chips and composer are NOT mistaken for the last bubble
+  assert.ok(st.lastMessage.cy < 2100);
+});

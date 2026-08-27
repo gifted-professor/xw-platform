@@ -42,8 +42,8 @@ function parseArgs(argv) {
   return out;
 }
 const argMap = parseArgs(process.argv.slice(2));
-const opt = (name, fb = null) => (argMap[name] !== undefined ? argMap[name] : fb);
-const flag = (name) => Boolean(argMap[name]);
+const opt = (name, fb = null) => (argMap[name.slice(2)] !== undefined ? argMap[name.slice(2)] : fb);
+const flag = (name) => Boolean(argMap[name.slice(2)]);
 
 if (flag("--help") || flag("-h")) {
   console.log(`用法:
