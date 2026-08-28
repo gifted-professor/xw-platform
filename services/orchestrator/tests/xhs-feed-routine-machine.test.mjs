@@ -154,6 +154,44 @@ test("invariant: each item opened at most once — no target fingerprint repeats
   assert.equal(new Set(fps).size, fps.length, "no target opened twice");
 });
 
+// --- sealed prefer is a hard media constraint on card selection (plan V2 §5.2)
+
+function mixedFeedXml() {
+  return feedCardXml(NOTE_DESC, "[40,400][500,900]")
+    + feedCardXml(VIDEO_DESCS[0], "[560,400][1020,900]");
+}
+const MIXED_FEED_DUMP = { xml: mixedFeedXml(), focus: FEED_FOCUS, pkg: "com.xingin.xhs" };
+
+test("prefer=note only ever opens note cards — never substitutes a video card", async () => {
+  const plan = planRoutine({ templateId: "xhs.feed-play.v1", params: { items: 1, prefer: "note", seed: "s1-note" } });
+  const driver = fakeDriver({ feedDump: MIXED_FEED_DUMP });
+  const receipt = await createRoutineRun({ plan, driver }).execute();
+  assert.equal(receipt.status, "SUCCEEDED");
+  assert.equal(driver.calls.tap.length, 1);
+  assert.equal(receipt.picks[0].cardKind, "note");
+  assert.equal(receipt.picks[0].prefer, "note");
+  assert.equal(receipt.items[0].cardKind, "note");
+});
+
+test("prefer=video with no video card -> bounded NO_MATCHING_CARD skip, tap=0", async () => {
+  const plan = planRoutine({ templateId: "xhs.feed-play.v1", params: { items: 1, prefer: "video", seed: "s1-novideo" } });
+  const driver = fakeDriver({});
+  const receipt = await createRoutineRun({ plan, driver }).execute();
+  assert.equal(receipt.status, "SUCCEEDED", "a single unmatched item is a bounded skip");
+  assert.equal(driver.calls.tap.length, 0, "never opens another media kind");
+  assert.equal(receipt.items[0].stopReason, "NO_MATCHING_CARD");
+  assert.equal(receipt.items[0].opened, false, "never opens another media kind");
+});
+
+test("prefer with persistent mismatch exhausts boundedly -> FAILED NO_MATCHING_CARD_EXHAUSTED", async () => {
+  const plan = planRoutine({ templateId: "xhs.feed-play.v1", params: { items: 4, prefer: "video", seed: "s1-still" } });
+  const driver = fakeDriver({});
+  const receipt = await createRoutineRun({ plan, driver }).execute();
+  assert.equal(receipt.status, "FAILED");
+  assert.equal(receipt.stopReason, "NO_MATCHING_CARD_EXHAUSTED");
+  assert.equal(driver.calls.tap.length, 0, "exhaustion never substitutes media");
+});
+
 test("invariant: video note never swipes for comments (swipe = 0 on video surfaces)", async () => {
   const plan = planRoutine({ templateId: "xhs.feed-play.v1", params: { items: 2, commentScreens: 3, seed: "s3" } });
   const driver = fakeDriver({ detailDump: { xml: VIDEO_XML, focus: VIDEO_FOCUS, pkg: "com.xingin.xhs" } });

@@ -7,7 +7,7 @@
   "files": [
     {
       "path": "package.json",
-      "sha256": "19da4224e1889b0d570523b953e9010530b15dfbcd38d2522f7a4d7d046c618f",
+      "sha256": "992f12efb6da4b075958835530159aaf1c6616c41581bf8dec49824a39d3c7f1",
       "origin": "migrated-from-dirty-wip"
     },
     {
@@ -27,7 +27,7 @@
     },
     {
       "path": "services/orchestrator/scripts/lib/xhs-feed-routine-machine.mjs",
-      "sha256": "a7752fcf200cfbaea1a5190c505e8f519e82e1c9b919a9b8dc94071ea45bfb58",
+      "sha256": "b182ff2bfde839997ca790710d29645fd64224c48ebe53b7477ce8f824774301",
       "origin": "migrated-from-dirty-wip"
     },
     {
@@ -42,7 +42,7 @@
     },
     {
       "path": "services/orchestrator/scripts/lib/xhs-routine-runner.mjs",
-      "sha256": "b28c62ededfd716f998f4f0d76edc6fad618bf22291c67be7205ebb3b020f6db",
+      "sha256": "60321d30822b79549df83b2ccdeb9d490ca7ea20e786a96c979f5abe36beaecb",
       "origin": "migrated-from-dirty-wip"
     },
     {
@@ -52,7 +52,7 @@
     },
     {
       "path": "services/orchestrator/tests/xhs-feed-routine-machine.test.mjs",
-      "sha256": "03b536231258df5e242f52f76b904ed36e8ad6d6698642907e57ad42bc30ed38",
+      "sha256": "51e050758d4a401fa51a5c35a5aee87aab47b2fda455853fde24383857a4b0f0",
       "origin": "migrated-from-dirty-wip"
     },
     {
@@ -67,7 +67,7 @@
     },
     {
       "path": "services/orchestrator/tests/xhs-routine-runner.test.mjs",
-      "sha256": "8452bf1b549e362428af442cd1a36cb55a74c6cede041dcb28d43bb836853d01",
+      "sha256": "67f2d776972e44b045494b592544c13fd4cd758f0b0fa703f1dc404e72d53083",
       "origin": "migrated-from-dirty-wip"
     },
     {
@@ -92,5 +92,13 @@
     "aitop.err",
     "aitop.out"
   ],
-  "note": "release A may only be built from committed tracked files; untracked broker/wechat/log assets are excluded from this chain"
+  "note": "release A may only be built from committed tracked files; untracked broker/wechat/log assets are excluded from this chain",
+  "r0Gate": {
+    "test:xhs-routine": "137/137",
+    "test:xhs-pack": "144/144",
+    "test:fusion": "20/20",
+    "fusion:verify": "PASS",
+    "git diff --check": "PASS"
+  },
+  "updatedAt": "2026-08-28"
 }

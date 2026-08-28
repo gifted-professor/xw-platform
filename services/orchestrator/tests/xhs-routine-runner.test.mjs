@@ -108,6 +108,37 @@ test("routine runner owns one formal CP 03 session, executes refresh, and report
   assert.ok(cp.calls.some((params) => params.primitive === "tap"), "bound feed card is opened once");
 });
 
+test("aggregate trace preserves per-primitive CP metadata (jobId/status/output.ok/evidenceRef)", async () => {
+  const cp = cpFixture();
+  const runner = new XhsRoutineRunner({
+    ...cp,
+    sleepFn: async () => {},
+    now: () => 1_780_000_000_000,
+  });
+  const run = await runner.start({
+    actorId: "agent:rpa-03",
+    templateId: "xhs.feed-play.v1",
+    params: { items: 1, dwell: "2:2", commentScreens: 0, seed: "cp-trace" },
+  });
+  assert.equal(run.status, "SUCCEEDED");
+  const trace = run.primitiveTrace;
+  assert.ok(Array.isArray(trace) && trace.length > 0, "aggregate run carries a primitive trace");
+  // every issued primitive appears in the trace, in order, with its CP metadata
+  assert.equal(trace.length, cp.calls.length, "no primitive is dropped from the trace");
+  cp.calls.forEach((params, i) => {
+    const entry = trace[i];
+    assert.equal(entry.seq, i + 1);
+    assert.equal(entry.primitive, params.primitive);
+    assert.equal(entry.jobId, `job-${i + 1}`, "CP jobId survives unwrapping");
+    assert.equal(entry.status, "succeeded");
+    assert.equal(entry.outputOk, true);
+    assert.ok("evidenceRef" in entry, "evidenceRef field is present (null when absent)");
+  });
+  // dump primitives keep their artifact linkage as evidence
+  const dumpEntry = trace.find((entry) => entry.primitive === "dump_ui");
+  assert.ok(dumpEntry, "dump_ui primitives are recorded");
+});
+
 test("routine runner defaults to 03 and rejects social or parallel plans before session creation", async () => {
   const cp = cpFixture();
   let creates = 0;

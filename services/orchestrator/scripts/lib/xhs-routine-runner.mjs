@@ -147,6 +147,10 @@ export function createControlPlaneRoutineDriver({
   let restored = false;
   let releaseResult = null;
   let lastObservation = null;
+  // Aggregate-trace authority: every primitive keeps its CP-level
+  // jobId/status/output.ok/evidenceRef alongside the unwrapped business value
+  // (plan V2 §5.2) — the acceptance tool reads this, not the unwrapped output.
+  const primitiveTrace = [];
 
   async function primitive(params) {
     if (released) throw fail("ROUTINE_SESSION_RELEASED", "routine session is already released", 409);
@@ -154,12 +158,35 @@ export function createControlPlaneRoutineDriver({
       await heartbeatSession(session.sessionId, session.token);
     }
     sequence += 1;
-    const result = await executeSessionAction(session.sessionId, session.token, {
-      capabilityId: EXPLORER_CAPABILITY_ID,
-      idempotencyKey: `xhs-routine:${execution.routineRunId}:${sequence}`,
-      params,
-    });
+    const seq = sequence;
+    let result = null;
+    try {
+      result = await executeSessionAction(session.sessionId, session.token, {
+        capabilityId: EXPLORER_CAPABILITY_ID,
+        idempotencyKey: `xhs-routine:${execution.routineRunId}:${seq}`,
+        params,
+      });
+    } catch (error) {
+      primitiveTrace.push({
+        seq,
+        primitive: params.primitive,
+        jobId: null,
+        status: String(error?.code || error?.name || "PRIMITIVE_TRANSPORT_FAILED"),
+        outputOk: false,
+        evidenceRef: null,
+      });
+      throw error;
+    }
     if (!statusOk(result)) {
+      primitiveTrace.push({
+        seq,
+        primitive: params.primitive,
+        jobId: result?.jobId ?? result?.result?.jobId ?? null,
+        status: result?.status ?? result?.result?.status ?? null,
+        outputOk: false,
+        evidenceRef: result?.evidenceRef ?? result?.result?.evidenceRef
+          ?? result?.runId ?? result?.result?.runId ?? null,
+      });
       throw fail("ROUTINE_PRIMITIVE_FAILED", `Explorer primitive ${params.primitive} did not succeed`, 409, {
         primitive: params.primitive,
         status: result?.status ?? null,
@@ -175,6 +202,15 @@ export function createControlPlaneRoutineDriver({
       });
       output = { ...output, xml };
     }
+    primitiveTrace.push({
+      seq,
+      primitive: params.primitive,
+      jobId: result?.jobId ?? result?.result?.jobId ?? null,
+      status: result?.status ?? result?.result?.status ?? null,
+      outputOk: output?.ok === true,
+      evidenceRef: result?.evidenceRef ?? result?.result?.evidenceRef
+        ?? result?.runId ?? result?.result?.runId ?? null,
+    });
     return output;
   }
 
@@ -220,6 +256,10 @@ export function createControlPlaneRoutineDriver({
   }
 
   return {
+    getPrimitiveTrace() {
+      return primitiveTrace.slice();
+    },
+
     async getExecutionBinding() {
       return {
         alias: execution.alias,
@@ -526,6 +566,10 @@ export class XhsRoutineRunner {
       });
       const receipt = await createRoutineRun({ execution, plan: execution, driver }).execute();
       run.receipt = receipt;
+      // aggregate trace keeps the per-primitive CP metadata (jobId/status/
+      // output.ok/evidenceRef) as an independent authority alongside the
+      // unwrapped machine receipt (plan V2 §5.2)
+      run.primitiveTrace = driver.getPrimitiveTrace();
       run.status = TERMINAL.has(receipt.status) ? receipt.status : "FAILED";
       const verifiedOpenedItems = Array.isArray(receipt.items)
         ? receipt.items.filter((item) => item?.opened === true).length
@@ -553,6 +597,11 @@ export class XhsRoutineRunner {
         code: error?.code || "ROUTINE_RUN_FAILED",
         message: String(error?.message || error),
       };
+      if (typeof driver?.getPrimitiveTrace === "function") {
+        // failed runs keep their primitive metadata too — acceptance needs the
+        // authoritative per-primitive record even for BLOCKED/FAILED closes
+        run.primitiveTrace = driver.getPrimitiveTrace();
+      }
       run.finishedAt = new Date(this.now()).toISOString();
       run.updatedAt = run.finishedAt;
     } finally {

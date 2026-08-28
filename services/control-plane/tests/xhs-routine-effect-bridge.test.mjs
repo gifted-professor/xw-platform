@@ -26,7 +26,7 @@ import test from "node:test";
 import { StateStore } from "../control-plane/lib/state-store.mjs";
 import { ControlPlaneError } from "../control-plane/lib/errors.mjs";
 import { createRoutineEffectBridge, bridgeAsMachineEffects, ROUTINE_EFFECT_BUDGET } from "../apps/xhs/routine-effect-bridge.mjs";
-import { planRoutine } from "../../orchestrator/scripts/lib/xhs-routine-plan.mjs";
+import { planRoutine, bindRoutineExecution } from "../../orchestrator/scripts/lib/xhs-routine-plan.mjs";
 import { createRoutineRun } from "../../orchestrator/scripts/lib/xhs-feed-routine-machine.mjs";
 
 const NOW = 1_700_000_000_000;
@@ -385,15 +385,29 @@ const FEED_FOCUS = "com.xingin.xhs/com.xingin.xhs.index.v2.IndexActivityV2";
 const NOTE_FOCUS = "com.xingin.xhs/com.xingin.xhs.note.NoteDetailActivity";
 const NOTE_DESC = "笔记 攀岩入门三条路线 来自小岩 123赞";
 
-/** Full fake driver wired to the same observation surface the bridge uses. */
+/** Full fake driver wired to the same observation surface the bridge uses.
+ *  Exposes the formal execution/cleanup interfaces the production machine
+ *  requires: getExecutionBinding/refresh/release/getCleanupStatus (plan V2 §5.2). */
 function machineDriver({ likeLabels = ["点赞", "已点赞"] } = {}) {
   const NOTE_DETAIL_XML = '<node class="android.widget.TextView" content-desc="点赞" text="" bounds="[40,2200][140,2300]"/>'
     + '<node class="android.widget.TextView" content-desc="评论 2" text="" bounds="[240,2200][340,2300]"/>';
   const FEED_XML = '<node class="android.widget.ImageView" content-desc="' + NOTE_DESC + '" text="" clickable="true" bounds="[40,400][500,900]"/>'
     + '<node class="android.widget.ImageView" content-desc="' + NOTE_DESC + '" text="" clickable="true" bounds="[560,400][1020,900]"/>';
   const state = { taps: 0, likeIdx: 0 };
+  let released = false;
+  let executionBinding = null;
   return {
+    async getExecutionBinding({ alias } = {}) {
+      released = false;
+      executionBinding = {
+        alias: String(alias),
+        sessionId: `fixture-session-${alias}`,
+        deviceId: `fixture-device-${alias}`,
+      };
+      return executionBinding;
+    },
     async ensureFeed() { return { ok: true, activity: FEED_FOCUS }; },
+    async refresh() { return { ok: true, activity: FEED_FOCUS }; },
     async dump({ label } = {}) {
       if (String(label || "").startsWith("detail")) {
         return { xml: NOTE_DETAIL_XML, focus: NOTE_FOCUS, pkg: "com.xingin.xhs", hash: `dh_detail_${label}` };
@@ -404,6 +418,18 @@ function machineDriver({ likeLabels = ["点赞", "已点赞"] } = {}) {
     async back() { return { ok: true, focusVerified: true }; },
     async swipeComments({ screens }) { return { ok: true, screens }; },
     async waitFor() { return { ok: true }; },
+    async release() {
+      released = true;
+      return { ok: true, released: true };
+    },
+    async getCleanupStatus() {
+      return {
+        activeLeases: released ? 0 : 1,
+        restored: released,
+        authorityRef: executionBinding?.sessionId ? "fixture:cleanup" : null,
+        observedAtMs: NOW,
+      };
+    },
     // bridge observation surface: the like label evolves with each transport
     observeLikeLabel() { return likeLabels[Math.min(state.likeIdx, likeLabels.length - 1)]; },
     noteLikeAdvanced() { state.likeIdx += 1; },
@@ -414,7 +440,10 @@ function machineDriver({ likeLabels = ["点赞", "已点赞"] } = {}) {
 test("machine x bridge: nurture-lite likeMax=1 end-to-end — one verified like, transport 1, receipt consistent", async () => {
   const f = setup();
   try {
-    const plan = planRoutine({ templateId: "xhs.nurture-lite.v1", params: { items: 3, likeMax: 1, seed: "s2-e2e" } });
+    const plan = bindRoutineExecution(
+      planRoutine({ templateId: "xhs.nurture-lite.v1", params: { items: 3, likeMax: 1, seed: "s2-e2e" } }),
+      { alias: "03" },
+    );
     const owner = Object.freeze({ ...OWNER, routineRunId: plan.routineRunId, planHash: plan.planHash });
     const driver = machineDriver();
     const t = {
@@ -460,7 +489,10 @@ test("machine x bridge: nurture-lite likeMax=1 end-to-end — one verified like,
 test("machine x bridge: unprovable like state -> zero transport across the whole run", async () => {
   const f = setup();
   try {
-    const plan = planRoutine({ templateId: "xhs.nurture-lite.v1", params: { items: 2, likeMax: 1, seed: "s2-unprovable" } });
+    const plan = bindRoutineExecution(
+      planRoutine({ templateId: "xhs.nurture-lite.v1", params: { items: 2, likeMax: 1, seed: "s2-unprovable" } }),
+      { alias: "03" },
+    );
     const owner = Object.freeze({ ...OWNER, routineRunId: plan.routineRunId, planHash: plan.planHash });
     const driver = machineDriver({ likeLabels: ["", ""] });
     const t = {

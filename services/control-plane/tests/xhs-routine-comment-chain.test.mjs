@@ -28,7 +28,7 @@ import { StateStore } from "../control-plane/lib/state-store.mjs";
 import { ControlPlaneError } from "../control-plane/lib/errors.mjs";
 import { createRoutineEffectBridge, bridgeAsMachineEffects, ROUTINE_EFFECT_BUDGET } from "../apps/xhs/routine-effect-bridge.mjs";
 import { validateDraft, sealDraftFromReceipt, reconcileAmbiguousComment, commentTextHash, COMMENT_DRAFT_TTL_MS } from "../apps/xhs/routine-comment-chain.mjs";
-import { planRoutine } from "../../orchestrator/scripts/lib/xhs-routine-plan.mjs";
+import { planRoutine, bindRoutineExecution } from "../../orchestrator/scripts/lib/xhs-routine-plan.mjs";
 import { createRoutineRun } from "../../orchestrator/scripts/lib/xhs-feed-routine-machine.mjs";
 
 const NOW = 1_700_000_000_000;
@@ -409,8 +409,20 @@ function machineDriver() {
     + '<node class="android.widget.TextView" content-desc="评论 2" text="" bounds="[240,2200][340,2300]"/>'
     + '<node class="android.widget.TextView" text="小岩" bounds="[40,600][120,660]"/>'
     + '<node class="android.widget.TextView" text="这条路线讲解得非常清楚，收藏了" bounds="[40,680][900,740]"/>';
+  let released = false;
+  let executionBinding = null;
   return {
+    async getExecutionBinding({ alias } = {}) {
+      released = false;
+      executionBinding = {
+        alias: String(alias),
+        sessionId: `fixture-session-${alias}`,
+        deviceId: `fixture-device-${alias}`,
+      };
+      return executionBinding;
+    },
     async ensureFeed() { return { ok: true, activity: FEED_FOCUS }; },
+    async refresh() { return { ok: true, activity: FEED_FOCUS }; },
     async dump({ label } = {}) {
       if (String(label || "").startsWith("detail")) {
         return { xml: DETAIL_XML, focus: NOTE_FOCUS, pkg: "com.xingin.xhs", hash: `dh_detail_${label}` };
@@ -421,6 +433,18 @@ function machineDriver() {
     async back() { return { ok: true, focusVerified: true }; },
     async swipeComments({ screens }) { return { ok: true, screens }; },
     async waitFor() { return { ok: true }; },
+    async release() {
+      released = true;
+      return { ok: true, released: true };
+    },
+    async getCleanupStatus() {
+      return {
+        activeLeases: released ? 0 : 1,
+        restored: released,
+        authorityRef: executionBinding?.sessionId ? "fixture:cleanup" : null,
+        observedAtMs: NOW,
+      };
+    },
   };
 }
 
@@ -450,10 +474,10 @@ function machineCommentTransport() {
 test("machine x bridge: nurture-grounded commentMax=1 end-to-end — one grounded comment, run continues", async () => {
   const f = setup();
   try {
-    const plan = planRoutine({
+    const plan = bindRoutineExecution(planRoutine({
       templateId: "xhs.nurture-grounded.v1",
       params: { items: 3, commentMax: 1, likeMax: 0, seed: "s3-e2e" },
-    });
+    }), { alias: "03" });
     const owner = Object.freeze({ ...OWNER, routineRunId: plan.routineRunId, planHash: plan.planHash });
     const t = machineCommentTransport();
     const bridge = createRoutineEffectBridge({
@@ -484,10 +508,10 @@ test("machine x bridge: nurture-grounded commentMax=1 end-to-end — one grounde
 test("machine x bridge: ambiguous comment closes remaining comments but read-only browsing continues", async () => {
   const f = setup();
   try {
-    const plan = planRoutine({
+    const plan = bindRoutineExecution(planRoutine({
       templateId: "xhs.nurture-grounded.v1",
       params: { items: 3, commentMax: 2, likeMax: 0, seed: "s3-ambig" },
-    });
+    }), { alias: "03" });
     const owner = Object.freeze({ ...OWNER, routineRunId: plan.routineRunId, planHash: plan.planHash });
     // panel never shows the text -> strict verifier fails -> ambiguous
     const t = { ...machineCommentTransport(), async observeCommentPanel() { return { hash: "p", texts: ["别的"] }; } };

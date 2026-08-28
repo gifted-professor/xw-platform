@@ -390,6 +390,7 @@ export function createRoutineRun({
 
     if (page.page === PAGE_CLASS.HOME_FEED && page.cards?.length) {
       // --- PICK_SEEDED_TARGET ----------------------------------------------
+      const prefer = params.prefer ?? "any";
       const eligible = page.cards.filter((c) => {
         const fp = bindTargetFingerprint({ cardTitle: c.title, cardAuthor: c.author, cardCenter: { x: c.cx, y: c.cy }, pageEvidence: page.page });
         return !openedTargets.has(fp);
@@ -398,8 +399,24 @@ export function createRoutineRun({
         item.stopReason = "NO_UNTRIED_CARDS";
         return { item, stop: finish("SUCCEEDED", "NO_UNTRIED_CARDS") };
       }
-      const pickIdx = Math.floor(rng() * eligible.length);
-      const card = eligible[pickIdxSafe(eligible, pickIdx)];
+      // A sealed prefer=note|video is a hard media constraint on card selection:
+      // when no visible card matches, the item is skipped (bounded) — the
+      // selector never silently substitutes another media kind (plan V2 §5.2).
+      const preferred = prefer === "any"
+        ? eligible
+        : eligible.filter((c) => classifyCardKind([c.desc]).kind === prefer);
+      if (prefer !== "any" && !preferred.length) {
+        item.stopReason = "NO_MATCHING_CARD";
+        item.preferApplied = prefer;
+        run.skipsConsecutive += 1;
+        if (run.skipsConsecutive > MAX_CONSECUTIVE_SKIPS) {
+          return { item, stop: finish("FAILED", "NO_MATCHING_CARD_EXHAUSTED") };
+        }
+        return { item, stop: null };
+      }
+      const pool = preferred.length ? preferred : eligible;
+      const pickIdx = Math.floor(rng() * pool.length);
+      const card = pool[pickIdxSafe(pool, pickIdx)];
       targetFingerprint = bindTargetFingerprint({
         cardTitle: card.title,
         cardAuthor: card.author,
