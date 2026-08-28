@@ -264,7 +264,18 @@ export function createControlPlaneRoutineDriver({
 
   async function restoreFeed() {
     try {
-      let observation = await observe("cleanup-before-release");
+      let observation = null;
+      try {
+        observation = await observe("cleanup-before-release");
+      } catch (error) {
+        // a dump-starved surface (playing video resumed by the app) cannot be
+        // classified; one back press is read-only navigation that typically
+        // restores a dumpable surface (live R1 finding, 2026-08-28)
+        if (!DUMP_RETRYABLE_CODES.test(String(error?.code || ""))) return false;
+        await primitive({ primitive: "back", times: 1 });
+        await sleepFn(800);
+        observation = await observe("cleanup-before-release-after-back");
+      }
       for (let attempt = 0; attempt < 5; attempt += 1) {
         if (pageOf(observation).page === PAGE_CLASS.HOME_FEED) return true;
         await primitive({ primitive: "back", times: 1 });
@@ -291,7 +302,18 @@ export function createControlPlaneRoutineDriver({
     },
 
     async ensureFeed() {
-      let observation = await observe("ensure-feed");
+      let observation = null;
+      try {
+        observation = await observe("ensure-feed");
+      } catch (error) {
+        // parked on a dump-starved surface (a playing video the app resumed):
+        // one back press is read-only navigation that typically restores a
+        // dumpable surface (live R1 finding, 2026-08-28)
+        if (!DUMP_RETRYABLE_CODES.test(String(error?.code || ""))) throw error;
+        await primitive({ primitive: "back", times: 1 });
+        await sleepFn(800);
+        observation = await observe("ensure-feed-after-back");
+      }
       if (pageOf(observation).page === PAGE_CLASS.HOME_FEED) return { ok: true, observation };
       await primitive({ primitive: "launch_app", package: XHS_PACKAGE });
       await sleepFn(800);
@@ -368,7 +390,16 @@ export function createControlPlaneRoutineDriver({
       }
       await primitive({ primitive: "tap", x: Math.round(x), y: Math.round(y) });
       await sleepFn(350);
-      const after = await observe("tap-detail-verify");
+      let after = null;
+      try {
+        after = await observe("tap-detail-verify");
+      } catch (error) {
+        // the opened card may be a playing video whose surface starves the
+        // dump (live R1 finding): for video cards one pause tap rescues the
+        // verify observation; anything else stays fatal
+        if (cardKind !== "video" || !DUMP_RETRYABLE_CODES.test(String(error?.code || ""))) throw error;
+        after = await this.pauseVideoAndDump({ label: "tap-detail-verify-after-pause" });
+      }
       const detail = pageOf(after, cardKind || null);
       const opened = detail.page === PAGE_CLASS.IMAGE_NOTE || detail.page === PAGE_CLASS.VIDEO_NOTE;
       return { ok: opened, x: Math.round(x), y: Math.round(y), detailPage: detail.page };
