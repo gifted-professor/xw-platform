@@ -331,3 +331,79 @@ test("durable trace is plan/run-bound, queryable, and rejects secret-bearing fie
     stopReason: null,
   }]);
 });
+
+test("video-surface dump failures retry with patience instead of aborting the run", async () => {
+  const cp = cpFixture();
+  let page = "feed";
+  let detailDumpFailures = 0;
+  const runner = new XhsRoutineRunner({
+    ...cp,
+    executeSessionAction: async (sessionId, token, action) => {
+      const params = action.params;
+      if (params.primitive === "tap") page = "detail";
+      if (params.primitive === "back" || params.primitive === "launch_app") page = "feed";
+      if (params.primitive === "dump_ui" && page === "detail") {
+        // the first two dumps on the video detail fail exactly like the live
+        // DetailFeedActivity idle-starvation; the third succeeds
+        detailDumpFailures += 1;
+        if (detailDumpFailures <= 2) {
+          throw Object.assign(new Error("dump missing hierarchy"), { code: "EXPLORER_DUMP_INVALID" });
+        }
+      }
+      return cp.executeSessionAction(sessionId, token, action);
+    },
+    sleepFn: async () => {},
+  });
+  const run = await runner.start({
+    actorId: "agent:rpa-03",
+    templateId: "xhs.feed-play.v1",
+    params: { items: 1, dwell: "2:2", commentScreens: 0, seed: "dump-retry" },
+  });
+  assert.equal(run.status, "SUCCEEDED", `run should survive transient dump failures, got ${run.error?.code}`);
+  assert.equal(detailDumpFailures >= 3, true, "dump retried until observation succeeded");
+  const failedDumps = run.primitiveTrace.filter((p) => p.primitive === "dump_ui" && !p.outputOk);
+  assert.equal(failedDumps.length >= 2, true, "failed dump attempts stay in the authoritative trace");
+});
+
+test("non-dump primitive failures are never retried as observations", async () => {
+  const cp = cpFixture();
+  let tapAttempts = 0;
+  const runner = new XhsRoutineRunner({
+    ...cp,
+    executeSessionAction: async (sessionId, token, action) => {
+      if (action.params.primitive === "tap") {
+        tapAttempts += 1;
+        throw Object.assign(new Error("tap rejected"), { code: "EXPLORER_TAP_REJECTED" });
+      }
+      return cp.executeSessionAction(sessionId, token, action);
+    },
+    sleepFn: async () => {},
+  });
+  const run = await runner.start({
+    actorId: "agent:rpa-03",
+    templateId: "xhs.feed-play.v1",
+    params: { items: 1, dwell: "2:2", commentScreens: 0, seed: "no-retry" },
+  });
+  assert.notEqual(run.status, "SUCCEEDED");
+  assert.equal(tapAttempts, 1, "transport failure on a non-observation primitive stays fatal");
+});
+
+test("catch-path failures keep the original error code (no ReferenceError mask)", async () => {
+  const cp = cpFixture();
+  const runner = new XhsRoutineRunner({
+    ...cp,
+    getDevice: async () => {
+      throw Object.assign(new Error("device profile unavailable"), { code: "DEVICE_PROFILE_DOWN" });
+    },
+    sleepFn: async () => {},
+  });
+  const run = await runner.start({
+    actorId: "agent:rpa-03",
+    templateId: "xhs.feed-play.v1",
+    params: { items: 1, dwell: "2:2", commentScreens: 0, seed: "catch-trace" },
+  });
+  // the original error must surface verbatim — never a "driver is not
+  // defined" ReferenceError raised by the failure path itself
+  assert.equal(run.error.code, "DEVICE_PROFILE_DOWN");
+  assert.equal(run.status, "FAILED");
+});

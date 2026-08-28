@@ -214,9 +214,31 @@ export function createControlPlaneRoutineDriver({
     return output;
   }
 
+  // Video detail surfaces (DetailFeedActivity) play video while uiautomator
+  // waits for UI idle, so dump can transiently fail with EXPLORER_DUMP_* /
+  // EXPLORER_SCREEN_* (live R1 finding, 2026-08-28). Observations retry with
+  // patience instead of aborting the run; all other primitive failures stay
+  // fatal (fail-closed, zero transport).
+  const DUMP_RETRYABLE_CODES = /^EXPLORER_(DUMP|SCREEN)_[A-Z_]+$/;
+  const DUMP_RETRY_ATTEMPTS = 3;
+  const DUMP_RETRY_SPACING_MS = 2000;
+
   async function observe(label = "observe") {
     const focusOutput = await primitive({ primitive: "focus" });
-    const dumpOutput = await primitive({ primitive: "dump_ui" });
+    let dumpOutput = null;
+    let dumpError = null;
+    for (let attempt = 0; attempt < DUMP_RETRY_ATTEMPTS; attempt += 1) {
+      try {
+        dumpOutput = await primitive({ primitive: "dump_ui" });
+        dumpError = null;
+        break;
+      } catch (error) {
+        dumpError = error;
+        if (!DUMP_RETRYABLE_CODES.test(String(error?.code || ""))) throw error;
+        if (attempt + 1 < DUMP_RETRY_ATTEMPTS) await sleepFn(DUMP_RETRY_SPACING_MS);
+      }
+    }
+    if (dumpError) throw dumpError;
     const focus = focusParts(focusOutput);
     const xml = dumpXmlOf(dumpOutput);
     const observation = {
@@ -536,7 +558,11 @@ export class XhsRoutineRunner {
     this.runs.set(run.executionRunId, run);
     this.activeAliases.set(run.alias, run.executionRunId);
 
+    // declared outside the try so failure/cleanup paths can keep the
+    // authoritative per-primitive trace (a const inside try is invisible in
+    // catch and would raise ReferenceError over the original error)
     let session = null;
+    let driver = null;
     try {
       session = await this.createSession({
         actorId: input.actorId || execution.actor || "agent:xhs-routine",
@@ -552,7 +578,7 @@ export class XhsRoutineRunner {
       run.updatedAt = new Date(this.now()).toISOString();
       const deviceProfile = await this.getDevice(session.deviceId);
 
-      const driver = createControlPlaneRoutineDriver({
+      driver = createControlPlaneRoutineDriver({
         execution,
         session,
         executeSessionAction: this.executeSessionAction,
