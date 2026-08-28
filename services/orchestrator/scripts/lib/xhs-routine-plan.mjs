@@ -1,13 +1,16 @@
 /**
- * xhs-routine-plan.mjs — the sealed routine plan catalog for the 04-only
- * deterministic XHS feed routine machine (direct-routine plan V2 §1/§4/§7).
+ * xhs-routine-plan.mjs — sealed routine plans for the deterministic XHS feed
+ * routine machine. Placement policy v1 is 03-first: a normal run is exactly
+ * one 03 child; 04 exists only as the second child of an explicitly requested
+ * read-only parallel=2 batch.
  *
  * Pure module: no fs, no network, no device I/O. The CLI is
  * ops/xw-xhs-routine.mjs; the state machine lib is xhs-feed-routine-machine.mjs.
  *
  * Invariants (plan V2 §2):
- *   - 04-only. alias 01/02/03 rejected at plan stage (ROUTINE_ALIAS_NOT_04)
- *     before any job/lease/session/device I/O. 04 busy never falls back.
+ *   - single/default -> 03 only. 01/02 are rejected. 04 never receives a
+ *     single run and is never an automatic fallback for a busy/offline 03.
+ *   - explicit parallel=2 -> exact [03,04], read-only effectClass=none only.
  *   - No publish/DM/follow/collect/payment/delete/account-setting entry exists
  *     in this catalog at all — there is nothing to mis-call.
  *   - comment.max schema cap is fixed at 2 (ROUTINE_COMMENT_MAX_EXCEEDED above
@@ -18,12 +21,30 @@
  *     routine <template>) converge on the same canonical planHash and the
  *     same executor. No second business script set.
  */
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 export const ROUTINE_SCHEMA_ID = "xw.xhs.routine-plan.v1";
-export const ROUTINE_SCHEMA_VERSION = 1;
-export const ROUTINE_ALIAS = "04";
+export const ROUTINE_SCHEMA_VERSION = 2;
+export const ROUTINE_PLACEMENT_POLICY_ID = "xw.xhs.placement.03-first.v1";
+export const ROUTINE_PLACEMENT_POLICY_VERSION = 1;
+export const ROUTINE_PRIMARY_ALIAS = "03";
+export const ROUTINE_SECONDARY_ALIAS = "04";
+/** Backward-compatible name: now means the default/primary alias. */
+export const ROUTINE_ALIAS = ROUTINE_PRIMARY_ALIAS;
 export const ROUTINE_PER_DEVICE_CONCURRENCY = 1;
+export const ROUTINE_MAX_PARALLEL = 2;
+
+export const ROUTINE_PLACEMENT_POLICY = Object.freeze({
+  id: ROUTINE_PLACEMENT_POLICY_ID,
+  version: ROUTINE_PLACEMENT_POLICY_VERSION,
+  primaryAlias: ROUTINE_PRIMARY_ALIAS,
+  secondaryAlias: ROUTINE_SECONDARY_ALIAS,
+  defaultParallel: 1,
+  maxParallel: ROUTINE_MAX_PARALLEL,
+  secondaryRequiresExplicitConcurrency: true,
+  automaticFallback: false,
+  allowedAliases: Object.freeze([ROUTINE_PRIMARY_ALIAS, ROUTINE_SECONDARY_ALIAS]),
+});
 
 /** comment.max is schema-fixed at 2 for the whole program (plan V2 §2/§7). */
 export const COMMENT_MAX_CAP = 2;
@@ -226,12 +247,15 @@ export function normalizeRoutineParams(template, raw = {}) {
   return Object.freeze(out);
 }
 
-function canonicalPlanBody({ template, alias, params, stopConditions, effectClass }) {
+function canonicalPlanBody({ template, alias, parallel, placement, children, params, stopConditions, effectClass }) {
   return {
     schemaId: ROUTINE_SCHEMA_ID,
     schemaVersion: ROUTINE_SCHEMA_VERSION,
     template,
     alias,
+    parallel,
+    placement,
+    children,
     perDeviceConcurrency: ROUTINE_PER_DEVICE_CONCURRENCY,
     effectClass,
     params,
@@ -239,45 +263,277 @@ function canonicalPlanBody({ template, alias, params, stopConditions, effectClas
   };
 }
 
+function normalizeParallel(raw) {
+  const text = String(raw ?? 1).trim();
+  if (!/^[12]$/.test(text)) {
+    throw new RoutinePlanError(
+      "ROUTINE_PARALLEL_INVALID",
+      `--parallel must be 1 or 2; got ${JSON.stringify(raw)}`,
+    );
+  }
+  return Number(text);
+}
+
+function placementFor({ requestedAlias, parallel, effectClass }) {
+  if (![ROUTINE_PRIMARY_ALIAS, ROUTINE_SECONDARY_ALIAS].includes(requestedAlias)) {
+    throw new RoutinePlanError(
+      "ROUTINE_ALIAS_NOT_ALLOWED",
+      `alias ${requestedAlias} rejected: placement policy permits only 03, plus 04 as an explicit parallel=2 secondary; 01/02 produce zero job/lease/I/O`,
+    );
+  }
+
+  if (parallel === 1 && requestedAlias === ROUTINE_SECONDARY_ALIAS) {
+    throw new RoutinePlanError(
+      "ROUTINE_SECONDARY_REQUIRES_EXPLICIT_CONCURRENCY",
+      "alias 04 cannot run alone or as fallback; request --parallel 2 to create the exact read-only [03,04] batch",
+    );
+  }
+
+  if (parallel === 2 && effectClass !== "none") {
+    throw new RoutinePlanError(
+      "ROUTINE_SECONDARY_EFFECT_CLASS_FORBIDDEN",
+      "parallel [03,04] is read-only only: alias 04 cannot receive a social-effect child",
+    );
+  }
+
+  const aliases = parallel === 2
+    ? [ROUTINE_PRIMARY_ALIAS, ROUTINE_SECONDARY_ALIAS]
+    : [ROUTINE_PRIMARY_ALIAS];
+  const mode = parallel === 2 ? "explicit_concurrency" : "single_primary";
+  const placement = Object.freeze({
+    policyId: ROUTINE_PLACEMENT_POLICY_ID,
+    policyVersion: ROUTINE_PLACEMENT_POLICY_VERSION,
+    mode,
+    primaryAlias: ROUTINE_PRIMARY_ALIAS,
+    aliases: Object.freeze([...aliases]),
+    parallel,
+    automaticFallback: false,
+  });
+  const children = Object.freeze(aliases.map((alias, index) => Object.freeze({
+    index,
+    alias,
+    role: index === 0 ? "primary" : "concurrency_secondary",
+    effectClass,
+    externalEffects: effectClass === "none" ? 0 : "hard-budgeted-on-03",
+  })));
+  return Object.freeze({ placement, children });
+}
+
+function semanticHashOf(planLike) {
+  return sha256Hex(canonicalJson(canonicalPlanBody({
+    template: planLike.template,
+    alias: planLike.planAlias ?? planLike.alias,
+    parallel: planLike.parallel,
+    placement: planLike.placement,
+    children: planLike.children,
+    params: planLike.params,
+    stopConditions: planLike.stopConditions,
+    effectClass: planLike.effectClass,
+  })));
+}
+
+function freshIdToken(randomUUIDFn = randomUUID) {
+  const raw = String(randomUUIDFn()).replaceAll("-", "").toLowerCase();
+  if (!/^[a-f0-9]{32}$/.test(raw)) {
+    throw new RoutinePlanError("ROUTINE_EXECUTION_ID_INVALID", "random UUID source must return a UUID-compatible 128-bit hex value");
+  }
+  return raw;
+}
+
+const EXECUTION_RUN_ID_RE = /^xe_[a-f0-9]{32}$/;
+const ROUTINE_RUN_ID_RE = /^rr_[a-f0-9]{32}$/;
+
 /**
- * Plan a routine run. Pure + deterministic: identical (template, params, alias)
- * always yields the same planHash across all call surfaces.
+ * Allocate execution identity independently from semantic planning. A batch
+ * shares executionRunId across its children and gives every child a unique
+ * routineRunId. IDs are random UUID material and are never derived from the
+ * deterministic planHash.
  */
-export function planRoutine({ templateId, params = {}, alias = ROUTINE_ALIAS, actor = null, goalSignature = null } = {}) {
+export function createRoutineExecutionIdentity({ executionRunId = null, randomUUIDFn = randomUUID } = {}) {
+  const token = freshIdToken(randomUUIDFn);
+  const resolvedExecutionRunId = executionRunId || `xe_${token}`;
+  if (!EXECUTION_RUN_ID_RE.test(resolvedExecutionRunId)) {
+    throw new RoutinePlanError("ROUTINE_EXECUTION_ID_INVALID", "executionRunId must match xe_<32 lowercase hex>");
+  }
+  return Object.freeze({
+    executionRunId: resolvedExecutionRunId,
+    routineRunId: `rr_${token}`,
+  });
+}
+
+function assertSemanticPlan(plan) {
+  if (!plan || typeof plan !== "object" || plan.schemaId !== ROUTINE_SCHEMA_ID || plan.schemaVersion !== ROUTINE_SCHEMA_VERSION) {
+    throw new RoutinePlanError("ROUTINE_PLAN_SCHEMA", "routine plan schema mismatch");
+  }
+  if (!/^[a-f0-9]{64}$/.test(plan.planHash || "") || semanticHashOf(plan) !== plan.planHash) {
+    throw new RoutinePlanError("ROUTINE_PLAN_TAMPERED", "planHash does not match canonical plan content");
+  }
+  if (plan.perDeviceConcurrency !== ROUTINE_PER_DEVICE_CONCURRENCY) {
+    throw new RoutinePlanError("ROUTINE_PLAN_TAMPERED", "perDeviceConcurrency differs from the sealed policy");
+  }
+  if (plan.planAlias !== undefined && plan.planAlias !== plan.placement?.primaryAlias) {
+    throw new RoutinePlanError("ROUTINE_PLAN_TAMPERED", "execution planAlias does not match the sealed placement primary");
+  }
+}
+
+function assertExecutionAlias(plan, alias) {
+  const allowed = plan.placement?.aliases || [];
+  if (!allowed.includes(alias)) {
+    if (alias === ROUTINE_SECONDARY_ALIAS) {
+      throw new RoutinePlanError(
+        "ROUTINE_SECONDARY_REQUIRES_EXPLICIT_CONCURRENCY",
+        "alias 04 is not present in this plan; only an explicit parallel=2 read-only plan can bind it",
+      );
+    }
+    throw new RoutinePlanError("ROUTINE_EXECUTION_ALIAS_INVALID", `alias ${alias} is not an authorized child of this plan`);
+  }
+  if (alias === ROUTINE_SECONDARY_ALIAS && plan.effectClass !== "none") {
+    throw new RoutinePlanError("ROUTINE_SECONDARY_EFFECT_CLASS_FORBIDDEN", "alias 04 execution child must be effectClass none");
+  }
+}
+
+/** Bind one authorized plan child to a fresh or supplied execution identity. */
+export function bindRoutineExecution(plan, { alias = plan?.alias, identity = null, randomUUIDFn = randomUUID } = {}) {
+  assertSemanticPlan(plan);
+  const resolvedAlias = String(alias || "").trim();
+  assertExecutionAlias(plan, resolvedAlias);
+  const ids = identity || createRoutineExecutionIdentity({ randomUUIDFn });
+  if (!EXECUTION_RUN_ID_RE.test(ids.executionRunId || "") || !ROUTINE_RUN_ID_RE.test(ids.routineRunId || "")) {
+    throw new RoutinePlanError("ROUTINE_EXECUTION_ID_INVALID", "execution identity is missing or malformed");
+  }
+  const bindingBody = {
+    schemaId: ROUTINE_SCHEMA_ID,
+    schemaVersion: ROUTINE_SCHEMA_VERSION,
+    planHash: plan.planHash,
+    alias: resolvedAlias,
+    executionRunId: ids.executionRunId,
+    routineRunId: ids.routineRunId,
+  };
+  const executionBindingHash = sha256Hex(canonicalJson(bindingBody));
+  return Object.freeze({
+    ...plan,
+    mode: "execution",
+    executionReady: true,
+    planAlias: plan.planAlias ?? plan.alias,
+    alias: resolvedAlias,
+    executionRunId: ids.executionRunId,
+    routineRunId: ids.routineRunId,
+    executionBindingHash,
+  });
+}
+
+/** Validate the explicit execution binding before a driver/session may use it. */
+export function validateRoutineExecutionBinding(bound) {
+  assertSemanticPlan(bound);
+  if (bound.mode !== "execution" || bound.executionReady !== true) {
+    throw new RoutinePlanError("ROUTINE_EXECUTION_NOT_BOUND", "plan-only document has no execution identity");
+  }
+  assertExecutionAlias(bound, String(bound.alias || ""));
+  if (!EXECUTION_RUN_ID_RE.test(bound.executionRunId || "") || !ROUTINE_RUN_ID_RE.test(bound.routineRunId || "")) {
+    throw new RoutinePlanError("ROUTINE_EXECUTION_ID_INVALID", "execution identity is missing or malformed");
+  }
+  const expected = sha256Hex(canonicalJson({
+    schemaId: ROUTINE_SCHEMA_ID,
+    schemaVersion: ROUTINE_SCHEMA_VERSION,
+    planHash: bound.planHash,
+    alias: bound.alias,
+    executionRunId: bound.executionRunId,
+    routineRunId: bound.routineRunId,
+  }));
+  if (expected !== bound.executionBindingHash) {
+    throw new RoutinePlanError("ROUTINE_EXECUTION_BINDING_TAMPERED", "execution binding hash mismatch");
+  }
+  return bound;
+}
+
+/** Bind the exact [03,04] children of an explicit read-only parallel plan. */
+export function bindRoutineExecutionBatch(plan, { randomUUIDFn = randomUUID } = {}) {
+  assertSemanticPlan(plan);
+  if (plan.parallel !== 2 || canonicalJson(plan.placement?.aliases) !== canonicalJson([ROUTINE_PRIMARY_ALIAS, ROUTINE_SECONDARY_ALIAS])) {
+    throw new RoutinePlanError("ROUTINE_PARALLEL_PLAN_REQUIRED", "an exact explicit parallel=2 [03,04] plan is required");
+  }
+  if (plan.effectClass !== "none") {
+    throw new RoutinePlanError("ROUTINE_SECONDARY_EFFECT_CLASS_FORBIDDEN", "parallel [03,04] batch must be effectClass none");
+  }
+  const primaryIdentity = createRoutineExecutionIdentity({ randomUUIDFn });
+  const secondaryIdentity = createRoutineExecutionIdentity({
+    executionRunId: primaryIdentity.executionRunId,
+    randomUUIDFn,
+  });
+  const children = Object.freeze([
+    bindRoutineExecution(plan, { alias: ROUTINE_PRIMARY_ALIAS, identity: primaryIdentity }),
+    bindRoutineExecution(plan, { alias: ROUTINE_SECONDARY_ALIAS, identity: secondaryIdentity }),
+  ]);
+  return Object.freeze({
+    ok: true,
+    mode: "execution_batch",
+    executionReady: true,
+    planHash: plan.planHash,
+    executionRunId: primaryIdentity.executionRunId,
+    aliases: Object.freeze(children.map((child) => child.alias)),
+    children,
+  });
+}
+
+/**
+ * Plan a routine run. Pure + deterministic: identical semantic input always
+ * yields the same planHash. No executionRunId/routineRunId is serialized here;
+ * bindRoutineExecution() allocates those only when execution is actually
+ * being prepared.
+ */
+export function planRoutine({ templateId, params = {}, alias = ROUTINE_ALIAS, parallel = 1, actor = null, goalSignature = null } = {}) {
   const template = BY_TEMPLATE.get(String(templateId || ""));
   if (!template) {
     throw new RoutinePlanError("ROUTINE_TEMPLATE_UNKNOWN", `unknown xhs routine template: ${templateId}`);
   }
   const requestedAlias = String(alias || ROUTINE_ALIAS).trim();
-  if (requestedAlias !== ROUTINE_ALIAS) {
-    throw new RoutinePlanError("ROUTINE_ALIAS_NOT_04", `alias ${requestedAlias} rejected: 04-only routine; 01-03 produce zero job/lease/I/O and 04 busy never falls back`);
-  }
+  const resolvedParallel = normalizeParallel(parallel);
   const normParams = normalizeRoutineParams(template, params);
+  const { placement, children } = placementFor({
+    requestedAlias,
+    parallel: resolvedParallel,
+    effectClass: template.effectClass,
+  });
 
   // actor/goalSignature are provenance, not execution semantics — they stay on
   // the plan for audit but never change the planHash, so the three call
   // surfaces converge on the same hash for the same semantic plan.
   const planBody = canonicalPlanBody({
     template: template.id,
-    alias: ROUTINE_ALIAS,
+    alias: ROUTINE_PRIMARY_ALIAS,
+    parallel: resolvedParallel,
+    placement,
+    children,
     params: normParams,
     stopConditions: template.stopConditions,
     effectClass: template.effectClass,
   });
   const planHash = sha256Hex(canonicalJson(planBody));
-  const routineRunId = `rr_${planHash.slice(0, 16)}`;
-
-  return Object.freeze({
+  const plan = {
     ok: true,
     mode: "plan",
     executionReady: false,
-    routineRunId,
     planHash,
     ...planBody,
     actor,
     goalSignature,
     templateSpec: template,
+  };
+
+  // Transitional programmatic compatibility for the already-landed offline
+  // machine/bridge fixtures: reading plan.routineRunId lazily allocates a
+  // random, non-enumerable ID. It is never serialized, hashed or accepted as
+  // part of a sealed plan. New production callers must bind explicitly.
+  let legacyIdentity = null;
+  Object.defineProperty(plan, "routineRunId", {
+    enumerable: false,
+    configurable: false,
+    get() {
+      legacyIdentity ||= createRoutineExecutionIdentity();
+      return legacyIdentity.routineRunId;
+    },
   });
+  return Object.freeze(plan);
 }
 
 /**
@@ -289,11 +545,32 @@ export function acceptSealedRoutinePlan(submitted) {
   if (!submitted || typeof submitted !== "object" || Array.isArray(submitted)) {
     throw new RoutinePlanError("ROUTINE_PLAN_INVALID", "submitted plan must be an object");
   }
-  const { templateSpec: _t, ...rest } = submitted;
   if (submitted.schemaId !== ROUTINE_SCHEMA_ID || submitted.schemaVersion !== ROUTINE_SCHEMA_VERSION) {
     throw new RoutinePlanError("ROUTINE_PLAN_SCHEMA", "submitted plan schema mismatch");
   }
-  const { routineRunId, planHash, templateSpec, ...body } = submitted;
+  const allowedPlanKeys = new Set([
+    "ok", "mode", "executionReady", "planHash", "schemaId", "schemaVersion",
+    "template", "alias", "parallel", "placement", "children",
+    "perDeviceConcurrency", "effectClass", "params", "stopConditions",
+    "actor", "goalSignature",
+  ]);
+  for (const key of Object.keys(submitted)) {
+    if (!allowedPlanKeys.has(key)) {
+      throw new RoutinePlanError("ROUTINE_PLAN_SEALED", `unknown or execution-only sealed-plan field: ${key}`);
+    }
+  }
+  if (submitted.ok !== true || submitted.mode !== "plan" || submitted.executionReady !== false) {
+    throw new RoutinePlanError("ROUTINE_PLAN_SEALED", "sealed submission must be an unbound plan-only document");
+  }
+  if (submitted.perDeviceConcurrency !== ROUTINE_PER_DEVICE_CONCURRENCY) {
+    throw new RoutinePlanError("ROUTINE_PLAN_TAMPERED", "perDeviceConcurrency differs from the sealed policy");
+  }
+  for (const executionKey of ["executionRunId", "routineRunId", "executionBindingHash"]) {
+    if (Object.prototype.propertyIsEnumerable.call(submitted, executionKey)) {
+      throw new RoutinePlanError("ROUTINE_PLAN_SEALED", `${executionKey} is execution-only and must not be submitted in a sealed plan`);
+    }
+  }
+  const { planHash, templateSpec, ...body } = submitted;
   if (!/^[a-f0-9]{64}$/.test(planHash || "")) throw new RoutinePlanError("ROUTINE_PLAN_HASH", "planHash missing/malformed");
   if (templateSpec !== undefined) throw new RoutinePlanError("ROUTINE_PLAN_SEALED", "templateSpec must not be submitted (server-sealed only)");
   // verify the seal over the submitted canonical body BEFORE re-planning — a
@@ -302,6 +579,9 @@ export function acceptSealedRoutinePlan(submitted) {
   const recomputedHash = sha256Hex(canonicalJson(canonicalPlanBody({
     template: body.template,
     alias: body.alias,
+    parallel: body.parallel,
+    placement: body.placement,
+    children: body.children,
     params: body.params,
     stopConditions: body.stopConditions,
     effectClass: body.effectClass,
@@ -309,12 +589,16 @@ export function acceptSealedRoutinePlan(submitted) {
   if (recomputedHash !== planHash) {
     throw new RoutinePlanError("ROUTINE_PLAN_TAMPERED", "planHash does not match canonical plan content — reject before I/O");
   }
-  const replanned = planRoutine({ templateId: body.template, params: body.params, alias: body.alias, actor: body.actor, goalSignature: body.goalSignature });
+  const replanned = planRoutine({
+    templateId: body.template,
+    params: body.params,
+    alias: body.alias,
+    parallel: body.parallel,
+    actor: body.actor,
+    goalSignature: body.goalSignature,
+  });
   if (replanned.planHash !== planHash) {
     throw new RoutinePlanError("ROUTINE_PLAN_TAMPERED", "planHash does not match canonical plan content — reject before I/O");
-  }
-  if (replanned.routineRunId !== routineRunId) {
-    throw new RoutinePlanError("ROUTINE_PLAN_TAMPERED", "routineRunId does not match planHash");
   }
   return replanned;
 }

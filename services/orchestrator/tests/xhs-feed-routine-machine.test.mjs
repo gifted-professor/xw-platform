@@ -2,13 +2,13 @@
  * xhs-feed-routine-machine.test.mjs — deterministic state-machine invariants
  * (direct-routine plan V2 §4/§6/§10.4): per-item single open, video comment
  * swipe = 0, bounded dwell/screens/skips, semantic back confirm, UNKNOWN skip,
- * forbidden-surface freeze, seeded replay determinism, deferred/capped effects
- * (transport 0 above plan caps), cleanup always activeLeases=0.
+ * forbidden-surface freeze, seeded replay determinism, deferred/capped effects,
+ * explicit refresh, injected R0 vision fallback, and authoritative cleanup.
  */
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { planRoutine } from "../scripts/lib/xhs-routine-plan.mjs";
+import { planRoutine, ROUTINE_ALIAS } from "../scripts/lib/xhs-routine-plan.mjs";
 import { createRoutineRun } from "../scripts/lib/xhs-feed-routine-machine.mjs";
 import { PAGE_CLASS } from "../scripts/lib/xhs-feed-surface.mjs";
 
@@ -50,24 +50,50 @@ function fakeDriver({
   detailDump = { xml: NOTE_DETAIL_XML, focus: NOTE_FOCUS, pkg: "com.xingin.xhs" },
   ensureFeedOk = true,
   dumpOk = true,
+  refreshOk = true,
   tapOk = true,
   backOk = true,
   swipeCommentsOk = true,
+  releaseOk = true,
+  cleanupActiveLeases = 0,
+  cleanupRestored = true,
+  binding = { alias: ROUTINE_ALIAS, sessionId: `sess-test-${ROUTINE_ALIAS}`, deviceId: `device-test-${ROUTINE_ALIAS}` },
 } = {}) {
-  const calls = { ensureFeed: 0, dump: [], tap: [], back: 0, swipeComments: [], waitFor: [] };
+  const calls = {
+    getExecutionBinding: 0,
+    ensureFeed: 0,
+    refresh: 0,
+    dump: [],
+    tap: [],
+    back: 0,
+    swipeComments: [],
+    waitFor: [],
+    release: 0,
+    getCleanupStatus: 0,
+  };
   return {
     calls,
+    async getExecutionBinding() {
+      calls.getExecutionBinding += 1;
+      return binding;
+    },
     async ensureFeed() {
       calls.ensureFeed += 1;
       return { ok: ensureFeedOk, activity: FEED_FOCUS };
     },
+    async refresh() {
+      calls.refresh += 1;
+      return { ok: refreshOk, activity: FEED_FOCUS };
+    },
     async dump({ label } = {}) {
       calls.dump.push(label || "");
+      if (!dumpOk) return { xml: "", focus: FEED_FOCUS, pkg: "com.xingin.xhs" };
       const base = (label || "").startsWith("detail") ? detailDump : feedDump;
       return { ...base, hash: `dh_${label}` };
     },
-    async tapAt({ x, y }) {
-      calls.tap.push({ x, y });
+    async tapAt(input) {
+      const { x, y } = input;
+      calls.tap.push({ ...input });
       return { ok: tapOk, activity: detailDump.focus };
     },
     async back() {
@@ -81,6 +107,19 @@ function fakeDriver({
     async waitFor(ms) {
       calls.waitFor.push(ms);
       return { ok: true };
+    },
+    async release() {
+      calls.release += 1;
+      return { ok: releaseOk, released: releaseOk };
+    },
+    async getCleanupStatus() {
+      calls.getCleanupStatus += 1;
+      return {
+        activeLeases: cleanupActiveLeases,
+        restored: cleanupRestored,
+        authorityRef: "cp:test-cleanup",
+        observedAtMs: 1,
+      };
     },
   };
 }
@@ -98,6 +137,11 @@ test("happy path: feed-play completes all items with zero transport and clean cl
   assert.ok(receipt.items.every((it) => it.detailPage === PAGE_CLASS.IMAGE_NOTE));
   assert.equal(receipt.transport.count, 0);
   assert.equal(receipt.cleanup.activeLeases, 0);
+  assert.equal(receipt.cleanup.restored, true);
+  assert.equal(receipt.cleanup.verified, true);
+  assert.equal(driver.calls.refresh, 3, "REFRESH_CAPTURE executes a real refresh per item");
+  assert.equal(driver.calls.release, 1, "session is released exactly once in finally");
+  assert.equal(driver.calls.getCleanupStatus, 1, "cleanup facts come from the authority");
   assert.ok(receipt.items.every((it) => it.commentScreens === 1 && it.commentsRead === 1));
 });
 
@@ -133,12 +177,13 @@ test("invariant: dwell bounded by plan range", async () => {
   }
 });
 
-test("unknown feed -> skip; >2 consecutive skips -> FAILED closeout", async () => {
+test("unknown feed without a vision navigator -> immediate FAILED closeout with tap=0", async () => {
   const plan = planRoutine({ templateId: "xhs.feed-play.v1", params: { items: 5, seed: "s5" } });
   const driver = fakeDriver({ feedDump: { xml: EMPTY_INDEX_XML, focus: FEED_FOCUS, pkg: "com.xingin.xhs" } });
   const receipt = await createRoutineRun({ plan, driver }).execute();
   assert.equal(receipt.status, "FAILED");
-  assert.equal(receipt.stopReason, "FEED_RECOGNITION_EXHAUSTED");
+  assert.equal(receipt.stopReason, "FEED_NOT_RECOGNIZED:HOME_FEED_EMPTY");
+  assert.equal(driver.calls.tap.length, 0);
 });
 
 test("ensure-feed failure -> BLOCKED closeout, no item loop", async () => {
@@ -247,12 +292,13 @@ test("different seeds diverge on multi-card feeds (sampling recorded in receipt)
   assert.notDeepEqual(a.picks.map((p) => p.targetFingerprint), b.picks.map((p) => p.targetFingerprint));
 });
 
-test("unrecognized detail -> back out, skip; exhaustion -> FAILED", async () => {
+test("unavailable detail dump without vision -> restore once then FAILED", async () => {
   const plan = planRoutine({ templateId: "xhs.feed-play.v1", params: { items: 4, seed: "s14" } });
   const driver = fakeDriver({ detailDump: { xml: "", focus: "com.xingin.xhs/com.xingin.xhs.some.WeirdActivity", pkg: "com.xingin.xhs" } });
   const receipt = await createRoutineRun({ plan, driver }).execute();
   assert.equal(receipt.status, "FAILED");
-  assert.equal(receipt.stopReason, "DETAIL_RECOGNITION_EXHAUSTED");
+  assert.equal(receipt.stopReason, "DETAIL_DUMP_UNAVAILABLE");
+  assert.equal(driver.calls.back, 1);
 });
 
 test("dump unavailable -> FAILED closeout", async () => {
@@ -261,6 +307,233 @@ test("dump unavailable -> FAILED closeout", async () => {
   const receipt = await createRoutineRun({ plan, driver }).execute();
   assert.equal(receipt.status, "FAILED");
   assert.equal(receipt.stopReason, "DUMP_UNAVAILABLE");
+});
+
+test("REFRESH_CAPTURE is mandatory: missing or failed refresh closes before dump/tap", async () => {
+  for (const mode of ["missing", "failed"]) {
+    const plan = planRoutine({ templateId: "xhs.feed-play.v1", params: { items: 1, seed: `refresh-${mode}` } });
+    const driver = fakeDriver({ refreshOk: mode !== "failed" });
+    if (mode === "missing") delete driver.refresh;
+    const receipt = await createRoutineRun({ plan, driver }).execute();
+    assert.equal(receipt.status, "BLOCKED", mode);
+    assert.equal(receipt.stopReason, mode === "missing" ? "REFRESH_INTERFACE_UNAVAILABLE" : "REFRESH_FAILED");
+    assert.equal(driver.calls.dump.length, 0, mode);
+    assert.equal(driver.calls.tap.length, 0, mode);
+    assert.equal(driver.calls.release, 1, `${mode}: finally releases`);
+    assert.equal(receipt.cleanup.verified, true, `${mode}: cleanup is independently verified`);
+  }
+});
+
+test("execution binding is mandatory and exact before any device primitive", async () => {
+  const plan = planRoutine({ templateId: "xhs.feed-play.v1", params: { items: 1, seed: "binding" } });
+  const driver = fakeDriver({ binding: { alias: "wrong", sessionId: "s", deviceId: "d" } });
+  const receipt = await createRoutineRun({ plan, driver }).execute();
+  assert.equal(receipt.status, "BLOCKED");
+  assert.equal(receipt.stopReason, "DRIVER_BINDING_MISMATCH");
+  assert.equal(driver.calls.ensureFeed, 0);
+  assert.equal(driver.calls.tap.length, 0);
+  assert.equal(driver.calls.release, 1);
+});
+
+test("cleanup facts are authoritative: active lease or unrestored device cannot succeed", async () => {
+  for (const scenario of [
+    { activeLeases: 1, restored: true, reason: "ACTIVE_LEASES_REMAIN" },
+    { activeLeases: 0, restored: false, reason: "DEVICE_NOT_RESTORED" },
+  ]) {
+    const plan = planRoutine({ templateId: "xhs.feed-play.v1", params: { items: 1, seed: scenario.reason } });
+    const driver = fakeDriver({
+      cleanupActiveLeases: scenario.activeLeases,
+      cleanupRestored: scenario.restored,
+    });
+    const receipt = await createRoutineRun({ plan, driver }).execute();
+    assert.equal(receipt.status, "BLOCKED");
+    assert.equal(receipt.stopReason, scenario.reason);
+    assert.equal(receipt.cleanup.activeLeases, scenario.activeLeases);
+    assert.equal(receipt.cleanup.restored, scenario.restored);
+    assert.equal(receipt.cleanup.verified, false);
+  }
+});
+
+test("missing release or cleanup-inspection interface fails closed without fabricated facts", async () => {
+  for (const missing of ["release", "getCleanupStatus"]) {
+    const plan = planRoutine({ templateId: "xhs.feed-play.v1", params: { items: 1, seed: `missing-${missing}` } });
+    const driver = fakeDriver({});
+    delete driver[missing];
+    const receipt = await createRoutineRun({ plan, driver }).execute();
+    assert.equal(receipt.status, "BLOCKED", missing);
+    assert.equal(receipt.stopReason, missing === "release"
+      ? "RELEASE_INTERFACE_UNAVAILABLE"
+      : "CLEANUP_INSPECTION_INTERFACE_UNAVAILABLE");
+    assert.equal(receipt.cleanup.verified, false);
+    if (missing === "getCleanupStatus") {
+      assert.equal(receipt.cleanup.activeLeases, null);
+      assert.equal(receipt.cleanup.restored, null);
+    }
+  }
+});
+
+test("driver exception still releases and inspects cleanup in finally", async () => {
+  const plan = planRoutine({ templateId: "xhs.feed-play.v1", params: { items: 1, seed: "finally" } });
+  const driver = fakeDriver({});
+  driver.tapAt = async () => { throw Object.assign(new Error("boom"), { code: "TAP_BOOM" }); };
+  const receipt = await createRoutineRun({ plan, driver }).execute();
+  assert.equal(receipt.status, "FAILED");
+  assert.equal(receipt.stopReason, "ROUTINE_EXECUTION_ERROR:TAP_BOOM");
+  assert.equal(driver.calls.release, 1);
+  assert.equal(driver.calls.getCleanupStatus, 1);
+  assert.equal(receipt.cleanup.verified, true);
+});
+
+test("dump unavailable may open only through an exact bound one-shot R0 vision permit", async () => {
+  const plan = planRoutine({ templateId: "xhs.feed-play.v1", params: { items: 1, seed: "vision-r0" } });
+  const binding = { alias: plan.alias, sessionId: "sess-vision", deviceId: "device-vision" };
+  const driver = fakeDriver({
+    binding,
+    feedDump: { xml: "", focus: FEED_FOCUS, pkg: "com.xingin.xhs" },
+  });
+  const visionNavigator = {
+    async authorizeR0Navigation(request) {
+      return {
+        ok: true,
+        permit: {
+          permitId: "permit-1",
+          executionRunId: request.executionRunId,
+          planHash: request.planHash,
+          alias: request.alias,
+          sessionId: request.sessionId,
+          deviceId: request.deviceId,
+          page: request.page,
+          frameId: "f".repeat(64),
+          provider: { id: "real-provider", version: "1.0.0", modelSha256: "a".repeat(64) },
+          actionClass: "R0_NAVIGATION",
+          oneShot: true,
+          blockId: "block-card-1",
+          dims: { width: 1080, height: 2400 },
+          expiresAtMs: 10,
+        },
+        target: {
+          blockId: "block-card-1",
+          label: "笔记 攀岩入门",
+          x: 300,
+          y: 600,
+        },
+      };
+    },
+  };
+  const receipt = await createRoutineRun({ plan, driver, visionNavigator, clock: CLOCK }).execute();
+  assert.equal(receipt.status, "SUCCEEDED");
+  assert.equal(driver.calls.tap.length, 1);
+  assert.equal(driver.calls.tap[0].source, "vision-r0");
+  assert.equal(driver.calls.tap[0].visionPermit.permitId, "permit-1");
+  assert.equal(receipt.vision[0].tapAuthorized, true);
+  assert.equal(receipt.vision[0].provider.version, "1.0.0");
+  assert.equal(receipt.vision[0].provider.modelSha256, "a".repeat(64));
+  assert.equal(receipt.picks[0].selectionMode, "vision_unique_r0");
+});
+
+test("one-shot vision permit is consumed even when a navigator tries to replay it", async () => {
+  const plan = planRoutine({ templateId: "xhs.feed-play.v1", params: { items: 2, seed: "vision-replay" } });
+  const binding = { alias: plan.alias, sessionId: "sess-replay", deviceId: "device-replay" };
+  const driver = fakeDriver({ binding, feedDump: { xml: "", focus: FEED_FOCUS, pkg: "com.xingin.xhs" } });
+  const visionNavigator = {
+    async authorizeR0Navigation(request) {
+      return {
+        ok: true,
+        permit: {
+          permitId: "permit-replayed",
+          executionRunId: request.executionRunId,
+          planHash: request.planHash,
+          alias: request.alias,
+          sessionId: request.sessionId,
+          deviceId: request.deviceId,
+          page: request.page,
+          frameId: "c".repeat(64),
+          provider: { id: "real-provider", version: "1.0.0", modelSha256: "b".repeat(64) },
+          actionClass: "R0_NAVIGATION",
+          oneShot: true,
+          blockId: `block-${request.index}`,
+          dims: { width: 1080, height: 2400 },
+          expiresAtMs: 10,
+        },
+        target: { blockId: `block-${request.index}`, label: "笔记 普通内容", x: 300, y: 600 },
+      };
+    },
+  };
+  const receipt = await createRoutineRun({ plan, driver, visionNavigator, clock: CLOCK }).execute();
+  assert.equal(receipt.status, "FAILED");
+  assert.equal(receipt.stopReason, "VISION_PERMIT_UNSAFE");
+  assert.equal(driver.calls.tap.length, 1, "the replayed permit produces no second tap");
+});
+
+test("vision permit with an effect control, wrong binding, or fixture provider is tap=0", async () => {
+  for (const unsafe of ["effect", "binding", "fixture"]) {
+    const plan = planRoutine({ templateId: "xhs.feed-play.v1", params: { items: 1, seed: `vision-${unsafe}` } });
+    const binding = { alias: plan.alias, sessionId: "sess-safe", deviceId: "device-safe" };
+    const driver = fakeDriver({ binding, feedDump: { xml: "", focus: FEED_FOCUS, pkg: "com.xingin.xhs" } });
+    const visionNavigator = {
+      async resolveNavigationTarget(request) {
+        return {
+          ok: true,
+          permit: {
+            actionRef: "action-unsafe",
+            executionRunId: request.executionRunId,
+            planHash: unsafe === "binding" ? "0".repeat(64) : request.planHash,
+            alias: request.alias,
+            sessionRef: request.sessionId,
+            deviceRef: request.deviceId,
+            page: request.page,
+            frameId: "e".repeat(64),
+            provider: unsafe === "fixture" ? "fixture" : "real-provider",
+            actionClass: "R0_NAVIGATION",
+            oneShot: true,
+            blockId: "block-unsafe",
+          },
+          target: {
+            blockId: "block-unsafe",
+            label: unsafe === "effect" ? "点赞 12" : "笔记 普通内容",
+            x: 300,
+            y: 600,
+          },
+        };
+      },
+    };
+    const receipt = await createRoutineRun({ plan, driver, visionNavigator, clock: CLOCK }).execute();
+    assert.equal(receipt.status, "FAILED", unsafe);
+    assert.equal(driver.calls.tap.length, 0, unsafe);
+    assert.match(receipt.stopReason, /^VISION_PERMIT_/, unsafe);
+  }
+});
+
+test("ambiguous detail dump may be classified by bound vision observation but cannot authorize a tap", async () => {
+  const plan = planRoutine({ templateId: "xhs.feed-play.v1", params: { items: 1, commentScreens: 0, seed: "vision-detail" } });
+  const binding = { alias: plan.alias, sessionId: "sess-detail", deviceId: "device-detail" };
+  const driver = fakeDriver({
+    binding,
+    detailDump: { xml: "", focus: "com.xingin.xhs/com.xingin.xhs.unknown", pkg: "com.xingin.xhs" },
+  });
+  const visionNavigator = {
+    async observePage(request) {
+      return {
+        ok: true,
+        observation: {
+          executionRunId: request.executionRunId,
+          planHash: request.planHash,
+          alias: request.alias,
+          sessionId: request.sessionId,
+          deviceId: request.deviceId,
+          page: PAGE_CLASS.IMAGE_NOTE,
+          frameId: "d".repeat(64),
+          provider: { id: "real-provider", version: "1.0.0", modelSha256: "a".repeat(64) },
+        },
+      };
+    },
+  };
+  const receipt = await createRoutineRun({ plan, driver, visionNavigator }).execute();
+  assert.equal(receipt.status, "SUCCEEDED");
+  assert.equal(receipt.items[0].detailPage, PAGE_CLASS.IMAGE_NOTE);
+  assert.equal(receipt.vision.length, 1);
+  assert.equal(receipt.vision[0].tapAuthorized, false);
+  assert.equal(driver.calls.tap.length, 1, "only the dump-bound feed card is tapped");
 });
 
 test("machine rejects a non-sealed plan object", () => {

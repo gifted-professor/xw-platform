@@ -1,0 +1,96 @@
+{
+  "schema": "xw.xhs.routine-03-live-source-files.v1",
+  "baselineHead": "eeb23dc268bd003c09b6843cebcb16c2acd3e893",
+  "branch": "codex/xhs-routine-03-live-s1-s4",
+  "worktree": ".worktrees/xhs-r03",
+  "generatedAt": "2026-08-28",
+  "files": [
+    {
+      "path": "package.json",
+      "sha256": "19da4224e1889b0d570523b953e9010530b15dfbcd38d2522f7a4d7d046c618f",
+      "origin": "migrated-from-dirty-wip"
+    },
+    {
+      "path": "services/orchestrator/ops/xw-xhs-routine.mjs",
+      "sha256": "72e85326b51bc37c32bd6cc842d2b188b6448986df0711d2ff7e054393a48f91",
+      "origin": "migrated-from-dirty-wip"
+    },
+    {
+      "path": "services/orchestrator/ops/xw-xhs.mjs",
+      "sha256": "94636df350cc6a4d580da3dc0a4542a50393cf239019ceecf4e709f16379e473",
+      "origin": "migrated-from-dirty-wip"
+    },
+    {
+      "path": "services/orchestrator/ops/_xhs-routine-explorer-runtime.mjs",
+      "sha256": "6aebba20a4fcfa9381ceaaccaf4263f81b61e9eeffdcf2a562f7ecf56f5cc257",
+      "origin": "migrated-from-dirty-wip"
+    },
+    {
+      "path": "services/orchestrator/scripts/lib/xhs-feed-routine-machine.mjs",
+      "sha256": "a7752fcf200cfbaea1a5190c505e8f519e82e1c9b919a9b8dc94071ea45bfb58",
+      "origin": "migrated-from-dirty-wip"
+    },
+    {
+      "path": "services/orchestrator/scripts/lib/xhs-routine-plan.mjs",
+      "sha256": "3f1037ae49a7f65e7e040ae939f0486a4ed4d087299da339f2349bf2c8c39e7b",
+      "origin": "migrated-from-dirty-wip"
+    },
+    {
+      "path": "services/orchestrator/scripts/lib/xhs-routine-run-store.mjs",
+      "sha256": "9b7be56b63b45c48c287bfa463f670331f2e162efa0dbec55bd750826981b650",
+      "origin": "migrated-from-dirty-wip"
+    },
+    {
+      "path": "services/orchestrator/scripts/lib/xhs-routine-runner.mjs",
+      "sha256": "b28c62ededfd716f998f4f0d76edc6fad618bf22291c67be7205ebb3b020f6db",
+      "origin": "migrated-from-dirty-wip"
+    },
+    {
+      "path": "services/orchestrator/tests/fixtures/xhs-routine-fake-driver.mjs",
+      "sha256": "53a28d91487457c0d9b98c9d240c9d72c0e0979e603206a2b547b7e149e45a34",
+      "origin": "migrated-from-dirty-wip"
+    },
+    {
+      "path": "services/orchestrator/tests/xhs-feed-routine-machine.test.mjs",
+      "sha256": "03b536231258df5e242f52f76b904ed36e8ad6d6698642907e57ad42bc30ed38",
+      "origin": "migrated-from-dirty-wip"
+    },
+    {
+      "path": "services/orchestrator/tests/xhs-routine-plan.test.mjs",
+      "sha256": "5c6496a0169ba36c3772b5da2a2c7ca259d32b915917cfd380c96f529718407d",
+      "origin": "migrated-from-dirty-wip"
+    },
+    {
+      "path": "services/orchestrator/tests/xhs-routine-explorer-runtime.test.mjs",
+      "sha256": "550ad286e782a0283df47d50bb2dddf1c354fe9f8e4b94eba3b8f577e7e02afb",
+      "origin": "migrated-from-dirty-wip"
+    },
+    {
+      "path": "services/orchestrator/tests/xhs-routine-runner.test.mjs",
+      "sha256": "8452bf1b549e362428af442cd1a36cb55a74c6cede041dcb28d43bb836853d01",
+      "origin": "migrated-from-dirty-wip"
+    },
+    {
+      "path": "services/orchestrator/tests/xw-xhs-routine-cli.test.mjs",
+      "sha256": "02792d16835d3fc42e21bd668709bba122eadb5debe1c53a46675937373ac369",
+      "origin": "migrated-from-dirty-wip"
+    }
+  ],
+  "excluded": [
+    "docs/plans/M6-3-execution-contract.json",
+    "docs/plans/M6-3-execution-route.json",
+    "services/control-plane/scripts/m6-resource-probe.mjs",
+    "services/control-plane/tests/m6-resource-probe.test.mjs",
+    "services/orchestrator/ops/install-xw-system-broker.ps1",
+    "services/orchestrator/ops/xw-system-broker.mjs",
+    "services/orchestrator/ops/xw-system-broker.ps1",
+    "services/orchestrator/ops/xw-system-broker.test.mjs",
+    "services/orchestrator/ops/xw-wechat-balance.mjs",
+    "kimi.err",
+    "kimi.out",
+    "tmp_m6check.png",
+    "aitop.err",
+    "aitop.out"
+  ],
+  "note": "release A may only be built from committed tracked files; untracked broker/wechat/log assets are excluded from this chain"
+}

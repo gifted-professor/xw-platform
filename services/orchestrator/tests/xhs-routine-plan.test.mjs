@@ -1,7 +1,8 @@
 /**
  * xhs-routine-plan.test.mjs — sealed routine plan catalog tests (direct-routine
- * plan V2 §1/§2/§4/§7): three call surfaces -> one planHash; publish/alias/
- * commentMax=3 rejected before any I/O; sealed JSON tamper-rejected.
+ * plan V2 §1/§2/§4/§7 + placement policy v1: deterministic semantic hash,
+ * 03-first single execution, explicit read-only [03,04] concurrency, and
+ * execution identity allocated independently from planHash.
  */
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -9,6 +10,9 @@ import assert from "node:assert/strict";
 import {
   planRoutine,
   acceptSealedRoutinePlan,
+  bindRoutineExecution,
+  bindRoutineExecutionBatch,
+  validateRoutineExecutionBinding,
   normalizeRoutineParams,
   parseDwellSeconds,
   listRoutineTemplates,
@@ -16,6 +20,10 @@ import {
   seedToRngState,
   RoutinePlanError,
   ROUTINE_SCHEMA_ID,
+  ROUTINE_SCHEMA_VERSION,
+  ROUTINE_PRIMARY_ALIAS,
+  ROUTINE_SECONDARY_ALIAS,
+  ROUTINE_PLACEMENT_POLICY_ID,
   COMMENT_MAX_CAP,
   LIKE_MAX_CAP,
 } from "../scripts/lib/xhs-routine-plan.mjs";
@@ -34,9 +42,12 @@ test("planRoutine is deterministic: identical inputs -> identical planHash", () 
   const a = planRoutine({ templateId: "xhs.feed-play.v1", params: { items: 8, seed: "daily" } });
   const b = planRoutine({ templateId: "xhs.feed-play.v1", params: { seed: "daily", items: 8 } });
   assert.equal(a.planHash, b.planHash);
-  assert.equal(a.routineRunId, b.routineRunId);
   assert.match(a.planHash, /^[0-9a-f]{64}$/);
-  assert.equal(a.routineRunId, `rr_${a.planHash.slice(0, 16)}`);
+  assert.equal(a.schemaVersion, 2);
+  assert.equal(ROUTINE_SCHEMA_VERSION, 2);
+  const serialized = JSON.parse(JSON.stringify(a));
+  assert.equal(serialized.routineRunId, undefined, "plan-only document has no routine execution identity");
+  assert.equal(serialized.executionRunId, undefined, "plan-only document has no parent execution identity");
 });
 
 test("planHash changes when params change", () => {
@@ -64,15 +75,96 @@ test("three call surfaces produce the same canonical plan", () => {
   assert.equal(composed.planHash, cli.planHash);
 });
 
-test("04-only: alias 01/02/03 rejected at plan stage with ROUTINE_ALIAS_NOT_04", () => {
-  for (const alias of ["01", "02", "03"]) {
+test("placement v1: default/explicit single is 03; 01/02 rejected; 04 alone fails closed", () => {
+  const implicit = planRoutine({ templateId: "xhs.feed-play.v1", params: {} });
+  const explicit = planRoutine({ templateId: "xhs.feed-play.v1", params: {}, alias: "03" });
+  assert.equal(implicit.alias, ROUTINE_PRIMARY_ALIAS);
+  assert.equal(implicit.planHash, explicit.planHash);
+  assert.equal(implicit.parallel, 1);
+  assert.equal(implicit.placement.policyId, ROUTINE_PLACEMENT_POLICY_ID);
+  assert.equal(implicit.placement.automaticFallback, false);
+  assert.deepEqual(implicit.placement.aliases, ["03"]);
+  assert.deepEqual(implicit.children.map((child) => child.alias), ["03"]);
+
+  for (const alias of ["01", "02"]) {
     assert.throws(
       () => planRoutine({ templateId: "xhs.feed-play.v1", params: {}, alias }),
-      (e) => e.code === "ROUTINE_ALIAS_NOT_04",
+      (e) => e.code === "ROUTINE_ALIAS_NOT_ALLOWED",
     );
   }
-  const p = planRoutine({ templateId: "xhs.feed-play.v1", params: {} });
-  assert.equal(p.alias, "04");
+  assert.throws(
+    () => planRoutine({ templateId: "xhs.feed-play.v1", params: {}, alias: ROUTINE_SECONDARY_ALIAS }),
+    (e) => e.code === "ROUTINE_SECONDARY_REQUIRES_EXPLICIT_CONCURRENCY",
+  );
+});
+
+test("only explicit parallel=2 forms exact read-only [03,04]; social secondary is forbidden", () => {
+  const batch = planRoutine({ templateId: "xhs.feed-play.v1", params: { items: 2 }, parallel: 2 });
+  assert.equal(batch.parallel, 2);
+  assert.equal(batch.placement.mode, "explicit_concurrency");
+  assert.equal(batch.placement.automaticFallback, false);
+  assert.deepEqual(batch.placement.aliases, ["03", "04"]);
+  assert.deepEqual(batch.children.map((child) => child.alias), ["03", "04"]);
+  assert.ok(batch.children.every((child) => child.effectClass === "none" && child.externalEffects === 0));
+
+  const expressedFromSecondary = planRoutine({
+    templateId: "xhs.feed-play.v1",
+    params: { items: 2 },
+    alias: "04",
+    parallel: 2,
+  });
+  assert.equal(expressedFromSecondary.planHash, batch.planHash, "explicit concurrency has one canonical [03,04] meaning");
+
+  assert.throws(
+    () => planRoutine({ templateId: "xhs.nurture-lite.v1", params: {}, parallel: 2 }),
+    (e) => e.code === "ROUTINE_SECONDARY_EFFECT_CLASS_FORBIDDEN",
+  );
+  for (const parallel of [0, 3, "all", true]) {
+    assert.throws(
+      () => planRoutine({ templateId: "xhs.feed-play.v1", params: {}, parallel }),
+      (e) => e.code === "ROUTINE_PARALLEL_INVALID",
+    );
+  }
+});
+
+test("execution IDs are bound after planning, random, validated, and never derived from planHash", () => {
+  const plan = planRoutine({ templateId: "xhs.feed-play.v1", params: { items: 2 } });
+  const first = bindRoutineExecution(plan, {
+    randomUUIDFn: () => "00000000-0000-4000-8000-000000000001",
+  });
+  const second = bindRoutineExecution(plan, {
+    randomUUIDFn: () => "00000000-0000-4000-8000-000000000002",
+  });
+  assert.equal(first.planHash, second.planHash);
+  assert.notEqual(first.executionRunId, second.executionRunId);
+  assert.notEqual(first.routineRunId, second.routineRunId);
+  assert.equal(first.alias, "03");
+  assert.equal(first.planAlias, "03");
+  assert.equal(validateRoutineExecutionBinding(first), first);
+  assert.ok(!first.executionRunId.includes(plan.planHash.slice(0, 16)));
+  assert.throws(
+    () => validateRoutineExecutionBinding({ ...first, routineRunId: "rr_00000000000040008000000000000009" }),
+    (e) => e.code === "ROUTINE_EXECUTION_BINDING_TAMPERED",
+  );
+  assert.throws(
+    () => bindRoutineExecution(plan, { alias: "04" }),
+    (e) => e.code === "ROUTINE_SECONDARY_REQUIRES_EXPLICIT_CONCURRENCY",
+  );
+});
+
+test("parallel execution binding shares executionRunId and gives exact children unique routineRunIds", () => {
+  const plan = planRoutine({ templateId: "xhs.scout.home.v1", params: { items: 2 }, parallel: 2 });
+  const uuids = [
+    "10000000-0000-4000-8000-000000000001",
+    "20000000-0000-4000-8000-000000000002",
+  ];
+  const batch = bindRoutineExecutionBatch(plan, { randomUUIDFn: () => uuids.shift() });
+  assert.deepEqual(batch.aliases, ["03", "04"]);
+  assert.equal(batch.children[0].executionRunId, batch.executionRunId);
+  assert.equal(batch.children[1].executionRunId, batch.executionRunId);
+  assert.notEqual(batch.children[0].routineRunId, batch.children[1].routineRunId);
+  assert.ok(batch.children.every((child) => validateRoutineExecutionBinding(child) === child));
+  assert.ok(batch.children.every((child) => child.effectClass === "none"));
 });
 
 test("no publish/DM/follow/collect template exists — invented ones are rejected", () => {
@@ -140,13 +232,24 @@ test("acceptSealedRoutinePlan rejects tampered templates/params/hash", () => {
   tamperedAlias.alias = "01";
   assert.throws(() => acceptSealedRoutinePlan(tamperedAlias), (e) => e.code === "ROUTINE_PLAN_TAMPERED");
 
+  const tamperedPlacement = JSON.parse(JSON.stringify(sealable));
+  tamperedPlacement.placement.aliases.push("04");
+  assert.throws(() => acceptSealedRoutinePlan(tamperedPlacement), (e) => e.code === "ROUTINE_PLAN_TAMPERED");
+
+  const tamperedConcurrency = JSON.parse(JSON.stringify(sealable));
+  tamperedConcurrency.perDeviceConcurrency = 2;
+  assert.throws(() => acceptSealedRoutinePlan(tamperedConcurrency), (e) => e.code === "ROUTINE_PLAN_TAMPERED");
+
+  const inventedTopLevel = { ...JSON.parse(JSON.stringify(sealable)), publish: true };
+  assert.throws(() => acceptSealedRoutinePlan(inventedTopLevel), (e) => e.code === "ROUTINE_PLAN_SEALED");
+
   const badHash = JSON.parse(JSON.stringify(sealable));
   badHash.planHash = "0".repeat(64);
   assert.throws(() => acceptSealedRoutinePlan(badHash), (e) => e.code === "ROUTINE_PLAN_TAMPERED");
 
-  const wrongRunId = JSON.parse(JSON.stringify(sealable));
-  wrongRunId.routineRunId = "rr_" + "0".repeat(16);
-  assert.throws(() => acceptSealedRoutinePlan(wrongRunId), (e) => e.code === "ROUTINE_PLAN_TAMPERED");
+  const injectedRunId = JSON.parse(JSON.stringify(sealable));
+  injectedRunId.routineRunId = "rr_" + "0".repeat(32);
+  assert.throws(() => acceptSealedRoutinePlan(injectedRunId), (e) => e.code === "ROUTINE_PLAN_SEALED");
 
   const withTemplateSpec = JSON.parse(JSON.stringify(sealable));
   withTemplateSpec.templateSpec = {};

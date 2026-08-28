@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
- * xw-xhs.mjs — single adaptive dispatcher for the 04 小红书 multi-entry
- * script pack (plan V2). The only execution surface for /xw xhs <action>.
+ * xw-xhs.mjs — adaptive dispatcher for the legacy 04 fixed-action pack plus
+ * the 03-first deterministic routine surface. `/xw xhs routine ...` delegates
+ * in-process to xw-xhs-routine.mjs; it does not create a second executor.
  *
  *   node ops/xw-xhs.mjs <action> [flags] --plan        # plan-only (default)
  *   node ops/xw-xhs.mjs <action> [flags] --json        # plan as JSON
@@ -89,6 +90,12 @@ actions (04-only):
   publish prepare --title <标题> --body <正文> [--tags a,b] [--images x,y]
   publish send --run <prepareRunId>
 
+routines (03-first, formal CP-session-bound):
+  routine feed-play [--items 8] [--dwell 5:12] [--execute]
+  routine scout [--items 5] [--execute]
+  routine nurture-lite|nurture-grounded ...  # social authority remains fail-closed
+  routine catalog
+
 --plan (default) never touches a device. --execute fails closed until the
 action's wave promotes it via the live canary chain.`;
 }
@@ -103,7 +110,17 @@ function toParams(action, args) {
 }
 
 async function main() {
-  const args = parseArgs(process.argv.slice(2));
+  const rawArgv = process.argv.slice(2);
+  if (rawArgv[0] === "routine") {
+    const tail = rawArgv.slice(1);
+    const directCommands = new Set(["catalog", "goal", "plan", "run"]);
+    const routineArgv = directCommands.has(tail[0]) ? tail : ["run", ...tail];
+    const { runRoutineCli } = await import("./xw-xhs-routine.mjs");
+    await runRoutineCli(routineArgv);
+    return;
+  }
+
+  const args = parseArgs(rawArgv);
   if (args.help || args.h) { console.log(usage()); return; }
 
   if (args._[0] === "catalog") {

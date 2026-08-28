@@ -33,6 +33,7 @@ import {
   bindTargetFingerprint,
 } from "./xhs-feed-surface.mjs";
 import { seedToRngState } from "./xhs-routine-plan.mjs";
+import { isEffectControlLabel } from "./xhs-vision-shadow.mjs";
 
 export const ROUTINE_MACHINE_STATE = Object.freeze({
   ENSURE_FEED: "ENSURE_FEED",
@@ -86,15 +87,26 @@ function defaultClock() {
  * Create a routine run executor.
  * @param {object} input
  * @param {object} input.plan - sealed plan from planRoutine/acceptSealedRoutinePlan
- * @param {object} input.driver - session-bound primitives:
- *   { ensureFeed(), refresh(), dump({label}), tapAt({x,y}), back(),
- *     waitFor(ms) } — every primitive returns an observation; the machine
- *     classifies and decides.
+ * @param {object} input.driver - session-bound primitives. A production
+ *   driver must expose getExecutionBinding(), refresh(), release()/close(),
+ *   and getCleanupStatus()/inspectCleanup() in addition to the interaction
+ *   primitives. Missing ownership/cleanup interfaces fail closed.
  * @param {object} [input.clock] - { nowMs(), sleep(ms) } (tests inject fake)
  * @param {object} [input.effects] - S2+ commitRoutineEffect bridge; when
  *        absent, effect steps are recorded as deferred (transport 0).
+ * @param {object} [input.visionNavigator] - optional production vision seam.
+ *   It may observe a detail page, or issue a one-shot R0 navigation permit
+ *   for a unique feed card. The machine does not provide a production vision
+ *   provider; callers must inject one and all bindings are verified here.
  */
-export function createRoutineRun({ plan, driver, clock = defaultClock(), effects = null, limits = {} } = {}) {
+export function createRoutineRun({
+  plan,
+  driver,
+  clock = defaultClock(),
+  effects = null,
+  visionNavigator = null,
+  limits = {},
+} = {}) {
   if (!plan || plan.ok !== true || plan.schemaId !== "xw.xhs.routine-plan.v1") {
     throw new TypeError("createRoutineRun: sealed routine plan required");
   }
@@ -106,11 +118,14 @@ export function createRoutineRun({ plan, driver, clock = defaultClock(), effects
   const params = plan.params;
   const dwell = params.dwell ?? { min: 5, max: 12 };
   const rng = mulberry32(seedToRngState(params.seed ?? "daily"));
+  const executionRunId = plan.executionRunId || plan.routineRunId;
 
   const run = {
     template,
     planHash: plan.planHash,
     routineRunId: plan.routineRunId,
+    executionRunId,
+    alias: plan.alias,
     seed: params.seed ?? "daily",
     picks: [],
     items: [],
@@ -126,14 +141,187 @@ export function createRoutineRun({ plan, driver, clock = defaultClock(), effects
     terminal: null,
     stopReason: null,
     cleanup: null,
+    executionBinding: null,
+    vision: [],
   };
 
   const openedTargets = new Set();
+  const consumedVisionPermits = new Set();
 
   function finish(status, reason) {
     run.terminal = status;
     run.stopReason = reason ?? run.stopReason;
     return { status, reason: run.stopReason };
+  }
+
+  function nonEmpty(value) {
+    return typeof value === "string" && value.trim().length > 0;
+  }
+
+  function normalizeExecutionBinding(raw) {
+    const binding = {
+      alias: String(raw?.alias ?? ""),
+      sessionId: String(raw?.sessionId ?? raw?.sessionRef ?? ""),
+      deviceId: String(raw?.deviceId ?? raw?.deviceRef ?? raw?.serial ?? ""),
+    };
+    if (binding.alias !== String(plan.alias)
+      || !nonEmpty(binding.sessionId)
+      || !nonEmpty(binding.deviceId)) {
+      return null;
+    }
+    return Object.freeze(binding);
+  }
+
+  async function initializeExecutionBinding() {
+    if (typeof driver.getExecutionBinding !== "function") {
+      finish("BLOCKED", "DRIVER_BINDING_INTERFACE_UNAVAILABLE");
+      return false;
+    }
+    let raw;
+    try {
+      raw = await driver.getExecutionBinding({ executionRunId, planHash: plan.planHash, alias: plan.alias });
+    } catch {
+      finish("BLOCKED", "DRIVER_BINDING_LOOKUP_FAILED");
+      return false;
+    }
+    const binding = normalizeExecutionBinding(raw);
+    if (!binding) {
+      finish("BLOCKED", "DRIVER_BINDING_MISMATCH");
+      return false;
+    }
+    run.executionBinding = binding;
+    return true;
+  }
+
+  function providerIdOf(provider) {
+    return typeof provider === "string" ? provider : provider?.id;
+  }
+
+  function providerIsPinned(provider) {
+    return provider && typeof provider === "object"
+      && nonEmpty(provider.id)
+      && nonEmpty(provider.version)
+      && /^[a-f0-9]{64}$/.test(String(provider.modelSha256 || ""));
+  }
+
+  function bindingMatches(candidate, expectedPage) {
+    const binding = run.executionBinding;
+    return candidate?.executionRunId === executionRunId
+      && candidate?.planHash === plan.planHash
+      && String(candidate?.alias) === String(plan.alias)
+      && String(candidate?.sessionId ?? candidate?.sessionRef ?? "") === binding?.sessionId
+      && String(candidate?.deviceId ?? candidate?.deviceRef ?? candidate?.serial ?? "") === binding?.deviceId
+      && candidate?.page === expectedPage
+      && nonEmpty(candidate?.frameId)
+      && nonEmpty(providerIdOf(candidate?.provider));
+  }
+
+  function validateR0VisionPermit(result, expectedPage = PAGE_CLASS.HOME_FEED) {
+    const permit = result?.permit;
+    const target = result?.target;
+    if (result?.ok !== true || !permit || !target || !bindingMatches(permit, expectedPage)) {
+      return { ok: false, reason: "VISION_PERMIT_BINDING_INVALID" };
+    }
+    const permitId = permit.permitId || permit.actionRef;
+    const actionClass = permit.actionClass || permit.riskClass;
+    const providerId = providerIdOf(permit.provider);
+    const fixtureProvider = /(^|[-_.])fixture($|[-_.])/i.test(providerId);
+    const effectSemantics = [target.label, target.action, target.category, target.controlType]
+      .some((value) => isEffectControlLabel(value));
+    const width = Number(permit.dims?.width);
+    const height = Number(permit.dims?.height);
+    if (!nonEmpty(permitId)
+      || (actionClass !== "R0_NAVIGATION" && actionClass !== "R0")
+      || permit.oneShot !== true
+      || permit.consumed === true
+      || consumedVisionPermits.has(permitId)
+      || fixtureProvider
+      || !providerIsPinned(permit.provider)
+      || !nonEmpty(target.blockId)
+      || (permit.blockId && permit.blockId !== target.blockId)
+      || !Number.isFinite(target.x)
+      || !Number.isFinite(target.y)
+      || !Number.isFinite(width)
+      || !Number.isFinite(height)
+      || width <= 0
+      || height <= 0
+      || target.x < 0
+      || target.y < 0
+      || target.x >= width
+      || target.y >= height
+      || permit.effectControl === true
+      || target.effectControl === true
+      || effectSemantics) {
+      return { ok: false, reason: "VISION_PERMIT_UNSAFE" };
+    }
+    if (!Number.isFinite(permit.expiresAtMs) || Number(permit.expiresAtMs) <= clock.nowMs()) {
+      return { ok: false, reason: "VISION_PERMIT_EXPIRED" };
+    }
+    return { ok: true, permit, target, permitId, provider: Object.freeze({ ...permit.provider }), providerId };
+  }
+
+  async function resolveVisionFeedTarget({ index, reason }) {
+    const authorize = visionNavigator?.authorizeR0Navigation
+      || visionNavigator?.resolveNavigationTarget;
+    if (typeof authorize !== "function") {
+      return { ok: false, reason: "VISION_NAVIGATOR_UNAVAILABLE" };
+    }
+    let result;
+    try {
+      result = await authorize.call(visionNavigator, {
+        purpose: "open_unique_feed_card",
+        reason,
+        executionRunId,
+        planHash: plan.planHash,
+        alias: plan.alias,
+        sessionId: run.executionBinding.sessionId,
+        deviceId: run.executionBinding.deviceId,
+        page: PAGE_CLASS.HOME_FEED,
+        index,
+        seed: run.seed,
+      });
+    } catch {
+      return { ok: false, reason: "VISION_NAVIGATOR_FAILED" };
+    }
+    return validateR0VisionPermit(result);
+  }
+
+  function validateVisionObservation(result) {
+    const observation = result?.observation || result;
+    if (result?.ok === false || !bindingMatches(observation, observation?.page)) {
+      return { ok: false, reason: "VISION_OBSERVATION_BINDING_INVALID" };
+    }
+    if (observation.page !== PAGE_CLASS.IMAGE_NOTE && observation.page !== PAGE_CLASS.VIDEO_NOTE) {
+      return { ok: false, reason: "VISION_DETAIL_UNSAFE_OR_UNKNOWN" };
+    }
+    const providerId = providerIdOf(observation.provider);
+    if (/(^|[-_.])fixture($|[-_.])/i.test(providerId) || !providerIsPinned(observation.provider)) {
+      return { ok: false, reason: "VISION_PROVIDER_UNSAFE" };
+    }
+    return { ok: true, observation, provider: Object.freeze({ ...observation.provider }), providerId };
+  }
+
+  async function observeDetailWithVision({ index, reason }) {
+    if (typeof visionNavigator?.observePage !== "function") {
+      return { ok: false, reason: "VISION_NAVIGATOR_UNAVAILABLE" };
+    }
+    let result;
+    try {
+      result = await visionNavigator.observePage({
+        purpose: "classify_open_detail",
+        reason,
+        executionRunId,
+        planHash: plan.planHash,
+        alias: plan.alias,
+        sessionId: run.executionBinding.sessionId,
+        deviceId: run.executionBinding.deviceId,
+        expectedPage: "XHS_NOTE_DETAIL",
+        index,
+      });
+    } catch {
+      return { ok: false, reason: "VISION_NAVIGATOR_FAILED" };
+    }
+    return validateVisionObservation(result);
   }
 
   /** One full item loop. Returns an item receipt. */
@@ -153,65 +341,154 @@ export function createRoutineRun({ plan, driver, clock = defaultClock(), effects
     };
 
     // --- ENSURE_FEED -------------------------------------------------------
+    if (typeof driver.ensureFeed !== "function") {
+      item.stopReason = "ENSURE_FEED_INTERFACE_UNAVAILABLE";
+      return { item, stop: finish("BLOCKED", "ENSURE_FEED_INTERFACE_UNAVAILABLE") };
+    }
     const feed = await driver.ensureFeed();
     if (!feed || feed.ok !== true) {
       item.stopReason = "ENSURE_FEED_FAILED";
       return { item, stop: finish("BLOCKED", "ENSURE_FEED_FAILED") };
     }
 
-    // --- REFRESH_CAPTURE + DISCOVER_VISIBLE_CARDS --------------------------
-    const dumped = await driver.dump({ label: `routine-${template}-${index}` });
-    if (!dumped || !dumped.xml) {
-      item.stopReason = "DUMP_UNAVAILABLE";
-      return { item, stop: finish("FAILED", "DUMP_UNAVAILABLE") };
+    // --- REFRESH_CAPTURE ---------------------------------------------------
+    // Refresh is an actual session-bound primitive, not a state-machine label.
+    // A driver that cannot perform it is not a production routine driver.
+    if (typeof driver.refresh !== "function") {
+      item.stopReason = "REFRESH_INTERFACE_UNAVAILABLE";
+      return { item, stop: finish("BLOCKED", "REFRESH_INTERFACE_UNAVAILABLE") };
     }
-    const page = classifyPage({
+    const refreshed = await driver.refresh({
+      executionRunId,
+      planHash: plan.planHash,
+      alias: plan.alias,
+      sessionId: run.executionBinding.sessionId,
+      deviceId: run.executionBinding.deviceId,
+      index,
+    });
+    if (!refreshed || refreshed.ok !== true) {
+      item.stopReason = "REFRESH_FAILED";
+      return { item, stop: finish("BLOCKED", "REFRESH_FAILED") };
+    }
+
+    // --- CAPTURE + DISCOVER_VISIBLE_CARDS ---------------------------------
+    let dumped = null;
+    if (typeof driver.dump === "function") {
+      dumped = await driver.dump({ label: `routine-${template}-${index}` });
+    }
+    const page = dumped?.xml ? classifyPage({
       xml: dumped.xml,
       focus: dumped.focus,
       pkg: dumped.pkg,
       sourceCardKind: null,
-    });
+    }) : { page: PAGE_CLASS.UNKNOWN, cards: [] };
     run.dumpHashes = run.dumpHashes || [];
-    if (dumped.hash) run.dumpHashes.push(dumped.hash);
-    if (page.page !== PAGE_CLASS.HOME_FEED || !page.cards?.length) {
-      item.stopReason = `FEED_NOT_RECOGNIZED:${page.page}`;
-      run.skipsConsecutive += 1;
-      if (run.skipsConsecutive > MAX_CONSECUTIVE_SKIPS) {
-        return { item, stop: finish("FAILED", "FEED_RECOGNITION_EXHAUSTED") };
+    if (dumped?.hash) run.dumpHashes.push(dumped.hash);
+    let targetFingerprint;
+    let openPoint;
+    let visionPermit = null;
+
+    if (page.page === PAGE_CLASS.HOME_FEED && page.cards?.length) {
+      // --- PICK_SEEDED_TARGET ----------------------------------------------
+      const eligible = page.cards.filter((c) => {
+        const fp = bindTargetFingerprint({ cardTitle: c.title, cardAuthor: c.author, cardCenter: { x: c.cx, y: c.cy }, pageEvidence: page.page });
+        return !openedTargets.has(fp);
+      });
+      if (!eligible.length) {
+        item.stopReason = "NO_UNTRIED_CARDS";
+        return { item, stop: finish("SUCCEEDED", "NO_UNTRIED_CARDS") };
       }
-      return { item, stop: null };
+      const pickIdx = Math.floor(rng() * eligible.length);
+      const card = eligible[pickIdxSafe(eligible, pickIdx)];
+      targetFingerprint = bindTargetFingerprint({
+        cardTitle: card.title,
+        cardAuthor: card.author,
+        cardCenter: { x: card.cx, y: card.cy },
+        pageEvidence: page.page,
+      });
+      item.cardKind = classifyCardKind([card.desc]).kind;
+      openPoint = { x: card.cx, y: card.cy };
+      run.picks.push({
+        index,
+        targetFingerprint,
+        cardKind: item.cardKind,
+        prefer: params.prefer ?? "any",
+        selectionMode: "dump_seeded",
+      });
+    } else {
+      // Dump absent/sparse/ambiguous may use an injected, production-pinned
+      // vision navigator. It must return a fully bound, one-shot R0 permit.
+      // Without that exact contract the run stops with tap=0.
+      const reason = !dumped?.xml ? "DUMP_UNAVAILABLE" : `FEED_NOT_RECOGNIZED:${page.page}`;
+      const visual = await resolveVisionFeedTarget({ index, reason });
+      if (!visual.ok) {
+        item.stopReason = `${reason}:${visual.reason}`;
+        return { item, stop: finish("FAILED", visual.reason === "VISION_NAVIGATOR_UNAVAILABLE" ? reason : visual.reason) };
+      }
+      visionPermit = visual.permit;
+      openPoint = { x: visual.target.x, y: visual.target.y };
+      targetFingerprint = visual.target.targetFingerprint
+        || `vision:${visionPermit.frameId}:${visual.target.blockId}`;
+      if (openedTargets.has(targetFingerprint)) {
+        item.stopReason = "VISION_TARGET_REPLAY";
+        return { item, stop: finish("FAILED", "VISION_TARGET_REPLAY") };
+      }
+      item.cardKind = classifyCardKind([visual.target.label, visual.target.cardKind]).kind;
+      run.picks.push({
+        index,
+        targetFingerprint,
+        cardKind: item.cardKind,
+        prefer: params.prefer ?? "any",
+        selectionMode: "vision_unique_r0",
+        frameId: visionPermit.frameId,
+        provider: visual.provider,
+        blockId: visual.target.blockId,
+        permitId: visual.permitId,
+      });
+      run.vision.push({
+        purpose: "open_unique_feed_card",
+        frameId: visionPermit.frameId,
+        provider: visual.provider,
+        blockId: visual.target.blockId,
+        permitId: visual.permitId,
+        tapAuthorized: true,
+      });
     }
 
-    // --- PICK_SEEDED_TARGET ------------------------------------------------
-    const eligible = page.cards.filter((c) => {
-      const fp = bindTargetFingerprint({ cardTitle: c.title, cardAuthor: c.author, cardCenter: { x: c.cx, y: c.cy }, pageEvidence: page.page });
-      return !openedTargets.has(fp);
-    });
-    if (!eligible.length) {
-      item.stopReason = "NO_UNTRIED_CARDS";
-      return { item, stop: finish("SUCCEEDED", "NO_UNTRIED_CARDS") };
-    }
-    const pickIdx = Math.floor(rng() * eligible.length);
-    const card = eligible[pickIdxSafe(eligible, pickIdx)];
-    const targetFingerprint = bindTargetFingerprint({
-      cardTitle: card.title,
-      cardAuthor: card.author,
-      cardCenter: { x: card.cx, y: card.cy },
-      pageEvidence: page.page,
-    });
     openedTargets.add(targetFingerprint);
     item.targetFingerprint = targetFingerprint;
-    item.cardKind = classifyCardKind([card.desc]).kind;
-    run.picks.push({ index, targetFingerprint, cardKind: item.cardKind, prefer: params.prefer ?? "any" });
 
     // --- OPEN_BOUND_TARGET (exactly once per item) --------------------------
+    if (typeof driver.tapAt !== "function") {
+      item.stopReason = "TAP_INTERFACE_UNAVAILABLE";
+      return { item, stop: finish("BLOCKED", "TAP_INTERFACE_UNAVAILABLE") };
+    }
+    if (visionPermit) {
+      consumedVisionPermits.add(visionPermit.permitId || visionPermit.actionRef);
+    }
     item.openAttempts = 1;
-    const opened = await driver.tapAt({ x: card.cx, y: card.cy });
+    const opened = await driver.tapAt({
+      ...openPoint,
+      source: visionPermit ? "vision-r0" : "dump",
+      targetFingerprint,
+      cardKind: item.cardKind,
+      visionPermit,
+      executionRunId,
+      planHash: plan.planHash,
+      alias: plan.alias,
+      sessionId: run.executionBinding.sessionId,
+      deviceId: run.executionBinding.deviceId,
+    });
     if (!opened || opened.ok !== true) {
       item.stopReason = "OPEN_FAILED";
       run.skipsConsecutive += 1;
       if (run.skipsConsecutive > MAX_CONSECUTIVE_SKIPS) {
         return { item, stop: finish("FAILED", "OPEN_EXHAUSTED") };
+      }
+      if (opened?.noAction === true) {
+        // A pre-tap target recheck/permit rejection leaves the feed unchanged;
+        // pressing Back here would itself be an unplanned navigation.
+        return { item, stop: null };
       }
       const backFeed = await driver.back();
       // even a failed open must land back on feed before next item
@@ -223,14 +500,45 @@ export function createRoutineRun({ plan, driver, clock = defaultClock(), effects
     item.opened = true;
 
     // --- ASSERT_DETAIL_KIND -------------------------------------------------
-    const detailDump = await driver.dump({ label: `detail-${index}` });
+    const detailDump = typeof driver.dump === "function"
+      ? await driver.dump({ label: `detail-${index}` })
+      : null;
     if (detailDump?.hash) run.dumpHashes.push(detailDump.hash);
-    const detail = classifyPage({
+    let detail = classifyPage({
       xml: detailDump?.xml || "",
       focus: detailDump?.focus || "",
       pkg: detailDump?.pkg,
       sourceCardKind: item.cardKind,
     });
+    if (!detailDump?.xml || detail.page === PAGE_CLASS.UNKNOWN) {
+      const visualDetail = await observeDetailWithVision({
+        index,
+        reason: !detailDump?.xml ? "DETAIL_DUMP_UNAVAILABLE" : "DETAIL_DUMP_AMBIGUOUS",
+      });
+      if (visualDetail.ok) {
+        detail = {
+          page: visualDetail.observation.page,
+          cards: [],
+          commentControl: null,
+          source: "vision_observation",
+        };
+        run.vision.push({
+          purpose: "classify_open_detail",
+          frameId: visualDetail.observation.frameId,
+          provider: visualDetail.provider,
+          tapAuthorized: false,
+        });
+      } else if (!detailDump?.xml) {
+        item.stopReason = `DETAIL_DUMP_UNAVAILABLE:${visualDetail.reason}`;
+        const back = typeof driver.back === "function" ? await driver.back() : null;
+        if (!back || back.ok !== true) {
+          return { item, stop: finish("BLOCKED", "RESTORE_AFTER_UNRECOGNIZED") };
+        }
+        return { item, stop: finish("FAILED", visualDetail.reason === "VISION_NAVIGATOR_UNAVAILABLE"
+          ? "DETAIL_DUMP_UNAVAILABLE"
+          : visualDetail.reason) };
+      }
+    }
     item.detailPage = detail.page;
     if (detail.page === PAGE_CLASS.PUBLISH_EDITOR
       || detail.page === PAGE_CLASS.PRODUCT_ENTRY
@@ -377,30 +685,125 @@ export function createRoutineRun({ plan, driver, clock = defaultClock(), effects
     return { item, stop: null };
   }
 
+  async function closeAndInspect() {
+    const releaseMethod = typeof driver.release === "function"
+      ? "release"
+      : (typeof driver.close === "function" ? "close" : null);
+    let releaseResult = null;
+    let releaseError = null;
+    if (releaseMethod) {
+      try {
+        releaseResult = await driver[releaseMethod]({
+          executionRunId,
+          planHash: plan.planHash,
+          alias: plan.alias,
+          sessionId: run.executionBinding?.sessionId ?? null,
+          deviceId: run.executionBinding?.deviceId ?? null,
+        });
+      } catch (error) {
+        releaseError = String(error?.code || error?.name || "RELEASE_FAILED");
+      }
+    } else {
+      releaseError = "RELEASE_INTERFACE_UNAVAILABLE";
+    }
+
+    const inspectMethod = typeof driver.getCleanupStatus === "function"
+      ? "getCleanupStatus"
+      : (typeof driver.inspectCleanup === "function" ? "inspectCleanup" : null);
+    let inspected = null;
+    let inspectError = null;
+    if (inspectMethod) {
+      try {
+        inspected = await driver[inspectMethod]({
+          executionRunId,
+          planHash: plan.planHash,
+          alias: plan.alias,
+          sessionId: run.executionBinding?.sessionId ?? null,
+          deviceId: run.executionBinding?.deviceId ?? null,
+        });
+      } catch (error) {
+        inspectError = String(error?.code || error?.name || "CLEANUP_INSPECTION_FAILED");
+      }
+    } else {
+      inspectError = "CLEANUP_INSPECTION_INTERFACE_UNAVAILABLE";
+    }
+
+    // These values come only from the driver's post-release authority. Null
+    // means "not observed"; the machine never invents lease/restoration facts.
+    const activeLeases = Number.isInteger(inspected?.activeLeases)
+      ? inspected.activeLeases
+      : null;
+    const restored = typeof inspected?.restored === "boolean"
+      ? inspected.restored
+      : null;
+    const releaseOk = releaseResult?.ok === true;
+    const cleanupVerified = releaseOk
+      && !releaseError
+      && !inspectError
+      && activeLeases === 0
+      && restored === true;
+    run.cleanup = Object.freeze({
+      releaseMethod,
+      releaseOk,
+      releaseError,
+      inspectionMethod: inspectMethod,
+      inspectionError: inspectError,
+      activeLeases,
+      restored,
+      verified: cleanupVerified,
+      authorityRef: inspected?.authorityRef ?? null,
+      observedAtMs: Number.isFinite(inspected?.observedAtMs) ? inspected.observedAtMs : null,
+    });
+
+    if (!cleanupVerified && run.terminal === "SUCCEEDED") {
+      let reason = "CLEANUP_NOT_VERIFIED";
+      if (!releaseMethod) reason = "RELEASE_INTERFACE_UNAVAILABLE";
+      else if (!inspectMethod) reason = "CLEANUP_INSPECTION_INTERFACE_UNAVAILABLE";
+      else if (releaseError || !releaseOk) reason = "DRIVER_RELEASE_FAILED";
+      else if (activeLeases !== 0) reason = "ACTIVE_LEASES_REMAIN";
+      else if (restored !== true) reason = "DEVICE_NOT_RESTORED";
+      finish("BLOCKED", reason);
+    }
+  }
+
   /** Main loop — items in bound order, deterministic stop. */
   async function execute() {
     const results = [];
-    for (let i = 0; i < (params.items ?? 5); i += 1) {
-      const { item, stop } = await runItem(i);
-      results.push(item);
-      run.items = results;
-      if (stop) {
-        // stop reason already recorded by finish()
-        break;
+    try {
+      const bindingReady = await initializeExecutionBinding();
+      if (bindingReady) {
+        for (let i = 0; i < (params.items ?? 5); i += 1) {
+          const { item, stop } = await runItem(i);
+          results.push(item);
+          run.items = results;
+          if (stop) {
+            // stop reason already recorded by finish()
+            break;
+          }
+        }
+        if (!run.terminal) {
+          finish("SUCCEEDED", "ITEMS_BOUND_REACHED");
+        }
       }
+    } catch (error) {
+      if (!run.terminal) {
+        const code = String(error?.reasonCode || error?.code || error?.name || "UNKNOWN");
+        finish("FAILED", `ROUTINE_EXECUTION_ERROR:${code}`);
+      }
+    } finally {
+      await closeAndInspect();
     }
-    if (!run.terminal) {
-      finish("SUCCEEDED", "ITEMS_BOUND_REACHED");
-    }
-    run.cleanup = { activeLeases: 0, restored: true };
     return buildReceipt();
   }
 
   function buildReceipt() {
     return Object.freeze({
       schemaId: "xw.xhs.execute-receipt.v1",
-      runId: run.routineRunId,
+      runId: run.executionRunId,
+      routineRunId: run.routineRunId,
       planHash: run.planHash,
+      alias: run.alias,
+      executionBinding: run.executionBinding,
       status: run.terminal,
       template,
       seed: run.seed,
@@ -409,6 +812,7 @@ export function createRoutineRun({ plan, driver, clock = defaultClock(), effects
       effects: run.effects,
       transport: { count: run.transport.count },
       cleanup: run.cleanup,
+      vision: run.vision,
       dumpHashes: run.dumpHashes || [],
       stopReason: run.stopReason,
     });
