@@ -55,7 +55,10 @@ export const CARD_KIND = Object.freeze({
 /** Page markers that mean "not a read-only comment surface" (plan V2 §5). */
 const FORBIDDEN_MARKERS = Object.freeze([
   { page: PAGE_CLASS.NOTE_COMMENT_ACTIVITY, activityRe: /NoteCommentActivity/i },
-  { page: PAGE_CLASS.PUBLISH_EDITOR, activityRe: /(?:Publish|Edit)Activity|NoteEdit|PublishActivity/i, xmlRe: /(?:发布|编辑器|说点什么，分享你的生活)/ },
+  // xml markers must be publish-editor-distinctive: a bare "发布" also appears
+  // in the persistent feed bottom navigation (首页|市集|发布|消息) and would
+  // misclassify every main-screen feed dump (live R1 finding, 2026-08-28).
+  { page: PAGE_CLASS.PUBLISH_EDITOR, activityRe: /(?:Publish|Edit)Activity|NoteEdit|PublishActivity/i, xmlRe: /(?:从相册选择|拍摄与直播|写文字|编辑器|说点什么，分享你的生活)/ },
   { page: PAGE_CLASS.PRODUCT_ENTRY, xmlRe: /(?:商品|带货|购买|加入购物车|立即购买)/ },
   { page: PAGE_CLASS.AUTH_RISK, xmlRe: /(?:验证码|安全验证|异常行为|账号存在风险|解除限制|登录后操作)/ },
 ]);
@@ -105,8 +108,12 @@ export function classifyPage({ xml = "", focus = "", pkg = null, sourceCardKind 
     evidence.push("overlay_window_root");
     return { page: PAGE_CLASS.SYSTEM_OVERLAY, evidence };
   }
-  // forbidden / non-read-only surfaces first — they win over detail heuristics
+  // forbidden / non-read-only surfaces first — they win over detail heuristics.
+  // PRODUCT_ENTRY is checked after the feed branch below: the main feed mixes
+  // commerce cards into the list and a card title mentioning 商品/购买 must not
+  // misclassify the whole read-only feed screen (live R1 finding, 2026-08-28).
   for (const m of FORBIDDEN_MARKERS) {
+    if (m.page === PAGE_CLASS.PRODUCT_ENTRY) continue;
     if (m.activityRe && m.activityRe.test(activity)) {
       evidence.push(`forbidden_activity:${m.page}`);
       return { page: m.page, evidence };
@@ -129,6 +136,13 @@ export function classifyPage({ xml = "", focus = "", pkg = null, sourceCardKind 
     }
     evidence.push("index_focus_without_feed_evidence");
     return { page: PAGE_CLASS.UNKNOWN, evidence, cards };
+  }
+
+  // commerce/product surfaces are still forbidden on every non-feed surface
+  const productMarker = FORBIDDEN_MARKERS.find((m) => m.page === PAGE_CLASS.PRODUCT_ENTRY);
+  if (productMarker.xmlRe.test(xml)) {
+    evidence.push("forbidden_marker:PRODUCT_ENTRY");
+    return { page: PAGE_CLASS.PRODUCT_ENTRY, evidence };
   }
 
   // Note detail (image note): NoteDetailActivity + detail anchors

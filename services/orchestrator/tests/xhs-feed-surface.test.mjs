@@ -168,3 +168,35 @@ test("bindTargetFingerprint: same observation -> same fingerprint; caller cannot
   assert.notEqual(a, c);
   assert.match(a, /^[a-f0-9]{64}$/);
 });
+test("live R1 regression: feed bottom navigation (发布 tab) is never a publish editor", () => {
+  // real feed dumps always carry the persistent bottom nav; a bare "发布"
+  // must not misclassify the whole main screen (live 03 finding 2026-08-28)
+  const nav = node({ desc: "首页", bounds: "[100,2280][280,2360]" })
+    + node({ desc: "市集", bounds: "[300,2280][480,2360]" })
+    + node({ desc: "发布", bounds: "[440,2280][620,2360]" })
+    + node({ desc: "消息，未读", bounds: "[780,2280][960,2360]" });
+  const xml = feedCardXml({ desc: NOTE_DESC_FULL, bounds: "[40,400][500,900]" }) + nav;
+  const page = classifyPage({ xml, focus: FEED_FOCUS });
+  assert.equal(page.page, PAGE_CLASS.HOME_FEED);
+  assert.equal(page.cards.length, 1);
+});
+
+test("live R1 regression: commerce card title on the feed does not mask HOME_FEED", () => {
+  // the feed mixes commerce cards into the list; feed focus + parsed cards
+  // stays HOME_FEED (the guard applies to non-feed surfaces only)
+  const commerceCard = feedCardXml({ desc: "笔记 这个好物真不错 来自小岩 3赞", bounds: "[40,400][500,900]" });
+  const page = classifyPage({ xml: commerceCard, focus: FEED_FOCUS });
+  assert.equal(page.page, PAGE_CLASS.HOME_FEED);
+  // ...but a non-feed surface with commerce markers is still forbidden
+  const nonFeed = classifyPage({ xml: node({ text: "立即购买" }), focus: NOTE_FOCUS, sourceCardKind: CARD_KIND.NOTE });
+  assert.equal(nonFeed.page, PAGE_CLASS.PRODUCT_ENTRY);
+});
+
+test("publish chooser sheet (从相册选择/拍摄与直播/写文字) is still PUBLISH_EDITOR", () => {
+  const xml = node({ text: "从相册选择", bounds: "[0,1200][1080,1400]" })
+    + node({ text: "拍摄与直播", bounds: "[0,1400][1080,1600]" })
+    + node({ text: "写文字", bounds: "[0,1600][1080,1800]" })
+    + node({ text: "取消", bounds: "[0,1800][1080,1900]" });
+  const page = classifyPage({ xml, focus: FEED_FOCUS });
+  assert.equal(page.page, PAGE_CLASS.PUBLISH_EDITOR);
+});
