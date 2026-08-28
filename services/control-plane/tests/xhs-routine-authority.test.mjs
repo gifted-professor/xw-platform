@@ -520,3 +520,21 @@ test("authority lifecycle: explicit close, wrong-token close, session release cl
     await f.close();
   }
 });
+// Regression (live S2 window 1, 2026-08-28): a registration whose sessionId is
+// missing used to reach the SQL layer as `undefined` and surface as the
+// CONTROL_INTERNAL_ERROR catch-all. validateSession must fail typed instead.
+test("validateSession with a missing session id fails typed SESSION_NOT_FOUND", async () => {
+  const f = fixture();
+  try {
+    assert.throws(
+      () => f.state.validateSession(undefined, "any-token"),
+      (error) => error.code === "SESSION_NOT_FOUND" && error.status === 404,
+    );
+    assert.throws(
+      () => f.state.validateSession("", "any-token"),
+      { code: "SESSION_NOT_FOUND" },
+    );
+  } finally {
+    await f.close();
+  }
+});

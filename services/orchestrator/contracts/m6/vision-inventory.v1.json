@@ -701,6 +701,88 @@
       "category": "self-absolute-ops",
       "compatException": false,
       "note": "serve-restart 脚本以绝对路径调用本仓 control-plane 重启脚本（既有 ops 行为，登记备查）"
+    },
+    {
+      "literal": "C:\\Users\\Public\\xw-runtime\\state\\orchestrator\\registry.db",
+      "files": [
+        "services/orchestrator/ops/xw-recipe-promote.mjs"
+      ],
+      "category": "runtime-root",
+      "compatException": false,
+      "note": "recipe promote 桥读写 runtime orchestrator registry.db(运行时根)"
+    },
+    {
+      "literal": "C:\\Users\\Public\\xw-runtime\\state\\xhs-dispatch-state.json",
+      "files": [
+        "services/orchestrator/ops/xw-recipe-promote.mjs"
+      ],
+      "category": "runtime-root",
+      "compatException": false,
+      "note": "recipe promote 桥记录 dispatch state(运行时根)"
+    },
+    {
+      "literal": "C:\\Users\\Public\\xw-runtime\\recipe-overlay\\xhs-search-fixed.overlay.v1.json",
+      "files": [
+        "services/orchestrator/ops/xw-recipe-promote.mjs"
+      ],
+      "category": "runtime-root",
+      "compatException": false,
+      "note": "recipe overlay 固定路径(运行时根)"
+    },
+    {
+      "literal": "C:\\Users\\Public\\xw-runtime\\state\\control-plane\\control.db",
+      "files": [
+        "services/orchestrator/ops/xw-xhs-capabilities.mjs",
+        "services/orchestrator/ops/xw-xhs-comment-live.mjs",
+        "services/orchestrator/ops/xw-xhs-dm-reply-live.mjs",
+        "services/orchestrator/ops/xw-xhs-publish-live.mjs",
+        "services/orchestrator/ops/xw-xhs-social-live.mjs"
+      ],
+      "category": "runtime-root",
+      "compatException": false,
+      "note": "xhs live ops CLI 只读查询 CP control.db(运行时根)"
+    },
+    {
+      "literal": "C:\\Users\\windows 10\\.xhs-explorer-sessions\\$",
+      "files": [
+        "services/orchestrator/ops/xw-xhs-comment-live.mjs",
+        "services/orchestrator/ops/xw-xhs-dm-reply-live.mjs",
+        "services/orchestrator/ops/xw-xhs-publish-live.mjs",
+        "services/orchestrator/ops/xw-xhs-r0-inbox.mjs",
+        "services/orchestrator/ops/xw-xhs-social-live.mjs"
+      ],
+      "category": "session-root",
+      "compatException": false,
+      "note": "explorer 会话上下文根(用户家目录,由 _explore-lease 默认根派生)"
+    },
+    {
+      "literal": "C:\\Users\\Public\\xw-runtime\\evidence\\w6-publish-live",
+      "files": [
+        "services/orchestrator/ops/xw-xhs-publish-live.mjs"
+      ],
+      "category": "runtime-root",
+      "compatException": false,
+      "note": "publish live 证据目录(运行时根)"
+    },
+    {
+      "literal": "C:\\Users\\Public\\xw-runtime\\publish-approval",
+      "files": [
+        "services/orchestrator/ops/xw-xhs-publish-live.mjs"
+      ],
+      "category": "runtime-root",
+      "compatException": false,
+      "note": "publish 审批目录(运行时根)"
+    },
+    {
+      "literal": "C:\\Users\\Public\\xw-runtime",
+      "files": [
+        "services/orchestrator/ops/xw-xhs-routine-accept.mjs",
+        "services/orchestrator/ops/_xhs-routine-vision-factory.mjs",
+        "services/orchestrator/scripts/lib/xhs-routine-run-store.mjs"
+      ],
+      "category": "runtime-root",
+      "compatException": false,
+      "note": "xhs routine 验收/视觉工厂/run-store 引用运行时根(§6/§8.2/§11)"
     }
   ]
 }

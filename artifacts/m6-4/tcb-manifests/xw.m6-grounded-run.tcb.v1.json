@@ -2,7 +2,7 @@
   "schemaId": "xhs.tcb.manifest.v1",
   "schemaVersion": 1,
   "manifestId": "xw.m6-grounded-run.tcb.v1",
-  "implementationClosureHash": "ac79080ff7919c512bb3e2101229f938903026426dd6a040711a2e242540e0f6",
+  "implementationClosureHash": "dd2317fe66e9c2efd27797c11d9e1220bc3e7861082ef2a4602f75e829ea29e3",
   "contentHashProfile": "xhs.m6-grounded-run-capability-self-binding.v1",
   "paths": [
     "artifacts/m6-4/cohort-manifests/m6_4_action_smoke.json",
@@ -71,6 +71,11 @@
     "services/control-plane/apps/xhs/adapter.mjs",
     "services/control-plane/apps/xhs/capabilities.json",
     "services/control-plane/apps/xhs/publish-edit-dry-run.mjs",
+    "services/control-plane/apps/xhs/routine-comment-chain.mjs",
+    "services/control-plane/apps/xhs/routine-draft-provider.mjs",
+    "services/control-plane/apps/xhs/routine-effect-bridge.mjs",
+    "services/control-plane/apps/xhs/routine-effect-transport.mjs",
+    "services/control-plane/apps/xhs/social-verifiers.mjs",
     "services/control-plane/apps/xianyu/adapter.mjs",
     "services/control-plane/apps/xianyu/capabilities.json",
     "services/control-plane/apps/xiaowei/adapter.mjs",
@@ -132,10 +137,13 @@
     "services/control-plane/control-plane/lib/policy.mjs",
     "services/control-plane/control-plane/lib/protected-commit-policy.mjs",
     "services/control-plane/control-plane/lib/protected-human-commit.mjs",
+    "services/control-plane/control-plane/lib/recipe-descriptor.mjs",
     "services/control-plane/control-plane/lib/recipe-interpreter.mjs",
+    "services/control-plane/control-plane/lib/recipe-primitive-handlers.mjs",
     "services/control-plane/control-plane/lib/recovery-inspection.mjs",
     "services/control-plane/control-plane/lib/return-home.mjs",
     "services/control-plane/control-plane/lib/runtime-integrity.mjs",
+    "services/control-plane/control-plane/lib/single-device-recipe-runner.mjs",
     "services/control-plane/control-plane/lib/state-store.mjs",
     "services/control-plane/control-plane/lib/tcb-manifest.mjs",
     "services/control-plane/control-plane/lib/transport-action-authorization.mjs",
@@ -160,7 +168,11 @@
     "services/control-plane/scripts/xianyu-page-classifier.mjs",
     "services/control-plane/scripts/xiaowei-http-adapter.mjs",
     "services/orchestrator/contracts/tcb.manifest.v1.schema.json",
-    "services/orchestrator/scripts/lib/m6/m6-live-tool-surface.mjs"
+    "services/orchestrator/ops/_xhs-parse.mjs",
+    "services/orchestrator/scripts/lib/m6/m6-live-tool-surface.mjs",
+    "services/orchestrator/scripts/lib/xhs-feed-surface.mjs",
+    "services/orchestrator/scripts/lib/xhs-routine-artifact.mjs",
+    "services/orchestrator/scripts/lib/xw-xhs-dispatcher.mjs"
   ],
   "capabilityIds": [
     "xiaowei.m6.grounded_run"
@@ -435,6 +447,26 @@
         "sha256": "5fb917ff0fa573fca31882ae5bda8332c300989a97eafc4f552e468e473325c4"
       },
       {
+        "path": "services/control-plane/apps/xhs/routine-comment-chain.mjs",
+        "sha256": "c2acd05796208d9845e6524aa85963a8b16bebf8c9d7e9e8d8793e2aa2f4375d"
+      },
+      {
+        "path": "services/control-plane/apps/xhs/routine-draft-provider.mjs",
+        "sha256": "ec10796bed65c325f6fb15af85df86b588e0efd8ba9cd26bcdb90dc3f999db90"
+      },
+      {
+        "path": "services/control-plane/apps/xhs/routine-effect-bridge.mjs",
+        "sha256": "4db9525b460e4c9c3acad8447937cdcedff0cd5881c1f7b2508648c69c71fa19"
+      },
+      {
+        "path": "services/control-plane/apps/xhs/routine-effect-transport.mjs",
+        "sha256": "8d5d5466ffd26b75ce47eb60bbac4734ecf44e3bf7cb7549e2dbbd3d75d20c86"
+      },
+      {
+        "path": "services/control-plane/apps/xhs/social-verifiers.mjs",
+        "sha256": "63a599c011bd0956541c47cecb915d37d759104beb673a21a89a6833d158d65f"
+      },
+      {
         "path": "services/control-plane/apps/xianyu/adapter.mjs",
         "sha256": "4cf90723806c0c06e484ce3564571cc8bbe2e8f0e8d1ec5e1a40ef346d3203e4"
       },
@@ -492,7 +524,7 @@
       },
       {
         "path": "services/control-plane/control-plane/lib/control-plane.mjs",
-        "sha256": "d9939c621f6f00dc1a8eeaad010a70dc4f6e88dd42ce82359ad5c2789fbd084e"
+        "sha256": "9611ffdcc1220437812d3d74505d1f8e3a6dfca1ae4ce57ff1d098cdd544e74b"
       },
       {
         "path": "services/control-plane/control-plane/lib/delegation-grant-policy.mjs",
@@ -679,8 +711,16 @@
         "sha256": "a7b6f95a4eae52eb6caa8701d206b844e2aa0a6b2a15f5d41c4a497dd24ae308"
       },
       {
+        "path": "services/control-plane/control-plane/lib/recipe-descriptor.mjs",
+        "sha256": "9e7c3b8c9e3799a40bc344b83512d2aeb94df762b339c91cf88c90ca8e203246"
+      },
+      {
         "path": "services/control-plane/control-plane/lib/recipe-interpreter.mjs",
-        "sha256": "c6431920054f781bab2a41d268ddc24b65268f48c48aa65d449b63db49f837be"
+        "sha256": "b8e99c58ab7d236a2dd6e3ea5f4098e8cf5cea21cfda66913b4bdc9cd5f91994"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/recipe-primitive-handlers.mjs",
+        "sha256": "6bf060d8454e8472185ed107e197b0b0856688176473eefaf081ee5dcdf6b87a"
       },
       {
         "path": "services/control-plane/control-plane/lib/recovery-inspection.mjs",
@@ -695,8 +735,12 @@
         "sha256": "b2bee3c2533908a7c385aba4f25faf2b3f34098aba4bac006dd4748f986cc519"
       },
       {
+        "path": "services/control-plane/control-plane/lib/single-device-recipe-runner.mjs",
+        "sha256": "0c728d509a8f62c769f35e0bc9cce07018381ec1e11ff4b6672061a0bd51ce54"
+      },
+      {
         "path": "services/control-plane/control-plane/lib/state-store.mjs",
-        "sha256": "c1c8a35cf4c79c8d257ad53fdab5fd1916e41d24f252604feb217f01eecf8e16"
+        "sha256": "97925f12aef93952cc6a291859e09c3ce0f53031b1458ec1fd09d0762abd6932"
       },
       {
         "path": "services/control-plane/control-plane/lib/tcb-manifest.mjs",
@@ -720,7 +764,7 @@
       },
       {
         "path": "services/control-plane/control-plane/router.mjs",
-        "sha256": "ce0e513ffae3768e681b85b20d53b6765964c1e2d700c15c9ff5f57503f2329f"
+        "sha256": "c38aac469c1ad7e1bcf260d3e5a3ed39cef192b503fd0b52d7459caeee8d7840"
       },
       {
         "path": "services/control-plane/control-plane/schema/effect-intent.schema.json",
@@ -791,8 +835,24 @@
         "sha256": "c767bfcb50f60b69c8a24e3a07990b9c62568b0f5308e9fc11d4fabe28017eaa"
       },
       {
+        "path": "services/orchestrator/ops/_xhs-parse.mjs",
+        "sha256": "130c6efd0766483f958e81f59374946695d1b2490ac9d04da36f12759819b04b"
+      },
+      {
         "path": "services/orchestrator/scripts/lib/m6/m6-live-tool-surface.mjs",
         "sha256": "85730eae1b80b1c7423cdb1b988614912a3a954f14f040d8902774ec32ee0792"
+      },
+      {
+        "path": "services/orchestrator/scripts/lib/xhs-feed-surface.mjs",
+        "sha256": "2b511a65274bb089f56439adaae604c4e3f9d22eb19445f25fad880898ecf4e6"
+      },
+      {
+        "path": "services/orchestrator/scripts/lib/xhs-routine-artifact.mjs",
+        "sha256": "5dfe2d46cfb62e141aacbe86261db3f20efed186747d0ddd8d8cb959bf926e5b"
+      },
+      {
+        "path": "services/orchestrator/scripts/lib/xw-xhs-dispatcher.mjs",
+        "sha256": "9698722b2b28321e3f4ac6bb29ede40dc7986187bfcac711b3a85a924ddc70a3"
       }
     ]
   }

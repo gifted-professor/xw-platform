@@ -2241,6 +2241,11 @@ export class StateStore {
   }
 
   validateSession(sessionId, token) {
+    if (!sessionId) {
+      // fail typed before the SQL bind: an undefined session id would otherwise
+      // surface as the CONTROL_INTERNAL_ERROR catch-all instead of 404
+      throw new ControlPlaneError("SESSION_NOT_FOUND", "active session not found", { status: 404 });
+    }
     this.cleanupExpiredLeases();
     const row = this.db.prepare("SELECT * FROM sessions WHERE session_id=?").get(sessionId);
     if (!row) throw new ControlPlaneError("SESSION_NOT_FOUND", "active session not found", { status: 404 });

@@ -137,3 +137,84 @@ test("production runtime rejects caller-selected loopback ports", () => {
     (error) => error.code === "ROUTINE_ENDPOINT_INVALID",
   );
 });
+
+// Regression (live S2 window 1, 2026-08-28): the register client dropped
+// sessionId from the POST body; the CP router fed `undefined` into
+// validateSession and the SQL bind failure surfaced as CONTROL_INTERNAL_ERROR.
+test("authority registration sends the sessionId in the POST body", async (t) => {
+  const contextRoot = mkdtempSync(join(tmpdir(), "xhs-routine-context-reg-"));
+  t.after(() => rmSync(contextRoot, { recursive: true, force: true }));
+  const controlBase = "http://127.0.0.1:19020";
+  const registryBase = "http://127.0.0.1:19030";
+  const sessionId = "session-03";
+  const leaseId = "lease-03";
+  const deviceId = "device-03";
+  const token = "private-session-token";
+  const entry = () => ({
+    devices: [{
+      alias: "03",
+      serial: "private-serial",
+      deviceId,
+      control: { deviceId },
+      state: { online: true, ready: true, quarantined: false, leaseFree: true },
+      metadata: { width: 1080, height: 2400 },
+    }],
+  });
+  let registerBody = null;
+  const fetchImpl = async (url, init = {}) => {
+    const parsed = new URL(url);
+    const method = init.method || "GET";
+    const body = init.body ? JSON.parse(init.body) : null;
+    if (parsed.origin === registryBase && parsed.pathname === "/api/agent-entry") return json(entry());
+    if (parsed.origin !== controlBase) return json({ error: { code: "UNEXPECTED_ORIGIN" } }, 500);
+    if (method === "POST" && parsed.pathname === "/control/v1/sessions") {
+      return json({
+        session: {
+          sessionId, leaseId, token, deviceId,
+          actorId: "agent:xhs-routine",
+          scopeCapabilityId: "xiaowei.explorer.primitive",
+          canary: true,
+          routeDecision: { selectedDevice: { alias: "03", deviceId } },
+        },
+      }, 201);
+    }
+    if (method === "POST" && parsed.pathname === "/control/v1/routine-authority") {
+      registerBody = body;
+      return json({ authority: { authorityId: "routine-auth-1", status: "active" } }, 201);
+    }
+    if (method === "GET" && parsed.pathname === "/control/v1/leases") {
+      return json({ leases: [{ leaseId, sessionId, deviceId, kind: "interactive", holderId: "agent:xhs-routine" }] });
+    }
+    return json({ error: { code: "UNEXPECTED_ROUTE", message: `${method} ${parsed.pathname}` } }, 500);
+  };
+  const runtime = createExplorerRoutineRuntime({
+    controlBase,
+    registryBase,
+    fetchImpl,
+    contextRoot,
+    allowTestEndpoints: true,
+    skipAclHardening: true,
+  });
+  await runtime.createSession({
+    actorId: "agent:xhs-routine",
+    capabilityId: "xiaowei.explorer.primitive",
+    canary: true,
+    placement: { alias: "03" },
+  });
+  const authority = await runtime.registerRoutineAuthority({
+    sessionId,
+    token,
+    executionRunId: "xe-reg-1",
+    routineRunId: "rr-reg-1",
+    planHash: "a".repeat(64),
+    effectCaps: { like: 1, comment: 0 },
+    canaryAuthorized: true,
+    accountFingerprint: null,
+  });
+  assert.equal(authority.authorityId, "routine-auth-1");
+  assert.ok(registerBody, "register must POST to /control/v1/routine-authority");
+  assert.equal(registerBody.sessionId, sessionId, "sessionId must travel in the body: the CP router keys registration off it");
+  assert.equal(registerBody.alias, "03");
+  assert.equal(registerBody.token, token);
+  assert.deepEqual(registerBody.effectCaps, { like: 1, comment: 0 });
+});

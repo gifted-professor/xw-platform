@@ -143,7 +143,12 @@
         "tests/xw-xhs-effect-budget.test.mjs",
         "tests/xw-xhs-execute-truth.test.mjs",
         "tests/xw-xhs-routine-accept.test.mjs",
-        "tests/xw-xhs-routine-cli.test.mjs"
+        "tests/xw-xhs-routine-cli.test.mjs",
+        "ops/_xhs-routine-vision-factory.mjs",
+        "scripts/lib/xhs-routine-artifact.mjs",
+        "scripts/lib/xhs-routine-authority.mjs",
+        "scripts/lib/xhs-routine-vision-navigator.mjs",
+        "tests/xhs-routine-vision-navigator.test.mjs"
       ]
     },
     "control-plane": {
@@ -305,7 +310,10 @@
         "tests/xhs-routine-effect-bridge.test.mjs",
         "tests/xhs-social-action-run.test.mjs",
         "tests/xhs-thread-fingerprint.test.mjs",
-        "tests/xhs-visual-navigation-boundary.test.mjs"
+        "tests/xhs-visual-navigation-boundary.test.mjs",
+        "apps/xhs/routine-draft-provider.mjs",
+        "apps/xhs/routine-effect-transport.mjs",
+        "tests/xhs-routine-authority.test.mjs"
       ]
     }
   }

@@ -269,8 +269,11 @@ export function createExplorerRoutineRuntime({
       accountFingerprint = null,
     } = {}) {
       const owned = requireOwnedContext(contexts, sessionId, token);
+      // sessionId MUST travel in the body: the CP router keys registration off
+      // input.sessionId (the token alone only authenticates it server-side)
       const payload = await postJson(`${control}/control/v1/routine-authority`, {
         token,
+        sessionId,
         executionRunId,
         routineRunId,
         planHash,
