@@ -83,7 +83,13 @@ export function createRoutineEffectsSurface({ authority, runtime, sessionId, tok
           payloadHash: intent.payloadHash ?? null,
         },
       });
-      return payload?.effect ?? { outcome: "bridge_error", transported: false };
+      // runtime.commitEffect already unwraps the HTTP envelope to the effect
+      // object (outcome validated as a string). Re-extracting `.effect` here
+      // silently discarded every real outcome (live S2 wave 2, 2026-08-28: a
+      // transported "ambiguous" like surfaced as "bridge_error" with the
+      // transported flag lost), so return the effect object verbatim — the
+      // machine keys cap/retry accounting on outcome + transported.
+      return payload;
     },
 
     async reconcileComments(targetFingerprint = null) {

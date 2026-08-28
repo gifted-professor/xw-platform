@@ -433,8 +433,20 @@ function authorityFixture({ effectOutcome = "verified" } = {}) {
     },
     async commitEffect(input) {
       authorityCalls.push({ kind: "commit", ...input });
-      if (effectOutcome === "malformed") return {};
-      return { effect: { outcome: effectOutcome, transported: effectOutcome === "verified", effectId: "effect-1" } };
+      if (effectOutcome === "malformed") {
+        // production contract (ops/_xhs-routine-explorer-runtime.mjs): the
+        // explorer runtime unwraps the HTTP envelope and THROWS on a malformed
+        // effect payload — the seam below receives the effect object itself
+        throw Object.assign(
+          new Error("effect commit response is malformed"),
+          { code: "ROUTINE_AUTHORITY_RESPONSE_INVALID", status: 502 },
+        );
+      }
+      return {
+        outcome: effectOutcome,
+        transported: effectOutcome === "verified" || effectOutcome === "ambiguous",
+        effectId: "effect-1",
+      };
     },
     async reconcileComments(input) {
       authorityCalls.push({ kind: "reconcile", ...input });
@@ -570,8 +582,26 @@ test("effects surface fails closed on machine identity mismatch, coordinates, an
   );
 });
 
-test("malformed CP effect responses surface as bridge_error, never as a transport", async () => {
+test("malformed CP effect responses fail closed as a thrown typed error, never as a transport", async () => {
   const { runtime } = authorityFixture({ effectOutcome: "malformed" });
+  const authority = { authorityId: "auth-1", routineRunId: "rr-1", planHash: "plan-1" };
+  const surface = createRoutineEffectsSurface({ authority, runtime, sessionId: "s", token: "t" });
+  await assert.rejects(
+    surface.commitRoutineEffect({
+      plan: { planHash: "plan-1" },
+      run: { routineRunId: "rr-1" },
+      intent: { action: "like", targetFingerprint: "t", observationHash: "o" },
+    }),
+    (error) => error.code === "ROUTINE_AUTHORITY_RESPONSE_INVALID",
+  );
+});
+
+// Regression (live S2 wave 2, 2026-08-28): the seam re-extracted `.effect`
+// from the already-unwrapped effect object, so a real transported like
+// (CP ledger: status "ambiguous", reservation_consumed=1) surfaced to the
+// machine as "bridge_error" with the transported flag lost.
+test("transported effects pass through to the machine verbatim, flags intact", async () => {
+  const { runtime } = authorityFixture({ effectOutcome: "ambiguous" });
   const authority = { authorityId: "auth-1", routineRunId: "rr-1", planHash: "plan-1" };
   const surface = createRoutineEffectsSurface({ authority, runtime, sessionId: "s", token: "t" });
   const res = await surface.commitRoutineEffect({
@@ -579,7 +609,7 @@ test("malformed CP effect responses surface as bridge_error, never as a transpor
     run: { routineRunId: "rr-1" },
     intent: { action: "like", targetFingerprint: "t", observationHash: "o" },
   });
-  assert.deepEqual(res, { outcome: "bridge_error", transported: false });
+  assert.deepEqual(res, { outcome: "ambiguous", transported: true, effectId: "effect-1" });
 });
 
 test("vision mode is a sealed enum: unknown values are tamper, never a degradation", async () => {
