@@ -517,9 +517,18 @@ export function createRoutineRun({
     item.opened = true;
 
     // --- ASSERT_DETAIL_KIND -------------------------------------------------
-    let detailDump = typeof driver.dump === "function"
-      ? await driver.dump({ label: `detail-${index}` })
-      : null;
+    // dump starvation throws after the runner's bounded retries (playing
+    // video never reaches accessibility idle), so a throw here is treated as
+    // "detail dump unavailable" — the pause recovery below may still rescue it
+    let detailDump = null;
+    let detailDumpError = null;
+    if (typeof driver.dump === "function") {
+      try {
+        detailDump = await driver.dump({ label: `detail-${index}` });
+      } catch (error) {
+        detailDumpError = error;
+      }
+    }
     if (detailDump?.hash) run.dumpHashes.push(detailDump.hash);
     let detail = classifyPage({
       xml: detailDump?.xml || "",
@@ -537,7 +546,13 @@ export function createRoutineRun({
         && typeof driver.pauseVideoAndDump === "function"
         && (run.videoPauseTaps || 0) < 1) {
         run.videoPauseTaps = (run.videoPauseTaps || 0) + 1;
-        detailDump = await driver.pauseVideoAndDump({ label: `detail-${index}-after-pause` });
+        try {
+          detailDump = await driver.pauseVideoAndDump({ label: `detail-${index}-after-pause` });
+          detailDumpError = null;
+        } catch (error) {
+          detailDump = null;
+          detailDumpError = error;
+        }
         if (detailDump?.hash) run.dumpHashes.push(detailDump.hash);
         detail = classifyPage({
           xml: detailDump?.xml || "",

@@ -51,6 +51,7 @@ function fakeDriver({
   // when set: detail dumps return empty xml (playing video starves uiautomator
   // idle) and the pause tap recovers a dumpable surface (live R1 finding)
   videoDetailPlaying = false,
+  detailDumpThrows = false,
   pausedDetailDump = { xml: VIDEO_XML, focus: VIDEO_FOCUS, pkg: "com.xingin.xhs" },
   ensureFeedOk = true,
   dumpOk = true,
@@ -94,6 +95,11 @@ function fakeDriver({
       calls.dump.push(label || "");
       if (!dumpOk) return { xml: "", focus: FEED_FOCUS, pkg: "com.xingin.xhs" };
       if (videoDetailPlaying && String(label || "").startsWith("detail")) {
+        if (detailDumpThrows) {
+          const error = new Error("dump missing hierarchy");
+          error.code = "EXPLORER_DUMP_INVALID";
+          throw error;
+        }
         return { xml: "", focus: VIDEO_FOCUS, pkg: "com.xingin.xhs" };
       }
       const base = (label || "").startsWith("detail") ? detailDump : feedDump;
@@ -229,6 +235,17 @@ test("playing video starves the detail dump -> one pause tap recovers, item veri
   assert.equal(receipt.videoPauseTaps, 1, "exactly one pause tap for the whole run");
   assert.equal(driver.calls.pauseVideoAndDump.length, 1, "pause recovery attempted once");
   assert.ok(receipt.items[0].opened === true);
+});
+
+test("driver.dump throwing EXPLORER_DUMP_INVALID is caught and rescued by the pause tap", async () => {
+  const plan = planRoutine({ templateId: "xhs.feed-play.v1", params: { items: 1, prefer: "video", seed: "s1-pause3" } });
+  const videoFeed = { xml: feedCardXml(VIDEO_DESCS[0], "[40,400][500,900]") + feedCardXml(VIDEO_DESCS[1], "[560,400][1020,900]"), focus: FEED_FOCUS, pkg: "com.xingin.xhs" };
+  const driver = fakeDriver({ feedDump: videoFeed, videoDetailPlaying: true, detailDumpThrows: true });
+  const receipt = await createRoutineRun({ plan, driver }).execute();
+  assert.equal(receipt.status, "SUCCEEDED");
+  assert.equal(receipt.items[0].detailPage, PAGE_CLASS.VIDEO_NOTE);
+  assert.equal(receipt.videoPauseTaps, 1);
+  assert.equal(driver.calls.pauseVideoAndDump.length, 1);
 });
 
 test("pause recovery is bounded: a second playing-video item never triggers another pause tap", async () => {
