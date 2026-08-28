@@ -48,6 +48,10 @@ const FEED_DUMP = { xml: feedXml(4), focus: FEED_FOCUS, pkg: "com.xingin.xhs" };
 function fakeDriver({
   feedDump = FEED_DUMP,
   detailDump = { xml: NOTE_DETAIL_XML, focus: NOTE_FOCUS, pkg: "com.xingin.xhs" },
+  // when set: detail dumps return empty xml (playing video starves uiautomator
+  // idle) and the pause tap recovers a dumpable surface (live R1 finding)
+  videoDetailPlaying = false,
+  pausedDetailDump = { xml: VIDEO_XML, focus: VIDEO_FOCUS, pkg: "com.xingin.xhs" },
   ensureFeedOk = true,
   dumpOk = true,
   refreshOk = true,
@@ -64,6 +68,7 @@ function fakeDriver({
     ensureFeed: 0,
     refresh: 0,
     dump: [],
+    pauseVideoAndDump: [],
     tap: [],
     back: 0,
     swipeComments: [],
@@ -88,8 +93,15 @@ function fakeDriver({
     async dump({ label } = {}) {
       calls.dump.push(label || "");
       if (!dumpOk) return { xml: "", focus: FEED_FOCUS, pkg: "com.xingin.xhs" };
+      if (videoDetailPlaying && String(label || "").startsWith("detail")) {
+        return { xml: "", focus: VIDEO_FOCUS, pkg: "com.xingin.xhs" };
+      }
       const base = (label || "").startsWith("detail") ? detailDump : feedDump;
       return { ...base, hash: `dh_${label}` };
+    },
+    async pauseVideoAndDump({ label } = {}) {
+      calls.pauseVideoAndDump.push(label || "");
+      return { ...pausedDetailDump, hash: `dh_${label}` };
     },
     async tapAt(input) {
       const { x, y } = input;
@@ -204,6 +216,31 @@ test("invariant: video note never swipes for comments (swipe = 0 on video surfac
     assert.equal(it.commentStop, "COMMENT_PANEL_ASSERTION_PENDING_S1");
   }
   assert.equal(driver.calls.swipeComments.length, 0, "no swipeComments call on video surfaces");
+});
+
+test("playing video starves the detail dump -> one pause tap recovers, item verifies as VIDEO_NOTE", async () => {
+  const plan = planRoutine({ templateId: "xhs.feed-play.v1", params: { items: 1, prefer: "video", seed: "s1-pause" } });
+  const videoFeed = { xml: feedCardXml(VIDEO_DESCS[0], "[40,400][500,900]") + feedCardXml(VIDEO_DESCS[1], "[560,400][1020,900]"), focus: FEED_FOCUS, pkg: "com.xingin.xhs" };
+  const driver = fakeDriver({ feedDump: videoFeed, videoDetailPlaying: true });
+  const receipt = await createRoutineRun({ plan, driver }).execute();
+  assert.equal(receipt.status, "SUCCEEDED");
+  assert.equal(receipt.items.length, 1);
+  assert.equal(receipt.items[0].detailPage, PAGE_CLASS.VIDEO_NOTE);
+  assert.equal(receipt.videoPauseTaps, 1, "exactly one pause tap for the whole run");
+  assert.equal(driver.calls.pauseVideoAndDump.length, 1, "pause recovery attempted once");
+  assert.ok(receipt.items[0].opened === true);
+});
+
+test("pause recovery is bounded: a second playing-video item never triggers another pause tap", async () => {
+  const plan = planRoutine({ templateId: "xhs.feed-play.v1", params: { items: 2, prefer: "video", seed: "s1-pause2" } });
+  const videoFeed = { xml: feedCardXml(VIDEO_DESCS[0], "[40,400][500,900]") + feedCardXml(VIDEO_DESCS[1], "[560,400][1020,900]"), focus: FEED_FOCUS, pkg: "com.xingin.xhs" };
+  const driver = fakeDriver({ feedDump: videoFeed, videoDetailPlaying: true });
+  const receipt = await createRoutineRun({ plan, driver }).execute();
+  assert.equal(driver.calls.pauseVideoAndDump.length, 1, "pause tap budget = 1 per run");
+  assert.equal(receipt.videoPauseTaps, 1);
+  // first item recovered, second item fails closed with a terminal stop reason
+  const opened = receipt.items.filter((it) => it.opened === true && it.detailPage === PAGE_CLASS.VIDEO_NOTE);
+  assert.equal(opened.length, 1);
 });
 
 test("invariant: dwell bounded by plan range", async () => {

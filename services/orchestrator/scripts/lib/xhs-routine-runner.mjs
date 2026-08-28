@@ -324,6 +324,29 @@ export function createControlPlaneRoutineDriver({
       return observe(label || "dump");
     },
 
+    async pauseVideoAndDump({ label } = {}) {
+      // Playing videos starve uiautomator idle indefinitely (live R1 finding,
+      // 2026-08-28): dump retries alone never recover. One center-surface tap
+      // pauses playback so the follow-up dump observes a static surface. This
+      // is a navigation tap (pause), not a social effect; callers bound it to
+      // at most one per opened item.
+      let bounds = null;
+      try {
+        bounds = displayBounds(lastObservation?.xml || "", deviceProfile);
+      } catch {
+        bounds = null;
+      }
+      const width = Number(bounds?.width) || 1080;
+      const height = Number(bounds?.height) || 2340;
+      await primitive({
+        primitive: "tap",
+        x: Math.round(width / 2),
+        y: Math.round(height / 2),
+      });
+      await sleepFn(800);
+      return observe(label || "detail-after-pause");
+    },
+
     async tapAt({ x, y, source, targetFingerprint, cardKind }) {
       if (!Number.isFinite(x) || !Number.isFinite(y)) return { ok: false, noAction: true, reason: "TAP_POINT_INVALID" };
       if (source !== "dump") {

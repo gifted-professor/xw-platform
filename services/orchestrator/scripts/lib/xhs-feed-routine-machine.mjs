@@ -517,7 +517,7 @@ export function createRoutineRun({
     item.opened = true;
 
     // --- ASSERT_DETAIL_KIND -------------------------------------------------
-    const detailDump = typeof driver.dump === "function"
+    let detailDump = typeof driver.dump === "function"
       ? await driver.dump({ label: `detail-${index}` })
       : null;
     if (detailDump?.hash) run.dumpHashes.push(detailDump.hash);
@@ -527,6 +527,26 @@ export function createRoutineRun({
       pkg: detailDump?.pkg,
       sourceCardKind: item.cardKind,
     });
+    if (!detailDump?.xml || detail.page === PAGE_CLASS.UNKNOWN) {
+      // Playing videos starve uiautomator idle indefinitely (live R1 finding,
+      // 2026-08-28), so for video cards a failed detail dump is retried once
+      // through a pause: one center-surface tap (navigation, not social)
+      // stops playback and the re-dump observes a static surface. Bounded to
+      // one pause tap per opened item — a second failure stays terminal.
+      if (!detailDump?.xml && item.cardKind === CARD_KIND.VIDEO
+        && typeof driver.pauseVideoAndDump === "function"
+        && (run.videoPauseTaps || 0) < 1) {
+        run.videoPauseTaps = (run.videoPauseTaps || 0) + 1;
+        detailDump = await driver.pauseVideoAndDump({ label: `detail-${index}-after-pause` });
+        if (detailDump?.hash) run.dumpHashes.push(detailDump.hash);
+        detail = classifyPage({
+          xml: detailDump?.xml || "",
+          focus: detailDump?.focus || "",
+          pkg: detailDump?.pkg,
+          sourceCardKind: item.cardKind,
+        });
+      }
+    }
     if (!detailDump?.xml || detail.page === PAGE_CLASS.UNKNOWN) {
       const visualDetail = await observeDetailWithVision({
         index,
@@ -830,6 +850,7 @@ export function createRoutineRun({
       transport: { count: run.transport.count },
       cleanup: run.cleanup,
       vision: run.vision,
+      videoPauseTaps: run.videoPauseTaps || 0,
       dumpHashes: run.dumpHashes || [],
       stopReason: run.stopReason,
     });
