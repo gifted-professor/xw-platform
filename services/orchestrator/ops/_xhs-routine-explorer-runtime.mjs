@@ -60,6 +60,31 @@ async function requestJson(url, { fetchImpl, timeoutMs = 15_000 } = {}) {
   return payload;
 }
 
+async function postJson(url, body, { fetchImpl, timeoutMs = 30_000 } = {}) {
+  let response;
+  try {
+    response = await fetchImpl(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body ?? {}),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (error) {
+    throw runtimeError("ROUTINE_AUTHORITY_UNREACHABLE", `authority request failed: ${error?.message || error}`, 503);
+  }
+  const text = await response.text();
+  let payload = {};
+  try { payload = text ? JSON.parse(text) : {}; } catch { /* rejected below */ }
+  if (!response.ok) {
+    throw runtimeError(
+      payload?.error?.code || "ROUTINE_AUTHORITY_REJECTED",
+      payload?.error?.message || `authority rejected request (${response.status})`,
+      response.status,
+    );
+  }
+  return payload;
+}
+
 function sameSecret(left, right) {
   if (typeof left !== "string" || typeof right !== "string" || !left || !right) return false;
   const a = createHash("sha256").update(left, "utf8").digest();
@@ -75,13 +100,13 @@ function requireOwnedContext(contexts, sessionId, token) {
   return owned;
 }
 
-function readBoundUtf8Artifact({ path, runId, storage, maxBytes = 8 * 1024 * 1024 } = {}) {
+function readBoundArtifact({ path, runId, storage, extensions, maxBytes = 12 * 1024 * 1024, encoding = null } = {}) {
   if (typeof runId !== "string" || !runId || typeof path !== "string" || !path) {
-    throw runtimeError("ROUTINE_ARTIFACT_BINDING_INVALID", "dump artifact needs path and owning runId", 409);
+    throw runtimeError("ROUTINE_ARTIFACT_BINDING_INVALID", "artifact needs path and owning runId", 409);
   }
   const declaredRunRoot = storage?.runDirectory;
   if (typeof declaredRunRoot !== "string" || !declaredRunRoot) {
-    throw runtimeError("ROUTINE_ARTIFACT_BINDING_INVALID", "dump artifact needs its CP runDirectory", 409);
+    throw runtimeError("ROUTINE_ARTIFACT_BINDING_INVALID", "artifact needs its CP runDirectory", 409);
   }
   let runRoot;
   let artifact;
@@ -89,20 +114,29 @@ function readBoundUtf8Artifact({ path, runId, storage, maxBytes = 8 * 1024 * 102
     runRoot = realpathSync(declaredRunRoot);
     artifact = realpathSync(path);
   } catch {
-    throw runtimeError("ROUTINE_ARTIFACT_MISSING", "dump artifact is absent", 409);
+    throw runtimeError("ROUTINE_ARTIFACT_MISSING", "artifact is absent", 409);
   }
   if (basename(runRoot) !== runId) {
     throw runtimeError("ROUTINE_ARTIFACT_BINDING_INVALID", "CP runDirectory does not match the primitive runId", 409);
   }
   const inside = relative(runRoot, artifact);
-  if (!inside || inside.startsWith("..") || isAbsolute(inside) || extname(artifact).toLowerCase() !== ".xml") {
-    throw runtimeError("ROUTINE_ARTIFACT_PATH_INVALID", "dump artifact escapes its CP run or is not XML", 409);
+  const ext = extname(artifact).toLowerCase();
+  if (!inside || inside.startsWith("..") || isAbsolute(inside) || !extensions.includes(ext)) {
+    throw runtimeError("ROUTINE_ARTIFACT_PATH_INVALID", `artifact escapes its CP run or is not ${extensions.join("/")}`, 409);
   }
   const stats = statSync(artifact);
   if (!stats.isFile() || stats.size <= 0 || stats.size > maxBytes) {
-    throw runtimeError("ROUTINE_ARTIFACT_INVALID", "dump artifact is empty, oversized, or not a regular file", 409, { maxBytes });
+    throw runtimeError("ROUTINE_ARTIFACT_INVALID", "artifact is empty, oversized, or not a regular file", 409, { maxBytes });
   }
-  return readFileSync(artifact, "utf8");
+  return readFileSync(artifact, encoding);
+}
+
+function readBoundUtf8Artifact(input = {}) {
+  return readBoundArtifact({ ...input, extensions: [".xml"], maxBytes: 8 * 1024 * 1024, encoding: "utf8" });
+}
+
+function readBoundPngArtifact(input = {}) {
+  return readBoundArtifact({ ...input, extensions: [".png"], encoding: null });
 }
 
 /**
@@ -206,6 +240,10 @@ export function createExplorerRoutineRuntime({
       return readBoundUtf8Artifact(input);
     },
 
+    readScreenArtifact(input) {
+      return readBoundPngArtifact(input);
+    },
+
     async getDevice(deviceId) {
       const payload = await requestJson(`${registry}/api/agent-entry`, { fetchImpl });
       const device = (Array.isArray(payload?.devices) ? payload.devices : []).find((row) => (
@@ -214,7 +252,81 @@ export function createExplorerRoutineRuntime({
       if (!device) throw runtimeError("ROUTINE_DEVICE_BINDING_MISSING", "Registry no longer exposes the session device", 409);
       return device;
     },
+
+    // --- routine authority (plan V2 §8.1.3): the formal session is the ONLY
+    // key that may register/commit/close; the CP seals the canary policy and
+    // re-validates every cap server-side. The token travels in the body like
+    // every other session RPC and never leaves this process otherwise.
+
+    async registerRoutineAuthority({
+      sessionId,
+      token,
+      executionRunId,
+      routineRunId,
+      planHash,
+      effectCaps = {},
+      canaryAuthorized = false,
+      accountFingerprint = null,
+    } = {}) {
+      const owned = requireOwnedContext(contexts, sessionId, token);
+      const payload = await postJson(`${control}/control/v1/routine-authority`, {
+        token,
+        executionRunId,
+        routineRunId,
+        planHash,
+        alias: owned.alias,
+        effectCaps,
+        canaryAuthorized,
+        accountFingerprint,
+      }, { fetchImpl });
+      if (!payload?.authority?.authorityId) {
+        throw runtimeError("ROUTINE_AUTHORITY_RESPONSE_INVALID", "authority registration response is malformed", 502);
+      }
+      return payload.authority;
+    },
+
+    async commitRoutineAuthorityEffect({ sessionId, token, authorityId, intent }) {
+      requireOwnedContext(contexts, sessionId, token);
+      if (!authorityId || typeof authorityId !== "string") {
+        throw runtimeError("ROUTINE_AUTHORITY_RESPONSE_INVALID", "commitRoutineAuthorityEffect requires an authorityId", 400);
+      }
+      const payload = await postJson(
+        `${control}/control/v1/routine-authority/${encodeURIComponent(authorityId)}/effects`,
+        { token, intent: intent ?? {} },
+        { fetchImpl },
+      );
+      if (!payload?.effect || typeof payload.effect.outcome !== "string") {
+        throw runtimeError("ROUTINE_AUTHORITY_RESPONSE_INVALID", "effect commit response is malformed", 502);
+      }
+      return payload.effect;
+    },
+
+    async reconcileRoutineAuthorityComments({ sessionId, token, authorityId, targetFingerprint = null } = {}) {
+      requireOwnedContext(contexts, sessionId, token);
+      if (!authorityId || typeof authorityId !== "string") {
+        throw runtimeError("ROUTINE_AUTHORITY_RESPONSE_INVALID", "reconcile requires an authorityId", 400);
+      }
+      const payload = await postJson(
+        `${control}/control/v1/routine-authority/${encodeURIComponent(authorityId)}/reconcile`,
+        { token, targetFingerprint },
+        { fetchImpl },
+      );
+      return Array.isArray(payload?.reconciles) ? payload.reconciles : [];
+    },
+
+    async closeRoutineAuthority({ sessionId, token, authorityId, reason = "run-finished" } = {}) {
+      requireOwnedContext(contexts, sessionId, token);
+      if (!authorityId || typeof authorityId !== "string") {
+        throw runtimeError("ROUTINE_AUTHORITY_RESPONSE_INVALID", "close requires an authorityId", 400);
+      }
+      const payload = await postJson(
+        `${control}/control/v1/routine-authority/${encodeURIComponent(authorityId)}`,
+        { token, reason },
+        { fetchImpl },
+      );
+      return payload?.authority ?? null;
+    },
   };
 }
 
-export { readBoundUtf8Artifact };
+export { readBoundUtf8Artifact, readBoundPngArtifact };

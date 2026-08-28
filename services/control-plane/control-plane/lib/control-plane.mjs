@@ -3,7 +3,12 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { ControlPlaneError, asControlError } from "./errors.mjs";
-import { canonicalJson, fingerprint } from "./canonical.mjs";
+import { canonicalJson, fingerprint, sha256 } from "./canonical.mjs";
+import * as routineEffectBridgeModule from "../../apps/xhs/routine-effect-bridge.mjs";
+import * as routineEffectTransportModule from "../../apps/xhs/routine-effect-transport.mjs";
+import * as routineArtifactModule from "../../../orchestrator/scripts/lib/xhs-routine-artifact.mjs";
+import { createRoutineEffectBridge } from "../../apps/xhs/routine-effect-bridge.mjs";
+import { createRoutineDraftProvider } from "../../apps/xhs/routine-draft-provider.mjs";
 import { validateJsonSchema } from "./json-schema-validator.mjs";
 import { DiscoverySessionRuntime } from "./discovery-session.mjs";
 import { evaluateCapabilityPolicy, assertAuthorizationAllow } from "./policy.mjs";
@@ -342,6 +347,10 @@ export class ControlPlane {
     // recipeOverlay is attached later by bootstrap (load-only); resolveRecipe reads it live.
     this.recipeOverlay = null;
     this.recipeCatalogExtras = [];
+    // Direct-routine plan V2 §8.1.5: the FIXED production CommentDraftProvider.
+    // Injected at construction (never selected by a CLI flag) — the bridge reads
+    // only { text, modelId, promptHash } from it.
+    this.routineDraftProvider = createRoutineDraftProvider();
     this.rpaAlias = resolveFixedRpaAlias();
     this.recipeRuns = new SingleDeviceRecipeRunner({
       fixedAlias: this.rpaAlias,
@@ -2417,6 +2426,178 @@ export class ControlPlane {
     return this.state.heartbeatSession(sessionId, token, this.leaseTtlMs);
   }
 
+  // --- Direct-routine plan V2 §8.1: CP-owned routine authority + effects -----
+  // The orchestrator holds only the formal Explorer session/token. Social
+  // effects commit through this typed CP surface: the CP re-validates the
+  // authority tuple, re-checks the SERVER-SEALED canary policy (a client
+  // --canary-authorized flag is only a request), and executes the effect with
+  // the bridge + session-bound transport BELOW — same session, same lease, no
+  // nested job, no raw caller coordinates, no StateStore access from the caller.
+
+  #routineEffectBridges = new Map();
+
+  #routineEffectCache(authorityId) {
+    let cached = this.#routineEffectBridges.get(authorityId);
+    if (!cached) {
+      cached = { targetBindings: new Map(), sequence: 0, bridge: null };
+      this.#routineEffectBridges.set(authorityId, cached);
+    }
+    return cached;
+  }
+
+  registerRoutineAuthority({
+    sessionId,
+    token,
+    executionRunId,
+    routineRunId,
+    planHash,
+    alias,
+    effectCaps = {},
+    canaryAuthorized = false,
+    accountFingerprint = null,
+  }) {
+    const session = this.state.validateSession(sessionId, token);
+    assertSessionKind(session, "capability");
+    const { authority } = this.state.registerRoutineAuthority({
+      executionRunId,
+      routineRunId,
+      planHash,
+      alias,
+      deviceId: session.deviceId,
+      sessionId: session.sessionId,
+      leaseId: session.leaseId,
+      actorId: session.actorId,
+      effectCaps,
+      canaryAuthorized,
+      accountFingerprint,
+    });
+    return authority;
+  }
+
+  #routineEffectBridge(authority, token) {
+    const cached = this.#routineEffectCache(authority.authorityId);
+    if (cached.bridge) return cached.bridge;
+    const { createRoutineEffectTransport } = routineEffectTransportModule;
+    const transport = createRoutineEffectTransport({
+      // typed CP-internal execution on the OWNING session: same lease, no
+      // nested-job surface, and the caller never supplies coordinates
+      executeAction: async (params) => {
+        const job = await this.executeSessionAction(authority.sessionId, token, {
+          capabilityId: this.#routineExplorerCapabilityId(),
+          idempotencyKey: `routine-effect:${authority.routineRunId}:${++cached.sequence}:${params.primitive}`,
+          params,
+        });
+        return this.#routinePrimitiveOutput(job, params);
+      },
+      // CP-owned append-only binding ledger: the machine's claimed target
+      // fingerprint is bound to the open detail's stable evidence exactly once
+      bindTarget: (claimedFingerprint, detailFingerprint) => {
+        const key = `${authority.routineRunId} ${claimedFingerprint}`;
+        const existing = cached.targetBindings.get(key);
+        if (existing && existing !== detailFingerprint) {
+          throw new ControlPlaneError("TARGET_BINDING_MISMATCH", "the claimed target is now bound to different detail evidence", {
+            status: 409, details: { claimedFingerprint },
+          });
+        }
+        cached.targetBindings.set(key, detailFingerprint);
+      },
+      // the fixed production draft provider (text-only seam, §8.1.5)
+      draftTextOf: async (draftId) => this.state.getCommentDraft(draftId),
+      now: () => Date.now(),
+    });
+    const bridge = createRoutineEffectBridge({
+      state: this.state,
+      owner: {
+        sessionId: authority.sessionId,
+        leaseRef: authority.leaseId,
+        leaseAuthorization: sha256(String(token || "")),
+        routineRunId: authority.routineRunId,
+        planHash: authority.planHash,
+      },
+      transport,
+      llm: this.routineDraftProvider ?? null,
+    });
+    cached.bridge = bridge;
+    return bridge;
+  }
+
+  #routineExplorerCapabilityId() {
+    return "xiaowei.explorer.primitive";
+  }
+
+  #routinePrimitiveOutput(job, params) {
+    const output = job?.result?.output ?? job?.output ?? job?.result ?? {};
+    if (params?.primitive === "dump_ui" && !output.xml && output.path) {
+      // the CP owns its evidence store; read the artifact straight from the
+      // bound run directory (same binding rule the runner applies)
+      const runDirectory = job?.storage?.runDirectory ?? job?.result?.storage?.runDirectory;
+      if (!runDirectory) throw new ControlPlaneError("ROUTINE_OBSERVATION_INVALID", "dump artifact has no bound run directory", { status: 409 });
+      const { readBoundUtf8Artifact } = routineArtifactModule;
+      return { ...output, xml: readBoundUtf8Artifact({ path: output.path, runId: job.runId, storage: job.storage ?? job.result?.storage }) };
+    }
+    return output;
+  }
+
+  async commitRoutineAuthorityEffect({ authorityId, token, intent }) {
+    const authority = this.state.getRoutineAuthority(String(authorityId || ""));
+    if (!authority || authority.status !== "active") {
+      throw new ControlPlaneError("ROUTINE_AUTHORITY_INACTIVE", "routine authority is missing or inactive", { status: 404 });
+    }
+    const session = this.state.validateSession(authority.sessionId, token);
+    assertSessionKind(session, "capability");
+    if (session.leaseId !== authority.leaseId) {
+      throw new ControlPlaneError("SESSION_MISMATCH", "routine authority does not match the presenting session lease", { status: 403 });
+    }
+    // server-sealed canary policy: the transport only opens for a policy the
+    // CP granted at registration — the client flag alone can never open it
+    if (authority.canaryPolicy?.granted !== true) {
+      throw new ControlPlaneError("ROUTINE_TRANSPORT_SEALED", "no server-sealed canary policy granted transport for this authority", { status: 403 });
+    }
+    this.#routineEffectCache(authority.authorityId);
+    const bridge = this.#routineEffectBridge(authority, token);
+    const intentInput = intent && typeof intent === "object" ? intent : {};
+    return bridge.commitRoutineEffect({
+      sessionId: authority.sessionId,
+      leaseRef: session.leaseId,
+      leaseAuthorization: sha256(String(token || "")),
+      routineRunId: authority.routineRunId,
+      planHash: authority.planHash,
+      targetFingerprint: intentInput.targetFingerprint ?? null,
+      observationHash: intentInput.observationHash ?? null,
+      payloadHash: intentInput.payloadHash ?? null,
+    }, intentInput);
+  }
+
+  async reconcileRoutineAuthorityComments({ authorityId, token, targetFingerprint = null }) {
+    const authority = this.state.getRoutineAuthority(String(authorityId || ""));
+    if (!authority || authority.status !== "active") {
+      throw new ControlPlaneError("ROUTINE_AUTHORITY_INACTIVE", "routine authority is missing or inactive", { status: 404 });
+    }
+    const session = this.state.validateSession(authority.sessionId, token);
+    assertSessionKind(session, "capability");
+    const bridge = this.#routineEffectBridge(authority, token);
+    return bridge.reconcileComment({
+      sessionId: authority.sessionId,
+      leaseRef: session.leaseId,
+      leaseAuthorization: sha256(String(token || "")),
+      routineRunId: authority.routineRunId,
+      planHash: authority.planHash,
+      targetFingerprint,
+      observationHash: null,
+    });
+  }
+
+  closeRoutineAuthorityViaRpc(authorityId, token, reason = "closed") {
+    const authority = this.state.getRoutineAuthority(String(authorityId || ""));
+    if (!authority) {
+      throw new ControlPlaneError("ROUTINE_AUTHORITY_NOT_FOUND", `unknown routine authority ${authorityId}`, { status: 404 });
+    }
+    // only the OWNING session's token may close its authority
+    this.state.validateSession(authority.sessionId, token);
+    this.#routineEffectBridges.delete(authority.authorityId);
+    return this.state.closeRoutineAuthority(authority.authorityId, { reason });
+  }
+
   releaseSession(sessionId, token) {
     const session = this.state.validateSession(sessionId, token);
     assertSessionKind(session, "capability");
@@ -2426,6 +2607,15 @@ export class ControlPlane {
         "cannot release a session while its action is running",
         { status: 423, details: { sessionId } },
       );
+    }
+    // §8.1: releasing the owning session closes the run's routine authority —
+    // the sealed canary policy dies with the session, never outlives it
+    const active = this.state.listActiveRoutineAuthorities?.() ?? null;
+    for (const authority of (Array.isArray(active) ? active : [])) {
+      if (authority.sessionId === sessionId) {
+        this.state.closeRoutineAuthority(authority.authorityId, { reason: "session-released" });
+        this.#routineEffectBridges.delete(authority.authorityId);
+      }
     }
     return this.state.releaseSession(sessionId, token);
   }

@@ -170,6 +170,7 @@ export function r0NavigationTap({
   return {
     ok: true,
     blockId: selected.blockId,
+    block: selected.block,
     center: selected.center,
     actionRef,
     reason: "VISION_R0_OK",

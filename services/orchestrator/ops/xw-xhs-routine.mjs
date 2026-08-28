@@ -71,7 +71,7 @@ function parseArgs(argv) {
 
 function usage() {
   return `usage:
-  node ops/xw-xhs-routine.mjs run --template xhs.feed-play.v1 [--alias 03] --items 8 [--prefer any] [--dwell 5:12] [--comment-screens 1] [--like-max 1] [--comment-max 2] [--seed daily] --plan|--json
+  node ops/xw-xhs-routine.mjs run --template xhs.feed-play.v1 [--alias 03] --items 8 [--prefer any] [--dwell 5:12] [--comment-screens 1] [--like-max 1] [--comment-max 2] [--seed daily] [--canary-authorized] [--vision-mode fallback|shadow|canary] --plan|--json
   node ops/xw-xhs-routine.mjs plan --template xhs.feed-play.v1 --parallel 2
       # explicit read-only batch; exact children [03,04], never fallback
   node ops/xw-xhs-routine.mjs run --plan-file <sealed-plan.json> --json
@@ -287,10 +287,17 @@ export async function runRoutineCli(argv = [], {
         return;
       }
       try {
-        const runner = new XhsRoutineRunner(routineRuntimeFactory());
+        const runtime = routineRuntimeFactory();
+        const runner = new XhsRoutineRunner(runtime);
         const routineRun = await runner.start({
           plan: sealedPlanDocument(plan),
           actorId: "agent:xhs-routine",
+          // request only: the CP seals the canary grant server-side
+          canaryAuthorized: args["canary-authorized"] === true,
+          // sealed vision mode (§8.2): fallback|shadow|canary — unknown values
+          // are rejected by the runner, never silently degraded to fallback
+          visionMode: args["vision-mode"] === undefined ? "fallback" : String(args["vision-mode"]),
+          accountFingerprint: args["account-fingerprint"] || null,
           executionRequest: {
             mode: plan.parallel === 2 ? "parallel" : "single",
             aliases: [...plan.placement.aliases],

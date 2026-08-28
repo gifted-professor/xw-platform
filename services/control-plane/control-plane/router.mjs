@@ -666,6 +666,62 @@ export class ControlRouter {
       };
     }
 
+    // --- Direct-routine plan V2 §8.1: CP-owned routine authority + effects ----
+    if (method === "POST" && path === "/control/v1/routine-authority") {
+      const input = requireBody(body);
+      const authority = this.control.registerRoutineAuthority({
+        sessionId: input.sessionId,
+        token: tokenOf(input, headers),
+        executionRunId: input.executionRunId,
+        routineRunId: input.routineRunId,
+        planHash: input.planHash,
+        alias: input.alias,
+        effectCaps: input.effectCaps ?? {},
+        canaryAuthorized: input.canaryAuthorized === true,
+        accountFingerprint: input.accountFingerprint ?? null,
+      });
+      return { status: 201, body: { authority } };
+    }
+    match = path.match(/^\/control\/v1\/routine-authority\/([^/]+)\/effects$/);
+    if (method === "POST" && match) {
+      const input = requireBody(body);
+      return {
+        status: 200,
+        body: {
+          effect: await this.control.commitRoutineAuthorityEffect({
+            authorityId: decodeURIComponent(match[1]),
+            token: tokenOf(input, headers),
+            intent: input.intent ?? null,
+          }),
+        },
+      };
+    }
+    match = path.match(/^\/control\/v1\/routine-authority\/([^/]+)\/reconcile$/);
+    if (method === "POST" && match) {
+      const input = requireBody(body);
+      return {
+        status: 200,
+        body: {
+          reconciles: await this.control.reconcileRoutineAuthorityComments({
+            authorityId: decodeURIComponent(match[1]),
+            token: tokenOf(input, headers),
+            targetFingerprint: input.targetFingerprint ?? null,
+          }),
+        },
+      };
+    }
+    match = path.match(/^\/control\/v1\/routine-authority\/([^/]+)$/);
+    if (method === "POST" && match) {
+      // explicit close (the owning session's release also closes implicitly)
+      const input = requireBody(body);
+      return {
+        status: 200,
+        body: {
+          authority: this.control.closeRoutineAuthorityViaRpc(decodeURIComponent(match[1]), tokenOf(input, headers), input.reason ?? "closed"),
+        },
+      };
+    }
+
     if (method === "POST" && path === "/control/v1/device-sessions") {
       const input = requireBody(body);
       const { faultAfter: _ignoredFaultAfter, ...safe } = input;

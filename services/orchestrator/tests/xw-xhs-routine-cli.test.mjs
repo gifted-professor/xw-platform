@@ -54,35 +54,52 @@ const FEED_XML = '<node class="android.widget.ImageView" content-desc="笔记 �
 const DETAIL_XML = '<node class="android.widget.TextView" content-desc="点赞" text="" bounds="[40,2200][140,2300]"/>'
   + '<node class="android.widget.TextView" content-desc="评论 3" text="" bounds="[240,2200][340,2300]"/>';
 
-function routineRuntimeFixture({ releaseFails = false } = {}) {
-  let page = "feed";
+function routineRuntimeFixture({ releaseFails = false, secondaryDown = false } = {}) {
+  const pages = { "03": "feed", "04": "feed" };
   let creates = 0;
-  const leases = [{ leaseId: "lease-03", sessionId: "session-03", deviceId: "device-03" }];
+  let deviceActions = 0;
+  const leases = [
+    { leaseId: "lease-03", sessionId: "session-03", deviceId: "device-03" },
+    { leaseId: "lease-04", sessionId: "session-04", deviceId: "device-04" },
+  ];
   const runtime = {
     get creates() { return creates; },
+    get deviceActions() { return deviceActions; },
     sleepFn: async () => {},
     async createSession({ placement }) {
       creates += 1;
-      assert.deepEqual(placement, { alias: "03" });
-      return { sessionId: "session-03", leaseId: "lease-03", token: "private", deviceId: "device-03" };
+      const alias = placement?.alias;
+      assert.ok(alias === "03" || alias === "04", "routine sessions are alias-pinned 03/04 only");
+      if (alias === "04" && secondaryDown) {
+        throw Object.assign(new Error("04 unavailable"), { code: "DEVICE_BUSY", status: 423 });
+      }
+      return { sessionId: `session-${alias}`, leaseId: `lease-${alias}`, token: "private", deviceId: `device-${alias}` };
     },
-    async executeSessionAction(_sessionId, _token, action) {
+    async executeSessionAction(sessionId, _token, action) {
+      deviceActions += 1;
+      const state = sessionId === "session-04" ? pages["04"] : pages["03"];
       const primitive = action.params.primitive;
       let output = { ok: true };
       if (primitive === "focus") {
-        output = page === "feed"
+        output = state === "feed"
           ? { ok: true, package: "com.xingin.xhs", activity: "com.xingin.xhs.index.v2.IndexActivityV2" }
           : { ok: true, package: "com.xingin.xhs", activity: "com.xingin.xhs.note.NoteDetailActivity" };
       }
-      if (primitive === "dump_ui") output = { ok: true, xml: page === "feed" ? FEED_XML : DETAIL_XML };
-      if (primitive === "tap") page = "detail";
-      if (primitive === "back" || primitive === "launch_app") page = "feed";
+      if (primitive === "dump_ui") output = { ok: true, xml: state === "feed" ? FEED_XML : DETAIL_XML };
+      if (primitive === "tap") {
+        if (sessionId === "session-04") pages["04"] = "detail";
+        else pages["03"] = "detail";
+      }
+      if (primitive === "back" || primitive === "launch_app") {
+        pages[sessionId === "session-04" ? "04" : "03"] = "feed";
+      }
       return { jobId: `job-${primitive}`, status: "succeeded", output };
     },
     async heartbeatSession() { return { ok: true }; },
-    async releaseSession() {
+    async releaseSession(sessionId) {
       if (releaseFails) throw Object.assign(new Error("release down"), { code: "RELEASE_DOWN" });
-      leases.splice(0, leases.length);
+      const index = leases.findIndex((lease) => lease.sessionId === sessionId);
+      if (index >= 0) leases.splice(index, 1);
       return { released: true };
     },
     async listLeases() { return [...leases]; },
@@ -258,16 +275,45 @@ test("an unresolved formal lease is traced but never reported as successful", as
   assert.ok(out.trace.path);
 });
 
-test("explicit read-only --parallel 2 seals [03,04] but creates zero sessions until its coordinator exists", async () => {
+test("explicit read-only --parallel 2 runs the sealed [03,04] batch through the coordinator", async () => {
   const planned = await runCli(["plan", "--template", "feed-play", "--items", "1", "--parallel", "2"]);
   assert.deepEqual(JSON.parse(planned.stdout).placement.aliases, ["03", "04"]);
   const runtime = routineRuntimeFixture();
   const { code, stdout } = await runCliInProcess([
     "run", "--template", "feed-play", "--items", "1", "--parallel", "2", "--execute",
   ], { routineRuntimeFactory: () => runtime, routineTraceWriter: traceWriterFixture() });
+  assert.equal(code, 0);
+  const out = JSON.parse(stdout);
+  assert.equal(out.ok, true);
+  assert.equal(out.routineRun.status, "SUCCEEDED");
+  assert.equal(out.routineRun.mode, "parallel-batch");
+  assert.deepEqual(out.routineRun.aliases, ["03", "04"]);
+  assert.equal(out.routineRun.serverVerified, true);
+  assert.equal(out.routineRun.receipt.cleanup.verified, true);
+  assert.equal(runtime.creates, 2, "exactly two sessions: 03 then 04, no downgrade");
+  const [child03, child04] = out.routineRun.children;
+  assert.equal(child03.status, "SUCCEEDED");
+  assert.equal(child04.status, "SUCCEEDED");
+  assert.equal(child03.executionRunId, out.routineRun.executionRunId, "children share the batch executionRunId");
+  assert.equal(child04.executionRunId, out.routineRun.executionRunId);
+  assert.notEqual(child03.routineRunId, child04.routineRunId, "children own their routineRunIds");
+  assert.equal(child03.receipt && out.routineRun.receipt.children[0].opened, 1);
+  assert.equal(out.routineRun.receipt.children[1].opened, 1);
+});
+
+test("04 acquire failure releases 03 before any device action and never downgrades", async () => {
+  const runtime = routineRuntimeFixture({ secondaryDown: true });
+  const { code, stdout } = await runCliInProcess([
+    "run", "--template", "feed-play", "--items", "1", "--parallel", "2", "--execute",
+  ], { routineRuntimeFactory: () => runtime, routineTraceWriter: traceWriterFixture() });
   assert.equal(code, 4);
-  assert.equal(JSON.parse(stdout).error.code, "ROUTINE_PARALLEL_EXECUTOR_UNAVAILABLE");
-  assert.equal(runtime.creates, 0);
+  const out = JSON.parse(stdout);
+  assert.equal(out.ok, false);
+  assert.equal(out.routineRun.status, "BLOCKED");
+  assert.equal(out.routineRun.error.code, "ROUTINE_PARALLEL_ACQUIRE_FAILED");
+  assert.equal(out.routineRun.error.secondaryRelease.ok, true, "03's lease is released before any device action");
+  assert.equal(runtime.deviceActions, 0, "no dump/tap/swipe ever reaches either device");
+  assert.equal(runtime.creates, 2);
 });
 
 test("caller-selected production endpoint is rejected before runtime/session creation", async () => {

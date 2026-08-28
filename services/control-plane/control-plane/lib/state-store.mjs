@@ -873,6 +873,27 @@ export class StateStore {
         evidence_hash TEXT,
         created_at INTEGER NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS routine_authorities (
+        authority_id TEXT PRIMARY KEY,
+        execution_run_id TEXT NOT NULL,
+        routine_run_id TEXT NOT NULL UNIQUE,
+        plan_hash TEXT NOT NULL,
+        alias TEXT NOT NULL,
+        device_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        lease_id TEXT NOT NULL,
+        actor_id TEXT NOT NULL,
+        effect_caps_json TEXT NOT NULL,
+        canary_authorized INTEGER NOT NULL DEFAULT 0,
+        canary_policy_json TEXT,
+        status TEXT NOT NULL DEFAULT 'active',
+        account_fingerprint TEXT,
+        created_at INTEGER NOT NULL,
+        closed_at INTEGER,
+        closed_reason TEXT
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS routine_authorities_session_active
+        ON routine_authorities(session_id) WHERE status='active';
     `);
     this.#ensureColumn("jobs", "operation_key", "TEXT");
     this.#ensureColumn("jobs", "authorization_snapshot_json", "TEXT");
@@ -4730,6 +4751,126 @@ export class StateStore {
 
   listCommentReconciles(effectId) {
     return this.db.prepare("SELECT * FROM comment_reconciles WHERE effect_id=? ORDER BY created_at").all(effectId);
+  }
+
+  // --- Direct-routine plan V2 §8.1: CP-owned routine authority ---------------
+  // Every social routine run registers ONE immutable authority tuple before any
+  // device work. The server seals the canary policy: a client --canary-authorized
+  // flag is only a request — the transport only opens for an authority whose
+  // server-sealed policy granted it, and the absolute caps (alias 03, like<=1,
+  // comment<=2) are re-validated here so even a mis-wired bridge caller cannot
+  // raise them.
+
+  static ROUTINE_AUTHORITY_ALIAS = "03";
+
+  #publicRoutineAuthority(row) {
+    if (!row) return null;
+    return {
+      authorityId: row.authority_id,
+      executionRunId: row.execution_run_id,
+      routineRunId: row.routine_run_id,
+      planHash: row.plan_hash,
+      alias: row.alias,
+      deviceId: row.device_id,
+      sessionId: row.session_id,
+      leaseId: row.lease_id,
+      actorId: row.actor_id,
+      effectCaps: parseJson(row.effect_caps_json, {}),
+      canaryAuthorized: Boolean(row.canary_authorized),
+      canaryPolicy: parseJson(row.canary_policy_json, null),
+      status: row.status,
+      accountFingerprint: row.account_fingerprint ?? null,
+      createdAt: iso(row.created_at),
+      closedAt: row.closed_at ? iso(row.closed_at) : null,
+      closedReason: row.closed_reason ?? null,
+    };
+  }
+
+  registerRoutineAuthority({ executionRunId, routineRunId, planHash, alias, deviceId, sessionId, leaseId, actorId, effectCaps = {}, canaryAuthorized = false, accountFingerprint = null }) {
+    if (!executionRunId || !routineRunId || !planHash || !deviceId || !sessionId || !leaseId || !actorId) {
+      throw new ControlPlaneError("ROUTINE_AUTHORITY_INVALID", "authority tuple fields are required", { status: 400 });
+    }
+    if (alias !== StateStore.ROUTINE_AUTHORITY_ALIAS) {
+      throw new ControlPlaneError("ROUTINE_AUTHORITY_ALIAS_FORBIDDEN", `routine social authority is 03-only (got ${alias})`, { status: 403 });
+    }
+    if (canaryAuthorized !== true && canaryAuthorized !== false) {
+      throw new ControlPlaneError("ROUTINE_AUTHORITY_INVALID", "canaryAuthorized must be a boolean request", { status: 400 });
+    }
+    // absolute caps re-validated server-side (§8.1.2): the client cannot raise them
+    const absolute = StateStore.ROUTINE_BUDGET_ABSOLUTE_CAPS;
+    const sealedCaps = {};
+    for (const action of Object.keys(absolute)) {
+      const requested = Number(effectCaps?.[action] ?? absolute[action]);
+      if (!Number.isInteger(requested) || requested < 0 || requested > absolute[action]) {
+        throw new ControlPlaneError("ROUTINE_AUTHORITY_CAP_EXCEEDED", `requested cap for ${action} exceeds the absolute routine cap ${absolute[action]}`, { status: 400 });
+      }
+      sealedCaps[action] = requested;
+    }
+    const now = this.now();
+    return this.transaction(() => {
+      // one immutable authority per routineRunId — a re-registration is a replay
+      const existing = this.db.prepare("SELECT * FROM routine_authorities WHERE routine_run_id=?").get(routineRunId);
+      if (existing) return { authority: this.#publicRoutineAuthority(existing), reused: true };
+      // at most one active routine authority per session (§8.1.1)
+      const active = this.db.prepare(
+        "SELECT authority_id FROM routine_authorities WHERE session_id=? AND status='active'",
+      ).get(sessionId);
+      if (active) {
+        throw new ControlPlaneError("ROUTINE_AUTHORITY_SESSION_ACTIVE", "this session already holds an active routine authority", {
+          status: 409, details: { authorityId: active.authority_id },
+        });
+      }
+      const authorityId = newId("routine-auth");
+      // server-sealed canary policy: the client flag is only a request; the
+      // grant lives here and the typed effect RPC re-checks it before transport
+      const canaryPolicy = canaryAuthorized
+        ? {
+            granted: true,
+            sealedAt: iso(now),
+            transport: { like: sealedCaps.like, comment: sealedCaps.comment },
+            visualTap: 0, // vision navigation is authorized by the vision permit chain, never by this policy
+            planHash,
+            alias,
+          }
+        : { granted: false, sealedAt: iso(now), transport: { like: 0, comment: 0 }, visualTap: 0, planHash, alias };
+      const canaryPolicyJson = canonicalJson({ ...canaryPolicy, policyHash: sha256(canonicalJson(canaryPolicy)) });
+      this.db.prepare(`
+        INSERT INTO routine_authorities (
+          authority_id, execution_run_id, routine_run_id, plan_hash, alias, device_id,
+          session_id, lease_id, actor_id, effect_caps_json, canary_authorized,
+          canary_policy_json, status, account_fingerprint, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
+      `).run(
+        authorityId, executionRunId, routineRunId, planHash, alias, deviceId,
+        sessionId, leaseId, actorId, canonicalJson(sealedCaps), canaryAuthorized ? 1 : 0,
+        canaryPolicyJson, accountFingerprint, now,
+      );
+      return { authority: this.#publicRoutineAuthority(this.db.prepare("SELECT * FROM routine_authorities WHERE authority_id=?").get(authorityId)), reused: false };
+    });
+  }
+
+  getRoutineAuthority(authorityId) {
+    return this.#publicRoutineAuthority(
+      this.db.prepare("SELECT * FROM routine_authorities WHERE authority_id=?").get(String(authorityId || "")),
+    );
+  }
+
+  closeRoutineAuthority(authorityId, { reason = "released" } = {}) {
+    const now = this.now();
+    return this.transaction(() => {
+      const row = this.db.prepare("SELECT * FROM routine_authorities WHERE authority_id=?").get(String(authorityId || ""));
+      if (!row) throw new ControlPlaneError("ROUTINE_AUTHORITY_NOT_FOUND", `unknown routine authority ${authorityId}`, { status: 404 });
+      if (row.status === "active") {
+        this.db.prepare("UPDATE routine_authorities SET status='closed', closed_at=?, closed_reason=? WHERE authority_id=?")
+          .run(now, String(reason), authorityId);
+      }
+      return this.#publicRoutineAuthority(this.db.prepare("SELECT * FROM routine_authorities WHERE authority_id=?").get(authorityId));
+    });
+  }
+
+  listActiveRoutineAuthorities() {
+    return this.db.prepare("SELECT * FROM routine_authorities WHERE status='active' ORDER BY created_at")
+      .all().map((row) => this.#publicRoutineAuthority(row));
   }
 
   // --- Mission effects (ECP) -------------------------------------------------
