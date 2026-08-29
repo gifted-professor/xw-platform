@@ -166,6 +166,18 @@ test("backfill S2 derives TRANSPORTED_AMBIGUOUS_NOT_VERIFIED from the ledger", (
   const result = cmdBackfill({ wave: "S2", ledger, runDump, ...RELEASE });
   assert.equal(result.verdict, "TRANSPORTED_AMBIGUOUS_NOT_VERIFIED");
 
+  // CLI arg parity: parseArgs keeps `--run-dump` as the dashed key — the tool
+  // must accept that form or every CLI backfill dies before reading files.
+  // Fresh XW_RUNTIME_ROOT: receipt writes are append-only per acceptance dir.
+  const prevRoot = process.env.XW_RUNTIME_ROOT;
+  try {
+    process.env.XW_RUNTIME_ROOT = join(prevRoot, "cli-parity");
+    const cliResult = cmdBackfill({ wave: "S2", ledger, "run-dump": runDump, ...RELEASE });
+    assert.equal(cliResult.verdict, "TRANSPORTED_AMBIGUOUS_NOT_VERIFIED");
+  } finally {
+    process.env.XW_RUNTIME_ROOT = prevRoot;
+  }
+
   const receipt = JSON.parse(readFileSync(result.path, "utf8"));
   assert.equal(receipt.schemaId, "xw.xhs.routine-wave-receipt.v1");
   assert.equal(receipt.wave, "S2");

@@ -165,6 +165,7 @@
         "control-plane/bootstrap.mjs",
         "control-plane/lib/authorization-decision.mjs",
         "control-plane/lib/control-plane.mjs",
+        "control-plane/lib/errors.mjs",
         "control-plane/lib/implementation-closure.mjs",
         "control-plane/lib/placement.mjs",
         "control-plane/lib/recipe-interpreter.mjs",

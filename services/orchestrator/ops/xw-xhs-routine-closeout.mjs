@@ -298,7 +298,10 @@ function cleanupView(runFaces) {
  * from read-only inputs. The verdict is derived from the ledger rows — not
  * from any caller assertion.
  */
-function cmdBackfill({ wave, ledger, runDump, held, ...rest }) {
+function cmdBackfill({ wave, ledger, runDump: runDumpCamel, held, ...rest }) {
+  // CLI `--run-dump` arrives from parseArgs as the dashed key; test seams pass it
+  // camelCase. Accept both, prefer whichever is the real path string.
+  const runDump = typeof runDumpCamel === "string" && runDumpCamel !== "true" ? runDumpCamel : rest["run-dump"];
   const releaseIdentity = assertReleaseIdentity({ ...rest, "release-id": rest["release-id"] });
   const waveName = String(wave || "").toUpperCase();
 

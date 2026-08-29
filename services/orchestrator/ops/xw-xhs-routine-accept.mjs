@@ -130,13 +130,33 @@ function loadBefore(wave) {
   return { path, body: JSON.parse(readFileSync(path, "utf8")) };
 }
 
-async function cmdAfter({ wave, runId, aliases }) {
+// V2.1 closeout: every fresh acceptance receipt must carry the release identity
+// it ran under — closeout `receipt --emit-contract` refuses identity-less
+// receipts as stale lineage (the release-A xe_ receipts must never seed a PASS).
+// Identity source (first hit wins): explicit --release-id/--source-commit flags,
+// then XW_RELEASE_MANIFEST (read + parsed, no fallback beyond it).
+function resolveReleaseIdentity({ releaseId, sourceCommit }) {
+  if (releaseId && releaseId !== true && sourceCommit && sourceCommit !== true) {
+    return { releaseId: String(releaseId), sourceCommit: String(sourceCommit) };
+  }
+  const manifestPath = process.env.XW_RELEASE_MANIFEST;
+  if (manifestPath && existsSync(manifestPath)) {
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    if (manifest?.releaseId && manifest?.sourceCommit) {
+      return { releaseId: String(manifest.releaseId), sourceCommit: String(manifest.sourceCommit) };
+    }
+  }
+  return null;
+}
+
+async function cmdAfter({ wave, runId, aliases, releaseId, sourceCommit }) {
   const before = loadBefore(wave);
   const after = await cmdBeforeForTest.snapshotImpl({ aliases });
   const { trace } = readRoutineTrace(runId);
   const run = trace.routineRun;
   const runReceipt = run?.receipt ?? {};
   const cleanup = runReceipt.cleanup ?? {};
+  const releaseIdentity = resolveReleaseIdentity({ releaseId, sourceCommit });
 
   const afterLeaseIds = new Set(after.leaseIds);
   const newLeases = after.leaseIds.filter((id) => !before.body.leaseIds.includes(id));
@@ -144,15 +164,29 @@ async function cmdAfter({ wave, runId, aliases }) {
   const ownedRemaining = afterLeaseIds.has(run.leaseId ?? "__none__");
 
   const primitiveTrace = Array.isArray(run.primitiveTrace) ? run.primitiveTrace : null;
+  // Parallel batch (xhs-routine-runner mode:"parallel-batch"): the parent receipt
+  // carries no primitive trace and a lane-aggregated cleanup — cleanup.verified
+  // already encodes "both lanes SUCCEEDED with child.cleanupRecovery
+  // .activeOwnedLeases===0". Assert lanes instead of the single-run shape.
+  const isParallel = run?.mode === "parallel-batch" && Array.isArray(runReceipt.children);
+  const parallelChildren = isParallel ? runReceipt.children : null;
   const assertions = {
     runSucceeded: trace.status === "SUCCEEDED",
     serverVerified: run.serverVerified === true,
-    cleanupVerified: cleanup.verified === true && cleanup.activeLeases === 0 && cleanup.restored === true,
+    cleanupVerified: isParallel
+      ? runReceipt.cleanup?.verified === true
+      : (cleanup.verified === true && cleanup.activeLeases === 0 && cleanup.restored === true),
     noNewLeases: newLeases.length === 0,
     ownedLeaseReleased: ownedRemaining === false,
     nonTargetAliasZeroDelta: true, // widened below when trace exposes alias I/O
-    primitiveTracePresent: Array.isArray(primitiveTrace) && primitiveTrace.length > 0,
+    primitiveTracePresent: isParallel
+      ? parallelChildren.length > 0 && parallelChildren.every((c) => c && typeof c.routineRunId === "string")
+      : (Array.isArray(primitiveTrace) && primitiveTrace.length > 0),
   };
+  if (isParallel) {
+    assertions.childLanesSucceeded = parallelChildren.length === before.body.aliases.length
+      && parallelChildren.every((c) => c.status === "SUCCEEDED");
+  }
   if (before.body.aliases.length > 1 && run.alias && before.body.aliases.includes(run.alias)) {
     const others = before.body.aliases.filter((a) => a !== run.alias);
     // leases are the only cross-alias I/O observable without device contact;
@@ -168,6 +202,7 @@ async function cmdAfter({ wave, runId, aliases }) {
     wave,
     verdict: pass ? "PASS" : "FAIL",
     emittedAt: new Date().toISOString(),
+    releaseIdentity,
     run: {
       executionRunId: trace.executionRunId,
       routineRunId: trace.routineRunId,
@@ -253,6 +288,8 @@ async function main() {
         wave: args.wave,
         runId: args["run-id"] || args.runId,
         aliases: assertAliases(args.aliases),
+        releaseId: args["release-id"] ?? args.releaseId,
+        sourceCommit: args["source-commit"] ?? args.sourceCommit,
       });
       if (result?.exitCode) process.exitCode = result.exitCode;
     } else if (command === "corpus") {

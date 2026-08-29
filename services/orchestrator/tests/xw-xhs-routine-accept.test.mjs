@@ -177,3 +177,102 @@ test("missing before snapshot or malformed run id fails closed with a stable cod
     );
   });
 });
+
+test("after stamps releaseIdentity (flags beat XW_RELEASE_MANIFEST; identity absent stays null)", async () => {
+  await withRuntimeRoot(async (root) => {
+    const restore = stubSnapshot([]);
+    const prevManifest = process.env.XW_RELEASE_MANIFEST;
+    try {
+      await cmdBeforeForTest({ wave: "S1", aliases: ["03"] });
+      const executionRunId = `xe_${"1".repeat(32)}`;
+      seedTrace(root, { executionRunId, primitiveTrace: [{ seq: 1, primitive: "focus", jobId: "job-1", status: "succeeded", outputOk: true, evidenceRef: null }] });
+      // 1. identity absent: receipt carries releaseIdentity:null (stale-refusal contract)
+      let result = await cmdAfterForTest({ wave: "S1", runId: executionRunId, aliases: ["03"] });
+      assert.equal(result.ok, true);
+      let disk = JSON.parse(readFileSync(result.receiptPath, "utf8"));
+      assert.equal(disk.releaseIdentity, null);
+
+      // 2. XW_RELEASE_MANIFEST provides the identity
+      const manifestPath = join(root, "release-manifest.v1.json");
+      writeFileSync(manifestPath, `${JSON.stringify({ releaseId: "xw-xhs-routine-b4-test-manifest", sourceCommit: "abc1234567890" })}\n`);
+      process.env.XW_RELEASE_MANIFEST = manifestPath;
+      result = await cmdAfterForTest({ wave: "S1", runId: executionRunId, aliases: ["03"] });
+      disk = JSON.parse(readFileSync(result.receiptPath, "utf8"));
+      assert.deepEqual(disk.releaseIdentity, { releaseId: "xw-xhs-routine-b4-test-manifest", sourceCommit: "abc1234567890" });
+
+      // 3. explicit flags beat the manifest
+      result = await cmdAfterForTest({ wave: "S1", runId: executionRunId, aliases: ["03"], releaseId: "xw-xhs-routine-b4-8aaba01", sourceCommit: "8aaba01bcbb2e7109d9b42e80dd319da74b91c81" });
+      disk = JSON.parse(readFileSync(result.receiptPath, "utf8"));
+      assert.deepEqual(disk.releaseIdentity, { releaseId: "xw-xhs-routine-b4-8aaba01", sourceCommit: "8aaba01bcbb2e7109d9b42e80dd319da74b91c81" });
+    } finally {
+      if (prevManifest === undefined) delete process.env.XW_RELEASE_MANIFEST;
+      else process.env.XW_RELEASE_MANIFEST = prevManifest;
+      restore();
+    }
+  });
+});
+
+test("parallel-batch acceptance asserts lanes, not the single-run cleanup shape", async () => {
+  await withRuntimeRoot(async (root) => {
+    const restore = stubSnapshot([{ leaseId: "lease-03", alias: "03" }]);
+    try {
+      await cmdBeforeForTest({ wave: "PARALLEL", aliases: ["03", "04"] });
+      const executionRunId = `xe_${"2".repeat(32)}`;
+      // seed a parallel-batch trace: parent cleanup.verified, two lanes, no
+      // parent primitiveTrace (parallel receipts never carry one)
+      const dir = join(root, "state", "orchestrator", "xhs-routine-runs");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, `${executionRunId}.json`), `${JSON.stringify({
+        schemaId: "xw.xhs.routine-trace.v1",
+        schemaVersion: 1,
+        executionRunId,
+        routineRunId: `rr_${"c".repeat(16)}`,
+        planHash: "a".repeat(64),
+        alias: "03",
+        status: "SUCCEEDED",
+        recordedAt: "2026-08-29T00:00:00.000Z",
+        plan: { planHash: "a".repeat(64), template: "xhs.feed-play.v1", alias: "03" },
+        routineRun: {
+          schemaId: "xw.xhs.routine-parallel-receipt.v1",
+          mode: "parallel-batch",
+          executionRunId,
+          routineRunId: `rr_${"c".repeat(16)}`,
+          planHash: "a".repeat(64),
+          alias: "03",
+          aliases: ["03", "04"],
+          status: "SUCCEEDED",
+          serverVerified: true,
+          leaseId: null,
+          receipt: {
+            schemaId: "xw.xhs.routine-parallel-receipt.v1",
+            cleanup: { verified: true },
+            children: [
+              { alias: "03", routineRunId: "rr_c1", status: "SUCCEEDED", opened: 1 },
+              { alias: "04", routineRunId: "rr_c2", status: "SUCCEEDED", opened: 1 },
+            ],
+          },
+        },
+      }, null, 2)}\n`);
+      const restoreAfter = stubSnapshot([]);
+      const result = await cmdAfterForTest({ wave: "PARALLEL", runId: executionRunId, aliases: ["03", "04"] });
+      restoreAfter();
+      assert.equal(result.ok, true, JSON.stringify(result.assertions ?? {}));
+      assert.equal(result.assertions.cleanupVerified, true);
+      assert.equal(result.assertions.childLanesSucceeded, true);
+      assert.equal(result.assertions.primitiveTracePresent, true);
+
+      // one failed lane -> FAIL
+      const bad = JSON.parse(readFileSync(join(dir, `${executionRunId}.json`), "utf8"));
+      bad.routineRun.receipt.children[1].status = "FAILED";
+      bad.routineRun.receipt.cleanup.verified = false;
+      bad.routineRun.status = "BLOCKED";
+      bad.routineRun.serverVerified = false;
+      writeFileSync(join(dir, `${executionRunId}.json`), JSON.stringify(bad, null, 2));
+      const failResult = await cmdAfterForTest({ wave: "PARALLEL", runId: executionRunId, aliases: ["03", "04"] });
+      assert.equal(failResult.ok, false);
+      assert.equal(failResult.assertions.childLanesSucceeded, false);
+    } finally {
+      restore();
+    }
+  });
+});
