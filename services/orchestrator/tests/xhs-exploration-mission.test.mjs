@@ -88,6 +88,27 @@ test("placement is frozen to [03=feed_lane,04=search_lane] with closed vocabular
   assert.equal(mission.schemaId, EXPLORATION_MISSION_SCHEMA_ID);
   assert.equal(mission.templateId, EXPLORATION_TEMPLATE_ID);
   assert.ok(EXPLORATION_BUDGET_CAPS.visionMaxIssuedPermits === 1 || mission.budgets.visionMaxIssuedPermits <= 1);
+  assert.equal(mission.vision.mode, "off", "an unpinned mission is DUMP-only by default");
+});
+
+test("shadow/canary vision requires the complete python/model/script/config identity", () => {
+  assert.throws(
+    () => compile({ vision: { mode: "shadow", provider: { modelHash: "a".repeat(64) } } }),
+    (error) => error.code === "EXPLORATION_VISION_PROVIDER_UNPINNED",
+  );
+  const provider = {
+    pythonHash: "1".repeat(64),
+    modelHash: "2".repeat(64),
+    scriptHash: "3".repeat(64),
+    configHash: "4".repeat(64),
+  };
+  const { mission } = compile({ vision: { mode: "canary1", provider } });
+  assert.deepEqual(mission.vision.provider, { kind: "local-pinned", ...provider });
+  assert.doesNotThrow(() => validateSealedMission(mission));
+  assert.throws(
+    () => compile({ vision: { mode: "off", provider } }),
+    (error) => error.code === "EXPLORATION_VISION_PROVIDER_INVALID",
+  );
 });
 
 test("sealed mission round-trips: hash reproduction + tamper detection", () => {

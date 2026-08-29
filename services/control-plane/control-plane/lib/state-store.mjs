@@ -928,6 +928,7 @@ export class StateStore {
         actor_id TEXT NOT NULL,
         lanes_json TEXT NOT NULL,
         budgets_json TEXT NOT NULL,
+        vision_json TEXT,
         profile TEXT NOT NULL,
         status TEXT NOT NULL DEFAULT 'active',
         created_at INTEGER NOT NULL,
@@ -956,6 +957,10 @@ export class StateStore {
         payload_json TEXT NOT NULL,
         payload_hash TEXT NOT NULL,
         evidence_hash TEXT NOT NULL,
+        source TEXT NOT NULL DEFAULT 'DUMP',
+        analysis_ref TEXT,
+        provider_identity_json TEXT,
+        visual_proof_hash TEXT,
         issued_at INTEGER NOT NULL,
         expires_at INTEGER NOT NULL,
         consumed_at INTEGER,
@@ -1000,6 +1005,13 @@ export class StateStore {
       );
     `);
     this.#ensureColumn("sessions", "profile", "TEXT");
+    this.#ensureColumn("exploration_authorities", "vision_json", "TEXT");
+    this.#ensureColumn("exploration_permits", "source", "TEXT NOT NULL DEFAULT 'DUMP'");
+    this.#ensureColumn("exploration_permits", "analysis_ref", "TEXT");
+    this.#ensureColumn("exploration_permits", "provider_identity_json", "TEXT");
+    this.#ensureColumn("exploration_permits", "visual_proof_hash", "TEXT");
+    this.db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS exploration_permits_analysis_ref_unique
+      ON exploration_permits(analysis_ref) WHERE analysis_ref IS NOT NULL`);
     this.#ensureColumn("jobs", "operation_key", "TEXT");
     this.#ensureColumn("jobs", "authorization_snapshot_json", "TEXT");
     // V2.1 P1-COMMENT-RECONCILE-LIFECYCLE: full account binding on the effect
@@ -5024,12 +5036,14 @@ export class StateStore {
         INSERT INTO exploration_authorities (
           authority_id, execution_run_id, routine_run_id, mission_hash, plan_hash,
           template_id, release_id, account_fingerprint, actor_id, lanes_json,
-          budgets_json, profile, status, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)
+          budgets_json, vision_json, profile, status, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)
       `).run(
         row.authorityId, row.executionRunId, row.routineRunId, row.missionHash, row.planHash,
         row.templateId, row.releaseId, row.accountFingerprint, row.actorId,
-        canonicalJson(row.lanes), canonicalJson(row.budgets), row.profile, row.createdAt,
+        canonicalJson(row.lanes), canonicalJson(row.budgets),
+        row.vision ? canonicalJson(row.vision) : null,
+        row.profile, row.createdAt,
       );
       for (const lane of row.laneBindings) {
         this.db.prepare(`
@@ -5060,6 +5074,7 @@ export class StateStore {
       actorId: row.actor_id,
       lanes: parseJson(row.lanes_json, []),
       budgets: parseJson(row.budgets_json, {}),
+      vision: parseJson(row.vision_json, { mode: "off", remoteEgress: false, provider: null }),
       profile: row.profile,
       status: row.status,
       sessionBindings: bindings.map((b) => ({
@@ -5101,6 +5116,13 @@ export class StateStore {
   }
 
   reserveExplorationBudget({ authorityId, missionHash, alias, kind, amount, detail = null }) {
+    if (!Number.isInteger(amount) || amount <= 0) {
+      throw new ControlPlaneError(
+        "EXPLORATION_BUDGET_AMOUNT_INVALID",
+        "exploration reservation amount must be a positive integer",
+        { status: 400, details: { amount } },
+      );
+    }
     const now = this.now();
     return this.transaction(() => {
       // ATOMIC cap check + reserve in one BEGIN IMMEDIATE: two lanes racing
@@ -5153,6 +5175,68 @@ export class StateStore {
       this.db.prepare("UPDATE exploration_reservations SET state=?, settled_at=? WHERE reservation_id=?").run(outcome, now, reservationId);
       return { reservationId, state: outcome, replayed: false };
     });
+  }
+
+  settleExplorationVisionAnalysis({ reservationId, authorityId, missionHash, outcome, analysis = null }) {
+    const now = this.now();
+    return this.transaction(() => {
+      const row = this.db.prepare("SELECT * FROM exploration_reservations WHERE reservation_id=?")
+        .get(String(reservationId || ""));
+      if (!row) {
+        throw new ControlPlaneError("EXPLORATION_RESERVATION_NOT_FOUND", `unknown reservation ${reservationId}`, { status: 404 });
+      }
+      if (row.authority_id !== authorityId || row.mission_hash !== missionHash
+        || row.alias !== "03" || row.kind !== "visionAnalysis" || row.amount !== 1) {
+        throw new ControlPlaneError(
+          "EXPLORATION_VISION_ANALYSIS_INVALID",
+          "vision analysis reservation does not match the active authority partition",
+          { status: 409 },
+        );
+      }
+      if (!['consumed', 'failed'].includes(outcome)) {
+        throw new ControlPlaneError("EXPLORATION_SETTLE_INVALID", "outcome must be consumed|failed", { status: 400 });
+      }
+      if (row.state !== "reserved") {
+        return { reservationId, state: row.state, replayed: true };
+      }
+      const detail = parseJson(row.detail_json, {});
+      let analysisHash = null;
+      if (outcome === "consumed") {
+        if (!analysis || typeof analysis !== "object" || Array.isArray(analysis)) {
+          throw new ControlPlaneError(
+            "EXPLORATION_VISION_ANALYSIS_RESULT_REQUIRED",
+            "a consumed vision analysis requires a CP-normalized result",
+            { status: 400 },
+          );
+        }
+        analysisHash = sha256(canonicalJson(analysis));
+        detail.analysis = analysis;
+        detail.analysisHash = analysisHash;
+      }
+      this.db.prepare(
+        "UPDATE exploration_reservations SET state=?, detail_json=?, settled_at=? WHERE reservation_id=?",
+      ).run(outcome, canonicalJson(detail), now, reservationId);
+      return { reservationId, state: outcome, replayed: false, analysisHash };
+    });
+  }
+
+  getExplorationReservation(reservationId) {
+    const row = this.db.prepare(
+      "SELECT * FROM exploration_reservations WHERE reservation_id=?",
+    ).get(String(reservationId || ""));
+    if (!row) return null;
+    return {
+      reservationId: row.reservation_id,
+      authorityId: row.authority_id,
+      missionHash: row.mission_hash,
+      alias: row.alias ?? null,
+      kind: row.kind,
+      amount: row.amount,
+      state: row.state,
+      detail: parseJson(row.detail_json, null),
+      createdAtMs: row.created_at,
+      settledAtMs: row.settled_at ?? null,
+    };
   }
 
   claimExplorationTarget({ authorityId, missionHash, keyKind, keyValue, alias = null }) {
@@ -5276,13 +5360,16 @@ export class StateStore {
         INSERT INTO exploration_permits (
           permit_id, authority_id, mission_hash, alias, lane_role, session_id,
           navigation_role, action_class, page, payload_json, payload_hash,
-          evidence_hash, issued_at, expires_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          evidence_hash, source, analysis_ref, provider_identity_json,
+          visual_proof_hash, issued_at, expires_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         permit.permitId, permit.authorityId, permit.missionHash, permit.alias,
         permit.laneRole, permit.sessionId, permit.navigationRole, permit.actionClass,
         permit.page, canonicalJson(permit.payload), permit.payloadHash,
-        permit.evidenceHash, permit.issuedAt, permit.expiresAt,
+        permit.evidenceHash, permit.source ?? "DUMP", permit.analysisRef ?? null,
+        permit.providerIdentity ? canonicalJson(permit.providerIdentity) : null,
+        permit.visualProofHash ?? null, permit.issuedAt, permit.expiresAt,
       );
       return permit;
     });
@@ -5304,6 +5391,10 @@ export class StateStore {
       payload: parseJson(row.payload_json),
       payloadHash: row.payload_hash,
       evidenceHash: row.evidence_hash,
+      source: row.source ?? "DUMP",
+      analysisRef: row.analysis_ref ?? null,
+      providerIdentity: parseJson(row.provider_identity_json, null),
+      visualProofHash: row.visual_proof_hash ?? null,
       issuedAt: iso(row.issued_at),
       expiresAtMs: row.expires_at,
       issuedAtMs: row.issued_at,
@@ -5326,6 +5417,48 @@ export class StateStore {
       return this.db.prepare("SELECT COUNT(*) AS n FROM exploration_permits WHERE authority_id=? AND alias=?").get(authorityId, alias).n;
     }
     return this.db.prepare("SELECT COUNT(*) AS n FROM exploration_permits WHERE authority_id=?").get(authorityId).n;
+  }
+
+  getExplorationVisionCounters(authorityId) {
+    const id = String(authorityId || "");
+    const analysisAttempts = this.db.prepare(`
+      SELECT COALESCE(SUM(amount),0) AS n
+      FROM exploration_reservations
+      WHERE authority_id=? AND kind='visionAnalysis'
+    `).get(id).n;
+    const permitsIssued = this.db.prepare(`
+      SELECT COUNT(*) AS n
+      FROM exploration_permits
+      WHERE authority_id=? AND navigation_role='PAUSE_VIDEO_SAFE_ZONE'
+    `).get(id).n;
+    const permitsConsumed = this.db.prepare(`
+      SELECT COUNT(*) AS n
+      FROM exploration_permits
+      WHERE authority_id=? AND navigation_role='PAUSE_VIDEO_SAFE_ZONE'
+        AND consumed_at IS NOT NULL
+    `).get(id).n;
+    // No dedicated adapter-dispatch column exists in the P1 schema.  A formal
+    // job row keyed by the consumed visual permit is the narrowest durable,
+    // conservative evidence available: count it as a possible physical tap
+    // even if the job later fails/enters recovery.  This never understates the
+    // safety cap, and remains distinct from permit consumption that failed
+    // before createJob.
+    const physicalTaps = this.db.prepare(`
+      SELECT COUNT(*) AS n
+      FROM exploration_permits p
+      WHERE p.authority_id=?
+        AND p.navigation_role='PAUSE_VIDEO_SAFE_ZONE'
+        AND EXISTS (
+          SELECT 1 FROM jobs j
+          WHERE j.idempotency_key=('exploration:' || p.permit_id)
+        )
+    `).get(id).n;
+    return {
+      analysisAttempts: Number(analysisAttempts) || 0,
+      permitsIssued: Number(permitsIssued) || 0,
+      permitsConsumed: Number(permitsConsumed) || 0,
+      physicalTaps: Number(physicalTaps) || 0,
+    };
   }
 
   appendExplorationJournal({ authorityId, alias, seq, type, recordHash, payload }) {

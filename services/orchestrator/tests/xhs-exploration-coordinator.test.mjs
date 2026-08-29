@@ -442,7 +442,13 @@ test("P3-G lane hang: wall-clock guard fires, lane marked HANG, ABORTED appended
   const f = fixture({ laneTimeoutMs: 80 });
   try {
     const log = { aliases: [] };
-    const never = () => new Promise(() => { /* the hang: no resolution, no rejection */ });
+    let abortSeen = false;
+    const never = ({ batchControl }) => new Promise((resolve) => {
+      batchControl.signal.addEventListener("abort", () => {
+        abortSeen = true;
+        resolve(undefined);
+      }, { once: true });
+    });
     f.setStartLane(laneRunner({ control: f.control, log, overrides: { "04": never } }));
     const aggregate = await f.coordinator.startExplorationRun({ mission: f.mission(), planHash: PLAN_HASH });
 
@@ -451,6 +457,7 @@ test("P3-G lane hang: wall-clock guard fires, lane marked HANG, ABORTED appended
     const child04 = aggregate.children.find((c) => c.alias === "04");
     assert.equal(child04.status, "HANG");
     assert.equal(child04.error.code, "EXPLORATION_LANE_HANG");
+    assert.equal(abortSeen, true, "hang cancellation reaches the underlying lane/provider signal");
     assert.equal(child04.committed, false);
     const types04 = f.journalTypes(aggregate.authorityId, "04");
     assert.ok(types04.includes("ABORTED"), "hung lane journal carries ABORTED via its own session");

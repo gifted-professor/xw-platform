@@ -190,7 +190,9 @@ export function compileExplorationMission({
     resolvedBudgets[name] = requested;
   }
 
-  const visionMode = String(vision?.mode ?? "shadow");
+  // Vision is opt-in. A mission without a fully pinned provider remains
+  // DUMP-only; shadow/canary may never carry null placeholder identities.
+  const visionMode = String(vision?.mode ?? "off");
   if (!EXPLORATION_VISION_MODES.includes(visionMode)) {
     throw new ExplorationMissionError("EXPLORATION_VISION_MODE_INVALID", `vision mode must be one of ${EXPLORATION_VISION_MODES.join("|")}`);
   }
@@ -204,11 +206,28 @@ export function compileExplorationMission({
     remoteEgress: false, // local-only vision for this release (V3-I09)
     provider: Object.freeze({
       kind: "local-pinned",
+      pythonHash: vision?.provider?.pythonHash ?? null,
       modelHash: vision?.provider?.modelHash ?? null,
       scriptHash: vision?.provider?.scriptHash ?? null,
       configHash: vision?.provider?.configHash ?? null,
     }),
   });
+  if (visionMode !== "off") {
+    for (const key of ["pythonHash", "modelHash", "scriptHash", "configHash"]) {
+      if (!/^[a-f0-9]{64}$/.test(String(visionPolicy.provider[key] ?? ""))) {
+        throw new ExplorationMissionError(
+          "EXPLORATION_VISION_PROVIDER_UNPINNED",
+          `vision ${visionMode} requires a 64-hex provider.${key}`,
+        );
+      }
+    }
+  } else if (["pythonHash", "modelHash", "scriptHash", "configHash"]
+    .some((key) => visionPolicy.provider[key] !== null)) {
+    throw new ExplorationMissionError(
+      "EXPLORATION_VISION_PROVIDER_INVALID",
+      "vision off must not carry a dormant provider binding",
+    );
+  }
 
   const goalRef = keyedDigest({ key: digestKey, digestKeyId, kind: "goal", value: normalizedGoal });
   const queryRefs = normalizedQueries.map((q, index) => {
@@ -321,6 +340,19 @@ export function validateSealedMission(submitted) {
     if (!Number.isInteger(v) || v < 0 || v > cap) {
       throw new ExplorationMissionError("EXPLORATION_BUDGET_CAP_EXCEEDED", `sealed budget ${name}=${v} violates cap ${cap}`);
     }
+  }
+  const visionMode = mission.vision?.mode;
+  if (!EXPLORATION_VISION_MODES.includes(visionMode) || mission.vision?.remoteEgress !== false
+    || mission.vision?.provider?.kind !== "local-pinned") {
+    throw new ExplorationMissionError("EXPLORATION_VISION_MODE_INVALID", "sealed vision policy is invalid");
+  }
+  const providerHashes = ["pythonHash", "modelHash", "scriptHash", "configHash"];
+  if (visionMode === "off") {
+    if (providerHashes.some((key) => mission.vision.provider[key] !== null)) {
+      throw new ExplorationMissionError("EXPLORATION_VISION_PROVIDER_INVALID", "vision off must not bind provider bytes");
+    }
+  } else if (providerHashes.some((key) => !/^[a-f0-9]{64}$/.test(String(mission.vision.provider[key] ?? "")))) {
+    throw new ExplorationMissionError("EXPLORATION_VISION_PROVIDER_UNPINNED", "sealed vision provider identity is incomplete");
   }
   return mission;
 }

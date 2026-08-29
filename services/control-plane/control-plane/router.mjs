@@ -780,6 +780,40 @@ export class ControlRouter {
         }),
       };
     }
+    match = path.match(/^\/control\/v1\/exploration-authority\/([^/]+)\/vision-analysis$/);
+    if (method === "POST" && match) {
+      const input = requireBody(body);
+      const authorityId = decodeURIComponent(match[1]);
+      if (input.action === "settle") {
+        return {
+          status: 200,
+          body: { reservation: this.control.settleExplorationVisionAnalysis({
+            sessionId: input.sessionId,
+            token: tokenOf(input, headers),
+            authorityId,
+            reservationId: input.reservationId,
+            outcome: input.outcome,
+            result: input.result ?? null,
+          }) },
+        };
+      }
+      if (["alias", "amount", "kind"].some((key) => Object.hasOwn(input, key))) {
+        throw new ControlPlaneError(
+          "EXPLORATION_VISION_ANALYSIS_INPUT_FORBIDDEN",
+          "vision analysis reservation fixes alias=03, kind=visionAnalysis, amount=1 inside the control plane",
+          { status: 400 },
+        );
+      }
+      return {
+        status: 201,
+        body: { reservation: this.control.reserveExplorationVisionAnalysis({
+          sessionId: input.sessionId,
+          token: tokenOf(input, headers),
+          authorityId,
+          detail: input.detail ?? null,
+        }) },
+      };
+    }
     match = path.match(/^\/control\/v1\/exploration-authority\/([^/]+)\/permits$/);
     if (method === "POST" && match) {
       const input = requireBody(body);
@@ -794,6 +828,7 @@ export class ControlRouter {
           evidenceHash: input.evidenceHash,
           resolvedPayload: input.resolvedPayload ?? null,
           ttlMs: input.ttlMs,
+          visualProof: input.visualProof ?? null,
         }) },
       };
     }

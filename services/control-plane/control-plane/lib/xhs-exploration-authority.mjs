@@ -49,6 +49,10 @@ export const EXPLORATION_BUDGET_CEILINGS = Object.freeze({
   visionAnalysisAttempts: 6,
   visionMaxIssuedPermits: 1,
   visionMaxPhysicalTaps: 1,
+  providerDecisionDeadlineMs: 8000,
+  frameMaxAgeMs: 10000,
+  permitTtlMs: 5000,
+  perDeviceConcurrency: 1,
   vision: 0,
 });
 
@@ -102,7 +106,8 @@ export function createExplorationAuthorityPolicy({ state } = {}) {
       reject("EXPLORATION_LANES_INVALID", "mission lanes must be exactly [03=feed_lane,04=search_lane]", { status: 400 });
     }
     const budgets = mission.budgets ?? {};
-    for (const capName of Object.values(EXPLORATION_BUDGET_KINDS)) {
+    const completeBudgetNames = Object.keys(EXPLORATION_BUDGET_CEILINGS).filter((name) => name !== "vision");
+    for (const capName of completeBudgetNames) {
       const value = budgets[capName];
       // the ceiling is the compiler's frozen cap (plan §3.3): a mission may go
       // LOWER than the default but never above it — a hash-colliding payload
@@ -114,7 +119,21 @@ export function createExplorationAuthorityPolicy({ state } = {}) {
     if (Array.isArray(mission.queries) && mission.queries.length > Number(budgets.sealedQueries ?? 0)) {
       reject("EXPLORATION_QUERY_CAP_EXCEEDED", "sealed queries exceed the mission budget", { status: 400 });
     }
-    return { budgets };
+    const vision = mission.vision ?? { mode: "off", remoteEgress: false, provider: null };
+    if (!["off", "shadow", "canary1"].includes(vision.mode) || vision.remoteEgress !== false) {
+      reject("EXPLORATION_VISION_POLICY_INVALID", "vision mode/egress policy is invalid", { status: 400 });
+    }
+    if (vision.mode !== "off") {
+      if (vision.provider?.kind !== "local-pinned") {
+        reject("EXPLORATION_VISION_PROVIDER_UNPINNED", "vision provider must be local-pinned", { status: 400 });
+      }
+      for (const key of ["pythonHash", "modelHash", "scriptHash", "configHash"]) {
+        if (!/^[a-f0-9]{64}$/.test(String(vision.provider?.[key] ?? ""))) {
+          reject("EXPLORATION_VISION_PROVIDER_UNPINNED", `vision provider.${key} must be 64-hex`, { status: 400 });
+        }
+      }
+    }
+    return { budgets, vision };
   }
 
   /**
@@ -136,7 +155,7 @@ export function createExplorationAuthorityPolicy({ state } = {}) {
     if (!/^[a-f0-9]{64}$/.test(String(mission?.missionHash || ""))) {
       reject("EXPLORATION_MISSION_HASH", "mission hash missing/malformed", { status: 400 });
     }
-    validateSealedMissionForAuthority(mission);
+    const validated = validateSealedMissionForAuthority(mission);
 
     // profile marks BOTH sessions BEFORE any device I/O can happen (pair
     // barrier, §3.4): the first session to attach already rejects raw taps.
@@ -168,6 +187,7 @@ export function createExplorationAuthorityPolicy({ state } = {}) {
       actorId,
       lanes: mission.placement.lanes,
       budgets: mission.budgets,
+      vision: validated.vision,
       profile: EXPLORATION_PROFILE,
       laneBindings,
       createdAt: Date.now(),

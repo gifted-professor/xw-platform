@@ -13,6 +13,7 @@ import {
   EXPLORE_PHASES,
   EXPLORE_STOP_REASONS,
 } from "../scripts/lib/xhs-goal-explore-machine.mjs";
+import { EXPLORE_DUMP_VERDICT } from "../scripts/lib/xhs-explore-surface.mjs";
 
 const CLOSED_ROLES = new Set([
   "OPEN_SEARCH", "SUBMIT_SEARCH", "SCROLL_FEED", "SCROLL_RESULTS",
@@ -48,6 +49,15 @@ const results = (keys) => ({
 });
 const imageNote = { page: "IMAGE_NOTE", commentControl: { x: 360, y: 1950 } };
 const videoNote = { page: "VIDEO_NOTE" };
+const safeVideoNote = {
+  page: "VIDEO_NOTE",
+  dumpDecision: {
+    verdict: EXPLORE_DUMP_VERDICT.AMBIGUOUS_SAFE,
+    navigationRole: "PAUSE_VIDEO_SAFE_ZONE",
+    visionEligible: true,
+    dumpNavigationEligible: false,
+  },
+};
 const commentPanel = { page: "COMMENT_PANEL" };
 
 /** Assert a NAVIGATE decision inside the closed vocabulary, carrying no
@@ -176,6 +186,57 @@ test("feed lane: video note never triggers comments (vision canary only)", () =>
   s = r.state; assertIntent(r, "BACK");
   r = exploreStep({ state: s, observation: home(["v3"]), report: { navigated: true, novel: null } });
   expectStop(r, EXPLORE_STOP_REASONS.NOVEL_OPEN_BUDGET);
+});
+
+test("vision-enabled 03 feed emits one typed video pause, then BACK without a loop", () => {
+  let s = createExploreLaneState({
+    laneRole: "feed_lane", alias: "03", seed: "s1", budgets: BUDGETS, visionEnabled: true,
+  });
+  let r = exploreStep({ state: s, observation: home(["v1"]) });
+  s = r.state; assertIntent(r, "OPEN_CONTENT_CARD");
+  r = exploreStep({ state: s, observation: safeVideoNote, report: { navigated: true, novel: true } });
+  s = r.state;
+  assertIntent(r, "PAUSE_VIDEO_SAFE_ZONE", { dumpVerdict: EXPLORE_DUMP_VERDICT.AMBIGUOUS_SAFE });
+  assert.equal(s.visionPauseAttempted, true);
+  assert.equal(s.phase, EXPLORE_PHASES.BROWSE_FEED, "pause decision immediately advances out of OPEN_CONTENT");
+
+  r = exploreStep({ state: s, observation: safeVideoNote, report: { navigated: true, novel: null } });
+  s = r.state; assertIntent(r, "BACK");
+  r = exploreStep({ state: s, observation: home(["v2"]), report: { navigated: true, novel: null } });
+  s = r.state; assertIntent(r, "OPEN_CONTENT_CARD");
+  r = exploreStep({ state: s, observation: safeVideoNote, report: { navigated: true, novel: true } });
+  assertIntent(r, "BACK");
+  assert.equal(r.state.visionPauseAttempted, true, "the one-shot pause cannot repeat on a later video");
+});
+
+test("video pause never reaches alias 04, search lanes, or forbidden DUMP decisions", () => {
+  const alias04Feed = {
+    ...createExploreLaneState({ laneRole: "feed_lane", alias: "04", seed: "s1", budgets: BUDGETS, visionEnabled: true }),
+    phase: EXPLORE_PHASES.OPEN_CONTENT,
+  };
+  assertIntent(exploreStep({ state: alias04Feed, observation: safeVideoNote }), "BACK");
+
+  const search04 = {
+    ...createExploreLaneState({
+      laneRole: "search_lane", alias: "04", seed: "s1", queries: ["q"], budgets: BUDGETS, visionEnabled: true,
+    }),
+    phase: EXPLORE_PHASES.OPEN_CONTENT,
+  };
+  assertIntent(exploreStep({ state: search04, observation: safeVideoNote }), "BACK");
+
+  const forbidden = {
+    ...safeVideoNote,
+    dumpDecision: {
+      verdict: EXPLORE_DUMP_VERDICT.FORBIDDEN_OR_RISKY,
+      navigationRole: "PAUSE_VIDEO_SAFE_ZONE",
+      visionEligible: false,
+    },
+  };
+  const eligibleLane = {
+    ...createExploreLaneState({ laneRole: "feed_lane", alias: "03", seed: "s1", budgets: BUDGETS, visionEnabled: true }),
+    phase: EXPLORE_PHASES.OPEN_CONTENT,
+  };
+  expectStop(exploreStep({ state: eligibleLane, observation: forbidden }), EXPLORE_STOP_REASONS.FORBIDDEN_SURFACE);
 });
 
 test("feed lane without candidates scrolls the HOME feed", () => {
@@ -325,6 +386,8 @@ test("forbidden and unreadable observations stop the lane immediately", () => {
   let s = createExploreLaneState({ laneRole: "feed_lane", alias: "03", seed: "s1", budgets: BUDGETS });
   expectStop(exploreStep({ state: s, observation: { page: "EXIT_PRODUCT" } }), EXPLORE_STOP_REASONS.FORBIDDEN_SURFACE);
   expectStop(exploreStep({ state: s, observation: { page: "EXIT_AUTH_RISK" } }), EXPLORE_STOP_REASONS.FORBIDDEN_SURFACE);
+  expectStop(exploreStep({ state: s, observation: { page: "SYSTEM_OVERLAY" } }), EXPLORE_STOP_REASONS.FORBIDDEN_SURFACE);
+  expectStop(exploreStep({ state: s, observation: { page: "UNKNOWN" } }), EXPLORE_STOP_REASONS.FORBIDDEN_SURFACE);
   const err = exploreStep({ state: s, observation: { error: true, code: "EXPLORER_DUMP_TIMEOUT" } });
   expectStop(err, EXPLORE_STOP_REASONS.OBSERVATION_ERROR);
 });

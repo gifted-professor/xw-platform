@@ -14,11 +14,19 @@ import { CapabilityRegistry } from "../control-plane/lib/capability-registry.mjs
 import { AdapterRegistry, ControlPlane } from "../control-plane/lib/control-plane.mjs";
 import { EvidenceStore } from "../control-plane/lib/evidence-store.mjs";
 import { StateStore } from "../control-plane/lib/state-store.mjs";
+import { ControlRouter } from "../control-plane/router.mjs";
 import { createXiaoweiAdapter } from "../apps/xiaowei/adapter.mjs";
 
 const registry = CapabilityRegistry.load(fileURLToPath(new URL("../apps", import.meta.url)));
 const capability = registry.require("xiaowei.explorer.primitive");
 const tempBase = fileURLToPath(new URL("../control-plane/runtime", import.meta.url));
+const PROVIDER = Object.freeze({
+  kind: "local-pinned",
+  pythonHash: "1".repeat(64),
+  modelHash: "2".repeat(64),
+  scriptHash: "3".repeat(64),
+  configHash: "4".repeat(64),
+});
 
 function mission(budgets = {}) {
   return {
@@ -41,10 +49,34 @@ function mission(budgets = {}) {
       visionAnalysisAttempts: 6,
       visionMaxIssuedPermits: 1,
       visionMaxPhysicalTaps: 1,
+      providerDecisionDeadlineMs: 8000,
+      frameMaxAgeMs: 10000,
+      permitTtlMs: 5000,
+      perDeviceConcurrency: 1,
       vision: 0,
       ...budgets,
     },
+    vision: { mode: "shadow", remoteEgress: false, provider: PROVIDER },
     queries: [],
+  };
+}
+
+function visionDetail(attempt = 1) {
+  return {
+    navigationRole: "PAUSE_VIDEO_SAFE_ZONE",
+    page: "VIDEO_NOTE",
+    evidenceHash: "a".repeat(64),
+    frameId: createHash("sha256").update(`frame-${attempt}`).digest("hex"),
+    frameHash: createHash("sha256").update(`bytes-${attempt}`).digest("hex"),
+    capturedAt: Date.now(),
+    dims: { width: 1080, height: 2400 },
+    dumpVerdict: "AMBIGUOUS_SAFE",
+    positiveRegion: { x: 0, y: 120, w: 1080, h: 1760 },
+    protectedZones: [
+      { x: 0, y: 0, w: 1080, h: 120 },
+      { x: 0, y: 1880, w: 1080, h: 520 },
+    ],
+    providerIdentity: PROVIDER,
   };
 }
 
@@ -193,5 +225,130 @@ test("unknown budget kind cannot reserve against an unmapped cap", async () => {
       }),
       (error) => error.code === "EXPLORATION_BUDGET_EXCEEDED",
     );
+  } finally { await f.close(); }
+});
+
+test("vision analysis has a dedicated alias03/feed-only global six-attempt reservation path", async () => {
+  const f = fixture();
+  try {
+    const { s03, s04, authority } = await f.pair();
+
+    // The generic caller-controlled budget API cannot forge either internal
+    // vision counter, regardless of which real lane token it holds.
+    for (const [session, kind] of [
+      [s03, "visionAnalysis"],
+      [s04, "visionAnalysis"],
+      [s03, "visionPermits"],
+      [s04, "visionPermits"],
+    ]) {
+      assert.throws(
+        () => f.control.reserveExplorationBudget({
+          sessionId: session.sessionId, token: session.token, authorityId: authority.authorityId,
+          kind, amount: 1,
+        }),
+        (error) => error.code === "EXPLORATION_BUDGET_KIND_INTERNAL",
+      );
+    }
+    assert.equal(f.state.db.prepare(
+      "SELECT COUNT(*) AS n FROM exploration_reservations WHERE authority_id=? AND kind IN ('visionAnalysis','visionPermits')",
+    ).get(authority.authorityId).n, 0);
+
+    assert.throws(
+      () => f.control.reserveExplorationVisionAnalysis({
+        sessionId: s04.sessionId, token: s04.token, authorityId: authority.authorityId,
+      }),
+      (error) => error.code === "EXPLORATION_VISUAL_ALIAS_INELIGIBLE",
+    );
+
+    for (let i = 1; i <= 6; i += 1) {
+      const reservation = f.control.reserveExplorationVisionAnalysis({
+        sessionId: s03.sessionId, token: s03.token, authorityId: authority.authorityId,
+        detail: visionDetail(i),
+      });
+      assert.equal(reservation.used, i);
+      assert.equal(reservation.cap, 6);
+      assert.equal(reservation.alias, "03");
+    }
+    assert.throws(
+      () => f.control.reserveExplorationVisionAnalysis({
+        sessionId: s03.sessionId, token: s03.token, authorityId: authority.authorityId,
+        detail: visionDetail(7),
+      }),
+      (error) => error.code === "EXPLORATION_BUDGET_EXCEEDED",
+    );
+
+    const view = f.control.getExplorationAuthorityView({
+      sessionId: s03.sessionId, token: s03.token, authorityId: authority.authorityId,
+    });
+    assert.deepEqual(view.visionCounters, {
+      analysisAttempts: 6,
+      permitsIssued: 0,
+      permitsConsumed: 0,
+      physicalTaps: 0,
+    });
+  } finally { await f.close(); }
+});
+
+test("exploration reservations reject zero, negative, fractional, and string amounts", async () => {
+  const f = fixture();
+  try {
+    const { s03, authority } = await f.pair();
+    for (const amount of [0, -1, 0.5, "1"]) {
+      assert.throws(
+        () => f.control.reserveExplorationBudget({
+          sessionId: s03.sessionId, token: s03.token, authorityId: authority.authorityId,
+          kind: "primitives", amount,
+        }),
+        (error) => error.code === "EXPLORATION_BUDGET_AMOUNT_INVALID",
+      );
+    }
+  } finally { await f.close(); }
+});
+
+test("vision-analysis RPC fixes kind, amount, and alias inside the control plane", async () => {
+  const f = fixture();
+  try {
+    const { s03, authority } = await f.pair();
+    const router = new ControlRouter({
+      control: f.control,
+      state: f.state,
+      capabilities: registry,
+      evidence: null,
+    });
+    const path = `/control/v1/exploration-authority/${authority.authorityId}/vision-analysis`;
+    const accepted = await router.handle({
+      method: "POST",
+      path,
+      body: { sessionId: s03.sessionId, token: s03.token, detail: visionDetail(1) },
+    });
+    assert.equal(accepted.status, 201);
+    assert.equal(accepted.body.reservation.alias, "03");
+    assert.equal(accepted.body.reservation.amount, 1);
+    assert.equal(accepted.body.reservation.kind, "visionAnalysisAttempts");
+    const settled = await router.handle({
+      method: "POST",
+      path,
+      body: {
+        sessionId: s03.sessionId,
+        token: s03.token,
+        action: "settle",
+        reservationId: accepted.body.reservation.reservationId,
+        outcome: "failed",
+      },
+    });
+    assert.equal(settled.status, 200);
+    assert.equal(settled.body.reservation.state, "failed");
+
+    for (const forged of [{ alias: "04" }, { amount: 6 }, { kind: "visionPermits" }]) {
+      await assert.rejects(
+        () => router.handle({
+          method: "POST",
+          path,
+          body: { sessionId: s03.sessionId, token: s03.token, ...forged },
+        }),
+        (error) => error.code === "EXPLORATION_VISION_ANALYSIS_INPUT_FORBIDDEN",
+      );
+    }
+    assert.equal(f.state.getExplorationVisionCounters(authority.authorityId).analysisAttempts, 1);
   } finally { await f.close(); }
 });

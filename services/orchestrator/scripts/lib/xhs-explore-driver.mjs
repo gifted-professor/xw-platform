@@ -136,6 +136,9 @@ export function resolveDisplayBounds(xml) {
  * @param {Function} [deps.confirmTarget] - CP confirmExplorationTarget wrapper
  * @param {Function} [deps.journalAppend] - CP lane-journal append(record)
  * @param {boolean} [deps.visionEnabled] - P2: false (pause stays fail-closed)
+ * @param {object} [deps.vision] - explorer vision navigator
+ *        ({proposeCanaryTap, recordPermitConsumed, recordPhysicalTap});
+ *        required when visionEnabled is true, never consulted otherwise
  */
 export function createExplorerTypedDriver({
   authorityId,
@@ -152,6 +155,7 @@ export function createExplorerTypedDriver({
   confirmTarget = null,
   journalAppend = null,
   visionEnabled = false,
+  vision = null,
   missionStartedAtMs = null,
   now = () => Date.now(),
   sleepFn = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
@@ -168,6 +172,12 @@ export function createExplorerTypedDriver({
   if (journalAppend !== null && typeof journalAppend !== "function") {
     throw fail("EXPLORE_DRIVER_JOURNAL_INVALID", "journalAppend must be a function or null");
   }
+  if (visionEnabled === true && (alias !== "03" || laneRole !== "feed_lane")) {
+    throw fail("EXPLORE_VISION_LANE_FORBIDDEN", "vision is eligible only on alias 03 feed_lane");
+  }
+  if (visionEnabled === true && (!vision || typeof vision !== "object")) {
+    throw fail("EXPLORE_VISION_NAVIGATOR_ABSENT", "enabled vision requires a bound navigator");
+  }
 
   // The driver holds the LAST observation only; nothing earlier is retained,
   // so no stale coordinate can ever be replayed.
@@ -179,11 +189,10 @@ export function createExplorerTypedDriver({
     observationCount: 0,
   };
 
-  function journal(record) {
+  async function journal(record) {
     if (typeof journalAppend === "function") {
-      journalAppend({ laneId, alias, at: now(), ...record });
+      await journalAppend({ laneId, alias, at: now(), ...record });
     }
-    return null;
   }
 
   /** Fresh read-only observation (the only observation the next decision sees). */
@@ -215,7 +224,7 @@ export function createExplorerTypedDriver({
       fresh: { page: surface.page, overlaySafe, evidenceHash },
     };
     internal.last = observation;
-    journal({ type: "OBSERVATION", label, page: surface.page, evidenceHash, seq: observation.seq });
+    await journal({ type: "OBSERVATION", label, page: surface.page, evidenceHash, seq: observation.seq });
     return observation;
   }
 
@@ -231,7 +240,14 @@ export function createExplorerTypedDriver({
    * fresh re-observation → byte-exact consume → exactly one job. Any guard
    * failure throws BEFORE the job; the run loop turns it into a failure report.
    */
-  async function performPermitted({ navigationRole, page, resolvedPayload, freshOverride = null }) {
+  async function performPermitted({
+    navigationRole,
+    page,
+    resolvedPayload,
+    freshOverride = null,
+    visualProof = null,
+    onIssued = null,
+  }) {
     const observation = requireFreshObservation();
     if (observation.surface.page !== page) {
       throw fail("EXPLORE_STALE_DECISION", "decision no longer matches the observed page", {
@@ -244,17 +260,19 @@ export function createExplorerTypedDriver({
       page,
       evidenceHash: observation.evidenceHash,
       resolvedPayload,
+      ...(visualProof ? { visualProof } : {}),
     });
+    if (typeof onIssued === "function") await onIssued(permit);
     // consumption re-check runs against a NEWLY taken observation (a fresh
     // CP-owned receipt, not the issuance one)
     const fresh = freshOverride ?? (await observe({ label: `pre-consume:${navigationRole}` })).fresh;
     const { permit: consumed, job } = await consumePermit({
       permitId: permit.permitId,
-      payload: resolvedPayload,
+      payload: permit.payload ?? resolvedPayload,
       freshObservation: fresh,
     });
     internal.consumedPermits += 1;
-    journal({
+    await journal({
       type: "PERMIT_CONSUMED",
       navigationRole,
       permitId: consumed.permitId,
@@ -411,7 +429,7 @@ export function createExplorerTypedDriver({
         novel = confirmed?.novel === true;
       }
     }
-    journal({
+    await journal({
       type: "TARGET_CLAIMED",
       candidateKey: String(candidateKey ?? "").slice(0, 96),
       keyKind: candidateKind ?? null,
@@ -442,8 +460,129 @@ export function createExplorerTypedDriver({
     if (visionEnabled !== true) {
       throw fail("EXPLORE_VISION_DISABLED", "PAUSE_VIDEO_SAFE_ZONE requires the sealed vision canary");
     }
-    // P4 wires the vision navigator; until then the role never fires
-    throw fail("EXPLORE_VISION_NAVIGATOR_ABSENT", "no vision navigator is bound to this lane");
+    if (!vision || typeof vision.proposeCanaryTap !== "function") {
+      throw fail("EXPLORE_VISION_NAVIGATOR_ABSENT", "no vision navigator is bound to this lane");
+    }
+    const page = assertPermittablePage();
+    if (page !== EXPLORE_PAGE.VIDEO_NOTE) {
+      throw fail("EXPLORE_ROLE_PAGE_MISMATCH", "PAUSE_VIDEO_SAFE_ZONE is only valid on a VIDEO_NOTE", { page });
+    }
+    const observation = requireFreshObservation();
+    const dumpDecision = observation.surface?.dumpDecision ?? null;
+    if (dumpDecision?.verdict === "FORBIDDEN_OR_RISKY") {
+      await journal({
+        type: "VISION_TAP_REFUSED",
+        navigationRole: "PAUSE_VIDEO_SAFE_ZONE",
+        page,
+        reason: "EXPLORATION_VISION_DUMP_FORBIDDEN",
+      });
+      return { navigated: true, novel: null, page, paused: false, visionRefused: "EXPLORATION_VISION_DUMP_FORBIDDEN" };
+    }
+    // COMPLETE_SAFE_UNIQUE is already resolved by DUMP. PAUSE is optional in
+    // V3, so the vision shadow/canary does not manufacture a second route.
+    if (dumpDecision?.verdict === "COMPLETE_SAFE_UNIQUE") {
+      await journal({
+        type: "VISION_NOT_NEEDED",
+        navigationRole: "PAUSE_VIDEO_SAFE_ZONE",
+        page,
+        dumpVerdict: dumpDecision.verdict,
+        tapAuthorized: false,
+      });
+      return { navigated: true, novel: null, page, paused: false, visionSkipped: "DUMP_COMPLETE_SAFE_UNIQUE" };
+    }
+    const request = {
+      navigationRole: "PAUSE_VIDEO_SAFE_ZONE",
+      page,
+      evidenceHash: observation.evidenceHash,
+      dumpDecision,
+    };
+    if (vision.mode === "shadow") {
+      const shadow = await vision.observeShadow(request);
+      const recheck = await observe({ label: "post-analysis-shadow:PAUSE_VIDEO_SAFE_ZONE" });
+      const agreement = shadow.ok === true
+        && recheck.surface.page === page
+        && recheck.surface.dumpDecision?.verdict !== "FORBIDDEN_OR_RISKY";
+      await journal({
+        type: "VISION_RECHECK",
+        navigationRole: "PAUSE_VIDEO_SAFE_ZONE",
+        page,
+        source: "VISION",
+        agreement,
+        initialEvidenceHash: observation.evidenceHash,
+        recheckEvidenceHash: recheck.evidenceHash,
+        tapAuthorized: false,
+      });
+      return {
+        navigated: true,
+        novel: null,
+        page: recheck.surface.page,
+        paused: false,
+        shadow: true,
+        agreement,
+      };
+    }
+    // The provider only proposes a block. A fresh DUMP after analysis must
+    // agree before CP issuance, and consumption performs a second fresh read.
+    const proposed = await vision.proposeCanaryTap(request);
+    if (!proposed.ok || proposed.candidateReady !== true) {
+      await journal({
+        type: "VISION_TAP_REFUSED",
+        navigationRole: "PAUSE_VIDEO_SAFE_ZONE",
+        page,
+        reason: proposed.reason ?? null,
+      });
+      return {
+        navigated: false,
+        novel: null,
+        page,
+        paused: false,
+        visionRefused: proposed.reason ?? "EXPLORATION_VISION_CANDIDATE_FAILED",
+      };
+    }
+    const recheck = await observe({ label: "post-analysis:PAUSE_VIDEO_SAFE_ZONE" });
+    const freshDecision = recheck.surface?.dumpDecision ?? null;
+    const candidateBounds = proposed.target?.bounds ?? null;
+    const agreement = recheck.surface.page === page
+      && ["AMBIGUOUS_SAFE", "ABSENT_OR_INVALID"].includes(freshDecision?.verdict)
+      && rectContains(freshDecision?.positiveRegion, candidateBounds)
+      && !(freshDecision?.protectedZones ?? []).some((zone) => rectIntersects(zone, candidateBounds));
+    if (!agreement) {
+      await journal({
+        type: "VISION_TAP_REFUSED",
+        navigationRole: "PAUSE_VIDEO_SAFE_ZONE",
+        page,
+        reason: "EXPLORATION_DUMP_VISION_CONFLICT",
+        initialEvidenceHash: observation.evidenceHash,
+        recheckEvidenceHash: recheck.evidenceHash,
+        tapAuthorized: false,
+      });
+      return { navigated: true, novel: null, page: recheck.surface.page, paused: false, visionRefused: "EXPLORATION_DUMP_VISION_CONFLICT" };
+    }
+    const center = proposed.target?.center;
+    if (!Number.isInteger(center?.x) || !Number.isInteger(center?.y)) {
+      throw fail("EXPLORE_VISION_TARGET_INVALID", "vision candidate has no integer center");
+    }
+    const performed = await performPermitted({
+      navigationRole: "PAUSE_VIDEO_SAFE_ZONE",
+      page,
+      resolvedPayload: { primitive: "tap", x: center.x, y: center.y },
+      visualProof: {
+        source: "VISION",
+        analysisRef: proposed.analysisRef,
+        issuanceEvidenceHash: recheck.evidenceHash,
+        dumpVerdict: freshDecision.verdict,
+        agreement: true,
+      },
+      onIssued: () => vision.recordPermitIssued?.(),
+    });
+    if (typeof vision.recordPermitConsumed === "function") vision.recordPermitConsumed();
+    if (performed?.job?.status === "succeeded"
+      && performed?.job?.result?.output?.primitive === "tap"
+      && typeof vision.recordPhysicalTap === "function") {
+      vision.recordPhysicalTap();
+    }
+    const post = await observe({ label: "post:PAUSE_VIDEO_SAFE_ZONE" });
+    return { navigated: true, novel: null, page: post.surface.page, paused: true };
   }
 
   async function backBound() {
@@ -514,6 +653,24 @@ export function createExplorerTypedDriver({
     }),
   };
   return api;
+}
+
+function validRect(rect) {
+  return rect && [rect.x, rect.y, rect.w, rect.h].every(Number.isFinite)
+    && rect.x >= 0 && rect.y >= 0 && rect.w > 0 && rect.h > 0;
+}
+
+function rectContains(outer, inner) {
+  return validRect(outer) && validRect(inner)
+    && inner.x >= outer.x && inner.y >= outer.y
+    && inner.x + inner.w <= outer.x + outer.w
+    && inner.y + inner.h <= outer.y + outer.h;
+}
+
+function rectIntersects(left, right) {
+  if (!validRect(left) || !validRect(right)) return true;
+  return left.x < right.x + right.w && left.x + left.w > right.x
+    && left.y < right.y + right.h && left.y + left.h > right.y;
 }
 
 /**

@@ -44,6 +44,10 @@ function mission(seal) {
       visionAnalysisAttempts: 6,
       visionMaxIssuedPermits: 1,
       visionMaxPhysicalTaps: 1,
+      providerDecisionDeadlineMs: 8000,
+      frameMaxAgeMs: 10000,
+      permitTtlMs: 5000,
+      perDeviceConcurrency: 1,
       vision: 0,
     },
     queries: seal?.enumerated

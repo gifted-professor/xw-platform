@@ -32,6 +32,11 @@ import { createXiaoweiAdapter } from "../../control-plane/apps/xiaowei/adapter.m
 import { createExploreLaneState } from "../scripts/lib/xhs-goal-explore-machine.mjs";
 import { createExplorerTypedDriver, runExploreLane } from "../scripts/lib/xhs-explore-driver.mjs";
 import {
+  parseExploreSurface,
+  EXPLORE_DUMP_VERDICT,
+  EXPLORE_DUMP_VERDICTS,
+} from "../scripts/lib/xhs-explore-surface.mjs";
+import {
   homeFeedXml,
   searchHomeXml,
   searchResultsXml,
@@ -46,6 +51,32 @@ const capability = registry.require("xiaowei.explorer.primitive");
 const runtimeBase = join(here, "../../control-plane/control-plane/runtime");
 
 const BRIDGE_IME = "com.android.xwkeyboard/.XwIME";
+
+function videoDump({
+  pkg = "com.xingin.xhs",
+  playbacks = [{ label: "暂停", bounds: "[480,900][600,1020]" }],
+  risks = [],
+  includeSurface = true,
+  overlay = false,
+} = {}) {
+  const leaf = ({ label = "", bounds, className = "android.widget.ImageButton" }) => (
+    `<node text="" resource-id="" class="${className}" package="${pkg}" content-desc="${label}" clickable="true" enabled="true" bounds="${bounds}" />`
+  );
+  const nodes = [
+    includeSurface
+      ? `<node text="" resource-id="video_surface" class="android.view.SurfaceView" package="${pkg}" content-desc="视频画面" clickable="false" enabled="true" bounds="[0,80][1080,2300]" />`
+      : "",
+    ...playbacks.map(leaf),
+    ...risks.map(leaf),
+    overlay
+      ? `<node text="" resource-id="overlay" class="android.app.AlertDialog" package="${pkg}" content-desc="" clickable="false" enabled="true" bounds="[80,400][1000,1800]" />`
+      : "",
+  ].join("");
+  return {
+    focus: `${pkg}/.DetailFeedActivity`,
+    xml: `<?xml version="1.0" encoding="UTF-8"?><hierarchy rotation="0"><node text="" resource-id="root" class="android.widget.FrameLayout" package="${pkg}" content-desc="" clickable="false" enabled="true" bounds="[0,0][1080,2400]">${nodes}</node></hierarchy>`,
+  };
+}
 
 // --- scripted device -------------------------------------------------------
 
@@ -132,6 +163,10 @@ function mission(overrides = {}) {
       visionAnalysisAttempts: 6,
       visionMaxIssuedPermits: 1,
       visionMaxPhysicalTaps: 1,
+      providerDecisionDeadlineMs: 8000,
+      frameMaxAgeMs: 10000,
+      permitTtlMs: 5000,
+      perDeviceConcurrency: 1,
       vision: 0,
       ...overrides,
     },
@@ -249,6 +284,68 @@ function targets(state, authorityId) {
 function rolesOf(receipt) {
   return receipt.decisions.filter((d) => d.action === "NAVIGATE").map((d) => d.navigationRole);
 }
+
+test("surface DUMP verdicts form a closed fail-closed gate for video pause", () => {
+  const parse = (fixture) => parseExploreSurface({ ...fixture, laneRole: "feed_lane" });
+  const unique = parse(videoDump());
+  assert.equal(unique.page, "VIDEO_NOTE");
+  assert.equal(unique.dumpDecision.navigationRole, "PAUSE_VIDEO_SAFE_ZONE");
+  assert.equal(unique.dumpDecision.verdict, EXPLORE_DUMP_VERDICT.COMPLETE_SAFE_UNIQUE);
+  assert.equal(unique.dumpDecision.candidateCount, 1);
+  assert.equal(unique.dumpDecision.visionEligible, false, "a complete DUMP target does not invoke vision");
+  assert.equal(unique.dumpDecision.dumpNavigationEligible, true);
+  assert.equal(unique.dumpDecision.page, "VIDEO_NOTE");
+  assert.equal(unique.dumpDecision.schemaVersion, 1);
+  assert.deepEqual(unique.dumpDecision.positiveRegion, { x: 0, y: 120, w: 1080, h: 1760 });
+  assert.deepEqual(unique.dumpDecision.protectedZones, [
+    { kind: "status_bar", x: 0, y: 0, w: 1080, h: 120 },
+    { kind: "bottom", x: 0, y: 1880, w: 1080, h: 520 },
+  ]);
+
+  const ambiguous = parse(videoDump({
+    playbacks: [
+      { label: "播放", bounds: "[480,900][600,1020]" },
+      { label: "暂停", bounds: "[480,1200][600,1320]" },
+    ],
+  }));
+  assert.equal(ambiguous.dumpDecision.verdict, EXPLORE_DUMP_VERDICT.AMBIGUOUS_SAFE);
+  assert.equal(ambiguous.dumpDecision.candidateCount, 2);
+
+  const absent = parse(videoDump({ playbacks: [] }));
+  assert.equal(absent.dumpDecision.verdict, EXPLORE_DUMP_VERDICT.ABSENT_OR_INVALID);
+  assert.equal(absent.dumpDecision.visionEligible, true, "a valid positive region may be resolved by bounded vision");
+
+  const protectedCandidate = parse(videoDump({
+    playbacks: [{ label: "暂停", bounds: "[480,20][600,100]" }],
+  }));
+  assert.equal(protectedCandidate.dumpDecision.verdict, EXPLORE_DUMP_VERDICT.FORBIDDEN_OR_RISKY);
+  assert.equal(protectedCandidate.dumpDecision.visionEligible, false);
+
+  const socialRisk = parse(videoDump({
+    risks: [{ label: "点赞", bounds: "[500,920][580,1000]" }],
+  }));
+  assert.equal(socialRisk.dumpDecision.verdict, EXPLORE_DUMP_VERDICT.FORBIDDEN_OR_RISKY);
+
+  const packageDrift = parse({
+    ...videoDump({ pkg: "com.example.other" }),
+    focus: "com.example.other/.SearchActivity",
+  });
+  assert.equal(packageDrift.page, "UNKNOWN");
+  assert.equal(packageDrift.dumpDecision.verdict, EXPLORE_DUMP_VERDICT.FORBIDDEN_OR_RISKY);
+  const systemOverlay = parse(videoDump({ overlay: true }));
+  assert.equal(systemOverlay.page, "SYSTEM_OVERLAY");
+  assert.equal(systemOverlay.dumpDecision.verdict, EXPLORE_DUMP_VERDICT.FORBIDDEN_OR_RISKY);
+
+  for (const surface of [unique, ambiguous, absent, protectedCandidate, socialRisk, packageDrift, systemOverlay]) {
+    assert.ok(EXPLORE_DUMP_VERDICTS.includes(surface.dumpDecision.verdict));
+  }
+  assert.deepEqual(EXPLORE_DUMP_VERDICTS, [
+    "COMPLETE_SAFE_UNIQUE",
+    "AMBIGUOUS_SAFE",
+    "ABSENT_OR_INVALID",
+    "FORBIDDEN_OR_RISKY",
+  ]);
+});
 
 test("feed lane E2E: open → read-only panel → novelty claims → budget stop → journal COMMITTED", async () => {
   const scenes03 = [
@@ -480,20 +577,33 @@ test("vision pause is fail-closed at the driver: disabled and navigator-absent",
       () => disabled.driver.pauseBoundVideo(),
       (error) => error.code === "EXPLORE_VISION_DISABLED",
     );
-    // driver bound with the canary flag still refuses: P4 wires the navigator
-    const enabledDriver = createExplorerTypedDriver({
-      authorityId: authority.authorityId,
-      alias: "04",
-      laneId: "lane-1",
-      laneRole: "search_lane",
-      session: { ...sessions["04"], alias: "04" },
-      observeDevice: f.devices["04"].observe,
-      issuePermit: (args) => f.control.issueExplorationPermit({ ...args, sessionId: sessions["04"].sessionId, token: sessions["04"].token, authorityId: authority.authorityId }),
-      consumePermit: (args) => f.control.consumeExplorationPermit({ ...args, sessionId: sessions["04"].sessionId, token: sessions["04"].token, authorityId: authority.authorityId }),
-      visionEnabled: true,
-    });
-    await assert.rejects(
-      () => enabledDriver.pauseBoundVideo(),
+    // P4: alias04/search lane cannot even construct an enabled vision driver.
+    assert.throws(
+      () => createExplorerTypedDriver({
+        authorityId: authority.authorityId,
+        alias: "04",
+        laneId: "lane-1",
+        laneRole: "search_lane",
+        session: { ...sessions["04"], alias: "04" },
+        observeDevice: f.devices["04"].observe,
+        issuePermit: (args) => f.control.issueExplorationPermit({ ...args, sessionId: sessions["04"].sessionId, token: sessions["04"].token, authorityId: authority.authorityId }),
+        consumePermit: (args) => f.control.consumeExplorationPermit({ ...args, sessionId: sessions["04"].sessionId, token: sessions["04"].token, authorityId: authority.authorityId }),
+        visionEnabled: true,
+      }),
+      (error) => error.code === "EXPLORE_VISION_LANE_FORBIDDEN",
+    );
+    assert.throws(
+      () => createExplorerTypedDriver({
+        authorityId: authority.authorityId,
+        alias: "03",
+        laneId: "lane-0",
+        laneRole: "feed_lane",
+        session: { ...sessions["03"], alias: "03" },
+        observeDevice: f.devices["03"].observe,
+        issuePermit: () => null,
+        consumePermit: () => null,
+        visionEnabled: true,
+      }),
       (error) => error.code === "EXPLORE_VISION_NAVIGATOR_ABSENT",
     );
     assert.equal(f.devices["03"].state.taps.length, 0);

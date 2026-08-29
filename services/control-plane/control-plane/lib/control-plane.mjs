@@ -52,11 +52,17 @@ import {
 import { SingleDeviceRecipeRunner, resolveFixedRpaAlias } from "./single-device-recipe-runner.mjs";
 import { filterOverlayRecipes, resolveOverlayMode } from "./generated-overlay.mjs";
 import { createExplorationAuthorityPolicy, EXPLORATION_PROFILE } from "./xhs-exploration-authority.mjs";
-import { createExplorationPermitPolicy } from "./xhs-exploration-permit.mjs";
+import {
+  createExplorationPermitPolicy,
+  EXPLORATION_VISUAL_NAVIGATION_ROLES,
+  normalizeExplorationVisionAnalysis,
+  normalizeExplorationVisionReservation,
+} from "./xhs-exploration-permit.mjs";
 
 // Visual navigation roles spend the visionPermits budget at permit issuance
 // (V3-I07); observation-only roles (BACK/RESTORE) do not.
-const EXPLORATION_VISUAL_ROLES = new Set(["PAUSE_VIDEO_SAFE_ZONE"]);
+const EXPLORATION_VISUAL_ROLES = EXPLORATION_VISUAL_NAVIGATION_ROLES;
+const EXPLORATION_INTERNAL_BUDGET_KINDS = new Set(["visionAnalysis", "visionPermits"]);
 
 function ledgerView(row) {
   if (!row) return null;
@@ -2536,8 +2542,32 @@ export class ControlPlane {
   // vision-provider-derived role is visual: DUMP-resolved surface taps
   // (OPEN_CONTENT_CARD / OPEN_COMMENT_PANEL) are DUMP-authorized navigation,
   // gated by reservedPrimitives instead (P2 clarification, plan §5.5).
-  issueExplorationPermit({ sessionId, token, authorityId, navigationRole, page, evidenceHash, resolvedPayload, ttlMs = 5000 }) {
+  issueExplorationPermit({
+    sessionId,
+    token,
+    authorityId,
+    navigationRole,
+    page,
+    evidenceHash,
+    resolvedPayload,
+    ttlMs = null,
+    visualProof = null,
+  }) {
     const { session, authority } = this.requireExplorationAuthority({ authorityId, sessionId, token });
+    // Build first: every role/page/payload/evidence/TTL/lane check must pass
+    // before a visual issuance reservation is durably consumed.  The later
+    // reserve+insert pair is not yet one SQL transaction, but malformed and
+    // alias-04 requests now leave both ledgers untouched.
+    const permit = this.explorationPermits.buildPermit({
+      session,
+      authority,
+      navigationRole,
+      page,
+      evidenceHash,
+      resolvedPayload,
+      ttlMs,
+      visualProof,
+    });
     if (EXPLORATION_VISUAL_ROLES.has(navigationRole)) {
       this.state.reserveExplorationBudget({
         authorityId: authority.authorityId,
@@ -2548,15 +2578,7 @@ export class ControlPlane {
         detail: { navigationRole, page, evidenceHash },
       });
     }
-    return this.explorationPermits.issuePermit({
-      session,
-      authority,
-      navigationRole,
-      page,
-      evidenceHash,
-      resolvedPayload,
-      ttlMs,
-    });
+    return this.explorationPermits.insertPermit(permit);
   }
 
   async consumeExplorationPermit({ sessionId, token, authorityId, permitId, payload = null, freshObservation = null }) {
@@ -2590,6 +2612,13 @@ export class ControlPlane {
 
   reserveExplorationBudget({ sessionId, token, authorityId, alias = null, kind, amount = 1, detail = null }) {
     const { authority, binding } = this.requireExplorationAuthority({ authorityId, sessionId, token });
+    if (EXPLORATION_INTERNAL_BUDGET_KINDS.has(kind)) {
+      throw new ControlPlaneError(
+        "EXPLORATION_BUDGET_KIND_INTERNAL",
+        `budget ${kind} is reserved by a dedicated control-plane transition`,
+        { status: 403, details: { kind } },
+      );
+    }
     return this.state.reserveExplorationBudget({
       authorityId: authority.authorityId,
       missionHash: authority.missionHash,
@@ -2600,8 +2629,78 @@ export class ControlPlane {
     });
   }
 
+  reserveExplorationVisionAnalysis({ sessionId, token, authorityId, detail = null }) {
+    const { authority, binding } = this.requireExplorationAuthority({ authorityId, sessionId, token });
+    if (binding.alias !== "03" || binding.laneRole !== "feed_lane") {
+      throw new ControlPlaneError(
+        "EXPLORATION_VISUAL_ALIAS_INELIGIBLE",
+        "vision analysis for the initial canary is restricted to alias 03/feed_lane",
+        { status: 403, details: { alias: binding.alias, laneRole: binding.laneRole } },
+      );
+    }
+    const normalizedDetail = normalizeExplorationVisionReservation({
+      authority,
+      sessionId,
+      detail,
+      nowMs: this.now(),
+    });
+    return this.state.reserveExplorationBudget({
+      authorityId: authority.authorityId,
+      missionHash: authority.missionHash,
+      alias: "03",
+      kind: "visionAnalysis",
+      amount: 1,
+      detail: normalizedDetail,
+    });
+  }
+
+  settleExplorationVisionAnalysis({ sessionId, token, authorityId, reservationId, outcome, result = null }) {
+    const { authority, binding } = this.requireExplorationAuthority({ authorityId, sessionId, token });
+    if (binding.alias !== "03" || binding.laneRole !== "feed_lane") {
+      throw new ControlPlaneError(
+        "EXPLORATION_VISUAL_ALIAS_INELIGIBLE",
+        "vision analysis settlement is restricted to alias 03/feed_lane",
+        { status: 403, details: { alias: binding.alias, laneRole: binding.laneRole } },
+      );
+    }
+    const reservation = this.state.getExplorationReservation(reservationId);
+    if (!reservation || reservation.authorityId !== authority.authorityId
+      || reservation.missionHash !== authority.missionHash
+      || reservation.kind !== "visionAnalysis" || reservation.alias !== "03") {
+      throw new ControlPlaneError(
+        "EXPLORATION_VISION_ANALYSIS_INVALID",
+        "vision analysis settlement does not match the active authority",
+        { status: 409 },
+      );
+    }
+    let normalizedResult = null;
+    if (outcome === "consumed") {
+      normalizedResult = normalizeExplorationVisionAnalysis({
+        authority,
+        reservation: { ...reservation, sessionId },
+        result,
+        nowMs: this.now(),
+      });
+    }
+    return this.state.settleExplorationVisionAnalysis({
+      reservationId,
+      authorityId: authority.authorityId,
+      missionHash: authority.missionHash,
+      outcome,
+      analysis: normalizedResult,
+    });
+  }
+
   settleExplorationReservation({ sessionId, token, authorityId, reservationId, outcome }) {
     this.requireExplorationAuthority({ authorityId, sessionId, token });
+    const reservation = this.state.getExplorationReservation(reservationId);
+    if (reservation?.kind === "visionAnalysis") {
+      throw new ControlPlaneError(
+        "EXPLORATION_VISION_ANALYSIS_SETTLE_REQUIRED",
+        "vision analysis must use its dedicated CP-normalized settlement transition",
+        { status: 403 },
+      );
+    }
     return this.state.settleExplorationReservation({ reservationId, outcome });
   }
 
@@ -2675,7 +2774,12 @@ export class ControlPlane {
       if (!committed) allSettled = false;
       lanes[b.alias] = { laneRole: b.laneRole, journalLength: journal.length, committed };
     }
-    return { authority, lanes, allSettled };
+    return {
+      authority,
+      lanes,
+      allSettled,
+      visionCounters: this.state.getExplorationVisionCounters(authorityId),
+    };
   }
 
   closeExplorationAuthority({ sessionId, token, authorityId, reason = "closed" }) {

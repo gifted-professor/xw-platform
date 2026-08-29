@@ -24,6 +24,7 @@ import {
   EXPLORE_PAGE,
   EXPLORE_EXIT_PAGES,
   EXPLORE_DETAIL_PAGES,
+  EXPLORE_DUMP_VERDICT,
 } from "./xhs-explore-surface.mjs";
 
 export const EXPLORE_PHASES = Object.freeze({
@@ -107,6 +108,7 @@ export function createExploreLaneState({
     budgets: Object.freeze({ ...budgets }),
     startedAtMs: Number.isFinite(startedAtMs) ? startedAtMs : null,
     visionEnabled: visionEnabled === true,
+    visionPauseAttempted: false,
     phase: laneRole === "search_lane" ? EXPLORE_PHASES.NEED_OPEN_SEARCH : EXPLORE_PHASES.BROWSE_FEED,
     queryIndex: 0,
     resultScreensUsed: 0,
@@ -211,7 +213,13 @@ export function exploreStep({ state, observation, report = null, nowMs = null } 
     return finishStop({ ...working, lastPage: null }, EXPLORE_STOP_REASONS.OBSERVATION_ERROR);
   }
   const page = observation?.page ?? null;
-  if (page !== null && EXPLORE_EXIT_PAGES.has(page)) {
+  const dumpForbidden = observation?.dumpDecision?.verdict === EXPLORE_DUMP_VERDICT.FORBIDDEN_OR_RISKY;
+  if (page !== null && (
+    EXPLORE_EXIT_PAGES.has(page)
+    || page === EXPLORE_PAGE.SYSTEM_OVERLAY
+    || page === EXPLORE_PAGE.UNKNOWN
+    || dumpForbidden
+  )) {
     return finishStop(working, EXPLORE_STOP_REASONS.FORBIDDEN_SURFACE);
   }
   working = { ...working, lastPage: page };
@@ -327,6 +335,18 @@ function decide(state, observation, depth) {
 
     case EXPLORE_PHASES.OPEN_CONTENT: {
       if (EXPLORE_DETAIL_PAGES.has(page)) {
+        if (eligibleVideoPause(state, observation)) {
+          return {
+            state: Object.freeze({
+              ...state,
+              phase: afterDetailPhase(state),
+              visionPauseAttempted: true,
+            }),
+            decision: navDecision("PAUSE_VIDEO_SAFE_ZONE", {
+              dumpVerdict: observation.dumpDecision.verdict,
+            }),
+          };
+        }
         const commentBudgetLeft = state.commentScreensUsed < capOf(state.budgets, "commentScreens");
         if (page === EXPLORE_PAGE.IMAGE_NOTE && commentBudgetLeft) {
           return {
@@ -379,6 +399,23 @@ function decide(state, observation, depth) {
     default:
       return finishStop(state, EXPLORE_STOP_REASONS.OBSERVATION_ERROR);
   }
+}
+
+function eligibleVideoPause(state, observation) {
+  const dumpDecision = observation?.dumpDecision;
+  const dumpResolved = dumpDecision?.verdict === EXPLORE_DUMP_VERDICT.COMPLETE_SAFE_UNIQUE
+    && dumpDecision?.dumpNavigationEligible === true;
+  const visionResolved = (
+    dumpDecision?.verdict === EXPLORE_DUMP_VERDICT.AMBIGUOUS_SAFE
+      || dumpDecision?.verdict === EXPLORE_DUMP_VERDICT.ABSENT_OR_INVALID
+  ) && dumpDecision?.visionEligible === true;
+  return state.laneRole === "feed_lane"
+    && state.alias === "03"
+    && state.visionEnabled === true
+    && state.visionPauseAttempted !== true
+    && observation?.page === EXPLORE_PAGE.VIDEO_NOTE
+    && dumpDecision?.navigationRole === "PAUSE_VIDEO_SAFE_ZONE"
+    && (dumpResolved || visionResolved);
 }
 
 function afterDetailPhase(state) {

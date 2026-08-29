@@ -322,13 +322,16 @@ export function createExplorationCoordinator({
       receiptHash: null,
     };
 
+    const abortController = new AbortController();
     const batchControl = {
       cancelled: false,
       reason: null,
+      signal: abortController.signal,
       cancel(reason) {
         if (this.cancelled) return;
         this.cancelled = true;
         this.reason = String(reason || "batch-cancelled");
+        abortController.abort(this.reason);
       },
     };
 
@@ -429,6 +432,7 @@ export function createExplorationCoordinator({
         authority,
         mission: sealed,
         batchControl,
+        signal: batchControl.signal,
         executionRunId: identity.executionRunId,
         routineRunId: child.routineRunId,
       }));

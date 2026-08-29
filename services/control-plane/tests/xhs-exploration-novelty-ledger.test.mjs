@@ -34,7 +34,12 @@ const mission = () => ({
     missionDurationSec: 600, reservedPrimitives: 80, novelOpens: 8, sealedQueries: 2,
     resultScreensPerQuery: 2, commentScreens: 6, consecutiveNavigationFailures: 2,
     noNovelScreens: 2, visionAnalysisAttempts: 6, visionMaxIssuedPermits: 1,
-    visionMaxPhysicalTaps: 1, vision: 0,
+    visionMaxPhysicalTaps: 1,
+    providerDecisionDeadlineMs: 8000,
+    frameMaxAgeMs: 10000,
+    permitTtlMs: 5000,
+    perDeviceConcurrency: 1,
+    vision: 0,
   },
   queries: [],
 });

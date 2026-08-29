@@ -1,3 +1,26 @@
+## 2026-08-30 XHS V3 P4 production vision 源码与审查修复完成，Gate E 仍 HOLD
+
+P4 的离线源码链已完成：本地 provider 四哈希钉扎、异步可取消进程与 8s/10s/5s 时限、独立
+vision-analysis 预算/结算、CP 持久化分析与单次 visual permit、真实语料 oracle/突变测试及
+runtime/factory 接线。唯一 CRITICAL review wave 指出的 caller 自报 geometry/provider/frame 越权与
+live confidence 漂移已修复：visual proof 收窄为非权威引用，分析必须由 CP 归一化、持久化并绑定哈希，
+通用 reservation settle 不得结算 vision analysis，最低置信度统一为 0.9。当前
+`test:xhs-routine` **341/341**、`test:fusion` **20/20**；这是 offline implementation/review PASS，
+不等于 P4 Gate PASS。未部署、未触碰设备、未 merge/push。
+
+**Gate E = BLOCKED_UNVERIFIABLE**：正式 runtime provider config
+`C:\Users\Public\xw-runtime\state\orchestrator\xhs-exploration-vision-provider.v1.json` 不存在，本机也未
+找到协议兼容的 production `analyze.py`/完整 model bundle；既有 PaddleOCR resolver 是
+`offline_only` 且协议不兼容，不得拿来做形式 pin。真实 corpus 覆盖为
+`HOME_FEED=4 / SEARCH_RESULTS=3 / IMAGE_NOTE=0 / VIDEO_NOTE=0 / COMMENT_PANEL=0`，而计划要求五条
+route 各至少 3 个 distinct frames。私有证据只发现 IMAGE_NOTE/VIDEO_NOTE 各 1 个待复核候选，受 ACL
+限制无法验证哈希、标注封印和 route 绑定，COMMENT_PANEL 仍为 0；即使前两张复核通过也还缺 2/2/3。
+因此 production corpus oracle、真实 shadow/canary 与 provider starvation 证据尚不能关闭。P4 前置
+Gate 未通过，不得进入 P5 的正式打包/部署身份；P6 又明确只能在 P5 后执行。
+
+Deferred P2 hardening：provider 子进程环境从继承完整 `process.env` 收紧为 allowlist；把
+visual-permit budget reserve 与 permit insert 合并为单事务，消除崩溃时的 availability gap。
+
 ## 2026-08-13 `xhs-compose` canary 统一日志层（源码收编，未部署）
 
 新增通用 `xhs.run-event.v1` / `xhs.run-summary.v1` / `xhs.run-metrics.v1` 与只读报告入口 `ops/xw-xhs-compose-report.mjs`。每个 canary attempt 和整个 closeout run 固定生成 `report/{run-report.md,timeline.jsonl,metrics.json,summary.json}`；历史回填只新增 `report/`，不覆盖旧 summary、STOP 或命令证据。目标 run `run_2a539677-a466-4729-b699-fda001e0de5d` 已完成两级回填与校验：attempt1=`partial`、attempt2=`controlled_stop`、attempt3/4=`passed`，run=`completed`；attempt4 自动复算 268 files / 2,859,369 bytes / 194 command records，`search_notes` 5 次平均 60.304s、最大 69.089s。
