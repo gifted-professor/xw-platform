@@ -1,7 +1,7 @@
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { ControlPlaneError } from "./lib/errors.mjs";
+import { ControlPlaneError, structuredErrorLog } from "./lib/errors.mjs";
 import { canonicalJson, sha256 } from "./lib/canonical.mjs";
 import { RUNTIME_POLICY_VERSION } from "./lib/nonpayment-autonomy-policy.mjs";
 import { LIVE_PROGRESS_CACHE_MS, readLiveProgressTail } from "../scripts/lib/stall-progress.mjs";
@@ -27,7 +27,9 @@ function releaseIdentity() {
   if (cachedIdentity === undefined) {
     try {
       cachedIdentity = loadReleaseIdentity({ startDir: dirname(fileURLToPath(import.meta.url)) });
-    } catch {
+    } catch (error) {
+      // memoized: this swallow logs exactly once per process, then degrades
+      structuredErrorLog({ event: "cp.release.identity.unavailable", error });
       cachedIdentity = { sourceRepo: null, sourceCommit: null, releaseId: null, runtimeProfile: null };
     }
   }
@@ -352,7 +354,8 @@ export class ControlRouter {
       const liveProgress = readLiveProgressTail(this.evidence.runDirectory(job.runId), { nowMs });
       this.liveProgressCache.set(job.runId, { at: nowMs, value: liveProgress });
       return { ...job, liveProgress };
-    } catch {
+    } catch (error) {
+      this.#logSwallow("cp.live.progress.unavailable", error, { runId: job?.runId ?? null });
       return { ...job, liveProgress: null };
     }
   }
@@ -363,10 +366,25 @@ export class ControlRouter {
       if (typeof this.control?.transportStatus === "function") {
         snapshot = this.control.transportStatus() || snapshot;
       }
-    } catch {
+    } catch (error) {
+      this.#logSwallow("cp.transport.status.unavailable", error, { runId: job?.runId ?? null });
       snapshot = { status: "unknown", ageMs: null };
     }
     return job ? { ...job, transportLock: publicTransportLock(snapshot) } : job;
+  }
+
+  // P2-OBSERVABILITY: secondary swallow points log their first failure per
+  // (event, runId) and then throttle for 30s so a hot read path cannot flood
+  // stdout while a CP subsystem is down.
+  #swallowLogAt = new Map();
+  static SWALLOW_LOG_INTERVAL_MS = 30_000;
+  #logSwallow(event, error, extra = {}) {
+    const key = `${event}:${extra.runId ?? "-"}`;
+    const now = Date.now();
+    const last = this.#swallowLogAt.get(key) ?? 0;
+    if (now - last < ControlRouter.SWALLOW_LOG_INTERVAL_MS) return;
+    this.#swallowLogAt.set(key, now);
+    structuredErrorLog({ event, error, extra });
   }
 
   async handle({ method, path, query = new URLSearchParams(), body, headers = {} }) {

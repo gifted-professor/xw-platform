@@ -73,6 +73,7 @@
         "ops/xw-xhs-r0-inbox.mjs",
         "ops/xw-xhs-routine-accept.mjs",
         "ops/xw-xhs-routine.mjs",
+        "ops/xw-xhs-routine-closeout.mjs",
         "ops/xw-xhs-social-live.mjs",
         "ops/xw-xhs.mjs",
         "scripts/lib/dag-compiler.mjs",
@@ -144,6 +145,7 @@
         "tests/xw-xhs-execute-truth.test.mjs",
         "tests/xw-xhs-routine-accept.test.mjs",
         "tests/xw-xhs-routine-cli.test.mjs",
+        "tests/xw-xhs-routine-closeout.test.mjs",
         "ops/_xhs-routine-vision-factory.mjs",
         "scripts/lib/xhs-routine-artifact.mjs",
         "scripts/lib/xhs-routine-authority.mjs",
@@ -313,6 +315,7 @@
         "tests/xhs-visual-navigation-boundary.test.mjs",
         "apps/xhs/routine-draft-provider.mjs",
         "apps/xhs/routine-effect-transport.mjs",
+        "tests/cp-structured-error-log.test.mjs",
         "tests/xhs-routine-authority.test.mjs"
       ]
     }

@@ -3,7 +3,7 @@ import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { assertAuthorityHost, assertPinnedNodeVersion, createControlPlaneRuntime } from "./bootstrap.mjs";
-import { ControlPlaneError, errorBody } from "./lib/errors.mjs";
+import { ControlPlaneError, errorBody, structuredErrorLog } from "./lib/errors.mjs";
 import {
   acquireM6C1RuntimeOwnerLock,
   assertM6C1ControlDbIdentity,
@@ -54,6 +54,21 @@ export function createControlServer({ router }) {
       });
       sendJson(response, result.status, result.body);
     } catch (error) {
+      // P2-OBSERVABILITY: route errors used to vanish into the response alone.
+      // Emit one structured stdout line (never stderr — Windows red line), no
+      // request body, before the client sees the JSON error.
+      const pathname = error && request.url
+        ? (() => { try { return new URL(request.url, "http://127.0.0.1").pathname; } catch { return null; } })()
+        : null;
+      structuredErrorLog({
+        event: "cp.route.error",
+        error,
+        extra: {
+          method: request.method,
+          path: pathname,
+          pid: process.pid,
+        },
+      });
       sendJson(response, error?.status || 500, errorBody(error));
     }
   });
