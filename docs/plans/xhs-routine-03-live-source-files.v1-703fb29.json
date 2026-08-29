@@ -1,0 +1,102 @@
+{
+  "schema": "xw.xhs.routine-03-live-source-files.v1",
+  "baselineHead": "703fb297be1431009b3c4e849601858fd3a7c45d",
+  "branch": "codex/xhs-routine-03-live-s1-s4",
+  "worktree": ".worktrees/xhs-r03",
+  "generatedAt": "2026-08-29",
+  "tool": "services/orchestrator/ops/xw-xhs-routine-closeout.mjs source-ledger",
+  "files": [
+    {
+      "path": "package.json",
+      "sha256": "8e5c97a3c5648f28390628bc00f84256564f7ef9951b2eed8e77aba16fde8633"
+    },
+    {
+      "path": "services/orchestrator/ops/xw-xhs-routine.mjs",
+      "sha256": "3eadc06e6956c9f2cbfb59bff5329ff016b2e849c88af7f79dde365fe474f9c2"
+    },
+    {
+      "path": "services/orchestrator/ops/xw-xhs.mjs",
+      "sha256": "94636df350cc6a4d580da3dc0a4542a50393cf239019ceecf4e709f16379e473"
+    },
+    {
+      "path": "services/orchestrator/ops/xw-xhs-routine-accept.mjs",
+      "sha256": "4c33423d06b980640105ac8718f543fafbc59a1c9a9661ab66f56675bd084e52"
+    },
+    {
+      "path": "services/orchestrator/ops/xw-xhs-routine-closeout.mjs",
+      "sha256": "eb28ea74526170353fa3af5583c90eed5a28c9e9a743423a19cdfc0842150788"
+    },
+    {
+      "path": "services/orchestrator/ops/_xhs-routine-explorer-runtime.mjs",
+      "sha256": "865a8b6b1a06f22f289be45c897a4d25f3289c1352c334769cdd89191518477b"
+    },
+    {
+      "path": "services/orchestrator/scripts/lib/xhs-feed-routine-machine.mjs",
+      "sha256": "4a5bcfe7762d3efa76fa5709716eb2f9a16e4bf576a4a992e210729c9c31620b"
+    },
+    {
+      "path": "services/orchestrator/scripts/lib/xhs-routine-plan.mjs",
+      "sha256": "3f1037ae49a7f65e7e040ae939f0486a4ed4d087299da339f2349bf2c8c39e7b"
+    },
+    {
+      "path": "services/orchestrator/scripts/lib/xhs-routine-run-store.mjs",
+      "sha256": "9b7be56b63b45c48c287bfa463f670331f2e162efa0dbec55bd750826981b650"
+    },
+    {
+      "path": "services/orchestrator/scripts/lib/xhs-routine-runner.mjs",
+      "sha256": "1f6c5cfc7caba82295633f71fa52ed88ee19afde4a5cc58392f595dc6ccc710a"
+    },
+    {
+      "path": "services/orchestrator/scripts/lib/xhs-routine-authority.mjs",
+      "sha256": "64a88a7cae6d3d7006b29b5cfc9246c4e3617ef1ef31525b4c70a0c9a02aa562"
+    },
+    {
+      "path": "services/orchestrator/tests/fixtures/xhs-routine-fake-driver.mjs",
+      "sha256": "53a28d91487457c0d9b98c9d240c9d72c0e0979e603206a2b547b7e149e45a34"
+    },
+    {
+      "path": "services/orchestrator/tests/xhs-feed-routine-machine.test.mjs",
+      "sha256": "3dc35d092f02b214a1a03c42d60034de834d5cf4eb9b121bbb61cf3f0e05f238"
+    },
+    {
+      "path": "services/orchestrator/tests/xhs-routine-plan.test.mjs",
+      "sha256": "5c6496a0169ba36c3772b5da2a2c7ca259d32b915917cfd380c96f529718407d"
+    },
+    {
+      "path": "services/orchestrator/tests/xhs-routine-explorer-runtime.test.mjs",
+      "sha256": "39d608e2222000dbb5554dcc11802a49380f9d4dd64dcc00cd9ab6ab8648ba02"
+    },
+    {
+      "path": "services/orchestrator/tests/xhs-routine-runner.test.mjs",
+      "sha256": "e16dab69ff29f0ecdc9dbf2f2895925a10514a3e157035a6c293f36938a9466c"
+    },
+    {
+      "path": "services/orchestrator/tests/xw-xhs-routine-cli.test.mjs",
+      "sha256": "c230f5c81cd2b0a495495c5d686de84ab5231baf33ce16d598f9aaa0823b2efb"
+    },
+    {
+      "path": "services/orchestrator/tests/xw-xhs-routine-accept.test.mjs",
+      "sha256": "e51c4430039ed3b8ddc8d20e66f38b6562970579b0e47064b257d46f93527d3c"
+    },
+    {
+      "path": "services/orchestrator/tests/xw-xhs-routine-closeout.test.mjs",
+      "sha256": "b6bf84b3ea2879eb44e7250c79d6a2daed110f95464f6bc569dc55aecf0c21a2"
+    },
+    {
+      "path": "services/control-plane/control-plane/lib/state-store.mjs",
+      "sha256": "e4bc5b9fc1bb86692d5c8c7e6bd4987948be31d8f6c424a31a27c05042847f59"
+    },
+    {
+      "path": "services/control-plane/control-plane/lib/control-plane.mjs",
+      "sha256": "8cb0349fa668217fbf85bd948eeca169a513b535ef70c281eb7fe61091f782e0"
+    },
+    {
+      "path": "services/control-plane/apps/xhs/routine-effect-bridge.mjs",
+      "sha256": "aebb4529c33f4ef39d31ffa3744ce3ff98ed5e70bb34004af9f92909b48a4121"
+    },
+    {
+      "path": "services/control-plane/apps/xhs/routine-comment-chain.mjs",
+      "sha256": "eae632048dff53d8f539acbe7f331af79107a6ed1c515ce055033abd623e03cd"
+    }
+  ]
+}
