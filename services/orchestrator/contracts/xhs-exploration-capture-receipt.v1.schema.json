@@ -1,0 +1,144 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "xw.xhs.exploration-capture-receipt.v1",
+  "title": "XHS exploration CP-bound capture receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaId",
+    "schemaVersion",
+    "captureMode",
+    "evidence",
+    "classification",
+    "placement",
+    "provenance",
+    "runtime",
+    "safety",
+    "authentication"
+  ],
+  "properties": {
+    "schemaId": { "const": "xw.xhs.exploration-capture-receipt.v1" },
+    "schemaVersion": { "const": 1 },
+    "captureMode": { "enum": ["OFFLINE_FIXTURE_ONLY", "CP_BOUND_R1_R2"] },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pngHash", "dumpHash", "focusHash", "width", "height"],
+      "properties": {
+        "pngHash": { "$ref": "#/$defs/sha256" },
+        "dumpHash": { "$ref": "#/$defs/sha256" },
+        "focusHash": { "$ref": "#/$defs/sha256" },
+        "width": { "type": "integer", "minimum": 1 },
+        "height": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "classification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pageClass", "evaluationRole", "dumpVerdict", "dumpReasonsHash", "dumpRegionsHash"],
+      "properties": {
+        "pageClass": {
+          "enum": ["HOME_FEED", "SEARCH_RESULTS", "IMAGE_NOTE", "VIDEO_NOTE", "COMMENT_PANEL"]
+        },
+        "evaluationRole": {
+          "enum": ["OPEN_CONTENT_CARD", "OPEN_COMMENT_PANEL", "PAUSE_VIDEO_SAFE_ZONE", "BACK"]
+        },
+        "dumpVerdict": {
+          "enum": ["COMPLETE_SAFE_UNIQUE", "AMBIGUOUS_SAFE", "ABSENT_OR_INVALID", "FORBIDDEN_OR_RISKY"]
+        },
+        "dumpReasonsHash": { "$ref": "#/$defs/sha256" },
+        "dumpRegionsHash": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "placement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["alias", "laneRole"],
+      "properties": {
+        "alias": { "enum": ["03", "04"] },
+        "laneRole": { "enum": ["FEED", "SEARCH"] }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["phase", "sessionDigest", "leaseDigest", "authorityDigest", "waveDigest", "surfaceClaimDigest"],
+      "properties": {
+        "phase": { "enum": ["CALIBRATION_ONLY", "R1", "R2"] },
+        "sessionDigest": { "$ref": "#/$defs/sha256" },
+        "leaseDigest": { "$ref": "#/$defs/sha256" },
+        "authorityDigest": { "$ref": "#/$defs/sha256" },
+        "waveDigest": { "$ref": "#/$defs/sha256" },
+        "surfaceClaimDigest": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["releaseId", "sourceCommit", "providerBundleDigest", "digestKeyId"],
+      "properties": {
+        "releaseId": { "$ref": "#/$defs/safeId" },
+        "sourceCommit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "providerBundleDigest": { "$ref": "#/$defs/sha256" },
+        "digestKeyId": { "$ref": "#/$defs/safeId" }
+      }
+    },
+    "safety": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["socialTransport", "effectTransport", "visualIssued", "visualConsumed", "visualPhysical"],
+      "properties": {
+        "socialTransport": { "const": 0 },
+        "effectTransport": { "const": 0 },
+        "visualIssued": { "const": 0 },
+        "visualConsumed": { "const": 0 },
+        "visualPhysical": { "const": 0 }
+      }
+    },
+    "authentication": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "digestKeyId", "payloadHash", "mac"],
+      "properties": {
+        "algorithm": { "const": "HMAC-SHA256" },
+        "digestKeyId": { "$ref": "#/$defs/safeId" },
+        "payloadHash": { "$ref": "#/$defs/sha256" },
+        "mac": { "$ref": "#/$defs/sha256" }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "captureMode": { "const": "OFFLINE_FIXTURE_ONLY" } },
+        "required": ["captureMode"]
+      },
+      "then": {
+        "properties": {
+          "provenance": {
+            "properties": { "phase": { "const": "CALIBRATION_ONLY" } },
+            "required": ["phase"]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "captureMode": { "const": "CP_BOUND_R1_R2" } },
+        "required": ["captureMode"]
+      },
+      "then": {
+        "properties": {
+          "provenance": {
+            "properties": { "phase": { "enum": ["R1", "R2"] } },
+            "required": ["phase"]
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "safeId": { "type": "string", "pattern": "^[A-Za-z0-9._:-]{1,160}$" }
+  }
+}

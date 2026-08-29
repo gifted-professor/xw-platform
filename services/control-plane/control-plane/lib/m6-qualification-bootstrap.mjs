@@ -701,6 +701,52 @@ function expectedPointer(verified) {
   });
 }
 
+// Rotation uses the same immutable package/epoch/closeout artifacts as the
+// first bootstrap, but it must not invoke the v18 migration path or publish a
+// pointer before the existing v21+ fence has been atomically replaced.  Keep
+// artifact staging separate from pointer publication so the bounded operator
+// can snapshot, rotate, and roll back the database around this boundary.
+export function stageM6QualificationBootstrapRotationArtifacts({
+  package: input,
+  m6Root,
+  issuerAllowlistPath = join(resolve(m6Root || "."), "m6-gate", "issuer-keys.json"),
+  nowMs = Date.now(),
+} = {}) {
+  const runtimeRoot = assertAbsolutePath(
+    m6Root,
+    "M6_QUALIFICATION_ROTATION_INPUT_INVALID",
+    "m6Root",
+  );
+  const verified = validateM6QualificationBootstrapPackage({
+    package: input,
+    issuerAllowlistPath,
+    m6Root: runtimeRoot,
+    nowMs,
+  });
+  const paths = artifactPaths(runtimeRoot, verified);
+  const pointer = expectedPointer(verified);
+  if (existsSync(paths.current)) {
+    const existing = readRegularJson(
+      paths.current,
+      "M6_QUALIFICATION_ROTATION_POINTER_DRIFT",
+    );
+    if (canonicalJson(existing) !== canonicalJson(pointer)) {
+      fail(
+        "M6_QUALIFICATION_ROTATION_POINTER_DRIFT",
+        "rotation target gate already has a different current pointer",
+      );
+    }
+  }
+  installArtifacts(paths, verified);
+  return Object.freeze({
+    package: verified.package,
+    rootEpoch: verified.rootEpoch,
+    closedEpoch: verified.closedEpoch,
+    paths,
+    pointer,
+  });
+}
+
 function injectedFault(stage) {
   fail("M6_QUALIFICATION_BOOTSTRAP_FAULT", `injected failure after ${stage}`);
 }

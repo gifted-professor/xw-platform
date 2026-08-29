@@ -72,6 +72,19 @@ export const EXPLORE_DUMP_VERDICT = Object.freeze({
 export const EXPLORE_DUMP_VERDICTS = Object.freeze(Object.values(EXPLORE_DUMP_VERDICT));
 
 const PAUSE_VIDEO_ROLE = "PAUSE_VIDEO_SAFE_ZONE";
+const DEFAULT_ROLE_BY_PAGE = Object.freeze({
+  [EXPLORE_PAGE.HOME_FEED]: "OPEN_CONTENT_CARD",
+  [EXPLORE_PAGE.SEARCH_RESULTS]: "OPEN_CONTENT_CARD",
+  [EXPLORE_PAGE.IMAGE_NOTE]: "OPEN_COMMENT_PANEL",
+  [EXPLORE_PAGE.VIDEO_NOTE]: PAUSE_VIDEO_ROLE,
+  [EXPLORE_PAGE.COMMENT_PANEL]: "BACK",
+});
+const ROLE_PAGES = Object.freeze({
+  OPEN_CONTENT_CARD: Object.freeze(new Set([EXPLORE_PAGE.HOME_FEED, EXPLORE_PAGE.SEARCH_RESULTS])),
+  OPEN_COMMENT_PANEL: Object.freeze(new Set([EXPLORE_PAGE.IMAGE_NOTE, EXPLORE_PAGE.VIDEO_NOTE])),
+  PAUSE_VIDEO_SAFE_ZONE: Object.freeze(new Set([EXPLORE_PAGE.VIDEO_NOTE])),
+  BACK: Object.freeze(new Set([EXPLORE_PAGE.COMMENT_PANEL])),
+});
 const DUMP_FORBIDDEN_PAGES = new Set([
   EXPLORE_PAGE.SYSTEM_OVERLAY,
   EXPLORE_PAGE.EXIT_PUBLISH,
@@ -137,6 +150,80 @@ function centerIn(bounds, region) {
 
 function overlaps(a, b) {
   return Boolean(a && b && a.x1 < b.x2 && a.x2 > b.x1 && a.y1 < b.y2 && a.y2 > b.y1);
+}
+
+function displayBounds(nodes) {
+  return nodes
+    .filter((node) => node.bounds?.x1 === 0 && node.bounds?.y1 === 0)
+    .sort((a, b) => area(b.bounds) - area(a.bounds))[0]?.bounds ?? null;
+}
+
+function scaledRegion(display, { x, y, w, h }) {
+  if (!display) return null;
+  const width = display.x2 - display.x1;
+  const height = display.y2 - display.y1;
+  return {
+    x1: Math.round(display.x1 + width * x),
+    y1: Math.round(display.y1 + height * y),
+    x2: Math.round(display.x1 + width * (x + w)),
+    y2: Math.round(display.y1 + height * (y + h)),
+  };
+}
+
+function roleTemplate(page, role, display) {
+  if (role === "OPEN_CONTENT_CARD") {
+    return scaledRegion(display, { x: 0.03, y: 0.09, w: 0.77, h: 0.81 });
+  }
+  if (role === "OPEN_COMMENT_PANEL" && page === EXPLORE_PAGE.IMAGE_NOTE) {
+    return scaledRegion(display, { x: 0.40, y: 0.80, w: 0.30, h: 0.18 });
+  }
+  if (role === "OPEN_COMMENT_PANEL" && page === EXPLORE_PAGE.VIDEO_NOTE) {
+    return scaledRegion(display, { x: 0.70, y: 0.22, w: 0.28, h: 0.62 });
+  }
+  if (role === "BACK") {
+    return scaledRegion(display, { x: 0.00, y: 0.04, w: 0.26, h: 0.18 });
+  }
+  return null;
+}
+
+function cardBounds(card) {
+  return [card?.L, card?.T, card?.R, card?.B].every(Number.isFinite)
+    ? { x1: card.L, y1: card.T, x2: card.R, y2: card.B }
+    : null;
+}
+
+function candidateCore(bounds) {
+  if (!bounds) return null;
+  const cx = (bounds.x1 + bounds.x2) / 2;
+  const cy = (bounds.y1 + bounds.y2) / 2;
+  const halfW = Math.max(16, Math.min(64, (bounds.x2 - bounds.x1) * 0.12));
+  const halfH = Math.max(16, Math.min(64, (bounds.y2 - bounds.y1) * 0.12));
+  return { x1: cx - halfW, y1: cy - halfH, x2: cx + halfW, y2: cy + halfH };
+}
+
+function roleCandidateBounds(surface, nodes, role) {
+  if (role === "OPEN_CONTENT_CARD") {
+    return (surface.cards ?? []).map(cardBounds);
+  }
+  if (role === "OPEN_COMMENT_PANEL") {
+    return nodes
+      .filter((node) => /(?:^|\s)评论(?:\s|$)/i.test(node.searchable)
+        && !/评论框|评论列表|EditText/i.test(node.searchable))
+      .map((node) => node.bounds);
+  }
+  if (role === "BACK") {
+    return nodes
+      .filter((node) => /返回|(?:^|\s)back(?:\s|$)/i.test(node.searchable))
+      .map((node) => node.bounds);
+  }
+  return [];
+}
+
+function protectedRoleNodes(nodes, role) {
+  const pattern = role === "BACK"
+    ? /点赞|评论框|收藏|关注|私信|发送|回复|分享|发布|支付|付款|购买|EditText/i
+    : /点赞|收藏|关注|私信|发送|回复|分享|发布|支付|付款|购买/i;
+  return nodes.filter((node) => node.bounds && pattern.test(node.searchable));
 }
 
 function verdict(verdictValue, {
@@ -295,6 +382,101 @@ function pauseVideoDumpDecision(xml) {
   });
 }
 
+/**
+ * Produce a role-specific DUMP decision for the offline five-route oracle.
+ * It is derived from the current XML nodes, never from screenshot labels.
+ * Runtime live vision still asks only VIDEO_NOTE/PAUSE_VIDEO_SAFE_ZONE; the
+ * broader role set is evidence/classification capability, not permit authority.
+ */
+export function roleSpecificDumpDecision({ surface, xml = "", requestedRole } = {}) {
+  const page = surface?.page ?? null;
+  if (!Object.hasOwn(ROLE_PAGES, requestedRole) || !ROLE_PAGES[requestedRole].has(page)) {
+    return verdict(EXPLORE_DUMP_VERDICT.FORBIDDEN_OR_RISKY, {
+      page,
+      navigationRole: requestedRole ?? null,
+      reasons: ["page_role_pair_forbidden"],
+    });
+  }
+  if (requestedRole === PAUSE_VIDEO_ROLE) return pauseVideoDumpDecision(xml);
+
+  const nodes = dumpNodes(xml);
+  const display = displayBounds(nodes);
+  const baseMeta = {
+    page,
+    navigationRole: requestedRole,
+    requiredLandmarks: ["xhs_package", "display_bounds", `role:${requestedRole}`, "protected_zones"],
+    positiveRoles: [requestedRole],
+  };
+  if (!display || display.x2 - display.x1 < 320 || display.y2 - display.y1 < 640) {
+    return verdict(EXPLORE_DUMP_VERDICT.ABSENT_OR_INVALID, {
+      ...baseMeta,
+      reasons: ["display_bounds_absent_or_invalid"],
+      visionEligible: false,
+    });
+  }
+  const positiveRegion = roleTemplate(page, requestedRole, display);
+  if (!positiveRegion || area(positiveRegion) < area(display) * 0.005) {
+    return verdict(EXPLORE_DUMP_VERDICT.ABSENT_OR_INVALID, {
+      ...baseMeta,
+      displayBounds: toRect(display),
+      reasons: ["role_positive_region_absent_or_invalid"],
+      visionEligible: false,
+    });
+  }
+  const riskyNodes = protectedRoleNodes(nodes, requestedRole);
+  const statusZone = scaledRegion(display, { x: 0, y: 0, w: 1, h: 0.04 });
+  const protectedZones = [
+    { kind: "status_bar", ...toRect(statusZone) },
+    ...riskyNodes.map((node) => ({ kind: "effect_control", ...toRect(node.bounds) })),
+  ];
+  const spatialMeta = {
+    ...baseMeta,
+    displayBounds: toRect(display),
+    positiveRegion: toRect(positiveRegion),
+    protectedZones,
+  };
+  const candidates = roleCandidateBounds(surface, nodes, requestedRole);
+  if (candidates.some((candidate) => candidate === null)) {
+    return verdict(EXPLORE_DUMP_VERDICT.ABSENT_OR_INVALID, {
+      ...spatialMeta,
+      reasons: ["role_candidate_bounds_invalid"],
+      candidateCount: candidates.length,
+      visionEligible: true,
+    });
+  }
+  const inRegion = candidates.filter((candidate) => centerIn(candidate, positiveRegion));
+  if (inRegion.some((candidate) => riskyNodes.some((node) => overlaps(candidateCore(candidate), node.bounds)))) {
+    return verdict(EXPLORE_DUMP_VERDICT.FORBIDDEN_OR_RISKY, {
+      ...spatialMeta,
+      reasons: ["role_candidate_intersects_effect_control"],
+      candidateCount: inRegion.length,
+      visionEligible: false,
+    });
+  }
+  if (inRegion.length === 0) {
+    return verdict(EXPLORE_DUMP_VERDICT.ABSENT_OR_INVALID, {
+      ...spatialMeta,
+      reasons: ["role_candidate_absent_in_known_positive_region"],
+      visionEligible: true,
+    });
+  }
+  if (inRegion.length > 1) {
+    return verdict(EXPLORE_DUMP_VERDICT.AMBIGUOUS_SAFE, {
+      ...spatialMeta,
+      reasons: ["multiple_safe_role_candidates"],
+      candidateCount: inRegion.length,
+      visionEligible: true,
+    });
+  }
+  return verdict(EXPLORE_DUMP_VERDICT.COMPLETE_SAFE_UNIQUE, {
+    ...spatialMeta,
+    reasons: ["unique_role_candidate_in_positive_region"],
+    candidateCount: 1,
+    visionEligible: false,
+    dumpNavigationEligible: true,
+  });
+}
+
 function dumpDecisionForSurface(surface, xml) {
   if (DUMP_FORBIDDEN_PAGES.has(surface.page)) {
     return verdict(EXPLORE_DUMP_VERDICT.FORBIDDEN_OR_RISKY, {
@@ -302,12 +484,9 @@ function dumpDecisionForSurface(surface, xml) {
       reasons: [`surface_forbidden:${surface.page}`],
     });
   }
-  if (surface.page === EXPLORE_PAGE.VIDEO_NOTE) return pauseVideoDumpDecision(xml);
-  const candidates = surface.candidates?.length ?? 0;
-  if (surface.page === EXPLORE_PAGE.HOME_FEED || surface.page === EXPLORE_PAGE.SEARCH_RESULTS) {
-    if (candidates > 1) return verdict(EXPLORE_DUMP_VERDICT.AMBIGUOUS_SAFE, { page: surface.page, candidateCount: candidates, reasons: ["multiple_allowlisted_candidates"] });
-    if (candidates === 1) return verdict(EXPLORE_DUMP_VERDICT.COMPLETE_SAFE_UNIQUE, { page: surface.page, candidateCount: 1, reasons: ["unique_allowlisted_candidate"], dumpNavigationEligible: true });
-    return verdict(EXPLORE_DUMP_VERDICT.ABSENT_OR_INVALID, { page: surface.page, reasons: ["allowlisted_candidate_absent"] });
+  const defaultRole = DEFAULT_ROLE_BY_PAGE[surface.page] ?? null;
+  if (defaultRole) {
+    return roleSpecificDumpDecision({ surface, xml, requestedRole: defaultRole });
   }
   if (surface.page === EXPLORE_PAGE.HOME_FEED_EMPTY) {
     return verdict(EXPLORE_DUMP_VERDICT.ABSENT_OR_INVALID, { page: surface.page, reasons: ["explicit_empty_surface"] });

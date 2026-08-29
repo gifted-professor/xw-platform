@@ -166,7 +166,7 @@ function publicGrantView(grant) {
 }
 
 export class ControlRouter {
-  constructor({ control, state, capabilities, evidence, delegationGrants = null, canaryEvidenceAuthorizer = null, nodeId = "DESKTOP-3I1EVHE", m6 = null, m6DeviceReadSnapshot = null, m6GateFOperations = null, m6LiveEntry = null, m6RuntimeMode = "STANDARD", m6StartupRecovery = null }) {
+  constructor({ control, state, capabilities, evidence, delegationGrants = null, canaryEvidenceAuthorizer = null, nodeId = "DESKTOP-3I1EVHE", m6 = null, m6DeviceReadSnapshot = null, m6GateFOperations = null, m6LiveEntry = null, m6RuntimeMode = "STANDARD", m6StartupRecovery = null, xhsV3TaskBootstrap = null, xhsRpaTaskBootstrap = null, xhsV3FixedOperatorAuthorization = null }) {
     this.control = control;
     this.state = state;
     this.capabilities = capabilities;
@@ -180,6 +180,9 @@ export class ControlRouter {
     this.m6LiveEntry = m6LiveEntry;
     this.m6RuntimeMode = m6RuntimeMode;
     this.m6StartupRecovery = m6StartupRecovery;
+    this.xhsV3TaskBootstrap = xhsV3TaskBootstrap;
+    this.xhsRpaTaskBootstrap = xhsRpaTaskBootstrap;
+    this.xhsV3FixedOperatorAuthorization = xhsV3FixedOperatorAuthorization;
     this.liveProgressCache = new Map();
   }
 
@@ -422,6 +425,9 @@ export class ControlRouter {
           // and resource counts only. It never exposes the internal token,
           // provider credential, child command, paths, or raw device identity.
           ...(this.m6LiveEntry ? { m6LiveEntry: this.m6LiveEntry.health() } : {}),
+          ...(this.xhsV3TaskBootstrap
+            ? { xhsV3TaskBootstrap: this.xhsV3TaskBootstrap.health() }
+            : {}),
           ...(this.m6StartupRecovery ? { m6StartupRecovery: this.m6StartupRecovery } : {}),
         },
       };
@@ -467,6 +473,102 @@ export class ControlRouter {
       }
       if (method === "POST" && path === "/control/v1/internal/m6/gate-f/recover-armed-active") {
         return { status: 200, body: this.m6GateFOperations.recoverArmedActive(body) };
+      }
+      throw new ControlPlaneError("ROUTE_NOT_FOUND", `${method} ${path} not found`, { status: 404 });
+    }
+
+    // XHS V3 formal task surface. It runs inside this already-owned listener;
+    // there is no shell-spawn or startup-time business execution. Gate-F's
+    // operations credential is header-only. The bootstrap then exact-validates
+    // the body before loading an invocation/corpus or creating a live resource.
+    if (path.startsWith("/control/v1/internal/xhs/exploration/")) {
+      if (!this.m6GateFOperations?.assertAuthorized || !this.xhsV3TaskBootstrap
+        || !this.xhsV3FixedOperatorAuthorization?.assertAuthorized) {
+        throw new ControlPlaneError(
+          "XHS_V3_TASK_BOOTSTRAP_UNAVAILABLE",
+          "formal XHS V3 task bootstrap is not installed in this listener",
+          { status: 503 },
+        );
+      }
+      this.m6GateFOperations.assertAuthorized(headers);
+      this.xhsV3FixedOperatorAuthorization.assertAuthorized({ method, path, body, headers });
+      if (method === "POST" && path === "/control/v1/internal/xhs/exploration/prepare-invocation") {
+        return {
+          status: 201,
+          body: { invocation: await this.xhsV3TaskBootstrap.prepareInvocation(requireBody(body)) },
+        };
+      }
+      if (method === "POST" && path === "/control/v1/internal/xhs/exploration/run") {
+        return { status: 200, body: { run: await this.xhsV3TaskBootstrap.runTask(requireBody(body)) } };
+      }
+      if (method === "POST" && path === "/control/v1/internal/xhs/exploration/prepare-corpus-review") {
+        return {
+          status: 201,
+          body: { review: await this.xhsV3TaskBootstrap.prepareCorpusReview(requireBody(body)) },
+        };
+      }
+      if (method === "POST" && path === "/control/v1/internal/xhs/exploration/submit-corpus-review") {
+        return {
+          status: 201,
+          body: { review: await this.xhsV3TaskBootstrap.submitCorpusReview(requireBody(body)) },
+        };
+      }
+      if (method === "POST" && path === "/control/v1/internal/xhs/exploration/assemble-corpus-set") {
+        return {
+          status: 201,
+          body: { corpus: await this.xhsV3TaskBootstrap.assembleCorpusSet(requireBody(body)) },
+        };
+      }
+      if (method === "POST" && path === "/control/v1/internal/xhs/exploration/evaluate-corpus-set") {
+        return {
+          status: 201,
+          body: { evaluator: await this.xhsV3TaskBootstrap.evaluateCorpus(requireBody(body)) },
+        };
+      }
+      if (method === "POST" && path === "/control/v1/internal/xhs/exploration/closeout-p6") {
+        return {
+          status: 201,
+          body: { closeout: await this.xhsV3TaskBootstrap.closeoutP6(requireBody(body)) },
+        };
+      }
+      if (method === "POST" && path === "/control/v1/internal/xhs/exploration/seal-e-corpus") {
+        return {
+          status: 200,
+          body: { eCorpus: await this.xhsV3TaskBootstrap.sealECorpus(requireBody(body)) },
+        };
+      }
+      throw new ControlPlaneError("ROUTE_NOT_FOUND", `${method} ${path} not found`, { status: 404 });
+    }
+
+    // P7 is listener-owned and manual-once only.  The operations token is
+    // header-only; bodies contain just fixed program/generation/idempotency
+    // references and are exact-validated by the task bootstrap before its
+    // ledger, scheduler, lease oracle, or R4 aggregate is reached.
+    if (path.startsWith("/control/v1/internal/xhs/rpa/")) {
+      if (!this.m6GateFOperations?.assertAuthorized || !this.xhsRpaTaskBootstrap
+        || !this.xhsV3FixedOperatorAuthorization?.assertAuthorized) {
+        throw new ControlPlaneError(
+          "XHS_RPA_TASK_BOOTSTRAP_UNAVAILABLE",
+          "formal XHS RPA task bootstrap is not installed in this listener",
+          { status: 503 },
+        );
+      }
+      this.m6GateFOperations.assertAuthorized(headers);
+      this.xhsV3FixedOperatorAuthorization.assertAuthorized({ method, path, body, headers });
+      if (method === "GET" && path === "/control/v1/internal/xhs/rpa/health") {
+        return { status: 200, body: { rpa: this.xhsRpaTaskBootstrap.health() } };
+      }
+      if (method === "POST" && path === "/control/v1/internal/xhs/rpa/plan") {
+        return { status: 200, body: { plan: await this.xhsRpaTaskBootstrap.plan(requireBody(body)) } };
+      }
+      if (method === "POST" && path === "/control/v1/internal/xhs/rpa/status") {
+        return { status: 200, body: { rpa: await this.xhsRpaTaskBootstrap.status(requireBody(body)) } };
+      }
+      if (method === "POST" && path === "/control/v1/internal/xhs/rpa/disable") {
+        return { status: 200, body: { rpa: await this.xhsRpaTaskBootstrap.disable(requireBody(body)) } };
+      }
+      if (method === "POST" && path === "/control/v1/internal/xhs/rpa/manual-once") {
+        return { status: 200, body: { rpa: await this.xhsRpaTaskBootstrap.manualOnce(requireBody(body)) } };
       }
       throw new ControlPlaneError("ROUTE_NOT_FOUND", `${method} ${path} not found`, { status: 404 });
     }
@@ -752,6 +854,7 @@ export class ControlRouter {
         mission: input.mission ?? null,
         planHash: input.planHash,
         releaseId: input.releaseId ?? null,
+        sourceCommit: input.sourceCommit ?? null,
         accountFingerprint: input.accountFingerprint ?? null,
       });
       return { status: 201, body: { authority } };
@@ -835,7 +938,7 @@ export class ControlRouter {
     match = path.match(/^\/control\/v1\/exploration-authority\/([^/]+)\/permits\/([^/]+)\/consume$/);
     if (method === "POST" && match) {
       const input = requireBody(body);
-      const { permit, job } = await this.control.consumeExplorationPermit({
+      const { permit, job, budgetReservation } = await this.control.consumeExplorationPermit({
         sessionId: input.sessionId,
         token: tokenOf(input, headers),
         authorityId: decodeURIComponent(match[1]),
@@ -843,7 +946,7 @@ export class ControlRouter {
         payload: input.payload ?? null,
         freshObservation: input.freshObservation ?? null,
       });
-      return { status: 200, body: { permit, job: publicJob(job) } };
+      return { status: 200, body: { permit, job: publicJob(job), budgetReservation } };
     }
     match = path.match(/^\/control\/v1\/exploration-authority\/([^/]+)\/budget$/);
     if (method === "POST" && match) {

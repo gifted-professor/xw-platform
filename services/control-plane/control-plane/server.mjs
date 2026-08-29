@@ -89,6 +89,7 @@ export async function shutdownControlServer({ server, runtime, m6C1RuntimeOwner 
     }));
   }
   await settle(() => runtime.m6LiveEntry?.shutdown?.() ?? Promise.resolve());
+  await settle(() => runtime.xhsRpaTaskBootstrap?.close?.() ?? Promise.resolve());
   await settle(() => runtime.control.stop());
   try {
     runtime.state.close();

@@ -22,6 +22,7 @@ const capability = registry.require("xiaowei.explorer.primitive");
 const tempBase = fileURLToPath(new URL("../control-plane/runtime", import.meta.url));
 const PROVIDER = Object.freeze({
   kind: "local-pinned",
+  providerBundleDigest: "0".repeat(64),
   pythonHash: "1".repeat(64),
   modelHash: "2".repeat(64),
   scriptHash: "3".repeat(64),

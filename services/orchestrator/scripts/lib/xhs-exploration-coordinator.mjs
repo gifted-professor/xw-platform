@@ -112,6 +112,7 @@ export function createExplorationCoordinator({
   startLane,
   appendLaneRecord = null,
   closeExplorationAuthority = null,
+  verifyECorpusBeforeAcquire = null,
   laneTimeoutMs = 10 * 60 * 1000,
   releaseTimeoutMs = 10_000,
   randomUUIDFn = randomUUID,
@@ -130,6 +131,9 @@ export function createExplorationCoordinator({
   }
   if (closeExplorationAuthority !== null && typeof closeExplorationAuthority !== "function") {
     throw new TypeError("createExplorationCoordinator requires closeExplorationAuthority to be a function or null");
+  }
+  if (verifyECorpusBeforeAcquire !== null && typeof verifyECorpusBeforeAcquire !== "function") {
+    throw new TypeError("createExplorationCoordinator requires verifyECorpusBeforeAcquire to be a function or null");
   }
 
   /** One promise + a wall-clock budget; a timeout rejects with `code`. */
@@ -218,6 +222,8 @@ export function createExplorationCoordinator({
         alias,
         { laneRole: lane.laneRole, journalLength: lane.journalLength, committed: lane.committed === true },
       ])),
+      ...(view.budgetLedger ? { budgetLedger: view.budgetLedger } : {}),
+      ...(view.visionCounters ? { visionCounters: view.visionCounters } : {}),
     };
   }
 
@@ -293,6 +299,7 @@ export function createExplorationCoordinator({
     executionRunId = null,
     planHash = null,
     releaseId = null,
+    sourceCommit = null,
     accountFingerprint = null,
   } = {}) {
     // seal discipline BEFORE any session/lease/authority I/O (plan §3.2/§5.1):
@@ -301,6 +308,25 @@ export function createExplorationCoordinator({
     assertExplorationLanePair(sealed);
     if (!planHash || !/^[a-f0-9]{64}$/.test(String(planHash))) {
       throw coordinatorError("EXPLORATION_PLAN_HASH_REQUIRED", "a 64-hex planHash is required to bind the authority");
+    }
+    // R3 is the only phase that can recover visual budget.  Verify the fixed
+    // Registry artifact before acquiring either session/lease; CP repeats the
+    // same task-owned check at authority, issuance and consumption.
+    if (sealed.vision?.rolloutPhase === "R3") {
+      if (typeof verifyECorpusBeforeAcquire !== "function") {
+        throw coordinatorError("ECORPUS_INTERLOCK_NOT_CONFIGURED", "R3 pre-acquire E-Corpus verifier is not configured");
+      }
+      const gate = await verifyECorpusBeforeAcquire({
+        ref: sealed.vision.eCorpusPassRef,
+        releaseId,
+        sourceCommit,
+        providerBundleDigest: sealed.vision.provider?.providerBundleDigest,
+      });
+      if (gate?.ok !== true || gate?.status !== "PASS"
+        || gate?.artifactHash !== sealed.vision.eCorpusPassRef?.artifactHash
+        || gate?.effectiveVisualPermitBudget !== 1) {
+        throw coordinatorError("ECORPUS_VERIFICATION_INVALID", "R3 pre-acquire E-Corpus verification failed");
+      }
     }
 
     const identity = createRoutineExecutionIdentity({ executionRunId, randomUUIDFn });
@@ -388,6 +414,7 @@ export function createExplorationCoordinator({
         mission: sealed,
         planHash,
         releaseId,
+        sourceCommit,
         accountFingerprint,
       });
       if (!authority?.authorityId) {

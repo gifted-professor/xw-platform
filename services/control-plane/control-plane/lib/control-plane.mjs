@@ -51,7 +51,11 @@ import {
 } from "./open-action-executor.mjs";
 import { SingleDeviceRecipeRunner, resolveFixedRpaAlias } from "./single-device-recipe-runner.mjs";
 import { filterOverlayRecipes, resolveOverlayMode } from "./generated-overlay.mjs";
-import { createExplorationAuthorityPolicy, EXPLORATION_PROFILE } from "./xhs-exploration-authority.mjs";
+import {
+  createExplorationAuthorityPolicy,
+  EXPLORATION_BUDGET_KINDS,
+  EXPLORATION_PROFILE,
+} from "./xhs-exploration-authority.mjs";
 import {
   createExplorationPermitPolicy,
   EXPLORATION_VISUAL_NAVIGATION_ROLES,
@@ -63,6 +67,83 @@ import {
 // (V3-I07); observation-only roles (BACK/RESTORE) do not.
 const EXPLORATION_VISUAL_ROLES = EXPLORATION_VISUAL_NAVIGATION_ROLES;
 const EXPLORATION_INTERNAL_BUDGET_KINDS = new Set(["visionAnalysis", "visionPermits"]);
+const EXPLORATION_BUDGET_LEDGER_VIEW_SCHEMA_ID = "xw.xhs.exploration-budget-ledger-view.v1";
+const EXPLORATION_PROOF_CAPS = Object.freeze([
+  "reservedPrimitives",
+  "novelOpens",
+  "resultScreensPerQuery",
+  "commentScreens",
+  "visionAnalysisAttempts",
+  "visionMaxIssuedPermits",
+  "visionMaxPhysicalTaps",
+]);
+
+function explorationOperationHash(value) {
+  return sha256(`xw.xhs.exploration-budget-operation.v1:${canonicalJson(value)}`);
+}
+
+function persistedExplorationReservationReceipt(state, reservation) {
+  const persisted = state.getExplorationReservation(reservation.reservationId);
+  if (!persisted) {
+    throw new ControlPlaneError(
+      "EXPLORATION_BUDGET_RECEIPT_MISSING",
+      "persisted exploration reservation disappeared before its receipt was returned",
+      { status: 500 },
+    );
+  }
+  return {
+    reservationId: reservation.reservationId,
+    kind: reservation.kind,
+    alias: reservation.alias,
+    amount: reservation.amount,
+    used: reservation.used,
+    cap: reservation.cap,
+    state: persisted.state,
+    operationHash: persisted.detail?.operationHash ?? null,
+  };
+}
+
+function explorationBudgetLedgerView(state, authority) {
+  const caps = Object.fromEntries(EXPLORATION_PROOF_CAPS.map((name) => [
+    name,
+    Number(authority.budgets?.[name] ?? 0),
+  ]));
+  const rows = state.db.prepare(`
+    SELECT reservation_id, alias, kind, amount, state, detail_json
+    FROM exploration_reservations
+    WHERE authority_id=?
+      AND kind IN ('primitives','novelOpens','resultScreens','commentScreens','visionAnalysis','visionPermits')
+    ORDER BY created_at, reservation_id
+  `).all(authority.authorityId).map((row) => {
+    let detail = null;
+    try { detail = row.detail_json ? JSON.parse(row.detail_json) : null; } catch {}
+    return {
+      reservationId: row.reservation_id,
+      kind: row.kind,
+      capName: EXPLORATION_BUDGET_KINDS[row.kind] ?? row.kind,
+      alias: row.alias ?? null,
+      amount: Number(row.amount),
+      state: row.state,
+      operationHash: detail?.operationHash ?? null,
+    };
+  });
+  const totals = Object.fromEntries(EXPLORATION_PROOF_CAPS.map((name) => [name, 0]));
+  for (const row of rows) {
+    if (Object.hasOwn(totals, row.capName)) totals[row.capName] += row.amount;
+  }
+  const body = {
+    schemaId: EXPLORATION_BUDGET_LEDGER_VIEW_SCHEMA_ID,
+    authorityId: authority.authorityId,
+    missionHash: authority.missionHash,
+    caps,
+    rows,
+    totals,
+  };
+  return {
+    ...body,
+    ledgerHash: sha256(`${EXPLORATION_BUDGET_LEDGER_VIEW_SCHEMA_ID}:${canonicalJson(body)}`),
+  };
+}
 
 function ledgerView(row) {
   if (!row) return null;
@@ -302,6 +383,7 @@ export class ControlPlane {
     policyMode = null,
     now = Date.now,
     observeProvider = null,
+    eCorpusInterlock = null,
   }) {
     this.state = state;
     this.capabilities = capabilities;
@@ -366,7 +448,10 @@ export class ControlPlane {
     // V3 exploration (plan §5.2): hard-zero authority + single-use permit
     // policies. Fail-closed regardless of policyMode — the exploration profile
     // never inherits nonpayment_v1 softness.
-    this.explorationAuthority = createExplorationAuthorityPolicy({ state });
+    this.explorationAuthority = createExplorationAuthorityPolicy({
+      state,
+      ...(eCorpusInterlock ? { eCorpusInterlock } : {}),
+    });
     this.explorationPermits = createExplorationPermitPolicy({ state, now: this.now ?? now });
     this.rpaAlias = resolveFixedRpaAlias();
     this.recipeRuns = new SingleDeviceRecipeRunner({
@@ -2518,7 +2603,16 @@ export class ControlPlane {
     return { session, authority, binding };
   }
 
-  registerExplorationAuthority({ sessions, executionRunId, routineRunId, mission, planHash, releaseId = null, accountFingerprint = null }) {
+  registerExplorationAuthority({
+    sessions,
+    executionRunId,
+    routineRunId,
+    mission,
+    planHash,
+    releaseId = null,
+    sourceCommit = null,
+    accountFingerprint = null,
+  }) {
     for (const s of sessions ?? []) {
       const session = this.state.validateSession(s.sessionId, s.token);
       assertSessionKind(session, "capability");
@@ -2533,6 +2627,7 @@ export class ControlPlane {
       mission,
       planHash,
       releaseId,
+      sourceCommit,
       accountFingerprint,
     });
   }
@@ -2554,6 +2649,12 @@ export class ControlPlane {
     visualProof = null,
   }) {
     const { session, authority } = this.requireExplorationAuthority({ authorityId, sessionId, token });
+    if (EXPLORATION_VISUAL_ROLES.has(navigationRole)) {
+      // Re-read and verify the task-owned PASS before any budget reservation
+      // or permit insertion.  A stale/key-drifted artifact cannot spend even
+      // the first slot.
+      this.explorationAuthority.assertVisualUnlocked({ authority });
+    }
     // Build first: every role/page/payload/evidence/TTL/lane check must pass
     // before a visual issuance reservation is durably consumed.  The later
     // reserve+insert pair is not yet one SQL transaction, but malformed and
@@ -2569,13 +2670,22 @@ export class ControlPlane {
       visualProof,
     });
     if (EXPLORATION_VISUAL_ROLES.has(navigationRole)) {
+      const operationHash = explorationOperationHash({
+        authorityId: authority.authorityId,
+        missionHash: authority.missionHash,
+        alias: permit.alias,
+        kind: "visionPermits",
+        permitId: permit.permitId,
+        navigationRole,
+        page,
+      });
       this.state.reserveExplorationBudget({
         authorityId: authority.authorityId,
         missionHash: authority.missionHash,
         alias: null,
         kind: "visionPermits",
         amount: 1,
-        detail: { navigationRole, page, evidenceHash },
+        detail: { navigationRole, page, evidenceHash, operationHash },
       });
     }
     return this.explorationPermits.insertPermit(permit);
@@ -2583,6 +2693,12 @@ export class ControlPlane {
 
   async consumeExplorationPermit({ sessionId, token, authorityId, permitId, payload = null, freshObservation = null }) {
     const { session, authority } = this.requireExplorationAuthority({ authorityId, sessionId, token });
+    const pendingPermit = this.state.getExplorationPermit(permitId);
+    if (pendingPermit && EXPLORATION_VISUAL_ROLES.has(pendingPermit.navigationRole)) {
+      // Fresh verification precedes the one-shot consume and #runSessionJob,
+      // so expiry/key/release drift cannot race into physical device I/O.
+      this.explorationAuthority.assertVisualUnlocked({ authority });
+    }
     const { permit, payload: resolvedPayload } = this.explorationPermits.consumePermit({
       session,
       authority,
@@ -2590,24 +2706,43 @@ export class ControlPlane {
       requestedPayload: payload,
       freshObservation,
     });
-    // the atomic one-shot consume above is the ONLY route that precedes
-    // createJob; the job then runs the SAME formal session pipeline
+    // The one-shot permit consume is followed by the authority-global step
+    // reservation BEFORE createJob.  A final-slot race therefore consumes the
+    // losing permit conservatively but can never cross the physical-I/O
+    // boundary.  A crash after this point leaves the reservation spent and the
+    // permit unreplayable.
+    const operationHash = explorationOperationHash({
+      authorityId: authority.authorityId,
+      missionHash: authority.missionHash,
+      alias: permit.alias,
+      kind: "primitives",
+      permitId: permit.permitId,
+      navigationRole: permit.navigationRole,
+      page: permit.page,
+    });
+    const reserved = this.state.reserveExplorationBudget({
+      authorityId: authority.authorityId,
+      missionHash: authority.missionHash,
+      alias: permit.alias,
+      kind: "primitives",
+      amount: 1,
+      detail: {
+        permitId: permit.permitId,
+        navigationRole: permit.navigationRole,
+        page: permit.page,
+        operationHash,
+      },
+    });
+    const budgetReservation = persistedExplorationReservationReceipt(this.state, reserved);
+    // The job runs the same formal session pipeline only after the shared
+    // totalSteps reservation has durably succeeded.
     const job = await this.#runSessionJob(session, {
       idempotencyKey: `exploration:${permit.permitId}`,
       capabilityId: "xiaowei.explorer.primitive",
       params: resolvedPayload,
       token,
     });
-    // conservative per-permit primitive accounting (V3-I06)
-    this.state.reserveExplorationBudget({
-      authorityId: authority.authorityId,
-      missionHash: authority.missionHash,
-      alias: permit.alias,
-      kind: "primitives",
-      amount: 1,
-      detail: { permitId: permit.permitId, jobId: job.jobId },
-    });
-    return { permit, job };
+    return { permit, job, budgetReservation };
   }
 
   reserveExplorationBudget({ sessionId, token, authorityId, alias = null, kind, amount = 1, detail = null }) {
@@ -2619,7 +2754,7 @@ export class ControlPlane {
         { status: 403, details: { kind } },
       );
     }
-    return this.state.reserveExplorationBudget({
+    const reservation = this.state.reserveExplorationBudget({
       authorityId: authority.authorityId,
       missionHash: authority.missionHash,
       alias: alias ?? binding.alias,
@@ -2627,6 +2762,7 @@ export class ControlPlane {
       amount,
       detail,
     });
+    return persistedExplorationReservationReceipt(this.state, reservation);
   }
 
   reserveExplorationVisionAnalysis({ sessionId, token, authorityId, detail = null }) {
@@ -2644,14 +2780,23 @@ export class ControlPlane {
       detail,
       nowMs: this.now(),
     });
-    return this.state.reserveExplorationBudget({
+    const operationHash = explorationOperationHash({
+      authorityId: authority.authorityId,
+      missionHash: authority.missionHash,
+      alias: "03",
+      kind: "visionAnalysis",
+      frameId: normalizedDetail.frameId,
+      evidenceHash: normalizedDetail.evidenceHash,
+    });
+    const reservation = this.state.reserveExplorationBudget({
       authorityId: authority.authorityId,
       missionHash: authority.missionHash,
       alias: "03",
       kind: "visionAnalysis",
       amount: 1,
-      detail: normalizedDetail,
+      detail: { ...normalizedDetail, operationHash },
     });
+    return persistedExplorationReservationReceipt(this.state, reservation);
   }
 
   settleExplorationVisionAnalysis({ sessionId, token, authorityId, reservationId, outcome, result = null }) {
@@ -2778,6 +2923,7 @@ export class ControlPlane {
       authority,
       lanes,
       allSettled,
+      budgetLedger: explorationBudgetLedgerView(this.state, authority),
       visionCounters: this.state.getExplorationVisionCounters(authorityId),
     };
   }

@@ -16,7 +16,12 @@ import { dirname, isAbsolute, join, parse, resolve } from "node:path";
 import { ControlPlaneError } from "./errors.mjs";
 
 export const M6_C1_RUNTIME_OWNER_LOCK_FILE = ".m6-c1-runtime-owner.lock";
-const OWNER_KINDS = new Set(["CONTROL_PLANE_M6_C1", "STAGE_LIVE_WINDOW", "QUALIFICATION_BOOTSTRAP"]);
+const OWNER_KINDS = new Set([
+  "CONTROL_PLANE_M6_C1",
+  "STAGE_LIVE_WINDOW",
+  "QUALIFICATION_BOOTSTRAP",
+  "QUALIFICATION_ROTATION",
+]);
 const HELD_LOCKS = new WeakSet();
 
 function fail(code, message, details = {}) {

@@ -287,6 +287,54 @@ test("P3-A pair/seal/planHash guards reject before ANY session I/O", async () =>
   } finally { f.close(); }
 });
 
+test("R3 without the task-owned pre-acquire E-Corpus verifier creates zero sessions/leases", async () => {
+  const f = fixture();
+  try {
+    const provider = {
+      providerBundleDigest: "1".repeat(64),
+      pythonHash: "2".repeat(64),
+      modelHash: "3".repeat(64),
+      scriptHash: "4".repeat(64),
+      configHash: "5".repeat(64),
+    };
+    const ref = {
+      schemaId: "xw.xhs.e-corpus-pass-ref.v1",
+      artifactHash: "6".repeat(64),
+      bindingHash: "7".repeat(64),
+      gateEpoch: "8".repeat(64),
+      expiresAtMs: 9_999_999_999_999,
+    };
+    const { mission } = compileExplorationMission({
+      goal: "安静浏览视频笔记",
+      queries: [],
+      digestKey: digestKey(),
+      vision: { mode: "canary1", provider },
+      rolloutPhase: "R3",
+      eCorpusPassRef: ref,
+      eCorpusVerifier: () => ({
+        ok: true,
+        status: "PASS",
+        artifactHash: ref.artifactHash,
+        effectiveVisualPermitBudget: 1,
+      }),
+    });
+    await assert.rejects(
+      () => f.coordinator.startExplorationRun({
+        mission,
+        planHash: PLAN_HASH,
+        releaseId: "xw-r3-test",
+        sourceCommit: "9".repeat(40),
+      }),
+      (error) => error.code === "ECORPUS_INTERLOCK_NOT_CONFIGURED",
+    );
+    assert.deepEqual(f.track.createSessionAliases, []);
+    assert.equal(f.track.authorityCalls, 0);
+    assert.equal(f.state.listLeases().length, 0);
+  } finally {
+    await f.close();
+  }
+});
+
 test("P3-B 03 acquire failure: nothing starts, no authority, zero device action", async () => {
   const f = fixture();
   try {

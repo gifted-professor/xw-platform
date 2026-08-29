@@ -23,10 +23,33 @@ const capability = registry.require("xiaowei.explorer.primitive");
 const tempBase = fileURLToPath(new URL("../control-plane/runtime", import.meta.url));
 const PROVIDER = Object.freeze({
   kind: "local-pinned",
+  providerBundleDigest: "0".repeat(64),
   pythonHash: "1".repeat(64),
   modelHash: "2".repeat(64),
   scriptHash: "3".repeat(64),
   configHash: "4".repeat(64),
+});
+const SOURCE_COMMIT = "5".repeat(40);
+const E_CORPUS_REF = Object.freeze({
+  schemaId: "xw.xhs.e-corpus-pass-ref.v1",
+  artifactHash: "6".repeat(64),
+  bindingHash: "7".repeat(64),
+  gateEpoch: "8".repeat(64),
+  expiresAtMs: 9_999_999_999_999,
+});
+const TEST_E_CORPUS_INTERLOCK = Object.freeze({
+  verifyR3({ ref, releaseId, sourceCommit, providerBundleDigest }) {
+    assert.deepEqual(ref, E_CORPUS_REF);
+    assert.equal(releaseId, "xw-v3-offline");
+    assert.equal(sourceCommit, SOURCE_COMMIT);
+    assert.equal(providerBundleDigest, PROVIDER.providerBundleDigest);
+    return {
+      ok: true,
+      status: "PASS",
+      artifactHash: E_CORPUS_REF.artifactHash,
+      effectiveVisualPermitBudget: 1,
+    };
+  },
 });
 
 function mission() {
@@ -56,7 +79,14 @@ function mission() {
       perDeviceConcurrency: 1,
       vision: 0,
     },
-    vision: { mode: "canary1", remoteEgress: false, provider: PROVIDER },
+    vision: {
+      mode: "canary1",
+      remoteEgress: false,
+      provider: PROVIDER,
+      rolloutPhase: "R3",
+      effectiveVisualPermitBudget: 1,
+      eCorpusPassRef: E_CORPUS_REF,
+    },
     queries: ["低卡早餐"],
   };
 }
@@ -80,7 +110,7 @@ function createDevice() {
   return { state, transport };
 }
 
-function fixture({ now = Date.now } = {}) {
+function fixture({ now = Date.now, eCorpusInterlock = TEST_E_CORPUS_INTERLOCK } = {}) {
   const device = createDevice();
   const root = mkdtempSync(join(tempBase, "exploration-permit-"));
   const state = new StateStore({ dbPath: join(root, "control.db"), now });
@@ -106,6 +136,7 @@ function fixture({ now = Date.now } = {}) {
     leaseTtlMs: 60000,
     schedulerIntervalMs: 5,
     now,
+    eCorpusInterlock,
   });
   control.start();
   let counter = 0;
@@ -136,6 +167,7 @@ function fixture({ now = Date.now } = {}) {
         mission: mission(),
         planHash: "p".repeat(64),
         releaseId: "xw-v3-offline",
+        sourceCommit: SOURCE_COMMIT,
         accountFingerprint: "acct-expl",
       });
       return { s03, s04, authority };
@@ -238,11 +270,27 @@ test("permit happy path: issue → byte-exact consume → exactly one physical t
     assert.match(permit.payloadHash, /^[0-9a-f]{64}$/);
     assert.equal(permit.expiresAt - permit.issuedAt, 5000);
 
-    const { job } = await f.control.consumeExplorationPermit({
+    const { job, budgetReservation } = await f.control.consumeExplorationPermit({
       sessionId: s03.sessionId, token: s03.token, authorityId: authority.authorityId,
       permitId: permit.permitId, payload: permit.payload, freshObservation: freshObservation("VIDEO_NOTE"),
     });
     assert.ok(job);
+    assert.deepEqual({
+      kind: budgetReservation.kind,
+      alias: budgetReservation.alias,
+      amount: budgetReservation.amount,
+      used: budgetReservation.used,
+      cap: budgetReservation.cap,
+      state: budgetReservation.state,
+    }, {
+      kind: "reservedPrimitives",
+      alias: "03",
+      amount: 1,
+      used: 1,
+      cap: 80,
+      state: "reserved",
+    });
+    assert.match(budgetReservation.operationHash, /^[0-9a-f]{64}$/u);
     assert.deepEqual(f.screen.taps, [{ x: TAP_X, y: TAP_Y }]);
 
     // replay: the second consume of the same permit refuses with 409
@@ -277,6 +325,178 @@ test("permit happy path: issue → byte-exact consume → exactly one physical t
       physicalTaps: 1,
     });
   } finally { await f.close(); }
+});
+
+test("authority totalSteps exhaustion consumes the permit but refuses before physical I/O", async () => {
+  const f = fixture();
+  try {
+    const { s03, authority } = await f.registerAuthority();
+    for (let index = 0; index < 80; index += 1) {
+      f.control.reserveExplorationBudget({
+        sessionId: s03.sessionId,
+        token: s03.token,
+        authorityId: authority.authorityId,
+        alias: "03",
+        kind: "primitives",
+        amount: 1,
+        detail: {
+          operationHash: createHash("sha256").update(`pre-spent-step:${index}`).digest("hex"),
+        },
+      });
+    }
+    const permit = f.control.issueExplorationPermit({
+      sessionId: s03.sessionId,
+      token: s03.token,
+      authorityId: authority.authorityId,
+      navigationRole: "OPEN_CONTENT_CARD",
+      page: "HOME_FEED",
+      evidenceHash: evidenceHash(),
+      resolvedPayload: tapPayload(),
+    });
+    await assert.rejects(
+      () => f.control.consumeExplorationPermit({
+        sessionId: s03.sessionId,
+        token: s03.token,
+        authorityId: authority.authorityId,
+        permitId: permit.permitId,
+        payload: permit.payload,
+        freshObservation: freshObservation("HOME_FEED"),
+      }),
+      (error) => error.code === "EXPLORATION_BUDGET_EXCEEDED",
+    );
+    assert.deepEqual(f.screen.taps, [], "a failed shared step reserve cannot cross into adapter I/O");
+    assert.notEqual(f.state.getExplorationPermit(permit.permitId).consumedAt, null,
+      "the losing permit stays conservatively consumed and unreplayable");
+    assert.equal(f.state.db.prepare(
+      "SELECT COUNT(*) AS n FROM jobs WHERE idempotency_key=?",
+    ).get(`exploration:${permit.permitId}`).n, 0);
+    assert.equal(f.state.db.prepare(
+      "SELECT COUNT(*) AS n FROM exploration_reservations WHERE authority_id=? AND kind='primitives'",
+    ).get(authority.authorityId).n, 80);
+    await assert.rejects(
+      () => f.control.consumeExplorationPermit({
+        sessionId: s03.sessionId,
+        token: s03.token,
+        authorityId: authority.authorityId,
+        permitId: permit.permitId,
+        payload: permit.payload,
+        freshObservation: freshObservation("HOME_FEED"),
+      }),
+      (error) => error.code === "EXPLORATION_PERMIT_REPLAY",
+    );
+  } finally { await f.close(); }
+});
+
+test("E-Corpus expiry/drift re-checks before visual reservation and again before device I/O", async () => {
+  function mutableInterlock() {
+    const gate = { unlocked: true, calls: 0 };
+    gate.verifyR3 = ({ ref }) => {
+      gate.calls += 1;
+      if (!gate.unlocked) {
+        const error = new Error("E-Corpus stale");
+        error.code = "ECORPUS_ARTIFACT_STALE";
+        error.status = 403;
+        throw error;
+      }
+      return {
+        ok: true,
+        status: "PASS",
+        artifactHash: ref.artifactHash,
+        effectiveVisualPermitBudget: 1,
+      };
+    };
+    return gate;
+  }
+
+  const issueGate = mutableInterlock();
+  const issueFixture = fixture({ eCorpusInterlock: issueGate });
+  try {
+    const { s03, authority } = await issueFixture.registerAuthority();
+    const proof = prepareVisualProof(issueFixture, { s03, authority });
+    issueGate.unlocked = false;
+    assert.throws(
+      () => issueFixture.control.issueExplorationPermit({
+        sessionId: s03.sessionId,
+        token: s03.token,
+        authorityId: authority.authorityId,
+        navigationRole: "PAUSE_VIDEO_SAFE_ZONE",
+        page: "VIDEO_NOTE",
+        evidenceHash: evidenceHash(),
+        resolvedPayload: tapPayload(),
+        visualProof: proof,
+      }),
+      (error) => error.code === "ECORPUS_ARTIFACT_STALE",
+    );
+    assert.equal(issueFixture.state.countExplorationPermits({ authorityId: authority.authorityId }), 0);
+    assert.equal(issueFixture.state.db.prepare(
+      "SELECT COUNT(*) AS n FROM exploration_reservations WHERE authority_id=? AND kind='visionPermits'",
+    ).get(authority.authorityId).n, 0, "stale PASS must reject before issuance reservation");
+    assert.deepEqual(issueFixture.screen.taps, []);
+  } finally {
+    await issueFixture.close();
+  }
+
+  const consumeGate = mutableInterlock();
+  const consumeFixture = fixture({ eCorpusInterlock: consumeGate });
+  try {
+    const { s03, authority } = await consumeFixture.registerAuthority();
+    const proof = prepareVisualProof(consumeFixture, { s03, authority });
+    const permit = consumeFixture.control.issueExplorationPermit({
+      sessionId: s03.sessionId,
+      token: s03.token,
+      authorityId: authority.authorityId,
+      navigationRole: "PAUSE_VIDEO_SAFE_ZONE",
+      page: "VIDEO_NOTE",
+      evidenceHash: evidenceHash(),
+      resolvedPayload: tapPayload(),
+      visualProof: proof,
+    });
+    consumeGate.unlocked = false;
+    await assert.rejects(
+      () => consumeFixture.control.consumeExplorationPermit({
+        sessionId: s03.sessionId,
+        token: s03.token,
+        authorityId: authority.authorityId,
+        permitId: permit.permitId,
+        payload: permit.payload,
+        freshObservation: freshObservation("VIDEO_NOTE"),
+      }),
+      (error) => error.code === "ECORPUS_ARTIFACT_STALE",
+    );
+    assert.equal(consumeFixture.state.getExplorationPermit(permit.permitId).consumedAt, null);
+    assert.equal(consumeFixture.state.db.prepare(
+      "SELECT COUNT(*) AS n FROM jobs WHERE idempotency_key=?",
+    ).get(`exploration:${permit.permitId}`).n, 0, "stale PASS must reject before job/device I/O");
+    assert.deepEqual(consumeFixture.screen.taps, []);
+  } finally {
+    await consumeFixture.close();
+  }
+});
+
+test("absent/non-PASS E-Corpus refuses R3 authority before profile mutation or reservations", async () => {
+  const f = fixture({
+    eCorpusInterlock: {
+      verifyR3() {
+        const error = new Error("artifact absent");
+        error.code = "ECORPUS_ARTIFACT_ABSENT";
+        error.status = 403;
+        throw error;
+      },
+    },
+  });
+  try {
+    await assert.rejects(
+      () => f.registerAuthority(),
+      (error) => error.code === "ECORPUS_ARTIFACT_ABSENT",
+    );
+    assert.equal(f.state.db.prepare("SELECT COUNT(*) AS n FROM exploration_authorities").get().n, 0);
+    assert.equal(f.state.db.prepare("SELECT COUNT(*) AS n FROM exploration_reservations").get().n, 0);
+    assert.equal(f.state.db.prepare("SELECT COUNT(*) AS n FROM exploration_permits").get().n, 0);
+    assert.equal(f.state.db.prepare("SELECT COUNT(*) AS n FROM sessions WHERE profile IS NOT NULL").get().n, 0);
+    assert.deepEqual(f.screen.taps, []);
+  } finally {
+    await f.close();
+  }
 });
 
 test("visual permit is alias03/feed-only and its one global issuance budget cannot be replayed", async () => {

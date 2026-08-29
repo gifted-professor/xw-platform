@@ -462,6 +462,7 @@ export function createExplorerRoutineRuntime({
       mission,
       planHash,
       releaseId = null,
+      sourceCommit = null,
       accountFingerprint = null,
     } = {}) {
       if (!Array.isArray(sessions) || sessions.length !== 2) {
@@ -484,6 +485,7 @@ export function createExplorerRoutineRuntime({
         mission,
         planHash,
         releaseId,
+        sourceCommit,
         accountFingerprint,
       }, { fetchImpl });
       if (!payload?.authority?.authorityId) {
@@ -536,10 +538,15 @@ export function createExplorerRoutineRuntime({
         `/permits/${encodeURIComponent(permitId)}/consume`,
         { sessionId, token, payload, freshObservation },
       );
-      if (!result?.permit?.permitId || !result?.job?.jobId) {
+      if (!result?.permit?.permitId || !result?.job?.jobId
+        || !result?.budgetReservation?.reservationId) {
         throw runtimeError("EXPLORATION_PERMIT_RESPONSE_INVALID", "exploration permit consumption response is malformed", 502);
       }
-      return { permit: result.permit, job: result.job };
+      return {
+        permit: result.permit,
+        job: result.job,
+        budgetReservation: result.budgetReservation,
+      };
     },
 
     reserveExplorationBudget(input) {

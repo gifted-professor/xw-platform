@@ -3182,6 +3182,365 @@ export class StateStore {
     });
   }
 
+  // A qualification-only generation is intentionally not part of the live
+  // Gate-F promotion sequence: its OBSERVE_ONLY root was never activated and
+  // its only durable authority is a generation-0 CLOSED fence.  A later
+  // release may replace that fence only after it has expired and while the
+  // complete resource/M6-residue audit is zero.  The old and new identities
+  // are chained into the generic append-only event ledger in the same SQLite
+  // transaction as the CAS update, so rotation cannot silently erase the
+  // previous qualification root.
+  rotateM6QualificationBootstrapFence({
+    expectedFence,
+    nextEpoch,
+    locksHash,
+    packageHash,
+  } = {}) {
+    const fenceIdentity = (value) => ({
+      gateId: value?.gateId,
+      epochHash: value?.epochHash,
+      generation: value?.generation,
+      mode: value?.mode,
+      purpose: value?.purpose,
+      allowlist: value?.allowlist,
+      expiresAt: value?.expiresAt,
+      releaseId: value?.releaseId,
+      sourceCommit: value?.sourceCommit,
+      locksHash: value?.locksHash,
+    });
+    const { epochHash: _ignoredEpochHash, ...epochPayload } = nextEpoch || {};
+    const derivedEpochHash = sha256(`xw.m6-live-gate.v1:${canonicalJson(epochPayload)}`);
+    if (!expectedFence || !nextEpoch
+      || nextEpoch.schemaId !== "xw.m6-live-gate.v1"
+      || nextEpoch.mode !== "CLOSED" || nextEpoch.status !== "closed"
+      || !nextEpoch.closeoutRef || !nextEpoch.aggregateSealRef
+      || nextEpoch.epochHash !== derivedEpochHash
+      || canonicalJson(nextEpoch.allowlist) !== canonicalJson(["01"])
+      || !/^[A-Za-z0-9._-]{1,128}$/.test(nextEpoch.gateId || "")
+      || !/^[A-Za-z0-9._-]{1,128}$/.test(nextEpoch.releaseId || "")
+      || !/^[0-9a-f]{40}$/.test(nextEpoch.sourceCommit || "")
+      || !/^[0-9a-f]{64}$/.test(locksHash || "")
+      || !/^[0-9a-f]{64}$/.test(packageHash || "")) {
+      throw new ControlPlaneError(
+        "M6_QUALIFICATION_ROTATION_INPUT_INVALID",
+        "qualification rotation requires one verified alias-01 CLOSED successor",
+        { status: 409 },
+      );
+    }
+    return this.transaction(() => {
+      const current = this.getM6GateFence();
+      const expected = fenceIdentity(expectedFence);
+      const actual = fenceIdentity(current);
+      const now = Number(this.now());
+      if (!current || canonicalJson(actual) !== canonicalJson(expected)) {
+        throw new ControlPlaneError(
+          "M6_QUALIFICATION_ROTATION_CAS_MISMATCH",
+          "qualification rotation fence compare-and-swap precondition failed",
+          { status: 409 },
+        );
+      }
+      if (current.generation !== 0 || current.mode !== "CLOSED" || current.purpose !== null
+        || canonicalJson(current.allowlist) !== canonicalJson(["01"])
+        || !Number.isFinite(Date.parse(current.expiresAt))
+        || Date.parse(current.expiresAt) > now
+        || current.gateId === nextEpoch.gateId
+        || !Number.isFinite(Date.parse(nextEpoch.expiresAt))
+        || Date.parse(nextEpoch.expiresAt) <= now) {
+        throw new ControlPlaneError(
+          "M6_QUALIFICATION_ROTATION_FENCE_INELIGIBLE",
+          "only an expired generation-0 alias-01 CLOSED fence may rotate to a distinct unexpired gate",
+          { status: 409 },
+        );
+      }
+      const baseResources = this.getM6GateFResourceCounts();
+      const resources = Object.freeze({
+        ...baseResources,
+        pendingApprovals:
+          Number(this.db.prepare(
+            "SELECT COUNT(*) AS count FROM protected_commits WHERE status='waiting_authorization'",
+          ).get().count)
+          + Number(this.db.prepare(
+            "SELECT COUNT(*) AS count FROM device_runs WHERE phase='waiting_authorization'",
+          ).get().count)
+          + Number(this.db.prepare(
+            "SELECT COUNT(*) AS count FROM mission_effects WHERE status IN ('pending_authorization','waiting_authorization')",
+          ).get().count),
+      });
+      const durableResidue = Object.freeze({
+        groundedActions: Number(this.db.prepare(
+          "SELECT COUNT(*) AS count FROM device_session_actions WHERE execution_mode='m6-grounded-live-v2'",
+        ).get().count),
+        emergencyCloseConsumptions: Number(this.db.prepare("SELECT COUNT(*) AS count FROM m6_emergency_close_consumptions").get().count),
+        groundingPermits: Number(this.db.prepare("SELECT COUNT(*) AS count FROM m6_grounding_permits").get().count),
+        actionClaims: Number(this.db.prepare("SELECT COUNT(*) AS count FROM m6_action_claims").get().count),
+        groundedActionDetails: Number(this.db.prepare("SELECT COUNT(*) AS count FROM m6_grounded_action_details").get().count),
+        liveWindowAuthorizations: Number(this.db.prepare("SELECT COUNT(*) AS count FROM m6_live_window_authorization_consumptions").get().count),
+        liveScenarioClaims: Number(this.db.prepare("SELECT COUNT(*) AS count FROM m6_live_scenario_claims").get().count),
+        safetyCloseArms: Number(this.db.prepare("SELECT COUNT(*) AS count FROM m6_gate_safety_close_arms").get().count),
+      });
+      if (Object.values(resources).some((count) => !Number.isSafeInteger(count) || count !== 0)
+        || Object.values(durableResidue).some((count) => !Number.isSafeInteger(count) || count !== 0)) {
+        throw new ControlPlaneError(
+          "M6_QUALIFICATION_ROTATION_RESOURCES_NOT_ZERO",
+          "qualification rotation requires one atomic zero-resource and zero-M6-residue snapshot",
+          { status: 409, details: { resources, durableResidue } },
+        );
+      }
+      const nextIdentity = {
+        gateId: nextEpoch.gateId,
+        epochHash: nextEpoch.epochHash,
+        generation: 0,
+        mode: "CLOSED",
+        purpose: null,
+        allowlist: nextEpoch.allowlist,
+        expiresAt: nextEpoch.expiresAt,
+        releaseId: nextEpoch.releaseId,
+        sourceCommit: nextEpoch.sourceCommit,
+        locksHash,
+      };
+      const previousFenceHash = sha256(
+        `xw.m6-c1-qualification-fence.v1:${canonicalJson(actual)}`,
+      );
+      const nextFenceHash = sha256(
+        `xw.m6-c1-qualification-fence.v1:${canonicalJson(nextIdentity)}`,
+      );
+      const auditBody = {
+        schemaId: "xw.m6-c1-qualification-bootstrap-rotation-audit.v1",
+        packageHash,
+        previousFence: actual,
+        previousFenceHash,
+        nextFence: nextIdentity,
+        nextFenceHash,
+        rotatedAt: new Date(now).toISOString(),
+      };
+      const audit = {
+        ...auditBody,
+        rotationHash: sha256(
+          `xw.m6-c1-qualification-bootstrap-rotation-audit.v1:${canonicalJson(auditBody)}`,
+        ),
+      };
+      const updated = this.db.prepare(`
+        UPDATE m6_gate_fence SET
+          gate_id=?, epoch_hash=?, generation=0, mode='CLOSED', purpose=NULL,
+          allowlist_json=?, expires_at=?, release_id=?, source_commit=?, locks_hash=?, updated_at=?
+        WHERE marker='M6' AND gate_id=? AND epoch_hash=? AND generation=0 AND mode='CLOSED'
+          AND expires_at=? AND release_id=? AND source_commit=? AND locks_hash=?
+      `).run(
+        nextIdentity.gateId,
+        nextIdentity.epochHash,
+        canonicalJson(nextIdentity.allowlist),
+        nextIdentity.expiresAt,
+        nextIdentity.releaseId,
+        nextIdentity.sourceCommit,
+        nextIdentity.locksHash,
+        now,
+        actual.gateId,
+        actual.epochHash,
+        actual.expiresAt,
+        actual.releaseId,
+        actual.sourceCommit,
+        actual.locksHash,
+      );
+      if (updated.changes !== 1) {
+        throw new ControlPlaneError(
+          "M6_QUALIFICATION_ROTATION_CAS_MISMATCH",
+          "qualification rotation fence changed during the atomic update",
+          { status: 409 },
+        );
+      }
+      const eventId = this.#insertEvent({
+        jobId: null,
+        runId: null,
+        type: "m6.qualification_bootstrap.rotated",
+        payload: audit,
+        createdAt: now,
+      });
+      return Object.freeze({
+        fence: this.getM6GateFence(),
+        eventId,
+        audit: Object.freeze(audit),
+        resourceCounts: Object.freeze({ ...resources }),
+      });
+    });
+  }
+
+  // A formal release cutover may replace one still-unexpired generation-0
+  // CLOSED fence with another release's externally signed generation-0 CLOSED
+  // fence.  This is deliberately narrower than ordinary Gate promotion: both
+  // sides must be the inert alias-01 bootstrap shape and the complete live and
+  // durable M6 residue audit must be zero in the same SQLite transaction as the
+  // CAS update.  The caller is expected to operate on a stopped, private copy
+  // of control.db and to publish that copy by content address before install.
+  handoffM6ClosedFenceForCutover({
+    expectedFence,
+    nextEpoch,
+    locksHash,
+    packageHash,
+  } = {}) {
+    const fenceIdentity = (value) => ({
+      gateId: value?.gateId,
+      epochHash: value?.epochHash,
+      generation: value?.generation,
+      mode: value?.mode,
+      purpose: value?.purpose,
+      allowlist: value?.allowlist,
+      expiresAt: value?.expiresAt,
+      releaseId: value?.releaseId,
+      sourceCommit: value?.sourceCommit,
+      locksHash: value?.locksHash,
+    });
+    const { epochHash: _ignoredEpochHash, ...epochPayload } = nextEpoch || {};
+    const derivedEpochHash = sha256(`xw.m6-live-gate.v1:${canonicalJson(epochPayload)}`);
+    if (!expectedFence || !nextEpoch
+      || nextEpoch.schemaId !== "xw.m6-live-gate.v1"
+      || nextEpoch.mode !== "CLOSED" || nextEpoch.status !== "closed"
+      || !nextEpoch.closeoutRef || !nextEpoch.aggregateSealRef
+      || nextEpoch.epochHash !== derivedEpochHash
+      || canonicalJson(nextEpoch.allowlist) !== canonicalJson(["01"])
+      || !/^[A-Za-z0-9._-]{1,128}$/.test(nextEpoch.gateId || "")
+      || !/^[A-Za-z0-9._-]{1,128}$/.test(nextEpoch.releaseId || "")
+      || !/^[0-9a-f]{40}$/.test(nextEpoch.sourceCommit || "")
+      || !/^[0-9a-f]{64}$/.test(locksHash || "")
+      || !/^[0-9a-f]{64}$/.test(packageHash || "")) {
+      throw new ControlPlaneError(
+        "M6_CUTOVER_HANDOFF_INPUT_INVALID",
+        "cross-release handoff requires one verified alias-01 CLOSED target",
+        { status: 409 },
+      );
+    }
+    return this.transaction(() => {
+      const current = this.getM6GateFence();
+      const expected = fenceIdentity(expectedFence);
+      const actual = fenceIdentity(current);
+      const now = Number(this.now());
+      if (!current || canonicalJson(actual) !== canonicalJson(expected)) {
+        throw new ControlPlaneError(
+          "M6_CUTOVER_HANDOFF_CAS_MISMATCH",
+          "cross-release handoff fence compare-and-swap precondition failed",
+          { status: 409 },
+        );
+      }
+      if (current.generation !== 0 || current.mode !== "CLOSED" || current.purpose !== null
+        || canonicalJson(current.allowlist) !== canonicalJson(["01"])
+        || current.gateId === nextEpoch.gateId
+        || current.releaseId === nextEpoch.releaseId
+        || !Number.isFinite(Date.parse(current.expiresAt))
+        || Date.parse(current.expiresAt) <= now
+        || !Number.isFinite(Date.parse(nextEpoch.expiresAt))
+        || Date.parse(nextEpoch.expiresAt) <= now) {
+        throw new ControlPlaneError(
+          "M6_CUTOVER_HANDOFF_FENCE_INELIGIBLE",
+          "only a distinct release's unexpired generation-0 alias-01 CLOSED fence may be installed",
+          { status: 409 },
+        );
+      }
+      const baseResources = this.getM6GateFResourceCounts();
+      const resources = Object.freeze({
+        ...baseResources,
+        pendingApprovals:
+          Number(this.db.prepare(
+            "SELECT COUNT(*) AS count FROM protected_commits WHERE status='waiting_authorization'",
+          ).get().count)
+          + Number(this.db.prepare(
+            "SELECT COUNT(*) AS count FROM device_runs WHERE phase='waiting_authorization'",
+          ).get().count)
+          + Number(this.db.prepare(
+            "SELECT COUNT(*) AS count FROM mission_effects WHERE status IN ('pending_authorization','waiting_authorization')",
+          ).get().count),
+      });
+      const durableResidue = Object.freeze({
+        groundedActions: Number(this.db.prepare(
+          "SELECT COUNT(*) AS count FROM device_session_actions WHERE execution_mode='m6-grounded-live-v2'",
+        ).get().count),
+        emergencyCloseConsumptions: Number(this.db.prepare("SELECT COUNT(*) AS count FROM m6_emergency_close_consumptions").get().count),
+        groundingPermits: Number(this.db.prepare("SELECT COUNT(*) AS count FROM m6_grounding_permits").get().count),
+        actionClaims: Number(this.db.prepare("SELECT COUNT(*) AS count FROM m6_action_claims").get().count),
+        groundedActionDetails: Number(this.db.prepare("SELECT COUNT(*) AS count FROM m6_grounded_action_details").get().count),
+        liveWindowAuthorizations: Number(this.db.prepare("SELECT COUNT(*) AS count FROM m6_live_window_authorization_consumptions").get().count),
+        liveScenarioClaims: Number(this.db.prepare("SELECT COUNT(*) AS count FROM m6_live_scenario_claims").get().count),
+        safetyCloseArms: Number(this.db.prepare("SELECT COUNT(*) AS count FROM m6_gate_safety_close_arms").get().count),
+      });
+      if (Object.values(resources).some((count) => !Number.isSafeInteger(count) || count !== 0)
+        || Object.values(durableResidue).some((count) => !Number.isSafeInteger(count) || count !== 0)) {
+        throw new ControlPlaneError(
+          "M6_CUTOVER_HANDOFF_RESOURCES_NOT_ZERO",
+          "cross-release handoff requires one atomic zero-resource and zero-M6-residue snapshot",
+          { status: 409, details: { resources, durableResidue } },
+        );
+      }
+      const nextIdentity = {
+        gateId: nextEpoch.gateId,
+        epochHash: nextEpoch.epochHash,
+        generation: 0,
+        mode: "CLOSED",
+        purpose: null,
+        allowlist: nextEpoch.allowlist,
+        expiresAt: nextEpoch.expiresAt,
+        releaseId: nextEpoch.releaseId,
+        sourceCommit: nextEpoch.sourceCommit,
+        locksHash,
+      };
+      const auditBody = {
+        schemaId: "xw.m6-gate-f-cross-release-handoff-audit.v1",
+        packageHash,
+        previousFence: actual,
+        nextFence: nextIdentity,
+        handedOffAt: new Date(now).toISOString(),
+      };
+      const audit = {
+        ...auditBody,
+        handoffHash: sha256(
+          `xw.m6-gate-f-cross-release-handoff-audit.v1:${canonicalJson(auditBody)}`,
+        ),
+      };
+      const updated = this.db.prepare(`
+        UPDATE m6_gate_fence SET
+          gate_id=?, epoch_hash=?, generation=0, mode='CLOSED', purpose=NULL,
+          allowlist_json=?, expires_at=?, release_id=?, source_commit=?, locks_hash=?, updated_at=?
+        WHERE marker='M6' AND gate_id=? AND epoch_hash=? AND generation=0 AND mode='CLOSED'
+          AND purpose IS NULL AND allowlist_json=? AND expires_at=?
+          AND release_id=? AND source_commit=? AND locks_hash=?
+      `).run(
+        nextIdentity.gateId,
+        nextIdentity.epochHash,
+        canonicalJson(nextIdentity.allowlist),
+        nextIdentity.expiresAt,
+        nextIdentity.releaseId,
+        nextIdentity.sourceCommit,
+        nextIdentity.locksHash,
+        now,
+        actual.gateId,
+        actual.epochHash,
+        canonicalJson(actual.allowlist),
+        actual.expiresAt,
+        actual.releaseId,
+        actual.sourceCommit,
+        actual.locksHash,
+      );
+      if (updated.changes !== 1) {
+        throw new ControlPlaneError(
+          "M6_CUTOVER_HANDOFF_CAS_MISMATCH",
+          "cross-release handoff fence changed during the atomic update",
+          { status: 409 },
+        );
+      }
+      const eventId = this.#insertEvent({
+        jobId: null,
+        runId: null,
+        type: "m6.gate_f.cross_release_handoff",
+        payload: audit,
+        createdAt: now,
+      });
+      return Object.freeze({
+        fence: this.getM6GateFence(),
+        eventId,
+        audit: Object.freeze(audit),
+        resourceCounts: Object.freeze({ ...resources }),
+        durableResidue: Object.freeze({ ...durableResidue }),
+      });
+    });
+  }
+
   promoteM6GateFence({
     expectedEpochHash,
     expectedGeneration,

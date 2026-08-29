@@ -46,7 +46,9 @@ export const EXPLORATION_VISION_MIN_CONFIDENCE = 0.9;
 const VISUAL_DUMP_VERDICTS = new Set(["AMBIGUOUS_SAFE", "ABSENT_OR_INVALID"]);
 const VISUAL_EFFECT_RE = /点赞|收藏|关注|评论|发送|私信|发布|支付|购买|登录|验证码|权限|like|follow|comment|send|publish|pay/i;
 const HEX_64 = /^[a-f0-9]{64}$/;
-const PROVIDER_IDENTITY_FIELDS = Object.freeze(["pythonHash", "modelHash", "scriptHash", "configHash"]);
+const PROVIDER_IDENTITY_FIELDS = Object.freeze([
+  "providerBundleDigest", "pythonHash", "modelHash", "scriptHash", "configHash",
+]);
 const RESERVATION_DETAIL_FIELDS = new Set([
   "navigationRole", "page", "evidenceHash", "frameId", "frameHash", "capturedAt",
   "dims", "dumpVerdict", "positiveRegion", "protectedZones", "providerIdentity",

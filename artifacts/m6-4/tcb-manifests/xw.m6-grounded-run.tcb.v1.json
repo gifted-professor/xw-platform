@@ -2,7 +2,7 @@
   "schemaId": "xhs.tcb.manifest.v1",
   "schemaVersion": 1,
   "manifestId": "xw.m6-grounded-run.tcb.v1",
-  "implementationClosureHash": "12980fcbcb2fc4e47a9043e06f5085a62236341ceae4266d638d1055197f754c",
+  "implementationClosureHash": "91b8bea5f809beb07dbf1a42709f32578f00770a0749d047ea740f7563307b49",
   "contentHashProfile": "xhs.m6-grounded-run-capability-self-binding.v1",
   "paths": [
     "artifacts/m6-4/cohort-manifests/m6_4_action_smoke.json",
@@ -33,6 +33,7 @@
     "integrations/dsh-xw/src/live-worker-driver.mjs",
     "integrations/dsh-xw/src/stdio-supervisor.mjs",
     "integrations/dsh-xw/src/xw-protocol-server.mjs",
+    "packages/harness-protocol/lib/trace-store.mjs",
     "packages/harness-protocol/locks/dsh.lock.v1.json",
     "packages/kernel/contracts/open-action/action-request.v1.schema.json",
     "packages/kernel/contracts/open-action/action-result.v1.schema.json",
@@ -149,8 +150,15 @@
     "services/control-plane/control-plane/lib/transport-action-authorization.mjs",
     "services/control-plane/control-plane/lib/trusted-human-issuer.mjs",
     "services/control-plane/control-plane/lib/typed-transport.mjs",
+    "services/control-plane/control-plane/lib/windows-private-acl.mjs",
+    "services/control-plane/control-plane/lib/windows-system-tcb-acl.mjs",
+    "services/control-plane/control-plane/lib/xhs-e-corpus-pass.mjs",
+    "services/control-plane/control-plane/lib/xhs-evidence-digest-keyring.mjs",
     "services/control-plane/control-plane/lib/xhs-exploration-authority.mjs",
     "services/control-plane/control-plane/lib/xhs-exploration-permit.mjs",
+    "services/control-plane/control-plane/lib/xhs-rpa-ledger.mjs",
+    "services/control-plane/control-plane/lib/xhs-rpa-m5-runtime.mjs",
+    "services/control-plane/control-plane/lib/xhs-v3-fixed-operator-auth.mjs",
     "services/control-plane/control-plane/lib/xiaowei-transport.mjs",
     "services/control-plane/control-plane/router.mjs",
     "services/control-plane/control-plane/schema/effect-intent.schema.json",
@@ -160,6 +168,7 @@
     "services/control-plane/docs/adr/0008-mission-driven-exploration-authorization.md",
     "services/control-plane/docs/adr/0009-standing-grant-delegation.md",
     "services/control-plane/docs/adr/0010-standing-grant-discovery-session.md",
+    "services/control-plane/ops/control-plane-private-material.mjs",
     "services/control-plane/scripts/fast-operator.mjs",
     "services/control-plane/scripts/gateway-operator.mjs",
     "services/control-plane/scripts/lib/stall-progress.mjs",
@@ -170,10 +179,53 @@
     "services/control-plane/scripts/xianyu-page-classifier.mjs",
     "services/control-plane/scripts/xiaowei-http-adapter.mjs",
     "services/orchestrator/contracts/tcb.manifest.v1.schema.json",
+    "services/orchestrator/ops/_explore-lease.mjs",
+    "services/orchestrator/ops/_explore-lib.mjs",
+    "services/orchestrator/ops/_explore-session-action.mjs",
     "services/orchestrator/ops/_xhs-parse.mjs",
+    "services/orchestrator/ops/_xhs-routine-explorer-runtime.mjs",
+    "services/orchestrator/ops/_xhs-routine-vision-factory.mjs",
+    "services/orchestrator/ops/xw-adaptive-visual-tap.mjs",
+    "services/orchestrator/ops/xw-xhs-vision-pin.mjs",
+    "services/orchestrator/scripts/lib/capability-contract-hash.mjs",
+    "services/orchestrator/scripts/lib/m6/m6-contracts.mjs",
+    "services/orchestrator/scripts/lib/m6/m6-grounding-runtime.mjs",
+    "services/orchestrator/scripts/lib/m6/m6-hard-redline.mjs",
     "services/orchestrator/scripts/lib/m6/m6-live-tool-surface.mjs",
+    "services/orchestrator/scripts/lib/m6/real-vision-provider.mjs",
+    "services/orchestrator/scripts/lib/mission-reducer.mjs",
+    "services/orchestrator/scripts/lib/orchestration-store.mjs",
+    "services/orchestrator/scripts/lib/orchestration-trace-bridge.mjs",
+    "services/orchestrator/scripts/lib/task-orchestrator.mjs",
+    "services/orchestrator/scripts/lib/task-plan-capability-binding.mjs",
+    "services/orchestrator/scripts/lib/task-plan-v2.mjs",
+    "services/orchestrator/scripts/lib/work-receipt.mjs",
+    "services/orchestrator/scripts/lib/xhs-e-corpus-interlock.mjs",
+    "services/orchestrator/scripts/lib/xhs-e-corpus-registry.mjs",
+    "services/orchestrator/scripts/lib/xhs-exploration-coordinator.mjs",
+    "services/orchestrator/scripts/lib/xhs-exploration-corpus-operator.mjs",
+    "services/orchestrator/scripts/lib/xhs-exploration-mission.mjs",
+    "services/orchestrator/scripts/lib/xhs-exploration-private-runtime.mjs",
+    "services/orchestrator/scripts/lib/xhs-exploration-production-runner.mjs",
+    "services/orchestrator/scripts/lib/xhs-exploration-provider-bundle.mjs",
+    "services/orchestrator/scripts/lib/xhs-exploration-shared-budget.mjs",
+    "services/orchestrator/scripts/lib/xhs-exploration-vision-corpus.mjs",
+    "services/orchestrator/scripts/lib/xhs-exploration-vision-process.mjs",
+    "services/orchestrator/scripts/lib/xhs-exploration-vision.mjs",
+    "services/orchestrator/scripts/lib/xhs-explore-driver.mjs",
+    "services/orchestrator/scripts/lib/xhs-explore-surface.mjs",
     "services/orchestrator/scripts/lib/xhs-feed-surface.mjs",
+    "services/orchestrator/scripts/lib/xhs-goal-explore-machine.mjs",
     "services/orchestrator/scripts/lib/xhs-routine-artifact.mjs",
+    "services/orchestrator/scripts/lib/xhs-routine-plan.mjs",
+    "services/orchestrator/scripts/lib/xhs-routine-vision-navigator.mjs",
+    "services/orchestrator/scripts/lib/xhs-rpa-m5-adapter.mjs",
+    "services/orchestrator/scripts/lib/xhs-rpa-program.mjs",
+    "services/orchestrator/scripts/lib/xhs-rpa-runtime.mjs",
+    "services/orchestrator/scripts/lib/xhs-rpa-task-bootstrap.mjs",
+    "services/orchestrator/scripts/lib/xhs-v3-post-e-production-runner.mjs",
+    "services/orchestrator/scripts/lib/xhs-v3-task-bootstrap.mjs",
+    "services/orchestrator/scripts/lib/xhs-vision-shadow.mjs",
     "services/orchestrator/scripts/lib/xw-xhs-dispatcher.mjs"
   ],
   "capabilityIds": [
@@ -295,6 +347,10 @@
       {
         "path": "integrations/dsh-xw/src/xw-protocol-server.mjs",
         "sha256": "f2f3eef29b37c620484d8a1ba2c03c31576fd2a1626db183d87d4031b92d708d"
+      },
+      {
+        "path": "packages/harness-protocol/lib/trace-store.mjs",
+        "sha256": "29afe18d66d0e2fbebc48a091b2cf76af980c4902109b809902472c82889c38d"
       },
       {
         "path": "packages/harness-protocol/locks/dsh.lock.v1.json",
@@ -502,7 +558,7 @@
       },
       {
         "path": "services/control-plane/control-plane/bootstrap.mjs",
-        "sha256": "e6e93daee0c939800aaddc50158b73451764cf0c17384bd56e6a81de19ccc1e7"
+        "sha256": "b1833937dd19a9d7d70645f08b80770602fc1e2f081d4cf4493a8d7c6673e47f"
       },
       {
         "path": "services/control-plane/control-plane/lib/authorization-decision.mjs",
@@ -526,7 +582,7 @@
       },
       {
         "path": "services/control-plane/control-plane/lib/control-plane.mjs",
-        "sha256": "e58175074246237f5060beebf795ee4630ffc3f3ed73a7fa9097e30aa498e2f1"
+        "sha256": "b6ab4068d39ecb92f0d38d893a8450cdb5a65cfbded6c3cb0541973a95fa0dcc"
       },
       {
         "path": "services/control-plane/control-plane/lib/delegation-grant-policy.mjs",
@@ -582,7 +638,7 @@
       },
       {
         "path": "services/control-plane/control-plane/lib/m6-c1-runtime-owner-lock.mjs",
-        "sha256": "ef40c21fe68979150b3b30fc1f7374eaf8f31075c83020ca96d915350269d710"
+        "sha256": "a4d862b52b49225d6973cbe28662cbb1233af58a783a034864568741e039bf28"
       },
       {
         "path": "services/control-plane/control-plane/lib/m6-device-read-snapshot.mjs",
@@ -666,7 +722,7 @@
       },
       {
         "path": "services/control-plane/control-plane/lib/m6-qualification-bootstrap.mjs",
-        "sha256": "a1f8109104ec4e101418b66b59c537c9dd98f978d39b942f2a9ff0b85cee7c0f"
+        "sha256": "b071e8a4bde2b8d221fadfd75d5b513417d5b1705c63e694e97900e39b6820e8"
       },
       {
         "path": "services/control-plane/control-plane/lib/m6-typed-transport.mjs",
@@ -742,7 +798,7 @@
       },
       {
         "path": "services/control-plane/control-plane/lib/state-store.mjs",
-        "sha256": "d67c22b4adb8810db21a27780022b8490821d0dfdc936b8e0f03b5f5ad6ad844"
+        "sha256": "4646dd6e8c202f367362591e6b5ad6fdfaeb34704ba6eaa2a673e38de677684f"
       },
       {
         "path": "services/control-plane/control-plane/lib/tcb-manifest.mjs",
@@ -761,12 +817,40 @@
         "sha256": "2641ec86c5bed99947df71f1961d9d7b63c085b2566645db7701d040f1261a17"
       },
       {
+        "path": "services/control-plane/control-plane/lib/windows-private-acl.mjs",
+        "sha256": "1270e8854f2643e76e1ab120849aec278d33624b11f2c7bc19764e9a6c7015a4"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/windows-system-tcb-acl.mjs",
+        "sha256": "e9bcc86bcde13d86a58db60664d1bc256bb4596da4fb18aac8c1cd957e2363d8"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/xhs-e-corpus-pass.mjs",
+        "sha256": "613863da9f9501ab241f731d74d2d9c72742795f9812a9df2b53b5d5e791c3fe"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/xhs-evidence-digest-keyring.mjs",
+        "sha256": "3a72c986ff33280a8584d0f7e8da12e548f2e4791f8bb0d53fd7ca0344d81f7e"
+      },
+      {
         "path": "services/control-plane/control-plane/lib/xhs-exploration-authority.mjs",
-        "sha256": "6b6f81b83f27038808f32772dfee624d167f66685b9553e07eb96c642244d5da"
+        "sha256": "110d0664b31994c6b4cc365932194a661dbc0129863bcd06302bb32da5bbcee4"
       },
       {
         "path": "services/control-plane/control-plane/lib/xhs-exploration-permit.mjs",
-        "sha256": "004354f3b5a12d7850919299841537cbceecf3d8e45c06ab084b58e0a3209955"
+        "sha256": "1b5c7e382695842aecd4ce1f6837b936e9b8641470fd707f50d8a14e667a2a6b"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/xhs-rpa-ledger.mjs",
+        "sha256": "dbe7020e4cc073cec8472a756f661f415e17004e6c8669a824e205317eb034b7"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/xhs-rpa-m5-runtime.mjs",
+        "sha256": "751ec7ac0ca5d96a849b68d7a28b3c11495019f56dffd32425fb178ca869ed7d"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/xhs-v3-fixed-operator-auth.mjs",
+        "sha256": "b9d3f5baf8c5c0fc90d9ed9127e5d716691707d6168ef22da188a63b64a1805f"
       },
       {
         "path": "services/control-plane/control-plane/lib/xiaowei-transport.mjs",
@@ -774,7 +858,7 @@
       },
       {
         "path": "services/control-plane/control-plane/router.mjs",
-        "sha256": "88302c827fa6bb569ce0a9a59b0d9743bec9b67540bcd07d2b76f554a6480b6c"
+        "sha256": "0ddacd41f2f6dd940863b6d6095943d1e9cfc86832d2bfae50518c62f88bd573"
       },
       {
         "path": "services/control-plane/control-plane/schema/effect-intent.schema.json",
@@ -790,7 +874,7 @@
       },
       {
         "path": "services/control-plane/control-plane/server.mjs",
-        "sha256": "7cb74ad7c6ba97914feca7485a3b53a168ca22dae6ebdf765712aa6210868fcc"
+        "sha256": "38947f953f594e914a5633cabf8bb936a47c5770e9a180ce7ec89802525dc52d"
       },
       {
         "path": "services/control-plane/docs/adr/0008-mission-driven-exploration-authorization.md",
@@ -803,6 +887,10 @@
       {
         "path": "services/control-plane/docs/adr/0010-standing-grant-discovery-session.md",
         "sha256": "c8847383dafc76ff57e51fe8921559fe9264bc541c87cb4c2a8fe97148cebfb7"
+      },
+      {
+        "path": "services/control-plane/ops/control-plane-private-material.mjs",
+        "sha256": "4740013fbd3e1b97ab109b98f524b06ea90e90c10748f4f62f20e8d6ebeaa429"
       },
       {
         "path": "services/control-plane/scripts/fast-operator.mjs",
@@ -845,20 +933,192 @@
         "sha256": "c767bfcb50f60b69c8a24e3a07990b9c62568b0f5308e9fc11d4fabe28017eaa"
       },
       {
+        "path": "services/orchestrator/ops/_explore-lease.mjs",
+        "sha256": "664b598a4eb51fe4f69dbc932cafd0b4e40d0162348b0530622352f849c56ccd"
+      },
+      {
+        "path": "services/orchestrator/ops/_explore-lib.mjs",
+        "sha256": "1e60a4e818b471e3ac1248d6de6071301850043255ba7f110b6c452ae5ca0235"
+      },
+      {
+        "path": "services/orchestrator/ops/_explore-session-action.mjs",
+        "sha256": "9bf22cdbfb61a18459ebbb30f45cc3a195353ace337836587458680659baf439"
+      },
+      {
         "path": "services/orchestrator/ops/_xhs-parse.mjs",
         "sha256": "130c6efd0766483f958e81f59374946695d1b2490ac9d04da36f12759819b04b"
+      },
+      {
+        "path": "services/orchestrator/ops/_xhs-routine-explorer-runtime.mjs",
+        "sha256": "0fc5fc3cf5fdfdccd36a8db2cd4bbc0244c893a7eb8c2110c477b1fef07b91bc"
+      },
+      {
+        "path": "services/orchestrator/ops/_xhs-routine-vision-factory.mjs",
+        "sha256": "7fbe10384eaa9809072adc747204892efde02a0aafefe06d60dc5c753239d9c9"
+      },
+      {
+        "path": "services/orchestrator/ops/xw-adaptive-visual-tap.mjs",
+        "sha256": "5a1b6ff28d2ad756362d1d234a7ac7124b00cfcfb8043c974dfaf66c2749709b"
+      },
+      {
+        "path": "services/orchestrator/ops/xw-xhs-vision-pin.mjs",
+        "sha256": "529be8a3a8eed10b95e0f30c412713378985e4ab985ebb65fad6a11b1b3b21dd"
+      },
+      {
+        "path": "services/orchestrator/scripts/lib/capability-contract-hash.mjs",
+        "sha256": "01986de5bdbf001afb5fe111e2329edabbcc474e8261f39e8b004ed07a87c4f3"
+      },
+      {
+        "path": "services/orchestrator/scripts/lib/m6/m6-contracts.mjs",
+        "sha256": "33c8c5452fc57aa2062f365aec144c8bb508d40d29461bf663c20042cab0a1f7"
+      },
+      {
+        "path": "services/orchestrator/scripts/lib/m6/m6-grounding-runtime.mjs",
+        "sha256": "9f6a02f76d64454ad8897662647bc9c2132aafdb9bc23a66842f719cbf6f09d7"
+      },
+      {
+        "path": "services/orchestrator/scripts/lib/m6/m6-hard-redline.mjs",
+        "sha256": "b253bedac99b39babde002204045e38723158cdd374b9a310081cadbe953c036"
       },
       {
         "path": "services/orchestrator/scripts/lib/m6/m6-live-tool-surface.mjs",
         "sha256": "85730eae1b80b1c7423cdb1b988614912a3a954f14f040d8902774ec32ee0792"
       },
       {
+        "path": "services/orchestrator/scripts/lib/m6/real-vision-provider.mjs",
+        "sha256": "dd41cb69f0c0c9a4d151c48e37c6d2809bda32e1d8f5a0a1c54161a3446eaa34"
+      },
+      {
+        "path": "services/orchestrator/scripts/lib/mission-reducer.mjs",
+        "sha256": "532be1da581a636dd697d583f88548ddbf2851be0629b50b7e9fdfcb4634ce6c"
+      },
+      {
+        "path": "services/orchestrator/scripts/lib/orchestration-store.mjs",
+        "sha256": "f2a93971be1c36d3989a37f30990d7e537090fc87d7fc556ff98856a49096161"
+      },
+      {
+        "path": "services/orchestrator/scripts/lib/orchestration-trace-bridge.mjs",
+        "sha256": "7b2da18663b7717c3ddb18e3ae3e529acff236315543104d7562481fdaa4255a"
+      },
+      {
+        "path": "services/orchestrator/scripts/lib/task-orchestrator.mjs",
+        "sha256": "351867ad368cf022683884d823891c8ddb08f8298c50c71be5d79359ab92c003"
+      },
+      {
+        "path": "services/orchestrator/scripts/lib/task-plan-capability-binding.mjs",
+        "sha256": "2f31a5f3c14d357378be091fe5485d3b0cf756448b89a7edc8be966cebf9e55f"
+      },
+      {
+        "path": "services/orchestrator/scripts/lib/task-plan-v2.mjs",
+        "sha256": "5f4a17236b29efcffe446d0b993c715ca18c9540e738bc6a1489e1962327402f"
+      },
+      {
+        "path": "services/orchestrator/scripts/lib/work-receipt.mjs",
+        "sha256": "bc690f6e37621f3dd47ff68a257b3d9bfc563896c270971a86b917ee1dfa0573"
+      },
+      {
+        "path": "services/orchestrator/scripts/lib/xhs-e-corpus-interlock.mjs",
+        "sha256": "9345e73d666690a54a946c70b86e3c856a25397f31908caf51a1d51e6981cf45"
+      },
+      {
+        "path": "services/orchestrator/scripts/lib/xhs-e-corpus-registry.mjs",
+        "sha256": "5608452d327fb17deb9071d00d980b3ea570aa195c15169088f1225b0bab0de3"
+      },
+      {
+        "path": "services/orchestrator/scripts/lib/xhs-exploration-coordinator.mjs",
+        "sha256": "b6c16aa848bd95727fc533c56200f5e29dbcae762080b44bcc4a570cc43c2e08"
+      },
+      {
+        "path": "services/orchestrator/scripts/lib/xhs-exploration-corpus-operator.mjs",
+        "sha256": "0ccc533e2709ca59345939e36403017622fc59e6bc76179b02e1bd7251618bc8"
+      },
+      {
+        "path": "services/orchestrator/scripts/lib/xhs-exploration-mission.mjs",
+        "sha256": "20604b9a2c5f85f10279c7fe1d264ba75aa468c52a809e8fa87ed8882c534fb5"
+      },
+      {
+        "path": "services/orchestrator/scripts/lib/xhs-exploration-private-runtime.mjs",
+        "sha256": "1972ba38ff80b6d3cc42839fbb70ab20fa155c4ab37e9b31b856c8ef33984c5f"
+      },
+      {
+        "path": "services/orchestrator/scripts/lib/xhs-exploration-production-runner.mjs",
+        "sha256": "c57c9a5ce276196e0e5b1e3712d6a2bfa6ac3451f9f7d36f3b50bf210cf5a84d"
+      },
+      {
+        "path": "services/orchestrator/scripts/lib/xhs-exploration-provider-bundle.mjs",
+        "sha256": "8e731a38290280c9b41fd1d1763f3009cecc6ee48535a6fb9ff8bbae810f5eca"
+      },
+      {
+        "path": "services/orchestrator/scripts/lib/xhs-exploration-shared-budget.mjs",
+        "sha256": "19ef5eafd047c36af60c831b289e622d7957d413777c1c75644692120f4abe53"
+      },
+      {
+        "path": "services/orchestrator/scripts/lib/xhs-exploration-vision-corpus.mjs",
+        "sha256": "6a26a32cb93d8677bf3db59c9b543a5484a32d193c58ffe7f4ec323c2b1859ee"
+      },
+      {
+        "path": "services/orchestrator/scripts/lib/xhs-exploration-vision-process.mjs",
+        "sha256": "c1abf96fc61ad5f73084de3b81e849dade9c120b8fde9f58e1b201360e8843a3"
+      },
+      {
+        "path": "services/orchestrator/scripts/lib/xhs-exploration-vision.mjs",
+        "sha256": "29ed76b76c615344b8c468ba9bdb1dfcf40b0526115dd277ff5d9636acbfb0cf"
+      },
+      {
+        "path": "services/orchestrator/scripts/lib/xhs-explore-driver.mjs",
+        "sha256": "11e666c01553cc2f7f2694270bb30ec48868a0486a5aa0273426bfa1eb92c83c"
+      },
+      {
+        "path": "services/orchestrator/scripts/lib/xhs-explore-surface.mjs",
+        "sha256": "e2f4182a23493c3b45a7f6ef6b4d19e3c904ca7163b4e0a40556ecd220186f87"
+      },
+      {
         "path": "services/orchestrator/scripts/lib/xhs-feed-surface.mjs",
         "sha256": "2b511a65274bb089f56439adaae604c4e3f9d22eb19445f25fad880898ecf4e6"
       },
       {
+        "path": "services/orchestrator/scripts/lib/xhs-goal-explore-machine.mjs",
+        "sha256": "fde26c724055b8a985ef4410dc87690cb5dc368266c1fdbd8085446b099af38a"
+      },
+      {
         "path": "services/orchestrator/scripts/lib/xhs-routine-artifact.mjs",
         "sha256": "5dfe2d46cfb62e141aacbe86261db3f20efed186747d0ddd8d8cb959bf926e5b"
+      },
+      {
+        "path": "services/orchestrator/scripts/lib/xhs-routine-plan.mjs",
+        "sha256": "57e5798739f59ffeb6fbdb02bc8d37b28447c22e5eb77db9bdc9f5c8f3b1eeae"
+      },
+      {
+        "path": "services/orchestrator/scripts/lib/xhs-routine-vision-navigator.mjs",
+        "sha256": "1842a3b04c6760d4fac2e274df14c9e7f6d43d63694c5b1a63e1e4c478026344"
+      },
+      {
+        "path": "services/orchestrator/scripts/lib/xhs-rpa-m5-adapter.mjs",
+        "sha256": "9f4a00bf60c4385af0f50f74cd7f0599a8c0f5e0062a6924b834e090bc6b5dca"
+      },
+      {
+        "path": "services/orchestrator/scripts/lib/xhs-rpa-program.mjs",
+        "sha256": "4cf48b46a61ef4f8929521c61ed954b52e8df180715bee7bfa1c06181974422e"
+      },
+      {
+        "path": "services/orchestrator/scripts/lib/xhs-rpa-runtime.mjs",
+        "sha256": "836123a63753fc81c036f8bb4c8b1dc734af6e1405d90fb6c9ac1ceb62b5f284"
+      },
+      {
+        "path": "services/orchestrator/scripts/lib/xhs-rpa-task-bootstrap.mjs",
+        "sha256": "685060731612abcd7310d63dafa292afb2677a2fd0d18a886aadd8a3074bde8e"
+      },
+      {
+        "path": "services/orchestrator/scripts/lib/xhs-v3-post-e-production-runner.mjs",
+        "sha256": "c3336ad6e02df1046305eba43ead37d0f732673dd4443b7548af9bbfce80d80e"
+      },
+      {
+        "path": "services/orchestrator/scripts/lib/xhs-v3-task-bootstrap.mjs",
+        "sha256": "7fa2d18ead9b419ae722016270c8403f5feb2ef2a248854e5a4f650bf3d558ab"
+      },
+      {
+        "path": "services/orchestrator/scripts/lib/xhs-vision-shadow.mjs",
+        "sha256": "b92461674de6f2e28789084139e1303b439e8b92868f8c6377d590ba44bf0344"
       },
       {
         "path": "services/orchestrator/scripts/lib/xw-xhs-dispatcher.mjs",

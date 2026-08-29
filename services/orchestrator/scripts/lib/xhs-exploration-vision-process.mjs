@@ -16,13 +16,43 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { delimiter, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { tmpdir } from "node:os";
+
+import {
+  EXPLORATION_VISION_PROCESS_RESULT_SCHEMA_ID,
+  verifyExplorationVisionProviderBundle,
+  verifyPythonRuntimeClosure,
+} from "./xhs-exploration-provider-bundle.mjs";
 
 export const EXPLORATION_VISION_PROCESS_DEADLINE_CAP_MS = 8_000;
 export const EXPLORATION_VISION_PROCESS_KILL_GRACE_MS = 750;
 export const EXPLORATION_VISION_PROCESS_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 export const EXPLORATION_VISION_PROCESS_MAX_FRAME_BYTES = 12 * 1024 * 1024;
+
+const CHILD_SYSTEM_ENV_KEYS = Object.freeze([
+  "SystemRoot",
+  "WINDIR",
+  "SystemDrive",
+  "TEMP",
+  "TMP",
+  "TMPDIR",
+  "LANG",
+  "LC_ALL",
+  "LC_CTYPE",
+  "TZ",
+]);
+
+// Offline provider capability is broader than live authority. These pairs are
+// used by the no-device-I/O corpus gate. The mission/navigator/CP live
+// allowlists remain separately closed to VIDEO_NOTE/PAUSE_VIDEO_SAFE_ZONE.
+export const EXPLORATION_VISION_PROCESS_ROUTE_ROLES = Object.freeze({
+  HOME_FEED: Object.freeze(["OPEN_CONTENT_CARD"]),
+  SEARCH_RESULTS: Object.freeze(["OPEN_CONTENT_CARD"]),
+  IMAGE_NOTE: Object.freeze(["OPEN_COMMENT_PANEL"]),
+  VIDEO_NOTE: Object.freeze(["OPEN_COMMENT_PANEL", "PAUSE_VIDEO_SAFE_ZONE"]),
+  COMMENT_PANEL: Object.freeze(["BACK"]),
+});
 
 function processError(code, message, { status = 502, details = {} } = {}) {
   return Object.assign(new Error(message), {
@@ -37,6 +67,52 @@ function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
+/**
+ * Provider children never inherit the orchestrator environment. Only the
+ * minimal Windows/locale/temp keys needed to start the pinned interpreter,
+ * deterministic Python flags, and request-owned XW_VISION_* bindings cross
+ * the process boundary. Token/proxy/path/module injection variables cannot.
+ */
+export function buildExplorationVisionChildEnv(sourceEnv = {}, bindings = {}, {
+  pythonPath = null,
+  platform = process.platform,
+} = {}) {
+  const childEnv = {};
+  const sourceRows = Object.entries(sourceEnv && typeof sourceEnv === "object" ? sourceEnv : {});
+  for (const canonicalKey of CHILD_SYSTEM_ENV_KEYS) {
+    const match = sourceRows.find(([key]) => key.toLowerCase() === canonicalKey.toLowerCase());
+    if (match && match[1] !== undefined && match[1] !== null) {
+      childEnv[canonicalKey] = String(match[1]);
+    }
+  }
+  Object.assign(childEnv, {
+    PYTHONDONTWRITEBYTECODE: "1",
+    PYTHONHASHSEED: "0",
+    PYTHONIOENCODING: "utf-8",
+    PYTHONNOUSERSITE: "1",
+    PYTHONUTF8: "1",
+  });
+  if (typeof pythonPath === "string" && isAbsolute(pythonPath)) {
+    const runtimeSearch = [dirname(pythonPath)];
+    if (platform === "win32") {
+      const systemRoot = childEnv.SystemRoot ?? childEnv.WINDIR;
+      if (systemRoot) runtimeSearch.push(join(systemRoot, "System32"), systemRoot);
+    } else {
+      runtimeSearch.push("/usr/bin", "/bin");
+    }
+    // Explicitly replace PATH. Omitting it on Windows lets CreateProcess add
+    // the caller's user PATH back into the child despite the supplied env.
+    childEnv.PATH = [...new Set(runtimeSearch)].join(delimiter);
+  }
+  for (const [key, value] of Object.entries(bindings)) {
+    if (!/^XW_VISION_[A-Z0-9_]+$/.test(key) || value === undefined || value === null) {
+      throw processError("EXPLORATION_VISION_PROCESS_CONFIG_INVALID", "child bindings must be explicit XW_VISION_* values");
+    }
+    childEnv[key] = String(value);
+  }
+  return Object.freeze(childEnv);
+}
+
 function isInside(root, candidate) {
   const rel = relative(resolve(root), resolve(candidate));
   return rel !== "" && rel !== ".." && !rel.startsWith(`..\\`) && !rel.startsWith("../");
@@ -48,37 +124,67 @@ function safeRemoveStaging(root, candidate) {
 }
 
 function normalizeBounds(value) {
-  if (Array.isArray(value) && value.length === 4) {
-    const [x, y, w, h] = value.map(Number);
-    return [x, y, w, h].every(Number.isFinite) ? { x, y, w, h } : null;
-  }
-  if (!value || typeof value !== "object") return null;
-  const x = Number(value.x ?? value.left);
-  const y = Number(value.y ?? value.top);
-  const w = Number(value.w ?? value.width);
-  const h = Number(value.h ?? value.height);
-  return [x, y, w, h].every(Number.isFinite) ? { x, y, w, h } : null;
+  if (!value || typeof value !== "object" || Array.isArray(value)
+    || Object.keys(value).length !== 4
+    || Object.keys(value).some((key) => !["x", "y", "w", "h"].includes(key))) return null;
+  const { x, y, w, h } = value;
+  return [x, y, w, h].every(Number.isFinite)
+    && x >= 0 && y >= 0 && w > 0 && h > 0
+    ? { x, y, w, h }
+    : null;
 }
 
 function normalizeElements(value, capturedAt) {
-  const rows = Array.isArray(value) ? value : Array.isArray(value?.elements) ? value.elements : null;
+  const rows = Array.isArray(value) ? value : null;
   if (!rows) {
     throw processError("EXPLORATION_VISION_RESULT_INVALID", "provider result must contain an elements array");
   }
   const blocks = [];
   for (const row of rows) {
-    if (!row || typeof row.label !== "string" || !row.label.trim()) continue;
+    if (!row || typeof row !== "object" || Array.isArray(row)
+      || Object.keys(row).length !== 3
+      || Object.keys(row).some((key) => !["label", "bounds", "confidence"].includes(key))
+      || typeof row.label !== "string" || !row.label.trim()) {
+      throw processError("EXPLORATION_VISION_PROVIDER_RESULT_INVALID", "provider element fields are invalid");
+    }
     const bounds = normalizeBounds(row.bounds);
-    if (!bounds) continue;
-    const confidence = Number(row.confidence ?? row.conf ?? 0);
+    const confidence = row.confidence;
+    if (!bounds || !Number.isFinite(confidence) || confidence < 0 || confidence > 1) {
+      throw processError("EXPLORATION_VISION_PROVIDER_RESULT_INVALID", "provider element values are invalid");
+    }
     blocks.push({
       label: row.label,
       bounds,
-      confidence: Number.isFinite(confidence) ? confidence : 0,
+      confidence,
       capturedAt,
     });
   }
   return blocks;
+}
+
+function assertBoundProviderResult(parsed, { frameHash, modelHash, page, requestedRole }) {
+  const keys = ["schemaId", "schemaVersion", "frameHash", "modelHash", "page", "role", "elements"];
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)
+    || Object.keys(parsed).length !== keys.length
+    || Object.keys(parsed).some((key) => !keys.includes(key))
+    || parsed.schemaId !== EXPLORATION_VISION_PROCESS_RESULT_SCHEMA_ID
+    || parsed.schemaVersion !== 1
+    || !Array.isArray(parsed.elements)) {
+    throw processError(
+      "EXPLORATION_VISION_PROVIDER_RESULT_INVALID",
+      "provider result does not match the exact versioned result protocol",
+    );
+  }
+  if (parsed.frameHash !== frameHash) {
+    throw processError("EXPLORATION_VISION_RESULT_FRAME_MISMATCH", "provider result is bound to a different frame", { status: 409 });
+  }
+  if (parsed.modelHash !== modelHash) {
+    throw processError("EXPLORATION_VISION_RESULT_MODEL_MISMATCH", "provider result is bound to a different model", { status: 409 });
+  }
+  if (parsed.page !== page || parsed.role !== requestedRole) {
+    throw processError("EXPLORATION_VISION_RESULT_ROUTE_MISMATCH", "provider result is bound to a different page/role", { status: 409 });
+  }
+  return parsed.elements;
 }
 
 function boundedStream(stream, maxBytes, onOverflow) {
@@ -149,6 +255,56 @@ function assertConfig(config) {
   return { maxBufferBytes, timeoutMs };
 }
 
+function verifyProviderClosureBeforeUse(config) {
+  // Lightweight fixture adapters do not carry production bundle identity.
+  // Every resolved production config does, and must reproduce the complete
+  // interpreter/script/model/data closure before the analyzer becomes active.
+  // Production additionally requires an immutable SYSTEM/Administrators-only
+  // content-addressed root, so untrusted writers cannot reopen a hash/use race.
+  if (!config?.bundle) return;
+  try {
+    const dataFiles = Array.isArray(config?.pin?.data)
+      ? config.pin.data.map((row) => ({ logicalPath: row.logicalPath, path: row.path }))
+      : [];
+    const closure = verifyExplorationVisionProviderBundle({
+      manifestPath: config.bundle.manifest.path,
+      python: config.pin.python.path,
+      script: config.pin.script.path,
+      model: config.pin.model.path,
+      dataFiles,
+    });
+    if (closure.providerBundleDigest !== config.bundle.providerBundleDigest) {
+      throw new Error("providerBundleDigest mismatch");
+    }
+    verifyPythonRuntimeClosure({ python: config.pin.python.path, dataFiles });
+  } catch (error) {
+    throw processError(
+      "EXPLORATION_VISION_PROVIDER_CLOSURE_DRIFT",
+      "provider runtime closure drifted before process use",
+      { status: 409, details: { cause: error?.code ?? null } },
+    );
+  }
+}
+
+export function buildExplorationVisionProcessArgs(config, requestRoot, inputPath, resultPath) {
+  if (extname(config.pin.script.path).toLowerCase() !== ".py") {
+    return [config.pin.script.path, inputPath, "-o", resultPath];
+  }
+  // -I removes cwd/user/PYTHON* injection, -S excludes third-party installs, and the
+  // fresh private pycache prefix makes on-install __pycache__ files unreachable.
+  return [
+    "-I",
+    "-S",
+    "-B",
+    "-X",
+    `pycache_prefix=${join(requestRoot, "pycache")}`,
+    config.pin.script.path,
+    inputPath,
+    "-o",
+    resultPath,
+  ];
+}
+
 /**
  * Build an analyzer pinned to a resolved V3 provider config.
  *
@@ -164,6 +320,7 @@ export function createPinnedExplorationVisionAnalyzer(config, {
   env = process.env,
 } = {}) {
   const { maxBufferBytes, timeoutMs } = assertConfig(config);
+  verifyProviderClosureBeforeUse(config);
   if (typeof stagingRoot !== "string" || !stagingRoot.trim()) {
     throw processError("EXPLORATION_VISION_PROCESS_CONFIG_INVALID", "private staging root is required");
   }
@@ -197,7 +354,16 @@ export function createPinnedExplorationVisionAnalyzer(config, {
         { status: 400 },
       );
     }
-
+    const page = String(request.page ?? "");
+    const requestedRole = String(request.requestedRole ?? "");
+    if (!Object.hasOwn(EXPLORATION_VISION_PROCESS_ROUTE_ROLES, page)
+      || !EXPLORATION_VISION_PROCESS_ROUTE_ROLES[page].includes(requestedRole)) {
+      throw processError(
+        "EXPLORATION_VISION_REQUEST_ROUTE_INVALID",
+        "provider request page/requestedRole is outside the closed offline route set",
+        { status: 400 },
+      );
+    }
     const requestRoot = mkdtempSync(join(privateStagingRoot, "request-"));
     try { chmodSync(requestRoot, 0o700); } catch { /* see root note above */ }
     const inputPath = join(requestRoot, `${actualFrameHash}.png`);
@@ -246,18 +412,21 @@ export function createPinnedExplorationVisionAnalyzer(config, {
       try {
         child = spawnImpl(
           config.pin.python.path,
-          [config.pin.script.path, inputPath, "-o", resultPath],
+          buildExplorationVisionProcessArgs(config, requestRoot, inputPath, resultPath),
           {
             cwd: dirname(config.pin.script.path),
             shell: false,
             windowsHide: true,
             stdio: ["ignore", "pipe", "pipe"],
-            env: {
-              ...env,
+            env: buildExplorationVisionChildEnv(env, {
               XW_VISION_MODEL_PATH: config.pin.model.path,
               XW_VISION_MODEL_SHA256: config.pin.model.sha256 ?? "",
               XW_VISION_FRAME_SHA256: actualFrameHash,
-            },
+              XW_VISION_PAGE: page,
+              XW_VISION_REQUESTED_ROLE: requestedRole,
+            }, {
+              pythonPath: config.pin.python.path,
+            }),
           },
         );
       } catch (error) {
@@ -298,10 +467,13 @@ export function createPinnedExplorationVisionAnalyzer(config, {
             throw processError("EXPLORATION_VISION_PROVIDER_RESULT_LIMIT", "provider result is empty or exceeds the configured byte limit");
           }
           const parsed = JSON.parse(readFileSync(resultPath, "utf8"));
-          if (parsed?.frameHash !== undefined && parsed.frameHash !== actualFrameHash) {
-            throw processError("EXPLORATION_VISION_RESULT_FRAME_MISMATCH", "provider result is bound to a different frame", { status: 409 });
-          }
-          resolveResult(normalizeElements(parsed, Number(frame.capturedAt ?? now())));
+          const elements = assertBoundProviderResult(parsed, {
+            frameHash: actualFrameHash,
+            modelHash: config.pin.model.sha256,
+            page,
+            requestedRole,
+          });
+          resolveResult(normalizeElements(elements, Number(frame.capturedAt ?? now())));
         } catch (error) {
           reject(error?.code ? error : processError("EXPLORATION_VISION_PROVIDER_RESULT_INVALID", `provider result is invalid: ${error?.message || error}`));
         }

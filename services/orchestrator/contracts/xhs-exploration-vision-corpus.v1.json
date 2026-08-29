@@ -3,6 +3,11 @@
   "schemaVersion": 1,
   "requiredRoutes": ["HOME_FEED", "SEARCH_RESULTS", "IMAGE_NOTE", "VIDEO_NOTE", "COMMENT_PANEL"],
   "minimumDistinctFramesPerRoute": 3,
+  "provenance": {
+    "usageClass": "calibration-only",
+    "gateECountingEligible": false,
+    "captureBoundary": "pre-P5"
+  },
   "coverage": {
     "complete": false,
     "distinctFramesByRoute": {

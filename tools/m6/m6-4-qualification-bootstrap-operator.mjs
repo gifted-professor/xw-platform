@@ -6,19 +6,28 @@
 // that may snapshot/migrate the control DB or publish immutable runtime
 // artifacts.  This module never loads or creates a private key, never contacts
 // a provider, and never touches a device.
-import { DatabaseSync } from "node:sqlite";
+import { backup as sqliteBackup, DatabaseSync } from "node:sqlite";
+import { execFileSync } from "node:child_process";
+import { createServer } from "node:net";
 import {
   closeSync,
+  copyFileSync,
   constants as fsConstants,
   existsSync,
   fstatSync,
+  fsyncSync,
   lstatSync,
   mkdirSync,
   openSync,
+  readdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
 } from "node:fs";
 import {
+  basename,
   dirname,
   isAbsolute,
   join,
@@ -55,11 +64,19 @@ import {
   M6_QUALIFICATION_BOOTSTRAP_PACKAGE_SCHEMA_ID,
   M6_QUALIFICATION_BOOTSTRAP_SCENARIO_SCHEMA_ID,
   validateM6QualificationBootstrapPackage,
+  stageM6QualificationBootstrapRotationArtifacts,
 } from "../../services/control-plane/control-plane/lib/m6-qualification-bootstrap.mjs";
 import {
   deriveM6CloseoutHash,
   deriveM6EpochHash,
 } from "../../services/control-plane/control-plane/lib/m6-live-gate.mjs";
+import {
+  CURRENT_CONTROL_SCHEMA_VERSION,
+  StateStore,
+} from "../../services/control-plane/control-plane/lib/state-store.mjs";
+import {
+  normalizeM64QualificationBootstrapBindingTcb,
+} from "../../services/control-plane/control-plane/lib/m6-qualification-tcb.mjs";
 import {
   inspectRecoverableCreateOnlyPublication,
   publishRecoverableCreateOnly,
@@ -71,6 +88,8 @@ export const M64_QUALIFICATION_OPERATOR_RECEIPT_SCHEMA_ID =
   "xw.m6-c1-qualification-bootstrap-operator-receipt.v1";
 export const M64_QUALIFICATION_SIGNING_DRAFT_SCHEMA_ID =
   "xw.m6-c1-qualification-bootstrap-signing-draft.v1";
+export const M64_QUALIFICATION_ROTATION_RECEIPT_SCHEMA_ID =
+  "xw.m6-c1-qualification-bootstrap-rotation-receipt.v1";
 export const M64_QUALIFICATION_INVENTORY_SENTINEL_HASH = sha256(
   "xw.m6-c1-qualification-bootstrap.inventory-unavailable.v1",
 );
@@ -108,6 +127,140 @@ const DEFAULT_DEPENDENCIES = Object.freeze({
   validatePackage: validateM6QualificationBootstrapPackage,
   verifyCapabilitySeal: verifyM6GroundedRunCapabilitySeal,
   verifyReleaseManifest,
+});
+
+const QUALIFICATION_ROTATION_TASKS = Object.freeze([
+  "XW Platform Control Plane",
+  "XW Platform Orchestrator",
+  "XW Platform FastOperator 03",
+  "XW Platform FastOperator 04",
+]);
+const QUALIFICATION_ROTATION_PORTS = Object.freeze([17920, 17930]);
+
+function inspectNativeQualificationRuntimeStopped({ includePorts = true } = {}) {
+  if (process.platform !== "win32") {
+    operatorError(
+      "M64_QUALIFICATION_ROTATION_STOP_UNPROVEN",
+      "native qualification rotation stop proof is available only on Windows",
+    );
+  }
+  const powershell = join(
+    process.env.SystemRoot || process.env.WINDIR || "C:\\Windows",
+    "System32",
+    "WindowsPowerShell",
+    "v1.0",
+    "powershell.exe",
+  );
+  const script = [
+    "$ErrorActionPreference='Stop'",
+    "$names=@(ConvertFrom-Json $args[0])",
+    "$ports=@(ConvertFrom-Json $args[1])",
+    "$tasks=@()",
+    "foreach($name in $names){",
+    "  $rows=@(Get-ScheduledTask -TaskName ([string]$name) -ErrorAction SilentlyContinue)",
+    "  if($rows.Count -gt 1){ throw ('TASK_IDENTITY_AMBIGUOUS:' + $name) }",
+    "  if($rows.Count -eq 0){ $tasks += [ordered]@{name=[string]$name;state='ABSENT'}; continue }",
+    "  $state=[string]$rows[0].State",
+    "  if($state -ne 'Ready' -and $state -ne 'Disabled'){ throw ('TASK_NOT_STOPPED:' + $name + ':' + $state) }",
+    "  $tasks += [ordered]@{name=[string]$name;state=$state}",
+    "}",
+    "$free=@()",
+    "foreach($port in $ports){",
+    "  $listener=[System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback,[int]$port)",
+    "  try { $listener.Server.ExclusiveAddressUse=$true; $listener.Start(); $free += [int]$port }",
+    "  catch { throw ('LISTENER_NOT_STOPPED:' + [string]$port) }",
+    "  finally { try { $listener.Stop() } catch {} }",
+    "}",
+    "[ordered]@{tasks=$tasks;exclusivePorts=$free} | ConvertTo-Json -Compress -Depth 4",
+  ].join("; ");
+  try {
+    const raw = execFileSync(
+      powershell,
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        script,
+        JSON.stringify(QUALIFICATION_ROTATION_TASKS),
+        JSON.stringify(includePorts ? QUALIFICATION_ROTATION_PORTS : []),
+      ],
+      {
+        encoding: "utf8",
+        windowsHide: true,
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: 30_000,
+      },
+    );
+    const proof = JSON.parse(raw.trim());
+    if (!Array.isArray(proof.tasks) || proof.tasks.length !== QUALIFICATION_ROTATION_TASKS.length
+      || proof.tasks.some((row, index) => row?.name !== QUALIFICATION_ROTATION_TASKS[index]
+        || !["ABSENT", "Disabled", "Ready"].includes(row?.state))
+      || !Array.isArray(proof.exclusivePorts)
+      || canonicalJson(proof.exclusivePorts) !== canonicalJson(
+        includePorts ? QUALIFICATION_ROTATION_PORTS : [],
+      )) {
+      operatorError(
+        "M64_QUALIFICATION_ROTATION_STOP_UNPROVEN",
+        "scheduled-task/listener stop proof was incomplete",
+      );
+    }
+    return Object.freeze({
+      tasks: Object.freeze(proof.tasks.map((row) => Object.freeze({ ...row }))),
+      exclusivePorts: Object.freeze([...proof.exclusivePorts]),
+    });
+  } catch (error) {
+    if (error?.code?.startsWith?.("M64_QUALIFICATION_")) throw error;
+    operatorError(
+      "M64_QUALIFICATION_ROTATION_STOP_UNPROVEN",
+      "control-plane tasks or listeners could not be proven stopped",
+      { cause: error?.code ?? error?.message ?? null },
+    );
+  }
+}
+
+const DEFAULT_ROTATION_DEPENDENCIES = Object.freeze({
+  ...DEFAULT_DEPENDENCIES,
+  inspectRuntimeStopped: inspectNativeQualificationRuntimeStopped,
+  now: Date.now,
+  async acquireAuxiliaryPortGuard({ host = "127.0.0.1", port = 17930 } = {}) {
+    const server = createServer();
+    await new Promise((resolveListen, reject) => {
+      server.once("error", reject);
+      server.listen({ host, port, exclusive: true }, resolveListen);
+    }).catch((cause) => {
+      try { server.close(); } catch {}
+      operatorError(
+        "M64_QUALIFICATION_ROTATION_STOP_UNPROVEN",
+        "qualification rotation could not retain exclusive ownership of the registry listener",
+        { cause: cause?.code ?? null },
+      );
+    });
+    return Object.freeze({
+      async release() {
+        await new Promise((resolveClose, rejectClose) => server.close((error) => (
+          error ? rejectClose(error) : resolveClose()
+        )));
+      },
+    });
+  },
+  async snapshotRotationDatabase({ sourcePath, destinationPath }) {
+    const source = new DatabaseSync(
+      `${pathToFileURL(sourcePath).href}?mode=ro&immutable=1`,
+      { readOnly: true },
+    );
+    try {
+      await sqliteBackup(source, destinationPath);
+    } finally {
+      source.close();
+    }
+    return Object.freeze({
+      sourcePath: resolve(sourcePath),
+      destinationPath: resolve(destinationPath),
+    });
+  },
+  stageArtifacts: stageM6QualificationBootstrapRotationArtifacts,
+  sealQualificationBinding: normalizeM64QualificationBootstrapBindingTcb,
+  stateFactory: (options) => new StateStore(options),
 });
 
 function operatorError(code, message, details = undefined) {
@@ -396,13 +549,16 @@ function inspectControlDatabase(dbPath, nowMs) {
   const immutableUri = `${pathToFileURL(file.path).href}?mode=ro&immutable=1`;
   const db = new DatabaseSync(immutableUri, { readOnly: true });
   try {
+    const quickCheck = db.prepare("PRAGMA quick_check").get().quick_check;
     const integrity = db.prepare("PRAGMA integrity_check").get().integrity_check;
     const userVersion = Number(db.prepare("PRAGMA user_version").get().user_version);
-    if (integrity !== "ok" || ![18, 20].includes(userVersion)) {
+    const supportedVersion = userVersion === 18
+      || (userVersion >= 20 && userVersion <= CURRENT_CONTROL_SCHEMA_VERSION);
+    if (quickCheck !== "ok" || integrity !== "ok" || !supportedVersion) {
       operatorError(
         "M64_QUALIFICATION_OPERATOR_DB_INVALID",
-        "qualification bootstrap requires one intact v18 source or exact v20 replay database",
-        { integrity, userVersion },
+        `qualification bootstrap requires one intact v18 source or supported v20-v${CURRENT_CONTROL_SCHEMA_VERSION} replay database`,
+        { quickCheck, integrity, userVersion },
       );
     }
     const tables = new Set(
@@ -413,6 +569,10 @@ function inspectControlDatabase(dbPath, nowMs) {
       sessions: tableCount(db, tables, "sessions", ` WHERE expires_at>${Number(nowMs)}`),
       leases: tableCount(db, tables, "leases", ` WHERE expires_at>${Number(nowMs)}`),
       actionCount: tableCount(db, tables, "device_session_actions", " WHERE execution_mode='m6-grounded-live-v2'"),
+      pendingApprovals:
+        tableCount(db, tables, "protected_commits", " WHERE status='waiting_authorization'")
+        + tableCount(db, tables, "device_runs", " WHERE phase='waiting_authorization'")
+        + tableCount(db, tables, "mission_effects", " WHERE status IN ('pending_authorization','waiting_authorization')"),
     });
     const durableM6Tables = [
       "m6_emergency_close_consumptions", "m6_grounding_permits", "m6_action_claims",
@@ -437,12 +597,32 @@ function inspectControlDatabase(dbPath, nowMs) {
         "control database changed or acquired a WAL boundary during read-only preflight",
       );
     }
+    const fenceRow = tables.has("m6_gate_fence")
+      ? db.prepare("SELECT * FROM m6_gate_fence WHERE marker='M6'").get()
+      : null;
+    const fence = fenceRow
+      ? Object.freeze({
+        gateId: fenceRow.gate_id,
+        epochHash: fenceRow.epoch_hash,
+        generation: Number(fenceRow.generation),
+        mode: fenceRow.mode,
+        purpose: fenceRow.purpose,
+        allowlist: JSON.parse(fenceRow.allowlist_json),
+        expiresAt: fenceRow.expires_at,
+        releaseId: fenceRow.release_id,
+        sourceCommit: fenceRow.source_commit,
+        locksHash: fenceRow.locks_hash,
+      })
+      : null;
     return Object.freeze({
       path: file.path,
       sha256: file.sha256,
+      quickCheck,
+      integrityCheck: integrity,
       userVersion,
       resources,
       durableResidue,
+      fence,
     });
   } finally {
     db.close();
@@ -606,6 +786,980 @@ export function planM64QualificationBootstrap({
   });
 }
 
+function qualificationFenceIdentity(value) {
+  if (!value) return null;
+  return Object.freeze({
+    gateId: value.gateId,
+    epochHash: value.epochHash,
+    generation: value.generation,
+    mode: value.mode,
+    purpose: value.purpose,
+    allowlist: value.allowlist,
+    expiresAt: value.expiresAt,
+    releaseId: value.releaseId,
+    sourceCommit: value.sourceCommit,
+    locksHash: value.locksHash,
+  });
+}
+
+function qualificationFenceHash(value) {
+  return sha256(`xw.m6-c1-qualification-fence.v1:${canonicalJson(qualificationFenceIdentity(value))}`);
+}
+
+function loadExpiredQualificationIdentity({
+  runtimeRoot,
+  issuerAllowlistPath,
+  database,
+  nextPackage,
+  nowMs,
+  dependencies,
+}) {
+  const fence = qualificationFenceIdentity(database.fence);
+  if (database.userVersion < 20 || database.userVersion > CURRENT_CONTROL_SCHEMA_VERSION || !fence
+    || fence.generation !== 0 || fence.mode !== "CLOSED" || fence.purpose !== null
+    || canonicalJson(fence.allowlist) !== canonicalJson(["01"])
+    || !HASH.test(fence.epochHash ?? "") || !HASH.test(fence.locksHash ?? "")
+    || !Number.isFinite(Date.parse(fence.expiresAt ?? ""))
+    || Date.parse(fence.expiresAt) > nowMs
+    || fence.gateId === nextPackage.gateId) {
+    operatorError(
+      "M64_QUALIFICATION_ROTATION_FENCE_INELIGIBLE",
+      `rotation requires one expired supported generation-0 alias-01 CLOSED fence and a distinct successor gate`,
+    );
+  }
+  const paths = Object.freeze({
+    bindingPath: join(runtimeRoot, BINDING_RELATIVE_PATH),
+    gateRoot: join(runtimeRoot, "m6-gate", fence.gateId),
+    pointerPath: join(runtimeRoot, "m6-gate", fence.gateId, "current.json"),
+    receiptRoot: join(runtimeRoot, RECEIPT_DIRECTORY),
+  });
+  const bindingFile = readPlainJson(paths.bindingPath, "expired qualification binding", {
+    controlledRoot: runtimeRoot,
+  });
+  exactObject(
+    bindingFile.value,
+    [
+      "gateFArtifactInventoryHash", "gateFArtifactInventoryPath", "gateId",
+      "gateIssuerAllowlistPath", "releaseId", "releaseManifestSha256", "schemaId",
+      "sourceCommit", "sourceReleaseRoot",
+    ],
+    "M64_QUALIFICATION_ROTATION_OLD_IDENTITY_INVALID",
+    "expired qualification binding",
+  );
+  if (bindingFile.value.schemaId !== "xw.runtime.m6-c1-qualification-bootstrap.v1"
+    || bindingFile.value.gateId !== fence.gateId
+    || bindingFile.value.releaseId !== fence.releaseId
+    || bindingFile.value.sourceCommit !== fence.sourceCommit
+    || !samePath(bindingFile.value.gateIssuerAllowlistPath, issuerAllowlistPath)
+    || bindingFile.value.gateFArtifactInventoryHash !== M64_QUALIFICATION_INVENTORY_SENTINEL_HASH) {
+    operatorError(
+      "M64_QUALIFICATION_ROTATION_OLD_IDENTITY_INVALID",
+      "expired binding does not reproduce the database fence identity",
+    );
+  }
+  const pointerFile = readPlainJson(paths.pointerPath, "expired qualification pointer", {
+    controlledRoot: runtimeRoot,
+  });
+  exactObject(
+    pointerFile.value,
+    ["chain", "generation", "promotedAt", "tailEpochHash"],
+    "M64_QUALIFICATION_ROTATION_OLD_IDENTITY_INVALID",
+    "expired qualification pointer",
+  );
+  if (pointerFile.value.generation !== 0 || pointerFile.value.tailEpochHash !== fence.epochHash
+    || !Array.isArray(pointerFile.value.chain) || pointerFile.value.chain.length !== 2
+    || pointerFile.value.chain[1] !== fence.epochHash) {
+    operatorError(
+      "M64_QUALIFICATION_ROTATION_OLD_IDENTITY_INVALID",
+      "expired pointer does not reproduce the generation-0 fence",
+    );
+  }
+  const packageRoot = join(paths.gateRoot, "qualification-bootstrap");
+  assertPlainDirectory(packageRoot, "expired qualification package root");
+  const packageNames = readdirSync(packageRoot)
+    .filter((name) => /^[0-9a-f]{64}\.package\.json$/u.test(name));
+  if (packageNames.length !== 1) {
+    operatorError(
+      "M64_QUALIFICATION_ROTATION_OLD_IDENTITY_INVALID",
+      "expired gate must retain exactly one immutable bootstrap package",
+    );
+  }
+  const packageFile = readPlainJson(
+    join(packageRoot, packageNames[0]),
+    "expired qualification package",
+    { controlledRoot: runtimeRoot },
+  );
+  assertNoSecretMaterial(packageFile.value, "expired qualification package");
+  const historicalNow = Date.parse(packageFile.value?.promotedAt ?? "");
+  if (!Number.isFinite(historicalNow) || historicalNow > nowMs) {
+    operatorError(
+      "M64_QUALIFICATION_ROTATION_OLD_IDENTITY_INVALID",
+      "expired package has no bounded historical verification instant",
+    );
+  }
+  const verifiedOld = dependencies.validatePackage({
+    package: packageFile.value,
+    issuerAllowlistPath,
+    m6Root: runtimeRoot,
+    nowMs: historicalNow,
+  });
+  const oldLocksHash = sha256(
+    `xw.m6-locks.v1:${canonicalJson(verifiedOld.closedEpoch.lockHashes)}`,
+  );
+  if (verifiedOld.package.gateId !== fence.gateId
+    || verifiedOld.package.releaseId !== fence.releaseId
+    || verifiedOld.package.sourceCommit !== fence.sourceCommit
+    || verifiedOld.closedEpoch.epochHash !== fence.epochHash
+    || basename(packageFile.path) !== `${verifiedOld.package.packageHash}.package.json`
+    || canonicalJson(pointerFile.value.chain) !== canonicalJson([
+      verifiedOld.rootEpoch.epochHash,
+      verifiedOld.closedEpoch.epochHash,
+    ])
+    || pointerFile.value.promotedAt !== verifiedOld.package.promotedAt
+    || oldLocksHash !== fence.locksHash
+    || verifiedOld.package.resourceSnapshot.actionCount !== 0) {
+    operatorError(
+      "M64_QUALIFICATION_ROTATION_OLD_IDENTITY_INVALID",
+      "expired signed package does not reproduce the zero-action database fence",
+    );
+  }
+  assertPlainDirectory(paths.receiptRoot, "qualification receipt root");
+  const receipts = readdirSync(paths.receiptRoot)
+    .filter((name) => /^[0-9a-f]{64}\.json$/u.test(name))
+    .map((name) => readPlainJson(join(paths.receiptRoot, name), "qualification operator receipt", {
+      controlledRoot: runtimeRoot,
+    }))
+    .filter((entry) => entry.value?.gateId === fence.gateId
+      && entry.value?.packageHash === verifiedOld.package.packageHash);
+  if (receipts.length !== 1) {
+    operatorError(
+      "M64_QUALIFICATION_ROTATION_OLD_IDENTITY_INVALID",
+      "expired gate must retain exactly one matching operator receipt",
+    );
+  }
+  const receipt = receipts[0];
+  const receiptBody = without(receipt.value, "receiptHash");
+  const supportedReceiptSchema = receipt.value.schemaId === M64_QUALIFICATION_OPERATOR_RECEIPT_SCHEMA_ID
+    || receipt.value.schemaId === M64_QUALIFICATION_ROTATION_RECEIPT_SCHEMA_ID;
+  if (!supportedReceiptSchema
+    || receipt.value.receiptHash !== sha256(
+      `${receipt.value.schemaId}:${canonicalJson(receiptBody)}`,
+    )
+    || basename(receipt.path) !== `${receipt.value.receiptHash}.json`
+    || receipt.value.closedEpochHash !== fence.epochHash
+    || receipt.value.generation !== 0 || receipt.value.mode !== "CLOSED"
+    || receipt.value.actionCount !== 0
+    || receipt.value.bindingSha256 !== bindingFile.sha256
+    || receipt.value.releaseManifestSha256 !== bindingFile.value.releaseManifestSha256
+    || !samePath(receipt.value.bindingPath, bindingFile.path)
+    || !samePath(
+      receipt.value.gateFArtifactInventoryPath,
+      bindingFile.value.gateFArtifactInventoryPath,
+    )) {
+    operatorError(
+      "M64_QUALIFICATION_ROTATION_OLD_IDENTITY_INVALID",
+      "expired operator receipt hash/fence identity is invalid",
+    );
+  }
+  return Object.freeze({
+    fence,
+    fenceHash: qualificationFenceHash(fence),
+    binding: bindingFile.value,
+    bindingBytes: bindingFile.bytes,
+    bindingSha256: bindingFile.sha256,
+    package: verifiedOld.package,
+    packagePath: packageFile.path,
+    packageSha256: packageFile.sha256,
+    pointer: pointerFile.value,
+    pointerSha256: pointerFile.sha256,
+    receipt: receipt.value,
+    receiptPath: receipt.path,
+    receiptSha256: receipt.sha256,
+    paths,
+  });
+}
+
+export function planM64QualificationBootstrapRotation({
+  bootstrapPackagePath,
+  issuerAllowlistPath,
+  releaseRoot,
+  runtimeRoot,
+  snapshotRoot,
+} = {}, dependencies = {}) {
+  const deps = Object.freeze({ ...DEFAULT_ROTATION_DEPENDENCIES, ...dependencies });
+  const nowMs = Number(deps.now());
+  if (!Number.isFinite(nowMs)) {
+    operatorError(
+      "M64_QUALIFICATION_ROTATION_CLOCK_INVALID",
+      "rotation requires the bounded operator clock",
+    );
+  }
+  const stopped = deps.inspectRuntimeStopped({ includePorts: true });
+  const runtime = assertPlainDirectory(runtimeRoot, "runtime root");
+  const paths = expectedRuntimePaths(runtime);
+  assertSentinelsUnavailable(paths);
+  const packageFile = readPlainJson(
+    bootstrapPackagePath,
+    "externally signed rotation package",
+  );
+  assertNoSecretMaterial(packageFile.value, "externally signed rotation package");
+  const issuerPath = absolutePath(issuerAllowlistPath, "gate issuer allowlist");
+  if (!within(runtime, issuerPath)) {
+    operatorError(
+      "M64_QUALIFICATION_OPERATOR_ISSUER_REBOUND",
+      "gate issuer allowlist must be rooted in the exact runtime",
+    );
+  }
+  const issuerFile = readPlainJson(issuerPath, "gate issuer allowlist", {
+    controlledRoot: runtime,
+  });
+  assertNoSecretMaterial(issuerFile.value, "gate issuer allowlist");
+  const verifiedPackage = deps.validatePackage({
+    package: packageFile.value,
+    issuerAllowlistPath: issuerPath,
+    m6Root: runtime,
+    nowMs,
+  });
+  const issuerAfterValidation = readPlainBytes(issuerPath, "gate issuer allowlist", {
+    controlledRoot: runtime,
+  });
+  if (!issuerAfterValidation.bytes.equals(issuerFile.bytes)) {
+    operatorError(
+      "M64_QUALIFICATION_OPERATOR_ISSUER_RACE",
+      "gate issuer allowlist changed while the rotation package was verified",
+    );
+  }
+  const release = verifyReleaseAndTcb({ releaseRoot, package: verifiedPackage.package }, deps);
+  const database = inspectControlDatabase(paths.controlDbPath, nowMs);
+  if (database.userVersion < 20 || database.userVersion > CURRENT_CONTROL_SCHEMA_VERSION) {
+    operatorError(
+      "M64_QUALIFICATION_ROTATION_DB_VERSION_INVALID",
+      `rotation requires a supported v20-v${CURRENT_CONTROL_SCHEMA_VERSION} qualification database, not a v18 migration source`,
+    );
+  }
+  const backupRoot = validateSnapshotRoot({
+    snapshotRoot,
+    runtimeRoot: runtime,
+    dbPath: paths.controlDbPath,
+  });
+  const previous = loadExpiredQualificationIdentity({
+    runtimeRoot: runtime,
+    issuerAllowlistPath: issuerPath,
+    database,
+    nextPackage: verifiedPackage.package,
+    nowMs,
+    dependencies: deps,
+  });
+  const binding = buildM6QualificationBootstrapBinding({
+    package: verifiedPackage.package,
+    sourceReleaseRoot: release.root,
+    releaseManifestSha256: release.manifestSha256,
+    gateIssuerAllowlistPath: issuerPath,
+    gateFArtifactInventoryPath: paths.sentinelPath,
+    gateFArtifactInventoryHash: M64_QUALIFICATION_INVENTORY_SENTINEL_HASH,
+  });
+  const bindingBytes = jsonBytes(binding);
+  const bindingSha256 = sha256(bindingBytes);
+  if (bindingSha256 === previous.bindingSha256) {
+    operatorError(
+      "M64_QUALIFICATION_ROTATION_TARGET_INVALID",
+      "rotation successor binding must differ from the expired binding",
+    );
+  }
+  const nextFence = qualificationFenceIdentity({
+    gateId: verifiedPackage.package.gateId,
+    epochHash: verifiedPackage.closedEpoch.epochHash,
+    generation: 0,
+    mode: "CLOSED",
+    purpose: null,
+    allowlist: verifiedPackage.closedEpoch.allowlist,
+    expiresAt: verifiedPackage.closedEpoch.expiresAt,
+    releaseId: verifiedPackage.package.releaseId,
+    sourceCommit: verifiedPackage.package.sourceCommit,
+    locksHash: sha256(
+      `xw.m6-locks.v1:${canonicalJson(verifiedPackage.closedEpoch.lockHashes)}`,
+    ),
+  });
+  const rotationId = sha256(`xw.m6-c1-qualification-bootstrap-rotation.v1:${canonicalJson({
+    previousFenceHash: previous.fenceHash,
+    nextFenceHash: qualificationFenceHash(nextFence),
+    packageHash: verifiedPackage.package.packageHash,
+    bindingSha256,
+  })}`);
+  const archiveRoot = join(runtime, "qualification-bootstrap", "rotations", rotationId);
+  assertPlainAncestors(archiveRoot, "qualification rotation archive", {
+    allowMissing: true,
+    includeTarget: true,
+  });
+  const snapshotLabel = `m6-c1-rotation-${rotationId.slice(0, 16)}`;
+  const body = {
+    ok: true,
+    schemaId: "xw.m6-c1-qualification-bootstrap-rotation-preflight.v1",
+    executed: false,
+    rotationId,
+    plannedAt: new Date(nowMs).toISOString(),
+    previousFence: previous.fence,
+    previousFenceHash: previous.fenceHash,
+    nextFence,
+    nextFenceHash: qualificationFenceHash(nextFence),
+    packageHash: verifiedPackage.package.packageHash,
+    packageSha256: packageFile.sha256,
+    issuerAllowlistSha256: issuerFile.sha256,
+    releaseManifestSha256: release.manifestSha256,
+    implementationClosureHash: release.seal.implementationClosureHash,
+    tcbManifestRef: release.seal.tcbManifestRef,
+    databaseSha256: database.sha256,
+    databaseVersion: database.userVersion,
+    databaseQuickCheck: database.quickCheck,
+    resourceCounts: database.resources,
+    durableM6Residue: database.durableResidue,
+    stoppedRuntime: stopped,
+    previousBindingSha256: previous.bindingSha256,
+    nextBindingSha256: bindingSha256,
+    previousPackageHash: previous.package.packageHash,
+    previousPointerSha256: previous.pointerSha256,
+    previousReceiptHash: previous.receipt.receiptHash,
+    archiveRoot,
+    snapshotRoot: backupRoot,
+    snapshotLabel,
+    writesPerformed: 0,
+    privateKeyAccessed: false,
+    providerAccessed: false,
+    deviceAccessed: false,
+    networkAccessed: false,
+  };
+  return Object.freeze({
+    ...body,
+    preflightHash: sha256(`${body.schemaId}:${canonicalJson(body)}`),
+    binding,
+    bindingBytes,
+    package: verifiedPackage.package,
+    previous,
+    paths,
+  });
+}
+
+function inspectRotationSnapshot(path, expectedFence, expectedVersion) {
+  const file = readPlainBytes(path, "qualification rotation database snapshot", {
+    maxBytes: 4 * 1024 * 1024 * 1024,
+  });
+  if (existsSync(`${file.path}-wal`) || existsSync(`${file.path}-shm`)) {
+    operatorError(
+      "M64_QUALIFICATION_ROTATION_SNAPSHOT_INVALID",
+      "rotation snapshot must be one standalone SQLite database",
+    );
+  }
+  const db = new DatabaseSync(`${pathToFileURL(file.path).href}?mode=ro&immutable=1`, {
+    readOnly: true,
+  });
+  try {
+    const quickCheck = db.prepare("PRAGMA quick_check").get().quick_check;
+    const integrityCheck = db.prepare("PRAGMA integrity_check").get().integrity_check;
+    const userVersion = Number(db.prepare("PRAGMA user_version").get().user_version);
+    const row = db.prepare("SELECT * FROM m6_gate_fence WHERE marker='M6'").get();
+    const fence = row ? qualificationFenceIdentity({
+      gateId: row.gate_id,
+      epochHash: row.epoch_hash,
+      generation: Number(row.generation),
+      mode: row.mode,
+      purpose: row.purpose,
+      allowlist: JSON.parse(row.allowlist_json),
+      expiresAt: row.expires_at,
+      releaseId: row.release_id,
+      sourceCommit: row.source_commit,
+      locksHash: row.locks_hash,
+    }) : null;
+    if (quickCheck !== "ok" || integrityCheck !== "ok" || userVersion !== expectedVersion
+      || canonicalJson(fence) !== canonicalJson(expectedFence)) {
+      operatorError(
+        "M64_QUALIFICATION_ROTATION_SNAPSHOT_INVALID",
+        "rotation snapshot did not reproduce the exact old fence and database version",
+      );
+    }
+    return Object.freeze({
+      path: file.path,
+      sha256: file.sha256,
+      sizeBytes: file.bytes.byteLength,
+      quickCheck,
+      integrityCheck,
+      userVersion,
+      fence,
+    });
+  } finally {
+    db.close();
+  }
+}
+
+async function createQualificationRotationSnapshots(plan, dependencies) {
+  assertPlainAncestors(plan.snapshotRoot, "qualification rotation snapshot root", {
+    allowMissing: true,
+    includeTarget: true,
+  });
+  mkdirSync(plan.snapshotRoot, { recursive: true });
+  assertPlainDirectory(plan.snapshotRoot, "qualification rotation snapshot root");
+  const onlinePath = join(plan.snapshotRoot, `${plan.snapshotLabel}.snapshot.db`);
+  const offlinePath = join(plan.snapshotRoot, `${plan.snapshotLabel}.offline.db`);
+  if (existsSync(onlinePath) || existsSync(offlinePath)) {
+    operatorError(
+      "M64_QUALIFICATION_ROTATION_SNAPSHOT_EXISTS",
+      "rotation snapshot destinations are create-only; use a fresh snapshot root after an abandoned attempt",
+    );
+  }
+  try {
+    copyFileSync(plan.paths.controlDbPath, offlinePath, fsConstants.COPYFILE_EXCL);
+    const fd = openSync(offlinePath, fsConstants.O_RDWR);
+    try { fsyncSync(fd); } finally { closeSync(fd); }
+  } catch (cause) {
+    operatorError(
+      "M64_QUALIFICATION_ROTATION_SNAPSHOT_INVALID",
+      "exact offline database snapshot could not be created",
+      { cause: cause?.code ?? cause?.message ?? null },
+    );
+  }
+  const offline = inspectRotationSnapshot(
+    offlinePath,
+    plan.previousFence,
+    plan.databaseVersion,
+  );
+  if (offline.sha256 !== plan.databaseSha256) {
+    operatorError(
+      "M64_QUALIFICATION_ROTATION_SNAPSHOT_INVALID",
+      "offline database snapshot is not the exact pre-rotation bytes",
+    );
+  }
+  const onlineRaw = await dependencies.snapshotRotationDatabase({
+    sourcePath: plan.paths.controlDbPath,
+    destinationPath: onlinePath,
+  });
+  if (!onlineRaw
+    || resolve(onlineRaw.sourcePath ?? "") !== resolve(plan.paths.controlDbPath)
+    || resolve(onlineRaw.destinationPath ?? "") !== onlinePath) {
+    operatorError(
+      "M64_QUALIFICATION_ROTATION_SNAPSHOT_INVALID",
+      "online SQLite backup callback escaped the exact source/destination",
+    );
+  }
+  const online = inspectRotationSnapshot(
+    onlinePath,
+    plan.previousFence,
+    plan.databaseVersion,
+  );
+  const sourceAfter = inspectControlDatabase(
+    plan.paths.controlDbPath,
+    Number(dependencies.now()),
+  );
+  if (sourceAfter.sha256 !== plan.databaseSha256
+    || canonicalJson(sourceAfter.fence) !== canonicalJson(plan.previousFence)) {
+    operatorError(
+      "M64_QUALIFICATION_ROTATION_DB_RACE",
+      "control database changed while rotation snapshots were created",
+    );
+  }
+  return Object.freeze({ online, offline, onlineRaw });
+}
+
+function replaceQualificationBindingCas({
+  targetPath,
+  expectedSha256,
+  replacementBytes,
+  controlledRoot,
+  rotationId,
+}) {
+  const before = readPlainBytes(targetPath, "qualification binding CAS source", {
+    controlledRoot,
+  });
+  if (before.sha256 !== expectedSha256) {
+    operatorError(
+      "M64_QUALIFICATION_ROTATION_BINDING_CAS_MISMATCH",
+      "well-known qualification binding changed before CAS replacement",
+    );
+  }
+  const temp = join(dirname(targetPath), `.${basename(targetPath)}.${rotationId}.tmp`);
+  if (existsSync(temp)) {
+    operatorError(
+      "M64_QUALIFICATION_ROTATION_BINDING_CAS_MISMATCH",
+      "well-known binding CAS staging path is not empty",
+    );
+  }
+  let installed = false;
+  try {
+    const fd = openSync(temp, fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY, 0o600);
+    try {
+      writeFileSync(fd, replacementBytes);
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+    const staged = readPlainBytes(temp, "qualification binding CAS staging", {
+      controlledRoot,
+    });
+    const expectedReplacementHash = sha256(replacementBytes);
+    if (staged.sha256 !== expectedReplacementHash) {
+      operatorError(
+        "M64_QUALIFICATION_ROTATION_BINDING_CAS_MISMATCH",
+        "well-known binding CAS staging bytes drifted",
+      );
+    }
+    const immediatelyBefore = readPlainBytes(targetPath, "qualification binding CAS source", {
+      controlledRoot,
+    });
+    if (immediatelyBefore.sha256 !== expectedSha256) {
+      operatorError(
+        "M64_QUALIFICATION_ROTATION_BINDING_CAS_MISMATCH",
+        "well-known qualification binding changed during CAS replacement",
+      );
+    }
+    renameSync(temp, targetPath);
+    installed = true;
+    const after = readPlainBytes(targetPath, "qualification binding CAS result", {
+      controlledRoot,
+    });
+    if (after.sha256 !== expectedReplacementHash) {
+      operatorError(
+        "M64_QUALIFICATION_ROTATION_BINDING_CAS_MISMATCH",
+        "well-known qualification binding failed CAS readback",
+      );
+    }
+    return Object.freeze({
+      path: targetPath,
+      previousSha256: expectedSha256,
+      sha256: after.sha256,
+    });
+  } catch (error) {
+    if (installed && error && typeof error === "object") error.bindingInstalled = true;
+    if (!installed && existsSync(temp)) {
+      try { rmSync(temp, { force: true }); } catch {}
+    }
+    throw error;
+  }
+}
+
+function restoreQualificationRotationDatabase(plan, snapshots) {
+  if (existsSync(`${plan.paths.controlDbPath}-wal`) || existsSync(`${plan.paths.controlDbPath}-shm`)) {
+    operatorError(
+      "M64_QUALIFICATION_ROTATION_ROLLBACK_UNPROVEN",
+      "database WAL/SHM remained at rollback boundary",
+    );
+  }
+  const temp = `${plan.paths.controlDbPath}.${plan.rotationId}.rollback.tmp`;
+  if (existsSync(temp)) rmSync(temp, { force: true });
+  copyFileSync(snapshots.offline.path, temp, fsConstants.COPYFILE_EXCL);
+  const fd = openSync(temp, fsConstants.O_RDWR);
+  try { fsyncSync(fd); } finally { closeSync(fd); }
+  const staged = readPlainBytes(temp, "qualification database rollback staging", {
+    maxBytes: 4 * 1024 * 1024 * 1024,
+  });
+  if (staged.sha256 !== plan.databaseSha256) {
+    operatorError(
+      "M64_QUALIFICATION_ROTATION_ROLLBACK_UNPROVEN",
+      "database rollback staging bytes differ from the exact offline snapshot",
+    );
+  }
+  renameSync(temp, plan.paths.controlDbPath);
+  const restored = inspectControlDatabase(
+    plan.paths.controlDbPath,
+    Date.parse(plan.plannedAt),
+  );
+  if (restored.sha256 !== plan.databaseSha256
+    || canonicalJson(restored.fence) !== canonicalJson(plan.previousFence)) {
+    operatorError(
+      "M64_QUALIFICATION_ROTATION_ROLLBACK_UNPROVEN",
+      "database rollback did not reproduce the old qualification identity",
+    );
+  }
+  return restored;
+}
+
+function verifyQualificationRotationOldIdentity(plan) {
+  const binding = readPlainBytes(plan.paths.bindingPath, "restored qualification binding", {
+    controlledRoot: dirname(dirname(plan.paths.bindingPath)),
+  });
+  const database = inspectControlDatabase(plan.paths.controlDbPath, Date.parse(plan.plannedAt));
+  if (binding.sha256 !== plan.previousBindingSha256
+    || database.sha256 !== plan.databaseSha256
+    || canonicalJson(database.fence) !== canonicalJson(plan.previousFence)) {
+    operatorError(
+      "M64_QUALIFICATION_ROTATION_ROLLBACK_UNPROVEN",
+      "old qualification database/binding identity was not completely restored",
+    );
+  }
+  return Object.freeze({
+    bindingSha256: binding.sha256,
+    databaseSha256: database.sha256,
+    fenceHash: qualificationFenceHash(database.fence),
+  });
+}
+
+export async function operateM64QualificationBootstrapRotation(input = {}, {
+  execute = false,
+  dependencies = {},
+  faultAfter = () => {},
+} = {}) {
+  const deps = Object.freeze({ ...DEFAULT_ROTATION_DEPENDENCIES, ...dependencies });
+  const firstPlan = planM64QualificationBootstrapRotation(input, deps);
+  if (!execute) return firstPlan;
+  let guard = null;
+  let auxiliaryPortGuard = null;
+  let plan = firstPlan;
+  let snapshots = null;
+  let state = null;
+  let databaseMutated = false;
+  let bindingMutated = false;
+  let cleanupProven = true;
+  let primaryError = null;
+  try {
+    guard = await deps.acquireStoppedRuntimeGuard({
+      runtimeRoot: resolve(input.runtimeRoot),
+      ownerKind: "QUALIFICATION_ROTATION",
+      host: "127.0.0.1",
+      port: 17920,
+    });
+    if (!guard || typeof guard.assertOwned !== "function" || typeof guard.release !== "function"
+      || typeof guard.retainStaleLock !== "function") {
+      operatorError(
+        "M64_QUALIFICATION_ROTATION_OWNER_GUARD_INVALID",
+        "qualification rotation stopped-runtime guard is unavailable",
+      );
+    }
+    guard.assertOwned();
+    auxiliaryPortGuard = await deps.acquireAuxiliaryPortGuard({
+      host: "127.0.0.1",
+      port: 17930,
+    });
+    if (!auxiliaryPortGuard || typeof auxiliaryPortGuard.release !== "function") {
+      operatorError(
+        "M64_QUALIFICATION_ROTATION_OWNER_GUARD_INVALID",
+        "qualification rotation registry-listener guard is unavailable",
+      );
+    }
+    const taskProof = deps.inspectRuntimeStopped({ includePorts: false });
+    plan = planM64QualificationBootstrapRotation(input, {
+      ...deps,
+      inspectRuntimeStopped: () => Object.freeze({
+        ...taskProof,
+        exclusivePorts: Object.freeze([...QUALIFICATION_ROTATION_PORTS]),
+        ownerGuardHeld: true,
+      }),
+    });
+    if (plan.rotationId !== firstPlan.rotationId
+      || plan.databaseSha256 !== firstPlan.databaseSha256
+      || plan.previousBindingSha256 !== firstPlan.previousBindingSha256
+      || plan.packageHash !== firstPlan.packageHash
+      || plan.nextBindingSha256 !== firstPlan.nextBindingSha256) {
+      operatorError(
+        "M64_QUALIFICATION_ROTATION_CONCURRENT_CHANGE",
+        "qualification rotation identity changed between preflight and stopped execution",
+      );
+    }
+    guard.assertOwned();
+    snapshots = await createQualificationRotationSnapshots(plan, deps);
+    faultAfter("snapshots", { plan, snapshots });
+    guard.assertOwned();
+
+    ensureControlledDirectory(resolve(input.runtimeRoot), relative(resolve(input.runtimeRoot), plan.archiveRoot));
+    const archivedBinding = writeExactCreateOnly(
+      join(plan.archiveRoot, "previous-binding.v1.json"),
+      plan.previous.bindingBytes,
+      {
+        controlledRoot: resolve(input.runtimeRoot),
+        driftCode: "M64_QUALIFICATION_ROTATION_ARCHIVE_DRIFT",
+      },
+    );
+    const archiveIndexBody = {
+      schemaId: "xw.m6-c1-qualification-bootstrap-rotation-archive.v1",
+      rotationId: plan.rotationId,
+      previousFence: plan.previousFence,
+      previousFenceHash: plan.previousFenceHash,
+      nextFence: plan.nextFence,
+      nextFenceHash: plan.nextFenceHash,
+      previousBinding: { path: archivedBinding.path, sha256: archivedBinding.sha256 },
+      previousGate: {
+        packagePath: plan.previous.packagePath,
+        packageHash: plan.previous.package.packageHash,
+        pointerPath: plan.previous.paths.pointerPath,
+        pointerSha256: plan.previous.pointerSha256,
+      },
+      previousReceipt: {
+        path: plan.previous.receiptPath,
+        receiptHash: plan.previous.receipt.receiptHash,
+        sha256: plan.previous.receiptSha256,
+      },
+      snapshots: {
+        online: { path: snapshots.online.path, sha256: snapshots.online.sha256 },
+        offline: { path: snapshots.offline.path, sha256: snapshots.offline.sha256 },
+      },
+    };
+    const archiveIndex = Object.freeze({
+      ...archiveIndexBody,
+      archiveHash: sha256(
+        `xw.m6-c1-qualification-bootstrap-rotation-archive.v1:${canonicalJson(archiveIndexBody)}`,
+      ),
+    });
+    writeExactCreateOnly(
+      join(plan.archiveRoot, "archive.v1.json"),
+      jsonBytes(archiveIndex),
+      {
+        controlledRoot: resolve(input.runtimeRoot),
+        driftCode: "M64_QUALIFICATION_ROTATION_ARCHIVE_DRIFT",
+      },
+    );
+    faultAfter("archive", { plan, archiveIndex });
+    guard.assertOwned();
+    assertSentinelsUnavailable(plan.paths);
+
+    const staged = deps.stageArtifacts({
+      package: plan.package,
+      m6Root: resolve(input.runtimeRoot),
+      issuerAllowlistPath: resolve(input.issuerAllowlistPath),
+      nowMs: Number(deps.now()),
+    });
+    faultAfter("artifacts", { plan, staged });
+    guard.assertOwned();
+    assertSentinelsUnavailable(plan.paths);
+
+    cleanupProven = false;
+    state = deps.stateFactory({
+      dbPath: plan.paths.controlDbPath,
+      now: deps.now,
+      m6RuntimeMode: "QUALIFICATION_ONLY",
+    });
+    const rotated = state.rotateM6QualificationBootstrapFence({
+      expectedFence: plan.previousFence,
+      nextEpoch: staged.closedEpoch,
+      locksHash: plan.nextFence.locksHash,
+      packageHash: plan.packageHash,
+    });
+    databaseMutated = true;
+    if (state.db?.exec) state.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+    state.close();
+    state = null;
+    if (existsSync(`${plan.paths.controlDbPath}-wal`) || existsSync(`${plan.paths.controlDbPath}-shm`)) {
+      operatorError(
+        "M64_QUALIFICATION_ROTATION_DB_WAL_PRESENT",
+        "rotation database did not return to a standalone checkpointed boundary",
+      );
+    }
+    faultAfter("database", { plan, rotated });
+    guard.assertOwned();
+    writeExactCreateOnly(
+      staged.paths.current,
+      jsonBytes(staged.pointer),
+      {
+        controlledRoot: resolve(input.runtimeRoot),
+        driftCode: "M64_QUALIFICATION_ROTATION_POINTER_DRIFT",
+      },
+    );
+    faultAfter("pointer", { plan, staged });
+    guard.assertOwned();
+
+    let bindingCas;
+    try {
+      bindingCas = replaceQualificationBindingCas({
+        targetPath: plan.paths.bindingPath,
+        expectedSha256: plan.previousBindingSha256,
+        replacementBytes: plan.bindingBytes,
+        controlledRoot: resolve(input.runtimeRoot),
+        rotationId: plan.rotationId,
+      });
+      bindingMutated = true;
+    } catch (error) {
+      bindingMutated = error?.bindingInstalled === true;
+      throw error;
+    }
+    const sealedBinding = deps.sealQualificationBinding({
+      runtimeRoot: resolve(input.runtimeRoot),
+    });
+    if (!samePath(sealedBinding?.path ?? "", plan.paths.bindingPath)
+      || sealedBinding?.sha256 !== plan.nextBindingSha256
+      || sealedBinding?.protectedDacl !== true) {
+      operatorError(
+        "M64_QUALIFICATION_ROTATION_BINDING_TCB_INVALID",
+        "rotated qualification binding did not enter the fixed protected TCB",
+      );
+    }
+    faultAfter("bindingTcb", { plan, bindingCas, sealedBinding });
+    faultAfter("binding", { plan, bindingCas });
+    guard.assertOwned();
+    assertSentinelsUnavailable(plan.paths);
+
+    const postDatabase = inspectControlDatabase(plan.paths.controlDbPath, Number(deps.now()));
+    const postIssuer = readPlainBytes(
+      resolve(input.issuerAllowlistPath),
+      "post-rotation gate issuer allowlist",
+      { controlledRoot: resolve(input.runtimeRoot) },
+    );
+    deps.validatePackage({
+      package: plan.package,
+      issuerAllowlistPath: resolve(input.issuerAllowlistPath),
+      m6Root: resolve(input.runtimeRoot),
+      nowMs: Number(deps.now()),
+    });
+    const postBinding = readPlainBytes(plan.paths.bindingPath, "post-rotation qualification binding", {
+      controlledRoot: resolve(input.runtimeRoot),
+    });
+    if (canonicalJson(postDatabase.fence) !== canonicalJson(plan.nextFence)
+      || postDatabase.quickCheck !== "ok"
+      || postBinding.sha256 !== plan.nextBindingSha256
+      || postIssuer.sha256 !== plan.issuerAllowlistSha256) {
+      operatorError(
+        "M64_QUALIFICATION_ROTATION_POSTCONDITION_FAILED",
+        "rotation did not reproduce the signed package, allowlist, fence, and binding identity",
+      );
+    }
+    const receiptBody = {
+      schemaId: M64_QUALIFICATION_ROTATION_RECEIPT_SCHEMA_ID,
+      rotationId: plan.rotationId,
+      gateId: plan.nextFence.gateId,
+      closedEpochHash: plan.nextFence.epochHash,
+      generation: 0,
+      mode: "CLOSED",
+      previousFenceHash: plan.previousFenceHash,
+      nextFenceHash: plan.nextFenceHash,
+      packageHash: plan.packageHash,
+      bindingPath: plan.paths.bindingPath,
+      previousBindingSha256: plan.previousBindingSha256,
+      bindingSha256: plan.nextBindingSha256,
+      gateFArtifactInventoryPath: plan.paths.sentinelPath,
+      gateFArtifactInventoryHash: M64_QUALIFICATION_INVENTORY_SENTINEL_HASH,
+      issuerAllowlistSha256: plan.issuerAllowlistSha256,
+      releaseManifestSha256: plan.releaseManifestSha256,
+      onlineSnapshotSha256: snapshots.online.sha256,
+      offlineSnapshotSha256: snapshots.offline.sha256,
+      databaseAuditEventId: rotated.eventId,
+      databaseAuditRotationHash: rotated.audit.rotationHash,
+      previousGatePath: plan.previous.paths.gateRoot,
+      previousReceiptPath: plan.previous.receiptPath,
+      archiveRoot: plan.archiveRoot,
+      actionCount: postDatabase.resources.actionCount,
+      resourceCounts: postDatabase.resources,
+      privateKeyAccessed: false,
+      providerAccessed: false,
+      deviceAccessed: false,
+      networkAccessed: false,
+    };
+    const receipt = Object.freeze({
+      ...receiptBody,
+      receiptHash: sha256(
+        `${M64_QUALIFICATION_ROTATION_RECEIPT_SCHEMA_ID}:${canonicalJson(receiptBody)}`,
+      ),
+    });
+    faultAfter("beforeReceipt", { plan, receipt });
+    const receiptPublication = writeExactCreateOnly(
+      join(plan.paths.receiptRoot, `${receipt.receiptHash}.json`),
+      jsonBytes(receipt),
+      {
+        controlledRoot: resolve(input.runtimeRoot),
+        driftCode: "M64_QUALIFICATION_ROTATION_RECEIPT_DRIFT",
+      },
+    );
+    cleanupProven = true;
+    return Object.freeze({
+      ok: true,
+      schemaId: "xw.m6-c1-qualification-bootstrap-rotation-result.v1",
+      executed: true,
+      status: "ROTATED",
+      rotationId: plan.rotationId,
+      receiptPath: receiptPublication.path,
+      receipt,
+      archiveRoot: plan.archiveRoot,
+      previousGatePath: plan.previous.paths.gateRoot,
+      previousReceiptPath: plan.previous.receiptPath,
+      bindingPath: plan.paths.bindingPath,
+      snapshotPaths: Object.freeze([snapshots.online.path, snapshots.offline.path]),
+      privateKeyAccessed: false,
+      providerAccessed: false,
+      deviceAccessed: false,
+      networkAccessed: false,
+    });
+  } catch (error) {
+    primaryError = error;
+    if (state) {
+      try {
+        if (state.db?.exec) state.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+        state.close();
+        state = null;
+      } catch {
+        cleanupProven = false;
+      }
+    }
+    if (snapshots && (databaseMutated || bindingMutated)) {
+      try {
+        if (bindingMutated) {
+          replaceQualificationBindingCas({
+            targetPath: plan.paths.bindingPath,
+            expectedSha256: plan.nextBindingSha256,
+            replacementBytes: plan.previous.bindingBytes,
+            controlledRoot: resolve(input.runtimeRoot),
+            rotationId: `${plan.rotationId}.restore`,
+          });
+          const restoredBindingTcb = deps.sealQualificationBinding({
+            runtimeRoot: resolve(input.runtimeRoot),
+          });
+          if (!samePath(restoredBindingTcb?.path ?? "", plan.paths.bindingPath)
+            || restoredBindingTcb?.sha256 !== plan.previousBindingSha256
+            || restoredBindingTcb?.protectedDacl !== true) {
+            operatorError(
+              "M64_QUALIFICATION_ROTATION_ROLLBACK_TCB_INVALID",
+              "restored qualification binding did not re-enter the fixed protected TCB",
+            );
+          }
+          bindingMutated = false;
+        }
+        if (databaseMutated) {
+          restoreQualificationRotationDatabase(plan, snapshots);
+          databaseMutated = false;
+        }
+        const restored = verifyQualificationRotationOldIdentity(plan);
+        const rollbackBody = {
+          schemaId: "xw.m6-c1-qualification-bootstrap-rotation-rollback.v1",
+          rotationId: plan.rotationId,
+          causeCode: error?.code ?? "M64_QUALIFICATION_ROTATION_FAILED",
+          restored,
+        };
+        const rollback = Object.freeze({
+          ...rollbackBody,
+          rollbackHash: sha256(
+            `xw.m6-c1-qualification-bootstrap-rotation-rollback.v1:${canonicalJson(rollbackBody)}`,
+          ),
+        });
+        writeExactCreateOnly(
+          join(plan.archiveRoot, `${rollback.rollbackHash}.rollback.json`),
+          jsonBytes(rollback),
+          {
+            controlledRoot: resolve(input.runtimeRoot),
+            driftCode: "M64_QUALIFICATION_ROTATION_ROLLBACK_DRIFT",
+          },
+        );
+        cleanupProven = true;
+        error.rotationRollback = restored;
+      } catch (rollbackError) {
+        cleanupProven = false;
+        error.rotationRollbackError = rollbackError?.code ?? rollbackError?.message ?? "UNKNOWN";
+      }
+    }
+    throw error;
+  } finally {
+    let finalizationError = null;
+    if (auxiliaryPortGuard) {
+      try {
+        await auxiliaryPortGuard.release();
+      } catch (releaseError) {
+        cleanupProven = false;
+        finalizationError = releaseError;
+      }
+    }
+    if (guard) {
+      try {
+        if (cleanupProven) await guard.release();
+        else await guard.retainStaleLock();
+      } catch (releaseError) {
+        if (!finalizationError) finalizationError = releaseError;
+      }
+    }
+    if (!primaryError && finalizationError) throw finalizationError;
+  }
+}
+
 function deriveOperatorReceipt({ plan, result, bindingSha256 }) {
   const body = {
     schemaId: M64_QUALIFICATION_OPERATOR_RECEIPT_SCHEMA_ID,
@@ -738,7 +1892,7 @@ export async function operateM64QualificationBootstrap(input = {}, {
       ? "EXACT_REPLAY"
       : bindingPublication.replay
         ? "RECOVERED_RECEIPT"
-        : plan.databaseVersion === 20
+        : plan.databaseVersion === CURRENT_CONTROL_SCHEMA_VERSION
           ? "RECOVERED_AFTER_BOOTSTRAP"
           : "BOOTSTRAPPED";
     return Object.freeze({
@@ -929,6 +2083,38 @@ export function buildM64QualificationBootstrapSigningDraft(input = {}) {
   });
 }
 
+export function validateM64QualificationBootstrapSigningDraft(draft) {
+  exactObject(draft, DRAFT_KEYS, "M64_QUALIFICATION_DRAFT_INVALID", "qualification signing draft");
+  assertNoSecretMaterial(draft, "qualification signing draft");
+  const expectedDraftHash = sha256(
+    `${M64_QUALIFICATION_SIGNING_DRAFT_SCHEMA_ID}:${canonicalJson(without(draft, "draftHash"))}`,
+  );
+  const requests = draft?.signingRequests;
+  const expected = [
+    { role: "ROOT", epoch: draft?.rootEpoch },
+    { role: "CLOSED", epoch: draft?.closedEpoch },
+  ];
+  if (draft.schemaId !== M64_QUALIFICATION_SIGNING_DRAFT_SCHEMA_ID
+    || draft.draftHash !== expectedDraftHash
+    || !Array.isArray(requests) || requests.length !== 2
+    || expected.some(({ role, epoch }, index) => {
+      const request = requests[index];
+      return !request || canonicalJson(Object.keys(request).sort()) !== canonicalJson([
+        "algorithm", "epochHash", "payloadEncoding", "payloadHex", "role", "subject",
+      ].sort())
+        || request.role !== role || request.algorithm !== "ed25519"
+        || request.subject !== epoch?.actor || request.epochHash !== epoch?.epochHash
+        || request.payloadEncoding !== "raw-32-byte-epoch-hash"
+        || request.payloadHex !== epoch?.epochHash || !HASH.test(request.payloadHex ?? "");
+    })) {
+    operatorError(
+      "M64_QUALIFICATION_DRAFT_INVALID",
+      "qualification signing draft hash or canonical signing requests are invalid",
+    );
+  }
+  return draft;
+}
+
 export function assembleM64QualificationBootstrapPackage({
   draft,
   rootProof,
@@ -938,14 +2124,7 @@ export function assembleM64QualificationBootstrapPackage({
   nowMs = Date.now(),
 } = {}, dependencies = {}) {
   const deps = Object.freeze({ ...DEFAULT_DEPENDENCIES, ...dependencies });
-  exactObject(draft, DRAFT_KEYS, "M64_QUALIFICATION_DRAFT_INVALID", "qualification signing draft");
-  const expectedDraftHash = sha256(
-    `${M64_QUALIFICATION_SIGNING_DRAFT_SCHEMA_ID}:${canonicalJson(without(draft, "draftHash"))}`,
-  );
-  if (draft.schemaId !== M64_QUALIFICATION_SIGNING_DRAFT_SCHEMA_ID
-    || draft.draftHash !== expectedDraftHash) {
-    operatorError("M64_QUALIFICATION_DRAFT_INVALID", "qualification signing draft hash is invalid");
-  }
+  validateM64QualificationBootstrapSigningDraft(draft);
   exactObject(rootProof, PROOF_KEYS, "M64_QUALIFICATION_PROOF_INVALID", "root proof");
   exactObject(closedProof, PROOF_KEYS, "M64_QUALIFICATION_PROOF_INVALID", "CLOSED proof");
   assertNoSecretMaterial({ rootProof, closedProof }, "external epoch proofs");

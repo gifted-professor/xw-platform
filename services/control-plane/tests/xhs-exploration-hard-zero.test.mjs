@@ -144,6 +144,10 @@ test("exploration authority registers [03,04] with profile stamped on BOTH sessi
     assert.equal(authority.sessionBindings[0].laneRole, "feed_lane");
     assert.equal(authority.sessionBindings[1].alias, "04");
     assert.equal(authority.sessionBindings[1].laneRole, "search_lane");
+    assert.equal(authority.vision.rolloutPhase, "R0");
+    assert.equal(authority.vision.effectiveVisualPermitBudget, 0);
+    assert.equal(authority.budgets.visionMaxIssuedPermits, 0);
+    assert.equal(authority.budgets.visionMaxPhysicalTaps, 0);
     // profile visible on the stored sessions
     const a = f.state.validateSession(s03.sessionId, s03.token);
     const b = f.state.validateSession(s04.sessionId, s04.token);

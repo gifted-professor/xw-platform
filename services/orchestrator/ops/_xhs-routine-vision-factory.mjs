@@ -24,9 +24,11 @@ import {
   visionError,
 } from "../scripts/lib/xhs-exploration-vision.mjs";
 import { createPinnedExplorationVisionAnalyzer } from "../scripts/lib/xhs-exploration-vision-process.mjs";
+import { verifyResolvedPrivateProviderConfig } from "../scripts/lib/xhs-exploration-private-runtime.mjs";
 import { createRoutineVisionNavigator } from "../scripts/lib/xhs-routine-vision-navigator.mjs";
 
 const RUNTIME_ROOT = process.env.XW_RUNTIME_ROOT || "C:\\Users\\Public\\xw-runtime";
+const EXPLORATION_FIXED_RUNTIME_ROOT = join("C:\\", "Users", "Public", "xw-runtime");
 export const VISION_PROVIDER_CONFIG_PATH = join(
   RUNTIME_ROOT,
   "state",
@@ -37,14 +39,14 @@ export const VISION_PROVIDER_CONFIG_PATH = join(
 /** V3 production pin. Unlike the legacy V2 config above, this hashes the real
  * Python executable, analysis script, model bytes and normalized config. */
 export const EXPLORATION_VISION_PROVIDER_CONFIG_PATH = join(
-  RUNTIME_ROOT,
+  EXPLORATION_FIXED_RUNTIME_ROOT,
   "state",
   "orchestrator",
   "xhs-exploration-vision-provider.v1.json",
 );
 
 const EXPLORATION_VISION_STAGING_ROOT = join(
-  RUNTIME_ROOT,
+  EXPLORATION_FIXED_RUNTIME_ROOT,
   "private",
   "orchestrator",
   "xhs-exploration-vision",
@@ -172,7 +174,7 @@ export function createProductionRoutineVisionNavigator({
 
 function sameProviderIdentity(expected, actual) {
   if (!expected || !actual) return false;
-  return ["pythonHash", "modelHash", "scriptHash", "configHash"]
+  return ["providerBundleDigest", "pythonHash", "modelHash", "scriptHash", "configHash"]
     .every((key) => /^[0-9a-f]{64}$/.test(String(expected[key] || ""))
       && expected[key] === actual[key]);
 }
@@ -231,10 +233,11 @@ export function createProductionExplorationVisionNavigator({
     );
   }
   const config = resolvePinnedVisionConfig(configPath);
-  if (config.mode !== mode) {
+  if (!allowTestConfigOverride) verifyResolvedPrivateProviderConfig(config);
+  if (!config.allowedModes.includes(mode)) {
     throw visionError(
       "EXPLORATION_VISION_MODE_DRIFT",
-      `sealed mission mode ${mode} differs from pinned provider mode ${config.mode}`,
+      `sealed mission mode ${mode} is outside the pinned provider capability set`,
     );
   }
   if (!sameProviderIdentity(providerBinding, config.provider)) {

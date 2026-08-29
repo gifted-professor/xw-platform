@@ -35,6 +35,7 @@ import {
   parseExploreSurface,
   EXPLORE_DUMP_VERDICT,
   EXPLORE_DUMP_VERDICTS,
+  roleSpecificDumpDecision,
 } from "../scripts/lib/xhs-explore-surface.mjs";
 import {
   homeFeedXml,
@@ -345,6 +346,54 @@ test("surface DUMP verdicts form a closed fail-closed gate for video pause", () 
     "ABSENT_OR_INVALID",
     "FORBIDDEN_OR_RISKY",
   ]);
+});
+
+test("role-specific DUMP decisions cover the offline five-route oracle without widening live vision", () => {
+  const parse = (fixture) => parseExploreSurface({ ...fixture, laneRole: "feed_lane" });
+  const homeFixture = homeFeedXml({ cards: [
+    { id: "a", title: "first route-specific card", author: "one" },
+    { id: "b", title: "second route-specific card", author: "two" },
+  ] });
+  const home = parse(homeFixture);
+  assert.equal(home.dumpDecision.navigationRole, "OPEN_CONTENT_CARD");
+  assert.equal(home.dumpDecision.verdict, EXPLORE_DUMP_VERDICT.AMBIGUOUS_SAFE);
+  assert.equal(home.dumpDecision.visionEligible, true);
+
+  const imageFixture = imageNoteXml({});
+  const image = parse(imageFixture);
+  assert.equal(image.dumpDecision.navigationRole, "OPEN_COMMENT_PANEL");
+  assert.equal(image.dumpDecision.verdict, EXPLORE_DUMP_VERDICT.COMPLETE_SAFE_UNIQUE);
+  assert.equal(image.dumpDecision.visionEligible, false, "ordinary complete IMAGE_NOTE is not vision evidence");
+  const imageAmbiguousFixture = {
+    ...imageFixture,
+    xml: imageFixture.xml.replace(
+      "</hierarchy>",
+      '<node text="" resource-id="comment-duplicate" class="android.widget.ImageView" package="com.xingin.xhs" content-desc="评论" clickable="true" enabled="true" bounds="[450,2100][520,2170]" /></hierarchy>',
+    ),
+  };
+  const imageAmbiguous = parse(imageAmbiguousFixture);
+  assert.equal(imageAmbiguous.dumpDecision.verdict, EXPLORE_DUMP_VERDICT.AMBIGUOUS_SAFE);
+  assert.equal(imageAmbiguous.dumpDecision.visionEligible, true);
+
+  const commentFixture = commentPanelXml({});
+  const comment = parse(commentFixture);
+  assert.equal(comment.dumpDecision.navigationRole, "BACK");
+  assert.equal(comment.dumpDecision.verdict, EXPLORE_DUMP_VERDICT.COMPLETE_SAFE_UNIQUE);
+  assert.equal(comment.dumpDecision.visionEligible, false, "ordinary complete COMMENT_PANEL is not vision evidence");
+  const commentSparse = parse({ ...commentFixture, xml: commentFixture.xml.replace('content-desc="返回"', 'content-desc=""') });
+  assert.equal(commentSparse.dumpDecision.verdict, EXPLORE_DUMP_VERDICT.ABSENT_OR_INVALID);
+  assert.equal(commentSparse.dumpDecision.visionEligible, true);
+
+  const videoFixture = videoDump({ playbacks: [] });
+  const video = parse(videoFixture);
+  const offlineCommentDecision = roleSpecificDumpDecision({
+    surface: video,
+    xml: videoFixture.xml,
+    requestedRole: "OPEN_COMMENT_PANEL",
+  });
+  assert.equal(offlineCommentDecision.verdict, EXPLORE_DUMP_VERDICT.ABSENT_OR_INVALID);
+  assert.equal(offlineCommentDecision.visionEligible, true);
+  assert.equal(video.dumpDecision.navigationRole, "PAUSE_VIDEO_SAFE_ZONE", "live/default VIDEO role remains pause-only");
 });
 
 test("feed lane E2E: open → read-only panel → novelty claims → budget stop → journal COMMITTED", async () => {

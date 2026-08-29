@@ -1,0 +1,160 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "xw.xhs.exploration-corpus-sealed-bundle.v1",
+  "title": "XHS exploration sealed corpus bundle",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaId",
+    "schemaVersion",
+    "publicManifest",
+    "privateIndex",
+    "captureReceipts",
+    "annotationManifest",
+    "labelSession"
+  ],
+  "properties": {
+    "schemaId": { "const": "xw.xhs.exploration-corpus-sealed-bundle.v1" },
+    "schemaVersion": { "const": 1 },
+    "publicManifest": { "$ref": "#/$defs/publicManifest" },
+    "privateIndex": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaId",
+        "schemaVersion",
+        "publicManifestHash",
+        "captureReceiptHashes",
+        "annotationManifestHash",
+        "labelSessionHash",
+        "runtime"
+      ],
+      "properties": {
+        "schemaId": { "const": "xw.xhs.exploration-corpus-private-index.v1" },
+        "schemaVersion": { "const": 1 },
+        "publicManifestHash": { "$ref": "#/$defs/sha256" },
+        "captureReceiptHashes": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/sha256" }
+        },
+        "annotationManifestHash": { "$ref": "#/$defs/sha256" },
+        "labelSessionHash": { "$ref": "#/$defs/sha256" },
+        "runtime": { "type": "object" }
+      }
+    },
+    "captureReceipts": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "xhs-exploration-capture-receipt.v1.schema.json" }
+    },
+    "annotationManifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaId", "schemaVersion", "rows"],
+      "properties": {
+        "schemaId": { "const": "xw.xhs.exploration-blind-annotations.v1" },
+        "schemaVersion": { "const": 1 },
+        "rows": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["captureReceiptHash", "expectedOutcome", "positiveRegions", "protectedRegions"],
+            "properties": {
+              "captureReceiptHash": { "$ref": "#/$defs/sha256" },
+              "expectedOutcome": { "enum": ["SAFE_UNIQUE", "NO_FALLBACK_EXPECTED", "REJECT"] },
+              "positiveRegions": { "$ref": "#/$defs/regions" },
+              "protectedRegions": { "$ref": "#/$defs/regions" }
+            }
+          }
+        }
+      }
+    },
+    "labelSession": {
+      "type": "object",
+      "required": ["schemaId", "schemaVersion", "reviewer", "isolation", "inputs", "seal", "digestKeyId", "authentication"],
+      "properties": {
+        "schemaId": { "const": "xw.xhs.exploration-label-session.v1" },
+        "schemaVersion": { "const": 1 }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "opaqueRef": { "type": "string", "pattern": "^(src|receipt|wave|surface|label):[0-9a-f]{64}$" },
+    "regions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["bounds"],
+        "properties": {
+          "role": { "type": "string" },
+          "kind": { "type": "string" },
+          "bounds": {
+            "type": "array",
+            "minItems": 4,
+            "maxItems": 4,
+            "items": { "type": "integer", "minimum": 0 }
+          }
+        }
+      }
+    },
+    "publicManifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaId", "schemaVersion", "requiredRoutes", "minimumDistinctFramesPerRoute", "rows", "coverage"],
+      "properties": {
+        "schemaId": { "const": "xw.xhs.exploration-corpus-public.v2" },
+        "schemaVersion": { "const": 2 },
+        "requiredRoutes": {
+          "const": ["HOME_FEED", "SEARCH_RESULTS", "IMAGE_NOTE", "VIDEO_NOTE", "COMMENT_PANEL"]
+        },
+        "minimumDistinctFramesPerRoute": { "const": 3 },
+        "rows": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "sourceRef", "receiptRef", "frame", "pageClass", "evaluationRole", "dumpVerdict", "provenance", "surfaceClaimRef", "labelSealHash"],
+            "properties": {
+              "id": { "type": "string", "pattern": "^row-[0-9]{3,6}$" },
+              "sourceRef": { "$ref": "#/$defs/opaqueRef" },
+              "receiptRef": { "$ref": "#/$defs/opaqueRef" },
+              "frame": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["sha256", "width", "height", "alias"],
+                "properties": {
+                  "sha256": { "$ref": "#/$defs/sha256" },
+                  "width": { "type": "integer", "minimum": 1 },
+                  "height": { "type": "integer", "minimum": 1 },
+                  "alias": { "enum": ["03", "04"] }
+                }
+              },
+              "pageClass": { "enum": ["HOME_FEED", "SEARCH_RESULTS", "IMAGE_NOTE", "VIDEO_NOTE", "COMMENT_PANEL"] },
+              "evaluationRole": { "enum": ["OPEN_CONTENT_CARD", "OPEN_COMMENT_PANEL", "PAUSE_VIDEO_SAFE_ZONE", "BACK"] },
+              "dumpVerdict": { "enum": ["COMPLETE_SAFE_UNIQUE", "AMBIGUOUS_SAFE", "ABSENT_OR_INVALID", "FORBIDDEN_OR_RISKY"] },
+              "provenance": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["captureMode", "phase", "countingEligible", "waveRef"],
+                "properties": {
+                  "captureMode": { "enum": ["OFFLINE_FIXTURE_ONLY", "CP_BOUND_R1_R2"] },
+                  "phase": { "enum": ["CALIBRATION_ONLY", "R1", "R2"] },
+                  "countingEligible": { "type": "boolean" },
+                  "waveRef": { "$ref": "#/$defs/opaqueRef" }
+                }
+              },
+              "surfaceClaimRef": { "$ref": "#/$defs/opaqueRef" },
+              "labelSealHash": { "$ref": "#/$defs/sha256" }
+            }
+          }
+        },
+        "coverage": { "type": "object" }
+      }
+    }
+  }
+}

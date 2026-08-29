@@ -20,8 +20,22 @@ import {
   readPngDims,
   selectBlock,
 } from "../../ops/xw-adaptive-visual-tap.mjs";
+import {
+  EXPLORATION_VISION_PROCESS_PROTOCOL,
+  verifyExplorationVisionProviderBundle,
+  verifyPythonRuntimeClosure,
+} from "./xhs-exploration-provider-bundle.mjs";
 
 export const EXPLORATION_VISION_CONFIG_SCHEMA_ID = "xw.xhs.exploration-vision-config.v1";
+/** Provider capability only. Rollout authority remains mission + E-Corpus/CP. */
+export const EXPLORATION_VISION_PROVIDER_ALLOWED_MODES = Object.freeze(["shadow", "canary1"]);
+export const EXPLORATION_VISION_PROVIDER_IDENTITY_FIELDS = Object.freeze([
+  "providerBundleDigest",
+  "pythonHash",
+  "modelHash",
+  "scriptHash",
+  "configHash",
+]);
 
 /** Constant timing seams (plan §3.3 caps; never raised at runtime). */
 export const EXPLORATION_VISION_DEADLINE_MS = EXPLORATION_BUDGET_CAPS.providerDecisionDeadlineMs;
@@ -78,12 +92,11 @@ export function hashFilePinned(path) {
 
 /**
  * Resolve and RE-VERIFY the pinned provider config at startup
- * (plan §5.5: pin and re-hash the actual Python executable, analysis script,
- * model bytes, and configuration). The config declares expected sha256 pins;
- * the actual bytes are re-hashed from disk on every resolve — any drift fails
- * closed (vision unusable, not degraded). The public provider identity is
- * content-addressed: model/script sha256 pins plus a sha256 over the
- * normalized config body itself.
+ * (execution addendum V2 §3 P4A: reproduce the canonical provider manifest,
+ * then re-hash the interpreter, entry script, model, every data file, and
+ * configuration/protocol closure). Any drift fails closed. The canonical
+ * providerBundleDigest is the identity; the legacy per-file/config hashes are
+ * retained as audit detail and are never sufficient without that digest.
  */
 export function resolvePinnedVisionConfig(configPath, {
   hashFile = hashFilePinned,
@@ -112,16 +125,31 @@ export function resolvePinnedVisionConfig(configPath, {
   if (config?.schemaId !== EXPLORATION_VISION_CONFIG_SCHEMA_ID || config?.schemaVersion !== 1) {
     throw visionError("EXPLORATION_VISION_CONFIG_INVALID", `vision pin config needs schemaId ${EXPLORATION_VISION_CONFIG_SCHEMA_ID}`);
   }
+  if (!exactKeys(config, ["schemaId", "schemaVersion", "bundle", "pin", "rules", "analysis"])) {
+    throw visionError("EXPLORATION_VISION_CONFIG_INVALID", "vision pin config fields are not the exact v1 contract");
+  }
   const files = config?.pin ?? null;
-  if (!files || !isPinnedFile(files.python) || !isPinnedFile(files.script) || !isPinnedFile(files.model)) {
-    throw visionError("EXPLORATION_VISION_CONFIG_INVALID", "vision pin config needs pin.{python,script,model} = {path, sha256}");
+  if (!exactKeys(files, ["python", "script", "model", "data"])
+    || !isPinnedFile(files.python) || !isPinnedFile(files.script) || !isPinnedFile(files.model)
+    || !Array.isArray(files.data) || files.data.some((row) => !isPinnedDataFile(row))) {
+    throw visionError("EXPLORATION_VISION_CONFIG_INVALID", "vision pin config needs the exact python/script/model/data closure");
+  }
+  const bundle = config?.bundle;
+  if (!exactKeys(bundle, ["manifest", "providerBundleDigest"])
+    || !isPinnedFile(bundle.manifest)
+    || !/^[0-9a-f]{64}$/.test(String(bundle.providerBundleDigest ?? ""))
+    || bundle.manifest.sha256 !== bundle.providerBundleDigest) {
+    throw visionError("EXPLORATION_VISION_CONFIG_INVALID", "vision pin config needs a canonical provider bundle binding");
   }
   const rules = config?.rules ?? null;
-  if (!rules) {
-    throw visionError("EXPLORATION_VISION_CONFIG_INVALID", "vision pin config needs rules{mode,targetLabels}");
+  if (!exactKeys(rules, ["allowedModes", "roles", "targets", "allowEffectLabels", "maxAnalysisAttemptsGlobal"])) {
+    throw visionError("EXPLORATION_VISION_CONFIG_INVALID", "vision pin config needs rollout-neutral capability rules");
   }
-  if (!EXPLORATION_VISION_MODES.includes(rules.mode) || rules.mode === "off") {
-    throw visionError("EXPLORATION_VISION_CONFIG_INVALID", "vision pin config rules.mode must be shadow or canary1 (off never runs a provider)");
+  if (canonicalJson(rules.allowedModes) !== canonicalJson(EXPLORATION_VISION_PROVIDER_ALLOWED_MODES)) {
+    throw visionError(
+      "EXPLORATION_VISION_CONFIG_INVALID",
+      "vision pin config rules.allowedModes must be the closed shadow/canary1 capability set",
+    );
   }
   if (!Array.isArray(rules.targets) || rules.targets.length === 0
     || rules.targets.some((t) => typeof t !== "string" || !t.trim())) {
@@ -142,6 +170,7 @@ export function resolvePinnedVisionConfig(configPath, {
     python: hashFile(files.python.path),
     script: hashFile(files.script.path),
     model: hashFile(files.model.path),
+    data: files.data.map((row) => hashFile(row.path)),
   };
   for (const kind of ["python", "script", "model"]) {
     if (rehash[kind] !== files[kind].sha256) {
@@ -152,19 +181,51 @@ export function resolvePinnedVisionConfig(configPath, {
       );
     }
   }
+  for (let index = 0; index < files.data.length; index += 1) {
+    if (rehash.data[index] !== files.data[index].sha256) {
+      throw visionError(
+        "EXPLORATION_VISION_PIN_DRIFT",
+        "pinned provider data bytes drifted from the sealed config",
+        { details: { kind: "data", logicalPath: files.data[index].logicalPath } },
+      );
+    }
+  }
+  const closure = verifyExplorationVisionProviderBundle({
+    manifestPath: bundle.manifest.path,
+    python: files.python.path,
+    script: files.script.path,
+    model: files.model.path,
+    dataFiles: files.data.map((row) => ({ logicalPath: row.logicalPath, path: row.path })),
+  });
+  if (closure.providerBundleDigest !== bundle.providerBundleDigest) {
+    throw visionError("EXPLORATION_VISION_BUNDLE_DRIFT", "provider bundle digest differs from the sealed config");
+  }
+  verifyPythonRuntimeClosure({
+    python: files.python.path,
+    dataFiles: files.data.map((row) => ({ logicalPath: row.logicalPath, path: row.path })),
+  });
   const analysis = config?.analysis ?? null;
-  if (!analysis || analysis.protocol !== "xw.xhs.exploration-vision-process.v1"
+  if (!exactKeys(analysis, ["protocol", "maxBufferBytes", "timeoutMs"])
+    || analysis.protocol !== EXPLORATION_VISION_PROCESS_PROTOCOL
     || !Number.isInteger(analysis.maxBufferBytes) || analysis.maxBufferBytes <= 0
     || !Number.isInteger(analysis.timeoutMs) || analysis.timeoutMs <= 0
     || analysis.timeoutMs > EXPLORATION_VISION_DEADLINE_MS) {
     throw visionError("EXPLORATION_VISION_CONFIG_INVALID", "vision pin config needs analysis{maxBufferBytes}");
   }
+  if (analysis.protocol !== closure.manifest.configuration.processProtocol
+    || analysis.maxBufferBytes !== closure.manifest.configuration.maxBufferBytes
+    || analysis.timeoutMs !== closure.manifest.configuration.timeoutMs
+    || canonicalJson(rules.targets) !== canonicalJson(closure.manifest.configuration.candidateLabels)
+    || rules.allowEffectLabels !== closure.manifest.configuration.allowEffectLabels) {
+    throw visionError("EXPLORATION_VISION_BUNDLE_DRIFT", "runtime config differs from the provider bundle configuration");
+  }
   const publicView = {
     schemaId: config.schemaId,
-    mode: rules.mode,
+    allowedModes: Object.freeze([...rules.allowedModes]),
     roles: Object.freeze([...rules.roles]),
     targets: Object.freeze([...rules.targets]),
     provider: Object.freeze({
+      providerBundleDigest: bundle.providerBundleDigest,
       pythonHash: files.python.sha256,
       modelHash: files.model.sha256,
       scriptHash: files.script.sha256,
@@ -177,6 +238,11 @@ export function resolvePinnedVisionConfig(configPath, {
       python: Object.freeze({ ...files.python }),
       script: Object.freeze({ ...files.script }),
       model: Object.freeze({ ...files.model }),
+      data: Object.freeze(files.data.map((row) => Object.freeze({ ...row }))),
+    }),
+    bundle: Object.freeze({
+      manifest: Object.freeze({ ...bundle.manifest }),
+      providerBundleDigest: bundle.providerBundleDigest,
     }),
     analysis: Object.freeze({
       maxBufferBytes: analysis.maxBufferBytes,
@@ -187,9 +253,25 @@ export function resolvePinnedVisionConfig(configPath, {
 }
 
 function isPinnedFile(value) {
-  return Boolean(value)
+  return exactKeys(value, ["path", "sha256"])
     && typeof value.path === "string"
     && /^[0-9a-f]{64}$/.test(String(value.sha256 || ""));
+}
+
+function isPinnedDataFile(value) {
+  return exactKeys(value, ["logicalPath", "path", "sha256"])
+    && /^data\/[a-zA-Z0-9][a-zA-Z0-9._/-]*$/.test(String(value.logicalPath ?? ""))
+    && !String(value.logicalPath).split("/").some((segment) => segment === "." || segment === "..")
+    && typeof value.path === "string"
+    && /^[0-9a-f]{64}$/.test(String(value.sha256 || ""));
+}
+
+function exactKeys(value, keys) {
+  return Boolean(value)
+    && typeof value === "object"
+    && !Array.isArray(value)
+    && Object.keys(value).length === keys.length
+    && Object.keys(value).every((key) => keys.includes(key));
 }
 
 /** SHA256 over the canonical (sorted-key) JSON of the config body. */
@@ -203,9 +285,15 @@ function bytesOf(config) {
     schemaId: config.schemaId,
     schemaVersion: config.schemaVersion,
     pin: {
+      providerBundleDigest: config.bundle?.providerBundleDigest ?? null,
+      manifestSha256: config.bundle?.manifest?.sha256 ?? null,
       pythonSha256: config.pin?.python?.sha256 ?? null,
       scriptSha256: config.pin?.script?.sha256 ?? null,
       modelSha256: config.pin?.model?.sha256 ?? null,
+      data: (config.pin?.data ?? []).map((row) => ({
+        logicalPath: row.logicalPath,
+        sha256: row.sha256,
+      })),
     },
     rules: config.rules ?? null,
     analysis: config.analysis ?? null,
@@ -399,8 +487,8 @@ export function createExplorationVisionNavigator({
       "vision navigator requires CP-owned reserve/settle analysis wrappers",
     );
   }
-  const identityFields = ["pythonHash", "modelHash", "scriptHash", "configHash"];
-  if (!providerIdentity || identityFields.some((key) => !/^[0-9a-f]{64}$/.test(String(providerIdentity[key] ?? "")))) {
+  if (!providerIdentity || EXPLORATION_VISION_PROVIDER_IDENTITY_FIELDS
+    .some((key) => !/^[0-9a-f]{64}$/.test(String(providerIdentity[key] ?? "")))) {
     throw visionError("EXPLORATION_VISION_PROVIDER_UNPINNED", "vision navigator requires pinned model/script/config hashes");
   }
 
@@ -505,6 +593,8 @@ export function createExplorationVisionNavigator({
       counters.analysisAttempts += 1;
       const blocks = await work.run({
         frame: captured,
+        page,
+        requestedRole: navigationRole,
         providerIdentity,
         deadlineMs,
         signal,

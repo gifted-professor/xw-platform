@@ -1,13 +1,18 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
 import { createExplorerRoutineRuntime } from "../ops/_xhs-routine-explorer-runtime.mjs";
 import { createProductionExplorationVisionNavigator } from "../ops/_xhs-routine-vision-factory.mjs";
-import { hashFilePinned, resolvePinnedVisionConfig } from "../scripts/lib/xhs-exploration-vision.mjs";
+import { resolvePinnedVisionConfig } from "../scripts/lib/xhs-exploration-vision.mjs";
+import { buildPinnedVisionConfig } from "../ops/xw-xhs-vision-pin.mjs";
+import {
+  enumeratePythonRuntimeClosure,
+  stageExplorationVisionProviderBundle,
+} from "../scripts/lib/xhs-exploration-provider-bundle.mjs";
 
 function json(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -157,32 +162,33 @@ test("V3 production factory re-hashes the sealed provider and constructs one bou
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const script = join(root, "analyze.py");
   const model = join(root, "model.bin");
+  const manifestPath = join(root, "provider-bundle.v1.json");
   const configPath = join(root, "xhs-exploration-vision-provider.v1.json");
   writeFileSync(script, "# pinned analysis script\n", "utf8");
   writeFileSync(model, Buffer.from("pinned-model"));
-  const config = {
-    schemaId: "xw.xhs.exploration-vision-config.v1",
-    schemaVersion: 1,
-    pin: {
-      python: { path: process.execPath, sha256: hashFilePinned(process.execPath) },
-      script: { path: script, sha256: hashFilePinned(script) },
-      model: { path: model, sha256: hashFilePinned(model) },
-    },
-    rules: {
-      mode: "shadow",
-      roles: ["PAUSE_VIDEO_SAFE_ZONE"],
-      targets: ["暂停"],
-      allowEffectLabels: false,
-      maxAnalysisAttemptsGlobal: 6,
-    },
-    analysis: {
-      protocol: "xw.xhs.exploration-vision-process.v1",
-      maxBufferBytes: 4096,
-      timeoutMs: 125,
-    },
-  };
+  const dataFiles = enumeratePythonRuntimeClosure({ python: process.execPath });
+  stageExplorationVisionProviderBundle({
+    manifestPath,
+    python: process.execPath,
+    script,
+    model,
+    dataFiles,
+    maxBufferBytes: 4096,
+    timeoutMs: 125,
+  });
+  const config = buildPinnedVisionConfig({
+    python: process.execPath,
+    script,
+    model,
+    dataFiles,
+    bundleManifest: manifestPath,
+    maxBufferBytes: 4096,
+    timeoutMs: 125,
+  });
   writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+  const rawConfigHash = createHash("sha256").update(readFileSync(configPath)).digest("hex");
   const resolved = resolvePinnedVisionConfig(configPath);
+  assert.deepEqual(resolved.allowedModes, ["shadow", "canary1"]);
   assert.throws(
     () => createProductionExplorationVisionNavigator({
       mode: "shadow",
@@ -249,6 +255,31 @@ test("V3 production factory re-hashes the sealed provider and constructs one bou
   assert.equal(observed.tapAuthorized, false);
   assert.equal(analyzerRequest.deadlineMs, 125, "pinned timeout narrows the global 8s ceiling");
   assert.equal(analyzerRequest.frame.frameHash, frameHash);
+  const canaryNavigator = createProductionExplorationVisionNavigator({
+    mode: "canary1",
+    alias: "03",
+    providerBinding: resolved.provider,
+    captureFrame: async () => ({
+      frameId: "frame-canary",
+      bytes: pngBytes,
+      frameHash,
+      capturedAt: Date.now(),
+    }),
+    configPath,
+    allowTestConfigOverride: true,
+    stagingRoot: join(root, "private-canary"),
+    reserveAnalysisAttempt: async () => ({ reservationId: "reservation-canary" }),
+    settleAnalysisAttempt: async () => ({ reservationId: "reservation-canary" }),
+    analyzerFactory: () => ({ analyze: async () => [], close: async () => {} }),
+  });
+  assert.equal(canaryNavigator.mode, "canary1");
+  assert.equal(canaryNavigator.providerIdentity.configHash, navigator.providerIdentity.configHash);
+  assert.equal(
+    createHash("sha256").update(readFileSync(configPath)).digest("hex"),
+    rawConfigHash,
+    "R2 shadow to R3 canary must not rewrite the provider config",
+  );
+  await canaryNavigator.close();
   await navigator.close();
   assert.equal(analyzerClosed, true);
   assert.throws(
@@ -459,7 +490,20 @@ test("V3 runtime binds all exploration RPCs, screen bytes, and vision factory to
       return json({ permit: { permitId: "expl-permit-v3", ...body } }, 201);
     }
     if (method === "POST" && parsed.pathname === "/control/v1/exploration-authority/expl-auth-v3/permits/expl-permit-v3/consume") {
-      return json({ permit: { permitId: "expl-permit-v3" }, job: { jobId: "expl-job-v3", status: "succeeded" } });
+      return json({
+        permit: { permitId: "expl-permit-v3" },
+        job: { jobId: "expl-job-v3", status: "succeeded" },
+        budgetReservation: {
+          reservationId: "expl-step-res-v3",
+          kind: "reservedPrimitives",
+          alias: "03",
+          amount: 1,
+          used: 1,
+          cap: 32,
+          state: "reserved",
+          operationHash: "8".repeat(64),
+        },
+      });
     }
     if (method === "POST" && parsed.pathname === "/control/v1/exploration-authority/expl-auth-v3/budget") {
       return json({ reservation: {
@@ -539,6 +583,7 @@ test("V3 runtime binds all exploration RPCs, screen bytes, and vision factory to
       capturedAt: 1_800_000_000_000,
       analysisRef: "analysis-proof-v3",
       providerIdentity: {
+        providerBundleDigest: "9".repeat(64),
         pythonHash: "0".repeat(64),
         modelHash: "1".repeat(64),
         scriptHash: "2".repeat(64),
@@ -549,12 +594,14 @@ test("V3 runtime binds all exploration RPCs, screen bytes, and vision factory to
   });
   assert.equal(permit.permitId, "expl-permit-v3");
   assert.equal(permit.visualProof.frameId, "frame-proof-v3");
-  assert.equal((await runtime.consumeExplorationPermit({
+  const consumed = await runtime.consumeExplorationPermit({
     ...binding,
     permitId: permit.permitId,
     payload: { primitive: "tap", x: 540, y: 1200 },
     freshObservation: { page: "VIDEO_NOTE", overlaySafe: true, evidenceHash: "c".repeat(64) },
-  })).job.jobId, "expl-job-v3");
+  });
+  assert.equal(consumed.job.jobId, "expl-job-v3");
+  assert.equal(consumed.budgetReservation.kind, "reservedPrimitives");
   const reservation = await runtime.reserveExplorationBudget({ ...binding, alias: "03", kind: "resultScreens", amount: 1 });
   assert.equal(reservation.reservationId, "expl-res-v3");
   assert.equal((await runtime.settleExplorationReservation({
@@ -590,6 +637,7 @@ test("V3 runtime binds all exploration RPCs, screen bytes, and vision factory to
   const navigator = runtime.createExplorationVisionNavigator({
     mode: "shadow",
     providerBinding: {
+      providerBundleDigest: "9".repeat(64),
       pythonHash: "0".repeat(64),
       modelHash: "1".repeat(64),
       scriptHash: "2".repeat(64),

@@ -33,6 +33,13 @@ import {
 import { resolvePolicyMode } from "./lib/nonpayment-autonomy-policy.mjs";
 import { StateStore } from "./lib/state-store.mjs";
 import { TrustedHumanIssuer } from "./lib/trusted-human-issuer.mjs";
+import { createFixedXhsV3TaskBootstrap } from
+  "../../orchestrator/scripts/lib/xhs-v3-task-bootstrap.mjs";
+import { createFixedXhsRpaTaskBootstrap } from
+  "../../orchestrator/scripts/lib/xhs-rpa-task-bootstrap.mjs";
+import { createXhsRpaM5RuntimeOracle } from "./lib/xhs-rpa-m5-runtime.mjs";
+import { createFixedXhsV3OperatorAuthorization } from
+  "./lib/xhs-v3-fixed-operator-auth.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -297,6 +304,35 @@ export function loadLegacyCompatProfile({ startDir = dirname(fileURLToPath(impor
   }
 }
 
+/**
+ * Bind ControlPlane's synchronous R3 checks to the task bootstrap that will be
+ * installed later in the same listener startup.  Before that installation (or
+ * if a non-task bootstrap is injected) the bridge is strictly locked.  The
+ * bridge accepts no store/path/key/binding dependency of its own.
+ */
+export function createXhsV3TaskECorpusInterlockBridge({ resolveTaskBootstrap } = {}) {
+  if (typeof resolveTaskBootstrap !== "function") {
+    throw new ControlPlaneError(
+      "ECORPUS_INTERLOCK_NOT_CONFIGURED",
+      "R3 visual authority requires a task-bootstrap resolver",
+      { status: 503 },
+    );
+  }
+  return Object.freeze({
+    verifyR3(input = {}) {
+      const taskBootstrap = resolveTaskBootstrap();
+      if (!taskBootstrap || typeof taskBootstrap.verifyECorpusR3 !== "function") {
+        throw new ControlPlaneError(
+          "ECORPUS_INTERLOCK_NOT_CONFIGURED",
+          "R3 visual authority is locked until the task-owned E-Corpus verifier is installed",
+          { status: 503 },
+        );
+      }
+      return taskBootstrap.verifyECorpusR3(input);
+    },
+  });
+}
+
 export function createControlPlaneRuntime({
   nodeId = process.env.CONTROL_PLANE_NODE_ID || "DESKTOP-3I1EVHE",
   dbPath,
@@ -352,6 +388,19 @@ export function createControlPlaneRuntime({
   m6GateFOperationsConfig = null,
   m6GateFFaultAfterForOperation = () => null,
   m6RuntimeMode = process.env.XW_M6_RUNTIME_MODE || "STANDARD",
+  // Installed only by the verified formal launcher. The task bootstrap lives
+  // in this listener process; it never auto-runs a mission during startup.
+  xhsV3TaskBootstrapEnabled = process.env.XW_XHS_V3_TASK_BOOTSTRAP_ENABLED === "1",
+  xhsV3TaskBootstrap = null,
+  xhsV3PostECorpusRunner = null,
+  // RPA stays dormant/default-disabled, but its manual-once listener surface
+  // must be explicitly installed by the verified formal launcher.
+  xhsRpaTaskBootstrapEnabled = process.env.XW_XHS_RPA_TASK_BOOTSTRAP_ENABLED === "1",
+  xhsRpaTaskBootstrap = null,
+  xhsRpaM5Runtime = null,
+  // A second request-bound authority keeps a generic Gate-F HTTP client from
+  // impersonating the tracked, FINAL-release production operator.
+  xhsV3FixedOperatorAuthorization = null,
 } = {}) {
   if (!new Set(["STANDARD", "QUALIFICATION_ONLY", "FINAL"]).has(m6RuntimeMode)) {
     throw new ControlPlaneError("M6_RUNTIME_MODE_INVALID", "M6 runtime mode is not recognized", { status: 503 });
@@ -423,6 +472,15 @@ export function createControlPlaneRuntime({
   const resolvedPolicyMode = policyMode ?? (
     autonomyMode === "legacy" ? null : resolvePolicyMode({ env: process.env, adapterKind: "real" })
   );
+  // The task bootstrap depends on Gate-F and is constructed below, after the
+  // ControlPlane.  A closure keeps the CP gate locked during construction and
+  // binds it to that exact in-process task instance before the server starts.
+  let resolvedXhsV3TaskBootstrap = xhsV3TaskBootstrap;
+  const xhsV3ECorpusInterlock = xhsV3TaskBootstrapEnabled
+    ? createXhsV3TaskECorpusInterlockBridge({
+      resolveTaskBootstrap: () => resolvedXhsV3TaskBootstrap,
+    })
+    : null;
   const control = new ControlPlane({
     state: runtimeState,
     capabilities: registry,
@@ -439,6 +497,7 @@ export function createControlPlaneRuntime({
     standingGrantAdrAccepted,
     standingGrantAdrPath,
     policyMode: resolvedPolicyMode,
+    ...(xhsV3ECorpusInterlock ? { eCorpusInterlock: xhsV3ECorpusInterlock } : {}),
     receiptAuthorityAllowlist: [
       { capabilityId: "xhs.observe.note_detail", adapterId: "xhs" },
       { capabilityId: "xhs.explore.open_feed_note", adapterId: "xhs" },
@@ -578,6 +637,52 @@ export function createControlPlaneRuntime({
     gateOperations: m6GateFOperations,
   });
 
+  if (xhsV3TaskBootstrapEnabled) {
+    if (m6RuntimeMode !== "FINAL" || !m6GateFOperations) {
+      throw new ControlPlaneError(
+        "XHS_V3_TASK_BOOTSTRAP_RUNTIME_INVALID",
+        "formal XHS V3 bootstrap requires the FINAL Gate-F-owned listener",
+        { status: 503 },
+      );
+    }
+    resolvedXhsV3TaskBootstrap ??= createFixedXhsV3TaskBootstrap({
+      gateFOperations: m6GateFOperations,
+      releaseIdentity: m6Release || loadReleaseIdentity({ startDir: root }),
+      postECorpusRunner: xhsV3PostECorpusRunner,
+    });
+    if (typeof resolvedXhsV3TaskBootstrap.verifyECorpusR3 !== "function") {
+      throw new ControlPlaneError(
+        "XHS_V3_TASK_BOOTSTRAP_INTERLOCK_INVALID",
+        "formal XHS V3 bootstrap lacks the task-owned E-Corpus verifier",
+        { status: 503 },
+      );
+    }
+  }
+  let resolvedXhsV3FixedOperatorAuthorization = xhsV3FixedOperatorAuthorization;
+  if (xhsV3TaskBootstrapEnabled) {
+    resolvedXhsV3FixedOperatorAuthorization ??= createFixedXhsV3OperatorAuthorization({
+      releaseIdentity: m6Release || loadReleaseIdentity({ startDir: root }),
+    });
+  }
+  let resolvedXhsRpaTaskBootstrap = xhsRpaTaskBootstrap;
+  if (xhsRpaTaskBootstrapEnabled) {
+    if (!xhsV3TaskBootstrapEnabled || m6RuntimeMode !== "FINAL"
+      || !m6GateFOperations || !resolvedXhsV3TaskBootstrap) {
+      throw new ControlPlaneError(
+        "XHS_RPA_TASK_BOOTSTRAP_RUNTIME_INVALID",
+        "formal XHS RPA bootstrap requires the FINAL Gate-F-owned V3 listener",
+        { status: 503 },
+      );
+    }
+    const resolvedM5Runtime = xhsRpaM5Runtime ?? createXhsRpaM5RuntimeOracle({ state: runtimeState });
+    resolvedXhsRpaTaskBootstrap ??= createFixedXhsRpaTaskBootstrap({
+      gateFOperations: m6GateFOperations,
+      releaseIdentity: m6Release || loadReleaseIdentity({ startDir: root }),
+      xhsV3TaskBootstrap: resolvedXhsV3TaskBootstrap,
+      m5Runtime: resolvedM5Runtime,
+    });
+  }
+
   // Phase 4: optional generated recipe overlay. Never removes static capabilities;
   // never auto-executes recipes. Flag off → skip attach entirely.
   const overlayMode = resolveOverlayMode();
@@ -613,5 +718,8 @@ export function createControlPlaneRuntime({
     m6LiveEntry,
     m6RuntimeMode,
     m6StartupRecovery,
+    xhsV3TaskBootstrap: resolvedXhsV3TaskBootstrap,
+    xhsRpaTaskBootstrap: resolvedXhsRpaTaskBootstrap,
+    xhsV3FixedOperatorAuthorization: resolvedXhsV3FixedOperatorAuthorization,
   };
 }

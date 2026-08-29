@@ -30,6 +30,9 @@ function fsHarness() {
       return f.content;
     },
     writeFileSync: (p, content, _opts) => {
+      if (_opts?.flag === "wx" && files.has(p) && !files.get(p).deleted) {
+        throw Object.assign(new Error("EEXIST"), { code: "EEXIST" });
+      }
       files.set(p, { content: String(content) });
     },
     renameSync: (from, to) => {
@@ -38,6 +41,7 @@ function fsHarness() {
       const dest = files.get(to);
       files.set(to, { content: f.content, acl: f.acl ?? dest?.acl });
     },
+    unlinkSync: (p) => files.delete(p),
     mkdirSync: () => {},
   };
   const aclChecker = (p) => {
@@ -47,17 +51,31 @@ function fsHarness() {
       throw new DigestKeyringError("KEYRING_ACL_INVALID", `digest key ring ${p} ACL drifted`);
     }
   };
-  return { root, files, fsImpl, aclChecker };
+  const aclHardener = (p) => {
+    const f = files.get(p);
+    if (!f) throw new DigestKeyringError("KEYRING_ACL_PROVISION_FAILED", "private temp is absent");
+    f.acl = "deny-by-default";
+  };
+  return { root, files, fsImpl, aclChecker, aclHardener };
+}
+
+function createHarnessRing(h, path, extra = {}) {
+  return createDigestKeyring({
+    path,
+    aclChecker: h.aclChecker,
+    aclHardener: h.aclHardener,
+    fsImpl: h.fsImpl,
+    ...extra,
+  });
 }
 
 test("provision creates a deny-by-default ring with exactly one active 256-bit key", () => {
   const h = fsHarness();
   try {
     const path = join(h.root, "keys", "digest-keyring.json");
-    const ring = createDigestKeyring({ path, aclChecker: h.aclChecker, fsImpl: h.fsImpl });
+    const ring = createHarnessRing(h, path);
     const provisioned = ring.provision();
     assert.equal(provisioned.activeKeyId, "ka-1");
-    h.files.get(path).acl = "deny-by-default";
     assert.equal(ring.activeKeyId(), "ka-1");
     const raw = JSON.parse(h.fsImpl.readFileSync(path, "utf8"));
     assert.equal(raw.schemaId, KEYRING_SCHEMA_ID);
@@ -70,9 +88,8 @@ test("sign/verify round-trip is domain-separated and key-bound", () => {
   const h = fsHarness();
   try {
     const path = join(h.root, "digest-keyring.json");
-    const ring = createDigestKeyring({ path, aclChecker: h.aclChecker, fsImpl: h.fsImpl });
+    const ring = createHarnessRing(h, path);
     ring.provision();
-    h.files.get(path).acl = "deny-by-default";
     const signed = ring.sign({ kind: "goal", value: "探索低卡早餐" });
     assert.match(signed.digest, /^[0-9a-f]{64}$/);
     assert.equal(ring.verify({ ...signed, kind: "goal", value: "探索低卡早餐" }).ok, true);
@@ -85,7 +102,7 @@ test("fail-closed: missing manifest, drifted schema, short key, two active keys,
   const h = fsHarness();
   try {
     const path = join(h.root, "digest-keyring.json");
-    const ring = createDigestKeyring({ path, aclChecker: h.aclChecker, fsImpl: h.fsImpl });
+    const ring = createHarnessRing(h, path);
     assert.throws(() => ring.load(), (error) => error.code === "KEYRING_MISSING");
     const valid = JSON.stringify({
       schemaId: KEYRING_SCHEMA_ID,
@@ -131,9 +148,8 @@ test("rotation retains the previous key read-only; historical digests verify WIT
   const h = fsHarness();
   try {
     const path = join(h.root, "digest-keyring.json");
-    const ring = createDigestKeyring({ path, aclChecker: h.aclChecker, fsImpl: h.fsImpl, randomBytesFn: (n) => Buffer.alloc(n, 9) });
+    const ring = createHarnessRing(h, path, { randomBytesFn: (n) => Buffer.alloc(n, 9) });
     ring.provision();
-    h.files.get(path).acl = "deny-by-default";
     const before = ring.sign({ kind: "goal", value: "原始目标" });
     const rotated = ring.rotate({ newKeyId: "ka-2" });
     assert.equal(rotated.activeKeyId, "ka-2");
@@ -155,7 +171,7 @@ test("provision refuses to overwrite an existing ring", () => {
   const h = fsHarness();
   try {
     const path = join(h.root, "digest-keyring.json");
-    const ring = createDigestKeyring({ path, aclChecker: h.aclChecker, fsImpl: h.fsImpl });
+    const ring = createHarnessRing(h, path);
     ring.provision();
     assert.throws(() => ring.provision(), (error) => error.code === "KEYRING_EXISTS");
   } finally { rmSync(h.root, { recursive: true, force: true }); }
@@ -165,7 +181,7 @@ test("key bytes are never derived from a release hash — they are 32 random byt
   const h = fsHarness();
   try {
     const path = join(h.root, "digest-keyring.json");
-    const ring = createDigestKeyring({ path, aclChecker: h.aclChecker, fsImpl: h.fsImpl, randomBytesFn: (n) => Buffer.alloc(n, 3) });
+    const ring = createHarnessRing(h, path, { randomBytesFn: (n) => Buffer.alloc(n, 3) });
     ring.provision();
     const raw = JSON.parse(h.fsImpl.readFileSync(path, "utf8"));
     const keyBytes = Buffer.from(raw.keys[0].keyBase64, "base64");

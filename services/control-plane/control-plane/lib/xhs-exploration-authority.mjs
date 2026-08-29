@@ -14,6 +14,7 @@
  */
 import { newId } from "./canonical.mjs";
 import { ControlPlaneError } from "./errors.mjs";
+import { createLockedECorpusInterlock, validateECorpusPassRef } from "./xhs-e-corpus-pass.mjs";
 
 export const EXPLORATION_PROFILE = "xhs_goal_explore_v1";
 export const EXPLORATION_TEMPLATE_ID = "xhs.explore.goal.v1";
@@ -73,8 +74,14 @@ function reject(code, message, { status = 403, details = {} } = {}) {
   throw new ControlPlaneError(code, message, { status, details });
 }
 
-export function createExplorationAuthorityPolicy({ state } = {}) {
+export function createExplorationAuthorityPolicy({
+  state,
+  eCorpusInterlock = createLockedECorpusInterlock(),
+} = {}) {
   if (!state) throw new TypeError("createExplorationAuthorityPolicy requires the CP state store");
+  if (!eCorpusInterlock || typeof eCorpusInterlock.verifyR3 !== "function") {
+    throw new TypeError("createExplorationAuthorityPolicy requires an E-Corpus interlock");
+  }
 
   /**
    * Validate a submitted sealed mission structurally. CP never trusts the
@@ -83,7 +90,7 @@ export function createExplorationAuthorityPolicy({ state } = {}) {
    * (missionHash) is asserted by the router-side mission lib; here the cap
    * floor is re-enforced so even a hash-colliding payload cannot widen budgets.
    */
-  function validateSealedMissionForAuthority(mission) {
+  function validateSealedMissionForAuthority(mission, { releaseId = null, sourceCommit = null } = {}) {
     if (!mission || typeof mission !== "object" || Array.isArray(mission)) {
       reject("EXPLORATION_MISSION_INVALID", "mission must be an object", { status: 400 });
     }
@@ -127,13 +134,77 @@ export function createExplorationAuthorityPolicy({ state } = {}) {
       if (vision.provider?.kind !== "local-pinned") {
         reject("EXPLORATION_VISION_PROVIDER_UNPINNED", "vision provider must be local-pinned", { status: 400 });
       }
-      for (const key of ["pythonHash", "modelHash", "scriptHash", "configHash"]) {
+      for (const key of ["providerBundleDigest", "pythonHash", "modelHash", "scriptHash", "configHash"]) {
         if (!/^[a-f0-9]{64}$/.test(String(vision.provider?.[key] ?? ""))) {
           reject("EXPLORATION_VISION_PROVIDER_UNPINNED", `vision provider.${key} must be 64-hex`, { status: 400 });
         }
       }
     }
-    return { budgets, vision };
+    const inferredPhase = vision.mode === "canary1" ? "R3" : vision.mode === "shadow" ? "R2" : "R0";
+    const rolloutPhase = String(vision.rolloutPhase ?? inferredPhase);
+    const validPhaseMode = (rolloutPhase === "R3" && vision.mode === "canary1")
+      || (rolloutPhase === "R2" && vision.mode === "shadow")
+      || (["R0", "R1"].includes(rolloutPhase) && vision.mode === "off");
+    if (!validPhaseMode) {
+      reject(
+        "EXPLORATION_ROLLOUT_MODE_MISMATCH",
+        `rollout phase ${rolloutPhase} is incompatible with vision mode ${vision.mode}`,
+        { status: 400 },
+      );
+    }
+
+    // R0/R1/R2 are mechanically zero even if a legacy/manual mission body
+    // still carries the parent cap.  The authority persists only these
+    // effective budgets, so bypassing the orchestrator compiler cannot make a
+    // visual reservation available.
+    let effectiveVisualPermitBudget = 0;
+    let eCorpusPassRef = null;
+    let eCorpusVerification = null;
+    if (rolloutPhase === "R3") {
+      if (!/^[a-f0-9]{40}$/.test(String(sourceCommit ?? ""))) {
+        reject("ECORPUS_SOURCE_MISMATCH", "R3 requires the full deployed source commit", { status: 403 });
+      }
+      if (!releaseId) {
+        reject("ECORPUS_RELEASE_MISMATCH", "R3 requires the deployed release identity", { status: 403 });
+      }
+      eCorpusPassRef = validateECorpusPassRef(vision.eCorpusPassRef ?? null);
+      eCorpusVerification = eCorpusInterlock.verifyR3({
+        ref: eCorpusPassRef,
+        releaseId,
+        sourceCommit,
+        providerBundleDigest: vision.provider?.providerBundleDigest,
+      });
+      if (eCorpusVerification?.ok !== true || eCorpusVerification?.status !== "PASS"
+        || eCorpusVerification?.artifactHash !== eCorpusPassRef?.artifactHash
+        || eCorpusVerification?.effectiveVisualPermitBudget !== 1) {
+        reject("ECORPUS_VERIFICATION_INVALID", "R3 E-Corpus verifier returned no exact PASS authority", { status: 403 });
+      }
+      if (budgets.visionMaxIssuedPermits !== 1 || budgets.visionMaxPhysicalTaps !== 1) {
+        reject("EXPLORATION_VISION_BUDGET_INVALID", "R3 parent issued/physical visual caps must be exactly one", { status: 400 });
+      }
+      effectiveVisualPermitBudget = 1;
+    } else if (vision.eCorpusPassRef != null) {
+      reject("ECORPUS_REF_PHASE_FORBIDDEN", `${rolloutPhase} must not carry dormant E-Corpus authority`, { status: 400 });
+    }
+    const effectiveBudgets = {
+      ...budgets,
+      visionMaxIssuedPermits: effectiveVisualPermitBudget,
+      visionMaxPhysicalTaps: effectiveVisualPermitBudget,
+    };
+    const effectiveVision = {
+      ...vision,
+      rolloutPhase,
+      effectiveVisualPermitBudget,
+      eCorpusPassRef,
+      ...(eCorpusVerification ? {
+        eCorpusBinding: {
+          artifactHash: eCorpusVerification.artifactHash,
+          sourceCommit,
+          providerBundleDigest: vision.provider.providerBundleDigest,
+        },
+      } : {}),
+    };
+    return { budgets: effectiveBudgets, vision: effectiveVision };
   }
 
   /**
@@ -141,7 +212,16 @@ export function createExplorationAuthorityPolicy({ state } = {}) {
    * [03,04], profile stamped on both sessions, budgets sealed. Zero social
    * authority/draft/bridge/transport side effects (V3-I01).
    */
-  function registerAuthority({ sessions, executionRunId, routineRunId, mission, planHash, releaseId = null, accountFingerprint = null }) {
+  function registerAuthority({
+    sessions,
+    executionRunId,
+    routineRunId,
+    mission,
+    planHash,
+    releaseId = null,
+    sourceCommit = null,
+    accountFingerprint = null,
+  }) {
     if (!Array.isArray(sessions) || sessions.length !== 2) {
       reject("EXPLORATION_SESSION_PAIR_REQUIRED", "exactly two sessions are required (03,04)", { status: 400 });
     }
@@ -155,7 +235,7 @@ export function createExplorationAuthorityPolicy({ state } = {}) {
     if (!/^[a-f0-9]{64}$/.test(String(mission?.missionHash || ""))) {
       reject("EXPLORATION_MISSION_HASH", "mission hash missing/malformed", { status: 400 });
     }
-    const validated = validateSealedMissionForAuthority(mission);
+    const validated = validateSealedMissionForAuthority(mission, { releaseId, sourceCommit });
 
     // profile marks BOTH sessions BEFORE any device I/O can happen (pair
     // barrier, §3.4): the first session to attach already rejects raw taps.
@@ -186,12 +266,35 @@ export function createExplorationAuthorityPolicy({ state } = {}) {
       accountFingerprint,
       actorId,
       lanes: mission.placement.lanes,
-      budgets: mission.budgets,
+      budgets: validated.budgets,
       vision: validated.vision,
       profile: EXPLORATION_PROFILE,
       laneBindings,
       createdAt: Date.now(),
     });
+  }
+
+  /** Fresh E-Corpus verification immediately before visual reserve/consume. */
+  function assertVisualUnlocked({ authority }) {
+    if (authority?.vision?.rolloutPhase !== "R3"
+      || authority?.vision?.mode !== "canary1"
+      || authority?.vision?.effectiveVisualPermitBudget !== 1
+      || authority?.budgets?.visionMaxIssuedPermits !== 1
+      || authority?.budgets?.visionMaxPhysicalTaps !== 1) {
+      reject("EXPLORATION_VISUAL_BUDGET_LOCKED", "visual permit budget is locked at zero before R3", { status: 403 });
+    }
+    const result = eCorpusInterlock.verifyR3({
+      ref: authority.vision.eCorpusPassRef,
+      releaseId: authority.releaseId,
+      sourceCommit: authority.vision.eCorpusBinding?.sourceCommit,
+      providerBundleDigest: authority.vision.provider?.providerBundleDigest,
+    });
+    if (result?.ok !== true || result?.status !== "PASS"
+      || result?.artifactHash !== authority.vision.eCorpusPassRef?.artifactHash
+      || result?.effectiveVisualPermitBudget !== 1) {
+      reject("ECORPUS_VERIFICATION_INVALID", "fresh E-Corpus verification failed", { status: 403 });
+    }
+    return result;
   }
 
   /**
@@ -215,5 +318,6 @@ export function createExplorationAuthorityPolicy({ state } = {}) {
     validateSealedMissionForAuthority,
     registerAuthority,
     assertGenericSessionAction,
+    assertVisualUnlocked,
   };
 }

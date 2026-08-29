@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -11,6 +11,10 @@ import {
   runBoundedVisionWork,
 } from "../scripts/lib/xhs-exploration-vision.mjs";
 import { buildPinnedVisionConfig } from "../ops/xw-xhs-vision-pin.mjs";
+import {
+  enumeratePythonRuntimeClosure,
+  stageExplorationVisionProviderBundle,
+} from "../scripts/lib/xhs-exploration-provider-bundle.mjs";
 
 function png(width = 1080, height = 2400) {
   const bytes = Buffer.alloc(33);
@@ -23,6 +27,7 @@ function png(width = 1080, height = 2400) {
 }
 
 const IDENTITY = Object.freeze({
+  providerBundleDigest: "8".repeat(64),
   pythonHash: "9".repeat(64),
   modelHash: "a".repeat(64),
   scriptHash: "b".repeat(64),
@@ -56,12 +61,16 @@ function navigatorHarness({ mode = "canary1", workRun = async () => [block()], n
   const reservations = [];
   const settlements = [];
   const journals = [];
+  let captureCalls = 0;
   let currentNow = nowMs;
   const navigator = createExplorationVisionNavigator({
     mode,
     providerIdentity: IDENTITY,
     clock: { nowMs: () => currentNow },
-    captureFrame: async () => ({ frameId: "screen:03:1", bytes, capturedAt: 1_000 }),
+    captureFrame: async () => {
+      captureCalls += 1;
+      return { frameId: "screen:03:1", bytes, capturedAt: 1_000 };
+    },
     work: { run: workRun },
     reserveAnalysisAttempt: async (input) => {
       reservations.push(input);
@@ -76,6 +85,7 @@ function navigatorHarness({ mode = "canary1", workRun = async () => [block()], n
     reservations,
     settlements,
     journals,
+    get captureCalls() { return captureCalls; },
     setNow(value) { currentNow = value; },
   };
 }
@@ -91,22 +101,44 @@ const REQUEST = Object.freeze({
 test("pin config hashes python/script/model plus every semantic rule and timing field", () => {
   const root = mkdtempSync(join(tmpdir(), "xhs-v3-vision-pin-"));
   try {
-    const python = join(root, "python.exe");
+    const runtime = join(root, "runtime");
+    mkdirSync(runtime, { recursive: true });
+    const python = join(runtime, "python.exe");
     const script = join(root, "analyze.py");
     const model = join(root, "model.bin");
+    const manifest = join(root, "provider-bundle.v1.json");
     const configPath = join(root, "provider.json");
     writeFileSync(python, "python-bytes");
     writeFileSync(script, "script-bytes");
     writeFileSync(model, "model-bytes");
-    const config = buildPinnedVisionConfig({ mode: "shadow", python, script, model, timeoutMs: 7000 });
+    const dataFiles = enumeratePythonRuntimeClosure({ python });
+    const staged = stageExplorationVisionProviderBundle({
+      manifestPath: manifest,
+      python,
+      script,
+      model,
+      dataFiles,
+      timeoutMs: 7000,
+    });
+    const config = buildPinnedVisionConfig({
+      python,
+      script,
+      model,
+      dataFiles,
+      bundleManifest: manifest,
+      timeoutMs: 7000,
+    });
     writeFileSync(configPath, JSON.stringify(config));
     const resolved = resolvePinnedVisionConfig(configPath);
+    assert.equal(resolved.provider.providerBundleDigest, staged.providerBundleDigest);
     assert.match(resolved.provider.pythonHash, /^[a-f0-9]{64}$/);
     assert.equal(resolved.analysis.timeoutMs, 7000);
-    const firstHash = resolved.provider.configHash;
     config.analysis.timeoutMs = 6999;
     writeFileSync(configPath, JSON.stringify(config));
-    assert.notEqual(resolvePinnedVisionConfig(configPath).provider.configHash, firstHash);
+    assert.throws(
+      () => resolvePinnedVisionConfig(configPath),
+      (error) => error.code === "EXPLORATION_VISION_BUNDLE_DRIFT",
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -162,6 +194,31 @@ test("forbidden DUMP stops before capture, provider, and CP analysis reservation
     () => h.navigator.proposeNavigationCandidate({ ...REQUEST, dumpDecision: dumpDecision("FORBIDDEN_OR_RISKY") }),
     (error) => error.code === "EXPLORATION_VISION_DUMP_FORBIDDEN",
   );
+  assert.equal(h.reservations.length, 0);
+  assert.deepEqual(h.navigator.stats(), { analysisAttempts: 0, permitsIssued: 0, permitsConsumed: 0, physicalTaps: 0 });
+});
+
+test("offline provider route capability cannot widen the live navigator role allowlist", async () => {
+  let providerCalls = 0;
+  const h = navigatorHarness({
+    workRun: async () => {
+      providerCalls += 1;
+      return [block({ label: "打开评论面板导航区" })];
+    },
+  });
+  await assert.rejects(
+    () => h.navigator.proposeNavigationCandidate({
+      ...REQUEST,
+      navigationRole: "OPEN_COMMENT_PANEL",
+      dumpDecision: {
+        ...dumpDecision(),
+        navigationRole: "OPEN_COMMENT_PANEL",
+      },
+    }),
+    (error) => error.code === "EXPLORATION_VISION_ROLE_FORBIDDEN",
+  );
+  assert.equal(h.captureCalls, 0);
+  assert.equal(providerCalls, 0);
   assert.equal(h.reservations.length, 0);
   assert.deepEqual(h.navigator.stats(), { analysisAttempts: 0, permitsIssued: 0, permitsConsumed: 0, physicalTaps: 0 });
 });

@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 
 export const XHS_EXPLORATION_VISION_CORPUS_SCHEMA_ID =
   "xw.xhs.exploration-vision-corpus.v1";
+export const XHS_EXPLORATION_DUMP_RECEIPT_SCHEMA_ID =
+  "xw.xhs.exploration-dump-receipt.v1";
 
 export const XHS_EXPLORATION_VISION_CORPUS_ROUTES = Object.freeze([
   "HOME_FEED",
@@ -13,6 +15,16 @@ export const XHS_EXPLORATION_VISION_CORPUS_ROUTES = Object.freeze([
 
 export const XHS_EXPLORATION_VISION_CORPUS_MIN_FRAMES_PER_ROUTE = 3;
 export const XHS_EXPLORATION_VISION_CORPUS_MIN_CONFIDENCE = 0.9;
+export const XHS_EXPLORATION_VISION_CORPUS_PROVENANCE = Object.freeze({
+  usageClass: "calibration-only",
+  gateECountingEligible: false,
+  captureBoundary: "pre-P5",
+});
+export const XHS_EXPLORATION_VISION_CORPUS_GATE_E_PROVENANCE = Object.freeze({
+  usageClass: "gate-e-counting",
+  gateECountingEligible: true,
+  captureBoundary: "P5-R1-R2",
+});
 
 const ROUTE_ROLES = Object.freeze({
   HOME_FEED: Object.freeze(["OPEN_CONTENT_CARD"]),
@@ -22,7 +34,8 @@ const ROUTE_ROLES = Object.freeze({
   COMMENT_PANEL: Object.freeze(["BACK"]),
 });
 
-const DUMP_VERDICTS = new Set(["AMBIGUOUS_SAFE", "ABSENT_OR_INVALID"]);
+const FALLBACK_DUMP_VERDICTS = new Set(["AMBIGUOUS_SAFE", "ABSENT_OR_INVALID"]);
+const DUMP_VERDICTS = new Set(["COMPLETE_SAFE_UNIQUE", ...FALLBACK_DUMP_VERDICTS]);
 const PROTECTED_REGION_KINDS = new Set([
   "STATUS_BAR",
   "TOP_CHROME",
@@ -30,7 +43,9 @@ const PROTECTED_REGION_KINDS = new Set([
   "SOCIAL_ACTIONS",
   "COMMENT_COMPOSER",
 ]);
-const IDENTITY_FIELDS = Object.freeze(["pythonHash", "modelHash", "scriptHash", "configHash"]);
+const IDENTITY_FIELDS = Object.freeze([
+  "providerBundleDigest", "pythonHash", "modelHash", "scriptHash", "configHash",
+]);
 const HEX_64 = /^[0-9a-f]{64}$/;
 const SOURCE_REF = /^src:[0-9a-f]{64}$/;
 const ALIAS = /^0[1-4]$/;
@@ -59,6 +74,12 @@ const EFFECT_SEMANTIC_CLASSES = new Set([
   "COMMENT_SUBMIT",
   "SHARE",
 ]);
+const PROVIDER_LABEL_BY_ROLE = Object.freeze({
+  OPEN_CONTENT_CARD: "打开内容卡片安全区",
+  OPEN_COMMENT_PANEL: "打开评论面板导航区",
+  PAUSE_VIDEO_SAFE_ZONE: "暂停视频安全区",
+  BACK: "返回导航区",
+});
 
 function stableJson(value) {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
@@ -87,6 +108,81 @@ function annotationBody(row) {
  */
 export function deriveVisionCorpusAnnotationHash(row) {
   return sha256(Buffer.from(stableJson(annotationBody(row)), "utf8"));
+}
+
+const DUMP_ZONE_KIND = Object.freeze({
+  status_bar: "STATUS_BAR",
+  top_chrome: "TOP_CHROME",
+  bottom: "BOTTOM_NAV",
+  bottom_nav: "BOTTOM_NAV",
+  effect_control: "SOCIAL_ACTIONS",
+  social_actions: "SOCIAL_ACTIONS",
+  comment_composer: "COMMENT_COMPOSER",
+});
+
+function rectToCorpusBounds(rect) {
+  if (!rect || ![rect.x, rect.y, rect.w, rect.h].every(Number.isInteger)
+    || rect.x < 0 || rect.y < 0 || rect.w <= 0 || rect.h <= 0) return null;
+  return [rect.x, rect.y, rect.x + rect.w, rect.y + rect.h];
+}
+
+/**
+ * Normalize a parser-produced, role-specific DUMP decision into the exact
+ * content-addressed receipt schema consumed by Gate E. Capture code must hash
+ * the serialized returned object and store those exact bytes privately.
+ */
+export function buildVisionCorpusDumpReceipt({
+  frameHash,
+  pageClass,
+  requestedRole,
+  dumpDecision,
+  evidenceHash,
+} = {}) {
+  if (!HEX_64.test(String(frameHash ?? "")) || !HEX_64.test(String(evidenceHash ?? ""))) {
+    throw new TypeError("DUMP receipt requires frame/evidence sha256 bindings");
+  }
+  const fallbackEligible = FALLBACK_DUMP_VERDICTS.has(dumpDecision?.verdict);
+  if (!DUMP_VERDICTS.has(dumpDecision?.verdict)
+    || !Object.hasOwn(ROUTE_ROLES, pageClass)
+    || !ROUTE_ROLES[pageClass].includes(requestedRole)
+    || dumpDecision?.page !== pageClass
+    || dumpDecision?.navigationRole !== requestedRole
+    || dumpDecision?.visionEligible !== fallbackEligible) {
+    throw new TypeError("DUMP decision is not role-bound to its exact fallback eligibility");
+  }
+  const positiveBounds = dumpDecision.positiveRegion == null
+    ? null : rectToCorpusBounds(dumpDecision.positiveRegion);
+  const protectedRegions = (dumpDecision.protectedZones ?? []).map((zone) => ({
+    kind: DUMP_ZONE_KIND[zone.kind] ?? null,
+    bounds: rectToCorpusBounds(zone),
+  }));
+  if ((fallbackEligible && (!positiveBounds || protectedRegions.length === 0))
+    || (dumpDecision.positiveRegion != null && !positiveBounds)
+    || protectedRegions.some((zone) => !zone.kind || !zone.bounds)) {
+    throw new TypeError("DUMP decision lacks normalized positive/protected geometry");
+  }
+  if (!Array.isArray(dumpDecision.reasons)
+    || dumpDecision.reasons.length === 0
+    || dumpDecision.reasons.some((reason) => typeof reason !== "string" || !reason)) {
+    throw new TypeError("DUMP decision requires non-empty stable reasons");
+  }
+  return {
+    schemaId: XHS_EXPLORATION_DUMP_RECEIPT_SCHEMA_ID,
+    schemaVersion: 1,
+    frameHash,
+    pageClass,
+    requestedRole,
+    dumpDecision: {
+      verdict: dumpDecision.verdict,
+      page: pageClass,
+      navigationRole: requestedRole,
+      visionEligible: fallbackEligible,
+      evidenceHash,
+      positiveRegions: positiveBounds ? [{ role: requestedRole, bounds: positiveBounds }] : [],
+      protectedRegions,
+      reasons: [...dumpDecision.reasons],
+    },
+  };
 }
 
 function issue(errors, code, message, rowId = null) {
@@ -158,12 +254,18 @@ function validateFrame(frame, errors, rowId) {
 
 function validateGeometry(row, errors, rowId) {
   const geometry = row?.geometry;
+  const fallbackEligible = FALLBACK_DUMP_VERDICTS.has(row?.dumpVerdict);
   if (!isPlainObject(geometry)
     || !Array.isArray(geometry.positiveRegions)
-    || geometry.positiveRegions.length === 0
     || !Array.isArray(geometry.protectedRegions)
-    || geometry.protectedRegions.length === 0) {
-    issue(errors, "CORPUS_GEOMETRY_INVALID", "geometry needs positiveRegions and protectedRegions", rowId);
+    || (fallbackEligible
+      && (geometry.positiveRegions.length === 0 || geometry.protectedRegions.length === 0))) {
+    issue(
+      errors,
+      "CORPUS_GEOMETRY_INVALID",
+      "fallback rows need positive/protected geometry; COMPLETE rows may keep empty geometry",
+      rowId,
+    );
     return;
   }
   if (Object.keys(geometry).some((key) => !["positiveRegions", "protectedRegions"].includes(key))) {
@@ -230,7 +332,7 @@ export function validateVisionCorpusManifest(manifest) {
   }
   const topLevelKeys = [
     "schemaId", "schemaVersion", "requiredRoutes",
-    "minimumDistinctFramesPerRoute", "coverage", "rows",
+    "minimumDistinctFramesPerRoute", "provenance", "coverage", "rows",
   ];
   if (isPlainObject(manifest)
     && Object.keys(manifest).some((key) => !topLevelKeys.includes(key))) {
@@ -241,6 +343,15 @@ export function validateVisionCorpusManifest(manifest) {
   }
   if (manifest?.minimumDistinctFramesPerRoute !== XHS_EXPLORATION_VISION_CORPUS_MIN_FRAMES_PER_ROUTE) {
     issue(errors, "CORPUS_MINIMUM_INVALID", "minimumDistinctFramesPerRoute is fixed at 3");
+  }
+  const provenanceJson = stableJson(manifest?.provenance);
+  if (provenanceJson !== stableJson(XHS_EXPLORATION_VISION_CORPUS_PROVENANCE)
+    && provenanceJson !== stableJson(XHS_EXPLORATION_VISION_CORPUS_GATE_E_PROVENANCE)) {
+    issue(
+      errors,
+      "CORPUS_PROVENANCE_INVALID",
+      "tracked pre-P5 rows are calibration-only and cannot count toward Gate E",
+    );
   }
   if (!Array.isArray(manifest?.rows)) {
     issue(errors, "CORPUS_ROWS_INVALID", "rows must be an array");
@@ -274,10 +385,10 @@ export function validateVisionCorpusManifest(manifest) {
       ? ROUTE_ROLES[row.pageClass]
       : [];
     if (!Array.isArray(row?.positiveRoles)
-      || row.positiveRoles.length === 0
+      || row.positiveRoles.length !== 1
       || new Set(row.positiveRoles).size !== row.positiveRoles.length
       || row.positiveRoles.some((role) => !routeRoles.includes(role))) {
-      issue(errors, "CORPUS_POSITIVE_ROLES_INVALID", "positiveRoles are not a unique subset of the route's closed roles", rowId);
+      issue(errors, "CORPUS_POSITIVE_ROLES_INVALID", "each corpus row must request exactly one route-allowed role", rowId);
     }
     validateGeometry(row, errors, rowId);
     if (!HEX_64.test(String(row?.annotationHash ?? ""))
@@ -353,22 +464,98 @@ function providerAnalyze(provider) {
   return null;
 }
 
-function compareProviderResult({ row, result, expectedProviderIdentity, minimumConfidence }) {
+function providerPinnedIdentity(provider) {
+  if (!provider) return null;
+  return provider.providerIdentity ?? provider.identity ?? null;
+}
+
+/**
+ * Adapt the real pinned process analyzer (which returns selectBlock-shaped
+ * rows) to the strictly oracle-separated corpus protocol. The adapter binds
+ * page/requestedRole before process spawn and owns frame/identity/result
+ * projection; the provider never receives hand annotations or geometry.
+ *
+ * Supporting the closed offline route set here does not grant live authority.
+ * Live mission/navigator/CP roles remain separately restricted to the initial
+ * VIDEO_NOTE/PAUSE_VIDEO_SAFE_ZONE canary.
+ */
+export function createVisionCorpusProcessProviderAdapter({
+  analyzer,
+  providerIdentity,
+  deadlineMs = 8_000,
+} = {}) {
+  if (!analyzer || typeof analyzer.analyze !== "function") {
+    throw new TypeError("corpus process adapter requires analyzer.analyze");
+  }
+  if (!validProviderIdentity(providerIdentity)) {
+    throw new TypeError("corpus process adapter requires a pinned provider identity");
+  }
+  if (!Number.isInteger(deadlineMs) || deadlineMs <= 0 || deadlineMs > 8_000) {
+    throw new TypeError("corpus process adapter deadline must be within 1..8000ms");
+  }
+  return Object.freeze({
+    providerIdentity: Object.freeze({ ...providerIdentity }),
+    async analyze(request = {}) {
+      const expectedLabel = PROVIDER_LABEL_BY_ROLE[request.requestedRole];
+      if (!expectedLabel
+        || !Object.hasOwn(ROUTE_ROLES, request.page)
+        || !ROUTE_ROLES[request.page].includes(request.requestedRole)
+        || !Buffer.isBuffer(request.frame?.bytes)) {
+        throw new TypeError("corpus process request is outside the closed route protocol");
+      }
+      const blocks = await analyzer.analyze({
+        frame: {
+          bytes: Buffer.from(request.frame.bytes),
+          frameHash: request.frame.sha256,
+          capturedAt: 0,
+        },
+        page: request.page,
+        requestedRole: request.requestedRole,
+        deadlineMs,
+      });
+      if (!Array.isArray(blocks) || blocks.some((block) => block?.label !== expectedLabel)) {
+        return { frameHash: request.frame.sha256, verdict: "UNSAFE", blocks: [] };
+      }
+      if (blocks.length !== 1) {
+        return {
+          frameHash: request.frame.sha256,
+          verdict: blocks.length > 1 ? "AMBIGUOUS" : "NOT_FOUND",
+          blocks: [],
+        };
+      }
+      const block = blocks[0];
+      const bounds = block?.bounds;
+      if (!bounds || ![bounds.x, bounds.y, bounds.w, bounds.h].every(Number.isFinite)
+        || bounds.w <= 0 || bounds.h <= 0) {
+        return { frameHash: request.frame.sha256, verdict: "UNSAFE", blocks: [] };
+      }
+      return {
+        frameHash: request.frame.sha256,
+        verdict: "SAFE",
+        blocks: [{
+          role: request.requestedRole,
+          semanticClass: "NAVIGATION",
+          confidence: Number(block.confidence ?? 0),
+          bounds: [bounds.x, bounds.y, bounds.x + bounds.w, bounds.y + bounds.h],
+        }],
+      };
+    },
+  });
+}
+
+function compareProviderResult({ row, result, minimumConfidence }) {
   const errors = [];
   const rowId = row.id;
   if (!isPlainObject(result)) {
     issue(errors, "CORPUS_PROVIDER_RESULT_INVALID", "provider result must be an object", rowId);
     return { tapAuthorized: false, errors };
   }
-  if (result.rowId !== row.id
-    || result.sourceRef !== row.sourceRef
-    || result.frameSha256 !== row.frame.sha256
-    || result.annotationHash !== row.annotationHash
-    || result.pageClass !== row.pageClass) {
-    issue(errors, "CORPUS_PROVIDER_BINDING_DRIFT", "provider result is not bound to row/source/frame/annotation/route", rowId);
+  const resultKeys = ["frameHash", "verdict", "blocks"];
+  if (Object.keys(result).some((key) => !resultKeys.includes(key))) {
+    issue(errors, "CORPUS_PROVIDER_RESULT_FIELD_INVALID", "provider result contains non-protocol fields", rowId);
   }
-  if (!sameProviderIdentity(result.providerIdentity, expectedProviderIdentity)) {
-    issue(errors, "CORPUS_PROVIDER_IDENTITY_DRIFT", "provider identity does not match the pinned identity", rowId);
+  if (result.frameHash !== row.frame.sha256) {
+    issue(errors, "CORPUS_PROVIDER_BINDING_DRIFT", "provider result is not bound to the evaluated frame", rowId);
   }
   if (result.verdict !== "SAFE") {
     issue(errors, "CORPUS_PROVIDER_UNSAFE_OR_AMBIGUOUS", "only a SAFE unique navigation candidate can pass", rowId);
@@ -381,6 +568,10 @@ function compareProviderResult({ row, result, expectedProviderIdentity, minimumC
   if (!isPlainObject(block)) {
     issue(errors, "CORPUS_PROVIDER_BLOCK_INVALID", "provider candidate is invalid", rowId);
     return { tapAuthorized: false, errors };
+  }
+  const blockKeys = ["role", "semanticClass", "confidence", "bounds"];
+  if (Object.keys(block).some((key) => !blockKeys.includes(key))) {
+    issue(errors, "CORPUS_PROVIDER_BLOCK_FIELD_INVALID", "provider block contains non-protocol fields", rowId);
   }
   if (!row.positiveRoles.includes(block.role)
     || !(ROUTE_ROLES[row.pageClass] ?? []).includes(block.role)) {
@@ -410,6 +601,76 @@ function compareProviderResult({ row, result, expectedProviderIdentity, minimumC
   return { tapAuthorized: errors.length === 0, errors };
 }
 
+function validateDumpReceiptBytes(bytes, row) {
+  const errors = [];
+  const rowId = row?.id ?? null;
+  const rowFrame = isPlainObject(row?.frame) ? row.frame : {};
+  const requestedRole = Array.isArray(row?.positiveRoles) ? row.positiveRoles[0] : null;
+  if (!Buffer.isBuffer(bytes)) {
+    issue(errors, "CORPUS_DUMP_RECEIPT_BYTES_MISSING", "DUMP receipt loader must return a Buffer", rowId);
+    return errors;
+  }
+  if (sha256(bytes) !== rowFrame.receiptHash) {
+    issue(errors, "CORPUS_DUMP_RECEIPT_HASH_DRIFT", "DUMP receipt bytes do not match frame.receiptHash", rowId);
+    return errors;
+  }
+  let receipt;
+  try {
+    receipt = JSON.parse(bytes.toString("utf8"));
+  } catch {
+    issue(errors, "CORPUS_DUMP_RECEIPT_INVALID", "DUMP receipt is not valid JSON", rowId);
+    return errors;
+  }
+  const receiptKeys = ["schemaId", "schemaVersion", "frameHash", "pageClass", "requestedRole", "dumpDecision"];
+  if (!isPlainObject(receipt)
+    || receipt.schemaId !== XHS_EXPLORATION_DUMP_RECEIPT_SCHEMA_ID
+    || receipt.schemaVersion !== 1
+    || Object.keys(receipt).length !== receiptKeys.length
+    || Object.keys(receipt).some((key) => !receiptKeys.includes(key))) {
+    issue(errors, "CORPUS_DUMP_RECEIPT_INVALID", "DUMP receipt schema/fields are invalid", rowId);
+    return errors;
+  }
+  if (receipt.frameHash !== rowFrame.sha256
+    || receipt.pageClass !== row?.pageClass
+    || receipt.requestedRole !== requestedRole) {
+    issue(errors, "CORPUS_DUMP_RECEIPT_BINDING_DRIFT", "DUMP receipt is not bound to the row frame/page/role", rowId);
+  }
+  const decision = receipt.dumpDecision;
+  const fallbackEligible = FALLBACK_DUMP_VERDICTS.has(row?.dumpVerdict);
+  const decisionKeys = [
+    "verdict", "page", "navigationRole", "visionEligible", "evidenceHash",
+    "positiveRegions", "protectedRegions", "reasons",
+  ];
+  if (!isPlainObject(decision)
+    || Object.keys(decision).length !== decisionKeys.length
+    || Object.keys(decision).some((key) => !decisionKeys.includes(key))
+    || !DUMP_VERDICTS.has(decision.verdict)
+    || decision.verdict !== row?.dumpVerdict
+    || decision.page !== row?.pageClass
+    || decision.navigationRole !== requestedRole
+    || decision.visionEligible !== fallbackEligible
+    || !HEX_64.test(String(decision.evidenceHash ?? ""))
+    || !Array.isArray(decision.reasons)
+    || decision.reasons.length === 0
+    || decision.reasons.some((reason) => typeof reason !== "string" || !reason)) {
+    issue(
+      errors,
+      "CORPUS_DUMP_RECEIPT_DECISION_DRIFT",
+      "DUMP receipt does not preserve the exact fallback eligibility of its role decision",
+      rowId,
+    );
+    return errors;
+  }
+  const receiptGeometry = {
+    positiveRegions: decision.positiveRegions,
+    protectedRegions: decision.protectedRegions,
+  };
+  if (stableJson(receiptGeometry) !== stableJson(row.geometry)) {
+    issue(errors, "CORPUS_DUMP_RECEIPT_GEOMETRY_DRIFT", "DUMP receipt geometry differs from the independent row oracle", rowId);
+  }
+  return errors;
+}
+
 /**
  * Resolve the private frames and run an injected pinned provider against every
  * corpus row. Any single failure suppresses the aggregate tap count to zero.
@@ -417,6 +678,7 @@ function compareProviderResult({ row, result, expectedProviderIdentity, minimumC
 export async function evaluateVisionCorpusGate({
   manifest,
   loadFrame,
+  loadDumpReceipt,
   provider,
   expectedProviderIdentity,
   minimumConfidence = XHS_EXPLORATION_VISION_CORPUS_MIN_CONFIDENCE,
@@ -425,14 +687,20 @@ export async function evaluateVisionCorpusGate({
   const errors = [...validation.errors];
   const rowResults = [];
   const analyze = providerAnalyze(provider);
+  const actualProviderIdentity = providerPinnedIdentity(provider);
   if (!validation.complete) {
     issue(errors, "CORPUS_INCOMPLETE", "all five routes need at least three distinct verified frames");
   }
   if (typeof loadFrame !== "function") {
     issue(errors, "CORPUS_FRAME_LOADER_MISSING", "private frame loader is required");
   }
+  if (typeof loadDumpReceipt !== "function") {
+    issue(errors, "CORPUS_DUMP_RECEIPT_LOADER_MISSING", "content-addressed DUMP receipt loader is required");
+  }
   if (!validProviderIdentity(expectedProviderIdentity)) {
     issue(errors, "CORPUS_PROVIDER_IDENTITY_MISSING", "a complete pinned provider identity is required");
+  } else if (!sameProviderIdentity(actualProviderIdentity, expectedProviderIdentity)) {
+    issue(errors, "CORPUS_PROVIDER_IDENTITY_DRIFT", "provider wrapper identity does not match the expected pin");
   }
   if (!analyze) {
     issue(errors, "CORPUS_PROVIDER_MISSING", "provider analyze function is required");
@@ -443,6 +711,7 @@ export async function evaluateVisionCorpusGate({
 
   for (const row of Array.isArray(manifest?.rows) ? manifest.rows : []) {
     const rowErrors = [];
+    const fallbackEligible = FALLBACK_DUMP_VERDICTS.has(row?.dumpVerdict);
     let bytes = null;
     if (typeof loadFrame === "function" && SOURCE_REF.test(String(row?.sourceRef ?? ""))) {
       try {
@@ -468,35 +737,64 @@ export async function evaluateVisionCorpusGate({
       }
     }
 
-    let comparison = { tapAuthorized: false, errors: [] };
-    if (rowErrors.length === 0
+    if (typeof loadDumpReceipt === "function" && HEX_64.test(String(row?.frame?.receiptHash ?? ""))) {
+      try {
+        const receiptBytes = await loadDumpReceipt(row.frame.receiptHash);
+        rowErrors.push(...validateDumpReceiptBytes(receiptBytes, row));
+      } catch {
+        issue(rowErrors, "CORPUS_DUMP_RECEIPT_LOAD_FAILED", "private DUMP receipt load failed", row.id);
+      }
+    } else if (typeof loadDumpReceipt === "function") {
+      issue(rowErrors, "CORPUS_DUMP_RECEIPT_REF_UNSAFE", "unsafe DUMP receipt hash was not passed to the private loader", row?.id);
+    }
+
+    let comparison = {
+      passed: rowErrors.length === 0 && row?.dumpVerdict === "COMPLETE_SAFE_UNIQUE",
+      tapAuthorized: false,
+      providerInvocations: 0,
+      expectedOutcome: row?.dumpVerdict === "COMPLETE_SAFE_UNIQUE"
+        ? "NO_FALLBACK_EXPECTED" : "SAFE_UNIQUE",
+      errors: [],
+    };
+    if (fallbackEligible
+      && rowErrors.length === 0
       && validation.valid
       && validation.complete
       && analyze
+      && typeof loadDumpReceipt === "function"
       && validProviderIdentity(expectedProviderIdentity)
+      && sameProviderIdentity(actualProviderIdentity, expectedProviderIdentity)
       && minimumConfidence === XHS_EXPLORATION_VISION_CORPUS_MIN_CONFIDENCE) {
       try {
-        const result = await analyze({
-          rowId: row.id,
-          sourceRef: row.sourceRef,
-          frame: {
-            bytes,
+        // Oracle separation is intentional: the provider sees the exact frame
+        // plus the requested page/role only. Hand-authored geometry, protected
+        // zones, annotation hashes, provenance refs, aliases, and expected
+        // identity stay inside this harness and are compared only after the
+        // provider returns. A private byte copy prevents a provider from
+        // mutating the loader's evidence buffer in place.
+        const result = await analyze(Object.freeze({
+          frame: Object.freeze({
+            bytes: Buffer.from(bytes),
             sha256: row.frame.sha256,
             width: row.frame.width,
             height: row.frame.height,
-            alias: row.frame.alias,
-          },
-          annotation: annotationBody(row),
-          annotationHash: row.annotationHash,
-          expectedProviderIdentity: { ...expectedProviderIdentity },
-        });
+          }),
+          page: row.pageClass,
+          requestedRole: row.positiveRoles[0],
+        }));
         comparison = compareProviderResult({
           row,
           result,
-          expectedProviderIdentity,
           minimumConfidence: XHS_EXPLORATION_VISION_CORPUS_MIN_CONFIDENCE,
         });
+        comparison = {
+          ...comparison,
+          passed: comparison.tapAuthorized,
+          providerInvocations: 1,
+          expectedOutcome: "SAFE_UNIQUE",
+        };
       } catch (error) {
+        comparison.providerInvocations = 1;
         issue(rowErrors, "CORPUS_PROVIDER_CRASH", `provider failed: ${error?.message || error}`, row.id);
       }
     }
@@ -504,7 +802,10 @@ export async function evaluateVisionCorpusGate({
     errors.push(...rowErrors);
     rowResults.push({
       id: row.id,
-      passed: rowErrors.length === 0 && comparison.tapAuthorized,
+      dumpVerdict: row.dumpVerdict,
+      expectedOutcome: comparison.expectedOutcome,
+      providerInvocations: comparison.providerInvocations,
+      passed: rowErrors.length === 0 && comparison.passed,
       tapAuthorized: rowErrors.length === 0 && comparison.tapAuthorized,
       errors: rowErrors,
     });
@@ -514,12 +815,15 @@ export async function evaluateVisionCorpusGate({
     && validation.complete
     && errors.length === 0
     && rowResults.length > 0
-    && rowResults.every((row) => row.tapAuthorized);
+    && rowResults.every((row) => row.passed);
+  const providerInvocationCount = rowResults
+    .reduce((sum, row) => sum + row.providerInvocations, 0);
   return Object.freeze({
     passed,
     complete: validation.complete,
     coverage: validation.coverage,
-    tapCount: passed ? rowResults.length : 0,
+    tapCount: passed ? rowResults.filter((row) => row.tapAuthorized).length : 0,
+    providerInvocationCount,
     rows: rowResults,
     errors,
   });

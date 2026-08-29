@@ -135,6 +135,9 @@ export function resolveDisplayBounds(xml) {
  * @param {Function} [deps.claimTarget] - CP claimExplorationTarget wrapper
  * @param {Function} [deps.confirmTarget] - CP confirmExplorationTarget wrapper
  * @param {Function} [deps.journalAppend] - CP lane-journal append(record)
+ * @param {Function} [deps.onPrimitiveBudgetReservation] - production-only
+ *        persisted CP reservation receipt sink; when supplied, every consumed
+ *        permit must return one before the lane may continue
  * @param {boolean} [deps.visionEnabled] - P2: false (pause stays fail-closed)
  * @param {object} [deps.vision] - explorer vision navigator
  *        ({proposeCanaryTap, recordPermitConsumed, recordPhysicalTap});
@@ -154,6 +157,7 @@ export function createExplorerTypedDriver({
   claimTarget = null,
   confirmTarget = null,
   journalAppend = null,
+  onPrimitiveBudgetReservation = null,
   visionEnabled = false,
   vision = null,
   missionStartedAtMs = null,
@@ -171,6 +175,12 @@ export function createExplorerTypedDriver({
   }
   if (journalAppend !== null && typeof journalAppend !== "function") {
     throw fail("EXPLORE_DRIVER_JOURNAL_INVALID", "journalAppend must be a function or null");
+  }
+  if (onPrimitiveBudgetReservation !== null && typeof onPrimitiveBudgetReservation !== "function") {
+    throw fail(
+      "EXPLORE_DRIVER_BUDGET_RECEIPT_INVALID",
+      "onPrimitiveBudgetReservation must be a function or null",
+    );
   }
   if (visionEnabled === true && (alias !== "03" || laneRole !== "feed_lane")) {
     throw fail("EXPLORE_VISION_LANE_FORBIDDEN", "vision is eligible only on alias 03 feed_lane");
@@ -266,11 +276,34 @@ export function createExplorerTypedDriver({
     // consumption re-check runs against a NEWLY taken observation (a fresh
     // CP-owned receipt, not the issuance one)
     const fresh = freshOverride ?? (await observe({ label: `pre-consume:${navigationRole}` })).fresh;
-    const { permit: consumed, job } = await consumePermit({
+    const consumedResult = await consumePermit({
       permitId: permit.permitId,
       payload: permit.payload ?? resolvedPayload,
       freshObservation: fresh,
     });
+    const { permit: consumed, job, budgetReservation = null } = consumedResult ?? {};
+    if (typeof onPrimitiveBudgetReservation === "function") {
+      if (!budgetReservation?.reservationId) {
+        throw fail(
+          "EXPLORATION_BUDGET_RECEIPT_UNPROVEN",
+          "permit consumption omitted its persisted pre-I/O totalSteps reservation",
+        );
+      }
+      try {
+        await onPrimitiveBudgetReservation({
+          reservation: budgetReservation,
+          permitId: permit.permitId,
+          navigationRole,
+          page,
+        });
+      } catch (error) {
+        throw fail(
+          "EXPLORATION_BUDGET_RECEIPT_UNPROVEN",
+          "permit totalSteps reservation could not be bound to the lane operation",
+          { causeCode: String(error?.code ?? "UNKNOWN") },
+        );
+      }
+    }
     internal.consumedPermits += 1;
     await journal({
       type: "PERMIT_CONSUMED",
@@ -717,6 +750,7 @@ export async function runExploreLane({
         outcome = { kind: "STOP", reason: "BUDGET_EXHAUSTED", errorCode: error.code };
         break;
       }
+      if (error?.code === "EXPLORATION_BUDGET_RECEIPT_UNPROVEN") throw error;
       report = { navigated: false, novel: null, errorCode: String(error?.code ?? "EXPLORE_NAVIGATION_ERROR") };
     }
   }

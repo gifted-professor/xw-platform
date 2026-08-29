@@ -12,6 +12,11 @@
  * mission bytes/hash. No timestamps, no random UUIDs in the sealed body.
  */
 import { createHash, createHmac } from "node:crypto";
+import {
+  inferExplorationRolloutPhase,
+  resolveEffectiveVisualPermitPolicy,
+  validateECorpusPassRef,
+} from "./xhs-e-corpus-interlock.mjs";
 
 export const EXPLORATION_MISSION_SCHEMA_ID = "xw.xhs.exploration-mission.v1";
 export const EXPLORATION_MISSION_SCHEMA_VERSION = 1;
@@ -137,6 +142,9 @@ export function compileExplorationMission({
   queries = [],
   budgets = {},
   vision = null,
+  rolloutPhase = null,
+  eCorpusPassRef = null,
+  eCorpusVerifier = null,
   releaseIdRef = null,
   accountFingerprintRef = null,
   digestKeyId = "ka-1",
@@ -201,33 +209,53 @@ export function compileExplorationMission({
   if (visionMode === "canary1" && resolvedBudgets.visionMaxIssuedPermits > 1) {
     throw new ExplorationMissionError("EXPLORATION_VISION_BUDGET_INVALID", "first canary vision budget is globally one permit");
   }
-  const visionPolicy = Object.freeze({
-    mode: visionMode,
-    remoteEgress: false, // local-only vision for this release (V3-I09)
-    provider: Object.freeze({
-      kind: "local-pinned",
-      pythonHash: vision?.provider?.pythonHash ?? null,
-      modelHash: vision?.provider?.modelHash ?? null,
-      scriptHash: vision?.provider?.scriptHash ?? null,
-      configHash: vision?.provider?.configHash ?? null,
-    }),
+  const providerPolicy = Object.freeze({
+    kind: "local-pinned",
+    providerBundleDigest: vision?.provider?.providerBundleDigest ?? null,
+    pythonHash: vision?.provider?.pythonHash ?? null,
+    modelHash: vision?.provider?.modelHash ?? null,
+    scriptHash: vision?.provider?.scriptHash ?? null,
+    configHash: vision?.provider?.configHash ?? null,
   });
   if (visionMode !== "off") {
-    for (const key of ["pythonHash", "modelHash", "scriptHash", "configHash"]) {
-      if (!/^[a-f0-9]{64}$/.test(String(visionPolicy.provider[key] ?? ""))) {
+    for (const key of ["providerBundleDigest", "pythonHash", "modelHash", "scriptHash", "configHash"]) {
+      if (!/^[a-f0-9]{64}$/.test(String(providerPolicy[key] ?? ""))) {
         throw new ExplorationMissionError(
           "EXPLORATION_VISION_PROVIDER_UNPINNED",
           `vision ${visionMode} requires a 64-hex provider.${key}`,
         );
       }
     }
-  } else if (["pythonHash", "modelHash", "scriptHash", "configHash"]
-    .some((key) => visionPolicy.provider[key] !== null)) {
+  } else if (["providerBundleDigest", "pythonHash", "modelHash", "scriptHash", "configHash"]
+    .some((key) => providerPolicy[key] !== null)) {
     throw new ExplorationMissionError(
       "EXPLORATION_VISION_PROVIDER_INVALID",
       "vision off must not carry a dormant provider binding",
     );
   }
+  const rollout = resolveEffectiveVisualPermitPolicy({
+    visionMode,
+    requestedPhase: rolloutPhase ?? vision?.rolloutPhase ?? null,
+    requestedIssuedPermits: Object.hasOwn(budgets ?? {}, "visionMaxIssuedPermits")
+      ? resolvedBudgets.visionMaxIssuedPermits
+      : null,
+    requestedPhysicalTaps: Object.hasOwn(budgets ?? {}, "visionMaxPhysicalTaps")
+      ? resolvedBudgets.visionMaxPhysicalTaps
+      : null,
+    eCorpusPassRef: eCorpusPassRef ?? vision?.eCorpusPassRef ?? null,
+    verifyR3: eCorpusVerifier,
+  });
+  // These are effective persisted caps, not advisory rollout metadata.
+  resolvedBudgets.visionMaxIssuedPermits = rollout.effectiveVisualPermitBudget;
+  resolvedBudgets.visionMaxPhysicalTaps = rollout.effectiveVisualPhysicalTapBudget;
+  const visionPolicy = Object.freeze({
+    mode: visionMode,
+    remoteEgress: false, // local-only vision for this release (V3-I09)
+    provider: providerPolicy,
+    rolloutPhase: rollout.phase,
+    effectiveVisualPermitBudget: rollout.effectiveVisualPermitBudget,
+    eCorpusPassRef: rollout.eCorpusPassRef,
+  });
 
   const goalRef = keyedDigest({ key: digestKey, digestKeyId, kind: "goal", value: normalizedGoal });
   const queryRefs = normalizedQueries.map((q, index) => {
@@ -346,13 +374,30 @@ export function validateSealedMission(submitted) {
     || mission.vision?.provider?.kind !== "local-pinned") {
     throw new ExplorationMissionError("EXPLORATION_VISION_MODE_INVALID", "sealed vision policy is invalid");
   }
-  const providerHashes = ["pythonHash", "modelHash", "scriptHash", "configHash"];
+  const providerHashes = ["providerBundleDigest", "pythonHash", "modelHash", "scriptHash", "configHash"];
   if (visionMode === "off") {
     if (providerHashes.some((key) => mission.vision.provider[key] !== null)) {
       throw new ExplorationMissionError("EXPLORATION_VISION_PROVIDER_INVALID", "vision off must not bind provider bytes");
     }
   } else if (providerHashes.some((key) => !/^[a-f0-9]{64}$/.test(String(mission.vision.provider[key] ?? "")))) {
     throw new ExplorationMissionError("EXPLORATION_VISION_PROVIDER_UNPINNED", "sealed vision provider identity is incomplete");
+  }
+  const rolloutPhase = inferExplorationRolloutPhase({
+    visionMode,
+    requestedPhase: mission.vision.rolloutPhase ?? null,
+  });
+  if (rolloutPhase === "R3") {
+    validateECorpusPassRef(mission.vision.eCorpusPassRef);
+    if (mission.vision.effectiveVisualPermitBudget !== 1
+      || mission.budgets.visionMaxIssuedPermits !== 1
+      || mission.budgets.visionMaxPhysicalTaps !== 1) {
+      throw new ExplorationMissionError("EXPLORATION_VISION_BUDGET_INVALID", "R3 effective issued/physical visual caps must be exactly one");
+    }
+  } else if (mission.vision.eCorpusPassRef !== null
+    || mission.vision.effectiveVisualPermitBudget !== 0
+    || mission.budgets.visionMaxIssuedPermits !== 0
+    || mission.budgets.visionMaxPhysicalTaps !== 0) {
+    throw new ExplorationMissionError("EXPLORATION_VISUAL_BUDGET_LOCKED", `${rolloutPhase} must seal effective visual budget zero`);
   }
   return mission;
 }

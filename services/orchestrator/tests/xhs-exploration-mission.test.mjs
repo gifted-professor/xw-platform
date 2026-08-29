@@ -89,21 +89,58 @@ test("placement is frozen to [03=feed_lane,04=search_lane] with closed vocabular
   assert.equal(mission.templateId, EXPLORATION_TEMPLATE_ID);
   assert.ok(EXPLORATION_BUDGET_CAPS.visionMaxIssuedPermits === 1 || mission.budgets.visionMaxIssuedPermits <= 1);
   assert.equal(mission.vision.mode, "off", "an unpinned mission is DUMP-only by default");
+  assert.equal(mission.vision.rolloutPhase, "R0");
+  assert.equal(mission.vision.effectiveVisualPermitBudget, 0);
+  assert.equal(mission.budgets.visionMaxIssuedPermits, 0);
+  assert.equal(mission.budgets.visionMaxPhysicalTaps, 0);
 });
 
-test("shadow/canary vision requires the complete python/model/script/config identity", () => {
+test("shadow/canary vision requires providerBundleDigest plus complete audit hashes", () => {
   assert.throws(
     () => compile({ vision: { mode: "shadow", provider: { modelHash: "a".repeat(64) } } }),
     (error) => error.code === "EXPLORATION_VISION_PROVIDER_UNPINNED",
   );
   const provider = {
+    providerBundleDigest: "0".repeat(64),
     pythonHash: "1".repeat(64),
     modelHash: "2".repeat(64),
     scriptHash: "3".repeat(64),
     configHash: "4".repeat(64),
   };
-  const { mission } = compile({ vision: { mode: "canary1", provider } });
+  const { providerBundleDigest: _omitted, ...partialFourHashIdentity } = provider;
+  assert.throws(
+    () => compile({ vision: { mode: "shadow", provider: partialFourHashIdentity } }),
+    (error) => error.code === "EXPLORATION_VISION_PROVIDER_UNPINNED",
+    "the legacy four hashes are audit detail, not a complete provider identity",
+  );
+  const ref = {
+    schemaId: "xw.xhs.e-corpus-pass-ref.v1",
+    artifactHash: "5".repeat(64),
+    bindingHash: "6".repeat(64),
+    gateEpoch: "7".repeat(64),
+    expiresAtMs: 9_999_999_999_999,
+  };
+  const { mission: shadow } = compile({
+    vision: { mode: "shadow", provider },
+    rolloutPhase: "R2",
+  });
+  assert.equal(shadow.vision.effectiveVisualPermitBudget, 0);
+  assert.equal(shadow.budgets.visionMaxIssuedPermits, 0);
+  assert.equal(shadow.budgets.visionMaxPhysicalTaps, 0);
+  const { mission } = compile({
+    vision: { mode: "canary1", provider },
+    rolloutPhase: "R3",
+    eCorpusPassRef: ref,
+    eCorpusVerifier: ({ ref: actual }) => ({
+      ok: true,
+      status: "PASS",
+      artifactHash: actual.artifactHash,
+      effectiveVisualPermitBudget: 1,
+    }),
+  });
   assert.deepEqual(mission.vision.provider, { kind: "local-pinned", ...provider });
+  assert.equal(mission.vision.rolloutPhase, "R3");
+  assert.equal(mission.vision.effectiveVisualPermitBudget, 1);
   assert.doesNotThrow(() => validateSealedMission(mission));
   assert.throws(
     () => compile({ vision: { mode: "off", provider } }),

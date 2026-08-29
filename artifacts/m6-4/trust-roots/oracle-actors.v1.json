@@ -1,0 +1,19 @@
+{
+  "schemaId": "xw.m6-4-independent-oracle-actor-registry.v1",
+  "actors": [
+    {
+      "role": "EXPECTATION_AUTHOR",
+      "keyId": "expectation-author-01",
+      "publicKey": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEADx1+8iXKYVw1vnWfrNXyt9lR9hAqss3HAgBySBVj9+Y=\n-----END PUBLIC KEY-----\n",
+      "actorHash": "28a740fab10170c1004f7844ee157abf2f09ee27f76249a8ce4fa45059555715",
+      "publicKeyFingerprintSha256": "8a1c7c3bc09146d5570fba85ce1fcbbb78d9b717abf738b85372231298949800"
+    },
+    {
+      "role": "OBSERVATION_OBSERVER",
+      "keyId": "observation-observer-01",
+      "publicKey": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEApCh0z+6PGufPwtUOFvJ3XCzUp2xumiRSn7PW/evPWcw=\n-----END PUBLIC KEY-----\n",
+      "actorHash": "4e92de303de052c1281e8058c03ce0090c45bd7bdd8bc400f69b0c91f6a2deef",
+      "publicKeyFingerprintSha256": "be59fe43514d57a232e790eaadb84f4f181e7dfaf18d224fd8aab94025351096"
+    }
+  ]
+}

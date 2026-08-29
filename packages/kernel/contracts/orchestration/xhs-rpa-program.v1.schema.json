@@ -1,0 +1,205 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "xw.xhs.rpa-program.v1",
+  "title": "XHS RPA Program V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaId", "schemaVersion", "programId", "programVersion", "ownerRef",
+    "generation", "rollbackGeneration", "enabled", "recurringEnabled", "accountRef",
+    "externalEffects", "writeTransportBudget", "forbiddenActions", "runtime",
+    "schedule", "pacing", "seedPolicy", "budgetPolicy", "failurePolicy",
+    "misfirePolicy", "evidencePolicy", "retentionPolicy", "nodes", "edges",
+    "dagHash", "taskPlanHash", "programHash"
+  ],
+  "properties": {
+    "schemaId": { "const": "xw.xhs.rpa-program.v1" },
+    "schemaVersion": { "const": 1 },
+    "programId": { "type": "string", "pattern": "^xrp_[a-z0-9][a-z0-9._-]{2,63}$" },
+    "programVersion": { "type": "integer", "minimum": 1 },
+    "ownerRef": { "type": "string", "pattern": "^own_[a-z0-9][a-z0-9._-]{2,127}$" },
+    "generation": { "type": "integer", "minimum": 1 },
+    "rollbackGeneration": { "type": "integer", "minimum": 0 },
+    "enabled": { "const": false },
+    "recurringEnabled": { "const": false },
+    "accountRef": { "$ref": "#/$defs/hash" },
+    "externalEffects": { "const": 0 },
+    "writeTransportBudget": { "const": 0 },
+    "forbiddenActions": {
+      "type": "array", "minItems": 15, "maxItems": 15, "uniqueItems": true,
+      "prefixItems": [
+        { "const": "like" }, { "const": "collect" }, { "const": "follow" },
+        { "const": "comment_send" }, { "const": "comment_reply" }, { "const": "comment_like" },
+        { "const": "dm" }, { "const": "publish" }, { "const": "delete" },
+        { "const": "payment" }, { "const": "purchase" }, { "const": "account" },
+        { "const": "settings" }, { "const": "permission_change" }, { "const": "share" }
+      ],
+      "items": false
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["releaseId", "sourceCommit", "catalogSnapshotHash"],
+      "properties": {
+        "releaseId": { "type": "string", "pattern": "^[A-Za-z0-9._-]{3,128}$" },
+        "sourceCommit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "catalogSnapshotHash": { "$ref": "#/$defs/hash" }
+      }
+    },
+    "schedule": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "timezone", "misfirePolicy"],
+      "properties": {
+        "kind": { "const": "manual_once" },
+        "timezone": { "const": "Asia/Shanghai" },
+        "misfirePolicy": { "const": "skip_no_catchup" }
+      }
+    },
+    "pacing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["accountConcurrency", "dailyStarts", "minimumIntervalMs", "preIoRetryMax"],
+      "properties": {
+        "accountConcurrency": { "const": 1 },
+        "dailyStarts": { "type": "integer", "minimum": 1, "maximum": 4 },
+        "minimumIntervalMs": { "type": "integer", "minimum": 300000 },
+        "preIoRetryMax": { "type": "integer", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "seedPolicy": {
+      "type": "object", "additionalProperties": false,
+      "required": ["algorithm", "domain", "timezone", "calendarSlot", "callerRandomness"],
+      "properties": {
+        "algorithm": { "const": "sha256" },
+        "domain": { "const": "xhs-rpa-node-seed-v1" },
+        "timezone": { "const": "Asia/Shanghai" },
+        "calendarSlot": { "const": "local_day" },
+        "callerRandomness": { "const": false }
+      }
+    },
+    "budgetPolicy": {
+      "type": "object", "additionalProperties": false,
+      "required": ["maxProgramNodes", "maxShards", "maxRunDurationMs", "maxReservedPrimitives"],
+      "properties": {
+        "maxProgramNodes": { "const": 8 }, "maxShards": { "const": 16 },
+        "maxRunDurationMs": { "const": 600000 }, "maxReservedPrimitives": { "const": 80 }
+      }
+    },
+    "failurePolicy": {
+      "type": "object", "additionalProperties": false,
+      "required": ["nodeFailure", "unknownOutcome", "cleanup"],
+      "properties": {
+        "nodeFailure": { "const": "block_program" },
+        "unknownOutcome": { "const": "block_no_retry" },
+        "cleanup": { "const": "required_all_settled" }
+      }
+    },
+    "misfirePolicy": {
+      "type": "object", "additionalProperties": false,
+      "required": ["mode", "clockRollback", "maxLatenessMs"],
+      "properties": {
+        "mode": { "const": "skip_no_catchup" },
+        "clockRollback": { "const": "block" },
+        "maxLatenessMs": { "const": 300000 }
+      }
+    },
+    "evidencePolicy": {
+      "type": "object", "additionalProperties": false,
+      "required": ["childReceipts", "aggregateReceipt", "validator", "publicRawText"],
+      "properties": {
+        "childReceipts": { "const": "required" },
+        "aggregateReceipt": { "const": "required" },
+        "validator": { "const": "required" },
+        "publicRawText": { "const": false }
+      }
+    },
+    "retentionPolicy": {
+      "type": "object", "additionalProperties": false,
+      "required": ["privateRawDays", "publicReceipts", "digestKeys"],
+      "properties": {
+        "privateRawDays": { "const": 7 },
+        "publicReceipts": { "const": "release_horizon" },
+        "digestKeys": { "const": "evidence_replay_horizon" }
+      }
+    },
+    "nodes": {
+      "type": "array", "minItems": 1, "maxItems": 8,
+      "items": { "$ref": "#/$defs/node" }
+    },
+    "edges": { "type": "array", "items": { "$ref": "#/$defs/edge" } },
+    "dagHash": { "$ref": "#/$defs/hash" },
+    "taskPlanHash": { "$ref": "#/$defs/hash" },
+    "programHash": { "$ref": "#/$defs/hash" }
+  },
+  "$defs": {
+    "hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "placement": {
+      "type": "object", "additionalProperties": false, "required": ["mode", "aliases"],
+      "properties": {
+        "mode": { "enum": ["fixed", "exact_pair"] },
+        "aliases": {
+          "type": "array", "minItems": 1, "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^0[1-4]$" }
+        }
+      }
+    },
+    "runner": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "capabilityId", "appId", "workflowId", "contractHash"],
+      "properties": {
+        "kind": { "enum": ["typed_job", "session_workflow"] },
+        "capabilityId": { "type": "string" },
+        "appId": { "type": "string" },
+        "workflowId": { "type": ["string", "null"] },
+        "contractHash": { "$ref": "#/$defs/hash" }
+      }
+    },
+    "catalogRef": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "entryId", "kind", "revision", "templateHash", "descriptorHash", "effectClass",
+        "placement", "maturity", "status", "acceptanceReceiptHashes", "runner",
+        "cleanupContractHash", "expectedReceiptSchema"
+      ],
+      "properties": {
+        "entryId": { "type": "string", "pattern": "^[a-z][a-z0-9._-]{2,127}$" },
+        "kind": { "enum": ["routine_template", "recipe_revision"] },
+        "revision": { "type": "integer", "minimum": 1 },
+        "templateHash": { "$ref": "#/$defs/hash" },
+        "descriptorHash": { "$ref": "#/$defs/hash" },
+        "effectClass": { "const": "none" },
+        "placement": { "$ref": "#/$defs/placement" },
+        "maturity": { "const": "accepted" },
+        "status": { "const": "active" },
+        "acceptanceReceiptHashes": {
+          "type": "array", "minItems": 1, "uniqueItems": true,
+          "items": { "$ref": "#/$defs/hash" }
+        },
+        "runner": { "$ref": "#/$defs/runner" },
+        "cleanupContractHash": { "$ref": "#/$defs/hash" },
+        "expectedReceiptSchema": { "type": "string", "pattern": "^[a-z][a-z0-9._-]{2,127}\\.v[1-9][0-9]*$" }
+      }
+    },
+    "node": {
+      "type": "object", "additionalProperties": false,
+      "required": ["nodeId", "catalogRef", "fixedParams", "inputPrivateRefs", "dependsOn"],
+      "properties": {
+        "nodeId": { "type": "string", "pattern": "^[a-z][a-z0-9._-]{0,63}$" },
+        "catalogRef": { "$ref": "#/$defs/catalogRef" },
+        "fixedParams": { "type": "object" },
+        "inputPrivateRefs": {
+          "type": "array", "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^priv_[0-9a-f]{64}$" }
+        },
+        "dependsOn": {
+          "type": "array", "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9._-]{0,63}$" }
+        }
+      }
+    },
+    "edge": {
+      "type": "object", "additionalProperties": false, "required": ["from", "to"],
+      "properties": { "from": { "type": "string" }, "to": { "type": "string" } }
+    }
+  }
+}

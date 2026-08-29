@@ -13,8 +13,20 @@
  * Zero third-party deps: node:fs + node:crypto only.
  */
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { readFileSync, writeFileSync, renameSync, mkdirSync, statSync, existsSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname } from "node:path";
+
+import {
+  createSystemAdministratorsPrivateAclChecker,
+  createSystemAdministratorsPrivateAclHardener,
+} from "./windows-private-acl.mjs";
 
 const KEYRING_SCHEMA_ID = "xw.digest-keyring.v1";
 
@@ -26,31 +38,29 @@ export class DigestKeyringError extends Error {
   }
 }
 
+const systemAdministratorsPrivateAclCheck = createSystemAdministratorsPrivateAclChecker();
+const systemAdministratorsPrivateAclHarden = createSystemAdministratorsPrivateAclHardener();
+
 function denyByDefaultAclCheck(path) {
-  // Deny-by-default filesystem check: the key ring must not be readable by
-  // group/other (POSIX) at minimum. Windows SYSTEM-only ACLs are enforced out
-  // of band (deployment hardening script) and verified by an injected checker
-  // in tests; a posix-style mode gate is the portable floor.
+  // Windows uses a native PowerShell/.NET ACL probe with a minimal child
+  // environment. It requires a protected DACL containing exactly SYSTEM and
+  // BUILTIN\Administrators on both the keyring and its plain parent directory.
+  // POSIX retains the 0600 portable floor.
   try {
-    const stats = statSync(path);
-    const mode = Number(stats.mode ?? 0);
-    if ((mode & 0o077) !== 0) {
-      throw new DigestKeyringError(
-        "KEYRING_ACL_INVALID",
-        `digest key ring ${path} is readable by group/other; ACL must deny by default (SYSTEM/Administrators only)`,
-      );
-    }
+    systemAdministratorsPrivateAclCheck(path);
   } catch (error) {
     if (error instanceof DigestKeyringError) throw error;
-    throw new DigestKeyringError("KEYRING_ACL_UNVERIFIABLE", `digest key ring ACL could not be verified: ${error?.message || error}`);
+    const code = error?.code === "KEYRING_ACL_INVALID" ? "KEYRING_ACL_INVALID" : "KEYRING_ACL_UNVERIFIABLE";
+    throw new DigestKeyringError(code, `digest key ring ACL could not be verified: ${code}`);
   }
 }
 
 export function createDigestKeyring({
   path,
   aclChecker = denyByDefaultAclCheck,
+  aclHardener = systemAdministratorsPrivateAclHarden,
   randomBytesFn = randomBytes,
-  fsImpl = { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync },
+  fsImpl = { readFileSync, writeFileSync, renameSync, unlinkSync, mkdirSync, existsSync },
   requireAcl = true,
 } = {}) {
   if (!path || typeof path !== "string") {
@@ -88,6 +98,9 @@ export function createDigestKeyring({
       if (entry.algorithm !== "HMAC-SHA-256") {
         throw new DigestKeyringError("KEYRING_MANIFEST_INVALID", `key ${entry.keyId} must be HMAC-SHA-256`);
       }
+      if (!new Set(["active", "retained"]).has(entry.status)) {
+        throw new DigestKeyringError("KEYRING_MANIFEST_INVALID", `key ${entry.keyId} status is invalid`);
+      }
       keys.set(entry.keyId, {
         keyId: entry.keyId,
         keyBytes,
@@ -103,6 +116,41 @@ export function createDigestKeyring({
       throw new DigestKeyringError("KEYRING_ACTIVE_KEY_INVALID", "exactly one active 256-bit key is required");
     }
     return { activeKeyId: raw.activeKeyId, keys };
+  }
+
+  function writePrivateManifest(manifest, operation, { createOnly }) {
+    const suffix = randomBytesFn(8).toString("hex");
+    const tmp = `${path}.tmp-${operation}-${suffix}`;
+    fsImpl.mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    let tempCreated = false;
+    try {
+      fsImpl.writeFileSync(tmp, `${JSON.stringify(manifest, null, 2)}\n`, {
+        flag: "wx",
+        mode: 0o600,
+        flush: true,
+      });
+      tempCreated = true;
+      if (requireAcl) {
+        if (!aclHardener || !aclChecker) {
+          throw new DigestKeyringError("KEYRING_ACL_UNVERIFIABLE", "private ACL writer/checker is unavailable");
+        }
+        aclHardener(tmp);
+        aclChecker(tmp);
+      }
+      if (createOnly && fsImpl.existsSync(path)) {
+        throw new DigestKeyringError("KEYRING_EXISTS", "refusing to overwrite an existing digest key ring");
+      }
+      fsImpl.renameSync(tmp, path);
+      tempCreated = false;
+      if (requireAcl) aclChecker(path);
+    } catch (error) {
+      if (tempCreated && typeof fsImpl.unlinkSync === "function") {
+        try { fsImpl.unlinkSync(tmp); } catch { /* best-effort private temp cleanup */ }
+      }
+      if (error instanceof DigestKeyringError) throw error;
+      const code = error?.code === "EEXIST" ? "KEYRING_TEMP_CONFLICT" : "KEYRING_WRITE_FAILED";
+      throw new DigestKeyringError(code, `digest key ring ${operation} failed closed`);
+    }
   }
 
   return {
@@ -161,10 +209,7 @@ export function createDigestKeyring({
       }));
       entries.push({ keyId: id, keyBase64, algorithm: "HMAC-SHA-256", status: "active", createdAt: now });
       const manifest = { schemaId: KEYRING_SCHEMA_ID, activeKeyId: id, rotatedAt: now, keys: entries };
-      const tmp = `${path}.tmp-rotate`;
-      fsImpl.mkdirSync(dirname(path), { recursive: true });
-      fsImpl.writeFileSync(tmp, JSON.stringify(manifest, null, 2), { mode: 0o600 });
-      fsImpl.renameSync(tmp, path);
+      writePrivateManifest(manifest, "rotate", { createOnly: false });
       return { activeKeyId: id, previousKeyId: activeKeyId };
     },
 
@@ -184,10 +229,7 @@ export function createDigestKeyring({
         createdAt: new Date().toISOString(),
         keys: [{ keyId: id, keyBase64, algorithm: "HMAC-SHA-256", status: "active", createdAt: new Date().toISOString() }],
       };
-      const tmp = `${path}.tmp-provision`;
-      fsImpl.mkdirSync(dirname(path), { recursive: true });
-      fsImpl.writeFileSync(tmp, JSON.stringify(manifest, null, 2), { mode: 0o600 });
-      fsImpl.renameSync(tmp, path);
+      writePrivateManifest(manifest, "provision", { createOnly: true });
       return { activeKeyId: id, path };
     },
   };
