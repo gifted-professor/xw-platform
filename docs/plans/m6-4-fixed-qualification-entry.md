@@ -30,6 +30,20 @@ derives the three release lock hashes, signs with the matching protected local k
 content-addressed package under the fixed `m6-audit` root. Its output contains only the package hash/ref and replay
 status.
 
+Immediately after package creation and immediately before `quiesce-fixed`, run the zero-argument legacy-current
+TCB provisioner from the successor's exact formal release:
+
+```text
+npm run m6-4:qualification-legacy-current-tcb-provision-fixed
+```
+
+It full-verifies the successor formal release, the legacy `current` release manifest/tree before the ACL operation,
+and the same manifest/tree again afterwards. It revalidates the fixed `current` junction target immediately before
+a write and again before returning. The only condition that permits one recursive protect of that exact legacy release is the
+native `SYSTEM_TCB_ACL_TARGET_DACL_INVALID` verification code. Every other error fails with zero protect. This is a
+monotonic legacy migration, not a general repair surface; its public receipt contains release identities and hashes,
+never filesystem paths.
+
 After the release-pinned legacy window has been quiesced, use exactly one of:
 
 ```text
@@ -46,6 +60,8 @@ The mechanically fixed per-release order is therefore:
 ```text
 npm run m6-4:qualification-tcb-provision-fixed
 npm run m6-4:qualification-package-fixed -- <releaseId> <sourceCommit>
+npm run m6-4:qualification-legacy-current-tcb-provision-fixed
+node services/control-plane/ops/m6-qualification-legacy-window-operator.mjs quiesce-fixed <releaseId> <sourceCommit>
 npm run m6-4:qualification-rotation-preflight-fixed -- <releaseId> <sourceCommit> <packageHash>
 npm run m6-4:qualification-rotation-execute-fixed -- <releaseId> <sourceCommit> <packageHash>
 npm run m6-4:qualification-tcb-provision-fixed

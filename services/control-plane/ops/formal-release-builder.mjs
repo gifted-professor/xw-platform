@@ -34,6 +34,7 @@ const REQUIRED_RELEASE_PATHS = Object.freeze([
   "services/control-plane/control-plane/lib/m6-qualification-tcb.mjs",
   "services/control-plane/control-plane/lib/windows-xhs-blind-review-acl.mjs",
   "services/control-plane/ops/gate-f-cutover-operator.mjs",
+  "services/control-plane/ops/m6-qualification-legacy-current-tcb-provision-fixed.mjs",
   "services/control-plane/ops/m6-qualification-legacy-window-operator.mjs",
   "services/control-plane/ops/m6-qualification-launcher-operator.mjs",
   "services/control-plane/ops/m6-qualification-tcb-provision-fixed.mjs",

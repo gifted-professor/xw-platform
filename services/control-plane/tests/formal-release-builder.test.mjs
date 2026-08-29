@@ -58,6 +58,7 @@ function fixture(t) {
   write(repo, "services/control-plane/control-plane/lib/m6-qualification-tcb.mjs", "export default true;\n");
   write(repo, "services/control-plane/control-plane/lib/windows-xhs-blind-review-acl.mjs", "export default true;\n");
   write(repo, "services/control-plane/ops/gate-f-cutover-operator.mjs", "export default true;\n");
+  write(repo, "services/control-plane/ops/m6-qualification-legacy-current-tcb-provision-fixed.mjs", "export default true;\n");
   write(repo, "services/control-plane/ops/m6-qualification-legacy-window-operator.mjs", "export default true;\n");
   write(repo, "services/control-plane/ops/m6-qualification-launcher-operator.mjs", "export default true;\n");
   write(repo, "services/control-plane/ops/m6-qualification-tcb-provision-fixed.mjs", "export default true;\n");
@@ -119,6 +120,7 @@ test("materializeReleaseManifest verifies exact Git blobs and emits canonical co
     "services/control-plane/control-plane/lib/m6-qualification-tcb.mjs",
     "services/control-plane/control-plane/lib/windows-xhs-blind-review-acl.mjs",
     "services/control-plane/ops/gate-f-cutover-operator.mjs",
+    "services/control-plane/ops/m6-qualification-legacy-current-tcb-provision-fixed.mjs",
     "services/control-plane/ops/m6-qualification-legacy-window-operator.mjs",
     "services/control-plane/ops/m6-qualification-launcher-operator.mjs",
     "services/control-plane/ops/m6-qualification-tcb-provision-fixed.mjs",
@@ -179,6 +181,10 @@ test("formal builder materializes one clean exact HEAD without switching current
   assert.equal(receipt.releaseId, `xw-xhs-v3-test-${f.commit.slice(0, 12)}`);
   assert.equal(existsSync(join(f.runtime, "current")), false, "builder must not perform cutover");
   assert.equal(existsSync(join(receipt.releaseRoot, "release-manifest.v1.json")), true);
+  assert.equal(existsSync(join(
+    receipt.releaseRoot,
+    "services/control-plane/ops/m6-qualification-legacy-current-tcb-provision-fixed.mjs",
+  )), true);
   assert.deepEqual(
     readFileSync(join(receipt.releaseRoot, "package.json")),
     execFileSync("git.exe", ["-C", f.repo, "show", `${f.commit}:package.json`]),
@@ -250,6 +256,9 @@ test("production CLI fixes repository/runtime identity and exposes no path selec
   assert.doesNotMatch(source, /--runtime-root|--repo-root|--release-id/u);
   assert.match(source, /const \{ releaseRoot: _privatePath, \.\.\.publicReceipt \} = receipt/u);
   assert.match(source, /createSystemTcbAclController/u);
+  assert.match(source, /services\/control-plane\/ops\/m6-qualification-legacy-current-tcb-provision-fixed\.mjs/u);
+  assert.match(source, /protect\(releasesRoot, false\)/u);
+  assert.doesNotMatch(source, /protect\(releasesRoot, true\)/u);
   assert.match(source, /protect\(payloadRoot, true\)/u);
   assert.match(source, /verify\(finalRoot, true\)/u);
 });
