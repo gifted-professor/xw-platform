@@ -360,6 +360,124 @@ test("ambiguous like consumes the slot and closes remaining like attempts", asyn
   }
 });
 
+// --- V2.1 P1-COMMENT-RECONCILE-LIFECYCLE --------------------------------------
+
+function commentEffectsFixture({ reconcileRows = [{ reconcileId: "rc_1", effectId: "e1", status: "verified_late", evidenceHash: "eh_1" }], reconcileThrows = false } = {}) {
+  const reconcileCalls = [];
+  return {
+    reconcileCalls,
+    effects: {
+      commitRoutineEffect: async ({ intent }) => (
+        intent.action === "comment" ? { outcome: "ambiguous", transported: true, effectId: "effect-c1" } : { outcome: "cap_reached", transported: false }
+      ),
+      reconcileComments: async (targetFingerprint) => {
+        reconcileCalls.push({ targetFingerprint });
+        if (reconcileThrows) throw Object.assign(new Error("panel observation failed"), { code: "ROUTINE_AUTHORITY_UNREACHABLE" });
+        return reconcileRows;
+      },
+    },
+  };
+}
+
+test("ambiguous comment triggers exactly ONE in-run reconcile bound to the target", async () => {
+  const plan = planRoutine({ templateId: "xhs.nurture-grounded.v1", params: { items: 3, likeMax: 0, commentMax: 1, commentScreens: 1, seed: "v21-rc1" } });
+  const { effects, reconcileCalls } = commentEffectsFixture();
+  const receipt = await createRoutineRun({ plan, driver: fakeDriver({}), effects }).execute();
+  // exactly one reconcile, fired while the comment surface is still open
+  // (before BACK_VERIFY_FEED — the only verified_late window)
+  assert.equal(reconcileCalls.length, 1);
+  assert.equal(reconcileCalls[0].targetFingerprint, receipt.items[0].targetFingerprint);
+  assert.deepEqual(receipt.reconciles, [{ reconcileId: "rc_1", effectId: "e1", status: "verified_late", evidenceHash: "eh_1" }]);
+  assert.deepEqual(receipt.items[0].commentReconcile, { attempted: true, statuses: ["verified_late"] });
+  // the run terminal is untouched by the reconcile
+  assert.equal(receipt.status, "SUCCEEDED");
+  // the ambiguity still closes every remaining comment of the run (§7.6)
+  for (let i = 1; i < receipt.items.length; i += 1) {
+    assert.equal(receipt.items[i].effects.comment, "closed:ambiguous");
+    assert.equal(receipt.items[i].commentReconcile, undefined);
+  }
+});
+
+test("reconcile failure never changes the terminal state", async () => {
+  const plan = planRoutine({ templateId: "xhs.nurture-grounded.v1", params: { items: 2, likeMax: 0, commentMax: 1, commentScreens: 1, seed: "v21-rc2" } });
+  const { effects, reconcileCalls } = commentEffectsFixture({ reconcileThrows: true });
+  const receipt = await createRoutineRun({ plan, driver: fakeDriver({}), effects }).execute();
+  assert.equal(reconcileCalls.length, 1);
+  // read-only reconcile: recorded and fail-visible, but not run-terminal
+  assert.deepEqual(receipt.items[0].commentReconcile, { attempted: true, error: "ROUTINE_AUTHORITY_UNREACHABLE" });
+  assert.equal(receipt.status, "SUCCEEDED");
+  assert.equal(receipt.reconciles.length, 0);
+});
+
+test("like ambiguous does NOT reconcile (like has no draft/panel oracle)", async () => {
+  const plan = planRoutine({ templateId: "xhs.nurture-lite.v1", params: { items: 2, likeMax: 1, commentScreens: 1, seed: "v21-rc3" } });
+  const reconcileCalls = [];
+  const effects = {
+    commitRoutineEffect: async () => ({ outcome: "ambiguous", transported: true }),
+    reconcileComments: async (targetFingerprint) => { reconcileCalls.push({ targetFingerprint }); return []; },
+  };
+  const receipt = await createRoutineRun({ plan, driver: fakeDriver({}), effects }).execute();
+  assert.equal(receipt.status, "SUCCEEDED");
+  assert.equal(reconcileCalls.length, 0);
+  assert.equal(receipt.reconciles.length, 0);
+});
+
+test("absent reconcile seam is a recorded no-op, not an error", async () => {
+  const plan = planRoutine({ templateId: "xhs.nurture-grounded.v1", params: { items: 2, likeMax: 0, commentMax: 1, commentScreens: 1, seed: "v21-rc4" } });
+  const effects = {
+    commitRoutineEffect: async ({ intent }) => (intent.action === "comment" ? { outcome: "ambiguous", transported: true } : { outcome: "cap_reached", transported: false }),
+  };
+  const receipt = await createRoutineRun({ plan, driver: fakeDriver({}), effects }).execute();
+  assert.equal(receipt.status, "SUCCEEDED");
+  assert.deepEqual(receipt.items[0].commentReconcile, { attempted: false, reason: "RECONCILE_SEAM_UNAVAILABLE" });
+  assert.equal(receipt.reconciles.length, 0);
+});
+
+test("V2.1 order: authority close happens BEFORE the session release", async () => {
+  const plan = planRoutine({ templateId: "xhs.feed-play.v1", params: { items: 1, seed: "v21-close" } });
+  const order = [];
+  const effects = {
+    commitRoutineEffect: async () => ({ outcome: "verified", transported: true }),
+    closeAuthority: async (reason) => { order.push(`close:${reason}`); return { status: "closed" }; },
+  };
+  const driver = fakeDriver({});
+  const originalRelease = driver.release.bind(driver);
+  driver.release = async (args) => {
+    order.push("release");
+    return originalRelease(args);
+  };
+  const receipt = await createRoutineRun({ plan, driver, effects }).execute();
+  assert.equal(receipt.status, "SUCCEEDED");
+  assert.deepEqual(order, ["close:run-succeeded", "release"]);
+  assert.equal(receipt.cleanup.authorityClose.ok, true);
+  assert.equal(receipt.cleanup.authorityClose.reason, "run-succeeded");
+  assert.equal(receipt.cleanup.authorityClose.method, "effects.closeAuthority");
+});
+
+test("V2.1 order: failed authority close is recorded but never breaks the closeout", async () => {
+  const plan = planRoutine({ templateId: "xhs.feed-play.v1", params: { items: 1, seed: "v21-closefail" } });
+  const order = [];
+  const effects = {
+    commitRoutineEffect: async () => ({ outcome: "verified", transported: true }),
+    closeAuthority: async (reason) => {
+      order.push(`close:${reason}`);
+      throw Object.assign(new Error("authority gone"), { code: "ROUTINE_AUTHORITY_INACTIVE" });
+    },
+  };
+  const driver = fakeDriver({});
+  const originalRelease = driver.release.bind(driver);
+  driver.release = async (args) => {
+    order.push("release");
+    return originalRelease(args);
+  };
+  const receipt = await createRoutineRun({ plan, driver, effects }).execute();
+  assert.equal(receipt.status, "SUCCEEDED");
+  assert.deepEqual(order, ["close:run-succeeded", "release"], "release still happens after a failed close");
+  assert.equal(receipt.cleanup.authorityClose.ok, false);
+  assert.equal(receipt.cleanup.authorityClose.error, "ROUTINE_AUTHORITY_INACTIVE");
+  assert.equal(receipt.cleanup.verified, true, "cleanup verification is independent of the close verdict");
+});
+
 test("seeded replay: same seed + same observations -> identical picks and dwell", async () => {
   const mk = () => createRoutineRun({
     plan: planRoutine({ templateId: "xhs.feed-play.v1", params: { items: 3, seed: "replay" } }),

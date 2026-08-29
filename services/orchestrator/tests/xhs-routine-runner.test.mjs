@@ -822,3 +822,91 @@ test("parallel alias-busy fails closed before any session", async () => {
   );
   assert.equal(cp.released, 0);
 });
+
+// --- V2.1 P2-AUTHORITY-CLOSE-ORDER: close precedes release --------------------
+
+test("V2.1: runner does not retry close after the machine handled it (no release noise)", async () => {
+  const cp = cpFixture();
+  const { authorityCalls, runtime } = authorityFixture();
+  const order = [];
+  const baseRelease = cp.releaseSession.bind(cp);
+  const runner = new XhsRoutineRunner({
+    ...cp,
+    releaseSession: async (sessionId, token) => {
+      order.push("release");
+      return baseRelease(sessionId, token);
+    },
+    registerRoutineAuthority: runtime.register,
+    commitRoutineAuthorityEffect: runtime.commitEffect,
+    reconcileRoutineAuthorityComments: runtime.reconcileComments,
+    closeRoutineAuthority: runtime.closeAuthority,
+    sleepFn: async () => {},
+    now: () => 1_780_000_000_000,
+  });
+  const run = await runner.start({
+    actorId: "agent:rpa-03",
+    templateId: "xhs.nurture-lite.v1",
+    params: { items: 1, dwell: "2:2", commentScreens: 0, likeMax: 1, seed: "v21-close-seq" },
+    canaryAuthorized: true,
+  });
+
+  assert.equal(run.status, "SUCCEEDED");
+  // machine's close is the kind:"close" authority call; it must precede the
+  // first releaseSession, and the runner fallback must NOT fire afterwards
+  // (a post-release close is pure ROUTINE_SESSION_BINDING_INVALID noise)
+  const closeIdx = order.length;
+  const closes = authorityCalls.filter((c) => c.kind === "close");
+  assert.equal(closes.length, 1, "exactly one explicit close, from the machine's closeAndInspect");
+  assert.equal(run.authorityCloseHandled, true);
+  assert.equal(run.authorityClosed, true);
+  assert.equal(run.authorityCloseError, undefined);
+  assert.equal(order[0], "release", "close happened before this release was invoked");
+  assert.deepEqual(receiptCleanupOf(run), {
+    authorityCloseOk: true,
+  });
+});
+
+function receiptCleanupOf(run) {
+  return { authorityCloseOk: run.receipt?.cleanup?.authorityClose?.ok === true };
+}
+
+test("V2.1: machine close failure is fail-visible and the runner never retries post-release", async () => {
+  const cp = cpFixture();
+  const { authorityCalls, runtime } = authorityFixture();
+  const failingRuntime = createRoutineAuthorityRuntime({
+    register: runtime.register,
+    commitEffect: runtime.commitEffect,
+    reconcileComments: runtime.reconcileComments,
+    closeAuthority: async (input) => {
+      authorityCalls.push({ kind: "close", ...input });
+      throw Object.assign(new Error("authority inactive"), { code: "ROUTINE_AUTHORITY_INACTIVE", status: 404 });
+    },
+  });
+  let releaseCount = 0;
+  const baseRelease = cp.releaseSession.bind(cp);
+  const runner = new XhsRoutineRunner({
+    ...cp,
+    releaseSession: async (sessionId, token) => {
+      releaseCount += 1;
+      return baseRelease(sessionId, token);
+    },
+    registerRoutineAuthority: failingRuntime.register,
+    commitRoutineAuthorityEffect: failingRuntime.commitEffect,
+    reconcileRoutineAuthorityComments: failingRuntime.reconcileComments,
+    closeRoutineAuthority: failingRuntime.closeAuthority,
+    sleepFn: async () => {},
+    now: () => 1_780_000_000_000,
+  });
+  const run = await runner.start({
+    actorId: "agent:rpa-03",
+    templateId: "xhs.nurture-lite.v1",
+    params: { items: 1, dwell: "2:2", commentScreens: 0, likeMax: 1, seed: "v21-close-fail" },
+    canaryAuthorized: true,
+  });
+
+  assert.equal(run.status, "SUCCEEDED", "a read-only close failure never flips the terminal status");
+  assert.equal(authorityCalls.filter((c) => c.kind === "close").length, 1, "machine attempted once");
+  assert.equal(releaseCount, 1, "release still happened exactly once");
+  assert.equal(run.authorityClosed, false);
+  assert.equal(run.authorityCloseError, "ROUTINE_AUTHORITY_INACTIVE");
+});

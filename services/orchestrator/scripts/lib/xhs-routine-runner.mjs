@@ -801,6 +801,20 @@ export class XhsRoutineRunner {
       }
       const receipt = await createRoutineRun({ execution, plan: execution, driver, effects, visionNavigator }).execute();
       run.receipt = receipt;
+      // V2.1 P2-AUTHORITY-CLOSE-ORDER: a cleanup.authorityClose record (even a
+      // failed one) means the machine already attempted the explicit close
+      // BEFORE the session release — the finally below must NOT retry then,
+      // because release has deleted the owning context and a retry is pure
+      // ROUTINE_SESSION_BINDING_INVALID noise. `null` (hook absent / machine
+      // never reached closeAndInspect) leaves the fallback armed.
+      run.authorityCloseHandled = receipt.cleanup?.authorityClose != null;
+      // propagate the machine's close verdict onto the run record (fail-visible:
+      // a failed explicit close surfaces in authorityCloseError, and the runner
+      // fallback below must not retry it post-release)
+      run.authorityClosed = receipt.cleanup?.authorityClose?.ok === true;
+      if (run.authorityClosed === false) {
+        run.authorityCloseError = receipt.cleanup?.authorityClose?.error ?? "ROUTINE_AUTHORITY_CLOSE_FAILED";
+      }
       // aggregate trace keeps the per-primitive CP metadata (jobId/status/
       // output.ok/evidenceRef) as an independent authority alongside the
       // unwrapped machine receipt (plan V2 §5.2)
@@ -844,8 +858,12 @@ export class XhsRoutineRunner {
     } finally {
       // §8.1: the authority dies with the run — close it explicitly with the
       // outcome reason BEFORE the session release (which would otherwise close
-      // it as "session-released"). Double-close is idempotent CP-side.
-      if (authority?.authorityId && session?.sessionId) {
+      // it as "session-released"). V2.1: the machine performs that close in
+      // closeAndInspect (cleanup.authorityClose); this block is now the
+      // idempotent fallback for paths where the machine hook never ran (no
+      // effects surface, exception before closeAndInspect). Double-close is
+      // idempotent CP-side.
+      if (!run.authorityCloseHandled && authority?.authorityId && session?.sessionId) {
         try {
           const reason = run.status === "SUCCEEDED" ? "run-succeeded" : `run-${String(run.status || "failed").toLowerCase()}`;
           const closed = await this.authorityRuntime.closeAuthority({

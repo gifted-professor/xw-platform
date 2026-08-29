@@ -85,6 +85,10 @@ export function createRoutineEffectBridge({ state, owner, transport, llm = null,
     leaseAuthorization: owner.leaseAuthorization,
     routineRunId: owner.routineRunId,
     planHash: owner.planHash,
+    // V2.1: authoritative accountFingerprint bound at authority registration;
+    // every effect/draft row carries it so the ledger is fully account-bound.
+    // Nullable for legacy owner tuples (tests/older registrations).
+    accountFingerprint: owner.accountFingerprint ?? null,
   });
 
   // run-level comment text hashes — duplicate-text dedup for the draft validator
@@ -136,6 +140,9 @@ export function createRoutineEffectBridge({ state, owner, transport, llm = null,
       receipt,
       llmResult,
       recentTextHashes: [...commentTextHashes],
+      // the registered authority tuple is authoritative; the observation's own
+      // account fingerprint is the fallback, never a client-supplied value
+      accountFingerprint: ownerTuple.accountFingerprint ?? receipt.accountFingerprint ?? null,
     });
     if (!sealed.ok) {
       // 草稿失败或不合格直接 skip — never send to fill the quota
@@ -163,6 +170,7 @@ export function createRoutineEffectBridge({ state, owner, transport, llm = null,
         intent: { surface: "xhs-routine", sessionId: routineContext.sessionId, draftId: draft.draftId },
         idempotencyKey: operationKey,
         budget: ROUTINE_EFFECT_BUDGET,
+        accountFingerprint: ownerTuple.accountFingerprint,
       }));
     } catch (e) {
       if (e instanceof ControlPlaneError && e.code === "ROUTINE_BUDGET_EXCEEDED") {
@@ -381,6 +389,7 @@ export function createRoutineEffectBridge({ state, owner, transport, llm = null,
         intent: { surface: "xhs-routine", sessionId: routineContext.sessionId, leaseRef: routineContext.leaseRef },
         idempotencyKey: operationKey,
         budget: ROUTINE_EFFECT_BUDGET,
+        accountFingerprint: ownerTuple.accountFingerprint,
       }));
     } catch (e) {
       if (e instanceof ControlPlaneError && e.code === "ROUTINE_BUDGET_EXCEEDED") {

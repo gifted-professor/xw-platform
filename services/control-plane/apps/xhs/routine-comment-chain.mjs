@@ -92,7 +92,7 @@ export function validateDraft({ draft, receipt, recentTextHashes = [] }) {
  * here. The draft is persisted via the supplied StateStore and only a stored
  * draftId can ever be sent.
  */
-export function sealDraftFromReceipt({ state, receipt, llmResult, recentTextHashes = [] }) {
+export function sealDraftFromReceipt({ state, receipt, llmResult, recentTextHashes = [], accountFingerprint = null }) {
   if (!receipt || !receipt.receiptHash) throw new TypeError("sealed receipt required");
   const text = String(llmResult?.text ?? "");
   // the LLM's typed surface: only text (+ model/prompt metadata) is read — any
@@ -108,6 +108,9 @@ export function sealDraftFromReceipt({ state, receipt, llmResult, recentTextHash
     sourceObservationHash: receipt.receiptHash,
     // evidence anchoring is chosen by the SERVER from the receipt's evidence set
     evidenceRefs: receipt.evidenceHashes,
+    // V2.1: account binding is server-derived (authority tuple / receipt), the
+    // LLM can never influence it
+    accountFingerprint: accountFingerprint ?? receipt.accountFingerprint ?? null,
     modelId: String(llmResult?.modelId ?? "unknown"),
     promptHash: llmResult?.promptHash ?? null,
     riskFlags: [],

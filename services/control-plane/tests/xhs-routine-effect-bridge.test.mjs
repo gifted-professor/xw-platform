@@ -521,3 +521,22 @@ test("machine x bridge: unprovable like state -> zero transport across the whole
     assert.equal(f.state.listRoutineEffects(owner.routineRunId).length, 0, "no slot consumed");
   } finally { f.cleanup(); }
 });
+// --- V2.1: full account binding (P1-COMMENT-RECONCILE-LIFECYCLE) ----------------
+
+test("V2.1: like effect rows bind the owner tuple's account fingerprint", async () => {
+  const f = setup();
+  try {
+    const bridge = createRoutineEffectBridge({
+      state: f.state,
+      owner: { ...OWNER, accountFingerprint: "acct-like-03" },
+      transport: transport(),
+      clock: CLOCK,
+    });
+    const res = await bridge.commitRoutineEffect(ctx(), { action: "like" });
+    assert.equal(res.outcome, "verified");
+    const effect = f.state.listRoutineEffects(OWNER.routineRunId)[0];
+    assert.equal(effect.accountFingerprint, "acct-like-03");
+  } finally {
+    f.cleanup();
+  }
+});

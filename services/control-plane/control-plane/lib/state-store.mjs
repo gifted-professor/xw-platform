@@ -814,6 +814,7 @@ export class StateStore {
         reservation_consumed INTEGER NOT NULL DEFAULT 0,
         retry_blocked INTEGER NOT NULL DEFAULT 0,
         evidence_refs_json TEXT NOT NULL DEFAULT '[]',
+        account_fingerprint TEXT,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
         finished_at INTEGER
@@ -861,6 +862,7 @@ export class StateStore {
         risk_flags_json TEXT NOT NULL DEFAULT '[]',
         validation_json TEXT,
         status TEXT NOT NULL DEFAULT 'sealed',
+        account_fingerprint TEXT,
         expires_at INTEGER NOT NULL,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
@@ -897,6 +899,13 @@ export class StateStore {
     `);
     this.#ensureColumn("jobs", "operation_key", "TEXT");
     this.#ensureColumn("jobs", "authorization_snapshot_json", "TEXT");
+    // V2.1 P1-COMMENT-RECONCILE-LIFECYCLE: full account binding on the effect
+    // ledger — the authoritative accountFingerprint comes from the registered
+    // routine_authorities tuple (which already carries the column). Nullable,
+    // no index, no backfill: pre-existing rows read back as null (append-only,
+    // history is never rewritten).
+    this.#ensureColumn("routine_effects", "account_fingerprint", "TEXT");
+    this.#ensureColumn("comment_drafts", "account_fingerprint", "TEXT");
     // Foundation PR3: one-time transport action authorizations (INV-02).
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS transport_action_authorizations (
@@ -4517,13 +4526,14 @@ export class StateStore {
       reservationConsumed: Boolean(row.reservation_consumed),
       retryBlocked: Boolean(row.retry_blocked),
       evidenceRefs: parseJson(row.evidence_refs_json, []),
+      accountFingerprint: row.account_fingerprint ?? null,
       createdAt: iso(row.created_at),
       updatedAt: iso(row.updated_at),
       finishedAt: row.finished_at ? iso(row.finished_at) : null,
     };
   }
 
-  beginRoutineEffect({ routineRunId, planHash, action, targetFingerprint, observationHash = null, payloadHash = null, intent = {}, idempotencyKey, budget }) {
+  beginRoutineEffect({ routineRunId, planHash, action, targetFingerprint, observationHash = null, payloadHash = null, intent = {}, idempotencyKey, budget, accountFingerprint = null }) {
     if (!routineRunId || !planHash || !action || !targetFingerprint || !idempotencyKey) {
       throw new TypeError("routineRunId, planHash, action, targetFingerprint, idempotencyKey are required");
     }
@@ -4575,11 +4585,11 @@ export class StateStore {
       this.db.prepare(`
         INSERT INTO routine_effects (
           effect_id, routine_run_id, plan_hash, idempotency_key, action, target_hash,
-          observation_hash, payload_hash, intent_json, status, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'reserved', ?, ?)
+          observation_hash, payload_hash, intent_json, status, account_fingerprint, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'reserved', ?, ?, ?)
       `).run(
         effectId, routineRunId, planHash, idempotencyKey, action, targetFingerprint,
-        observationHash, payloadHash, canonicalJson(redactEffectIntent(intent)), now, now,
+        observationHash, payloadHash, canonicalJson(redactEffectIntent(intent)), accountFingerprint ?? null, now, now,
       );
       return { effect: this.#publicRoutineEffect(this.db.prepare("SELECT * FROM routine_effects WHERE effect_id=?").get(effectId)), reused: false };
     });
@@ -4695,14 +4705,14 @@ export class StateStore {
       INSERT INTO comment_drafts (
         draft_id, draft_hash, receipt_hash, routine_run_id, plan_hash, target_fingerprint,
         detail_state_version, text, text_hash, source_observation_hash, evidence_refs_json,
-        model_id, prompt_hash, risk_flags_json, validation_json, status, expires_at, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'sealed', ?, ?, ?)
+        model_id, prompt_hash, risk_flags_json, validation_json, status, account_fingerprint, expires_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'sealed', ?, ?, ?, ?)
     `).run(
       draft.draftId, draft.draftHash, draft.receiptHash, draft.routineRunId, draft.planHash,
       draft.targetFingerprint, draft.detailStateVersion, draft.text, draft.textHash,
       draft.sourceObservationHash, canonicalJson(draft.evidenceRefs ?? []), draft.modelId ?? null,
       draft.promptHash ?? null, canonicalJson(draft.riskFlags ?? []), canonicalJson(draft.validation ?? {}),
-      draft.expiresAt, now, now,
+      draft.accountFingerprint ?? null, draft.expiresAt, now, now,
     );
     return this.getCommentDraft(draft.draftId);
   }
@@ -4727,6 +4737,7 @@ export class StateStore {
       riskFlags: parseJson(row.risk_flags_json, []),
       validation: parseJson(row.validation_json, {}),
       status: row.status,
+      accountFingerprint: row.account_fingerprint ?? null,
       expiresAt: row.expires_at,
     };
   }

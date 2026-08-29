@@ -95,5 +95,16 @@ export function createRoutineEffectsSurface({ authority, runtime, sessionId, tok
     async reconcileComments(targetFingerprint = null) {
       return runtime.reconcileComments({ sessionId, token, authorityId: authority.authorityId, targetFingerprint });
     },
+
+    /**
+     * V2.1 P2-AUTHORITY-CLOSE-ORDER: explicit close the machine performs in
+     * closeAndInspect BEFORE the session release (releaseSession deletes the
+     * owning client context, so any later close only produces the
+     * ROUTINE_SESSION_BINDING_INVALID noise). The runner's finally keeps an
+     * idempotent fallback for surfaces that never reach the machine hook.
+     */
+    async closeAuthority(reason = "run-finished") {
+      return runtime.closeAuthority({ sessionId, token, authorityId: authority.authorityId, reason });
+    },
   });
 }

@@ -2513,6 +2513,9 @@ export class ControlPlane {
         leaseAuthorization: sha256(String(token || "")),
         routineRunId: authority.routineRunId,
         planHash: authority.planHash,
+        // V2.1: full account binding — the authoritative accountFingerprint is
+        // sealed at authority registration and flows into every effect/draft row
+        accountFingerprint: authority.accountFingerprint ?? null,
       },
       transport,
       llm: this.routineDraftProvider ?? null,

@@ -134,6 +134,11 @@ export function createRoutineRun({
       comment: { planned: params.commentMax ?? 0, transported: 0, remaining: params.commentMax ?? 0 },
     },
     transport: { count: 0 },
+    // in-run comment reconcile records (V2.1 P1-COMMENT-RECONCILE-LIFECYCLE):
+    // each ambiguous comment triggers ONE read-only reconcile while the device
+    // is still on the comment surface — the only window where verified_late
+    // is reachable (post-release reconcile fails ROUTINE_AUTHORITY_INACTIVE)
+    reconciles: [],
     skipsConsecutive: 0,
     // an ambiguous effect consumes its slot and closes that action for the run
     // (plan V2 §7.6: ambiguous 禁止同 target 重试; comment ambiguous 关闭本 run 其余评论)
@@ -152,6 +157,32 @@ export function createRoutineRun({
     run.terminal = status;
     run.stopReason = reason ?? run.stopReason;
     return { status, reason: run.stopReason };
+  }
+
+  /**
+   * V2.1 in-run comment reconcile (P1-COMMENT-RECONCILE-LIFECYCLE). Called
+   * right after an ambiguous comment — BEFORE back/feed-restore — so the CP
+   * reads the still-open comment panel. A thrown reconcile is recorded and
+   * never changes the terminal state: reconcile is read-only verification,
+   * not an effect (plan V2 §7.6: ambiguous is never retried, only verified).
+   */
+  async function reconcileCommentSafely(targetFingerprint) {
+    if (!effects || typeof effects.reconcileComments !== "function") {
+      return { attempted: false, reason: "RECONCILE_SEAM_UNAVAILABLE" };
+    }
+    try {
+      const rows = await effects.reconcileComments(targetFingerprint);
+      const outcomes = (Array.isArray(rows) ? rows : []).map((row) => ({
+        reconcileId: row?.reconcileId ?? null,
+        effectId: row?.effectId ?? row?.id ?? null,
+        status: typeof row?.status === "string" ? row.status : null,
+        evidenceHash: row?.evidenceHash ?? null,
+      }));
+      run.reconciles.push(...outcomes);
+      return { attempted: true, statuses: outcomes.map((o) => o.status) };
+    } catch (error) {
+      return { attempted: true, error: String(error?.code || error?.name || "RECONCILE_FAILED") };
+    }
   }
 
   function nonEmpty(value) {
@@ -715,7 +746,15 @@ export function createRoutineRun({
           run.effects.comment.remaining = Math.max(0, run.effects.comment.remaining - 1);
         }
         if (outcome === "ambiguous" || outcome === "ambiguous_no_retry") {
-          run.closedActions.add("comment");
+          // §7.6: comment ambiguous closes ALL remaining comments this run —
+          // and V2.1 requires the ONE reconcile to run while the comment
+          // surface is still open (before BACK_VERIFY_FEED), the only window
+          // where verified_late is reachable. never re-run for
+          // ambiguous_no_retry (the first ambiguous already reconciled)
+          if (run.closedActions.has("comment") === false) {
+            run.closedActions.add("comment");
+            item.commentReconcile = await reconcileCommentSafely(targetFingerprint);
+          }
         }
       }
     }
@@ -738,6 +777,36 @@ export function createRoutineRun({
   }
 
   async function closeAndInspect() {
+    // V2.1 P2-AUTHORITY-CLOSE-ORDER: close the social authority BEFORE the
+    // session release. The driver's releaseSession deletes the owning client
+    // context (op/_xhs-routine-explorer-runtime.mjs), so any close attempted
+    // after release fails client-side with ROUTINE_SESSION_BINDING_INVALID —
+    // and the CP would only record a synthetic "session-released" close. The
+    // explicit close here keeps the outcome reason on the authority record.
+    // Failure to close is recorded, never escalated: the run terminal is
+    // already decided and the CP also close-tolls the authority on release.
+    let authorityClose = null;
+    if (effects && typeof effects.closeAuthority === "function") {
+      const reason = run.terminal === "SUCCEEDED" ? "run-succeeded"
+        : `run-${String(run.terminal || "failed").toLowerCase()}`;
+      try {
+        const closed = await effects.closeAuthority(reason);
+        authorityClose = {
+          method: "effects.closeAuthority",
+          ok: closed?.status === "closed",
+          reason,
+          error: null,
+        };
+      } catch (error) {
+        authorityClose = {
+          method: "effects.closeAuthority",
+          ok: false,
+          reason,
+          error: String(error?.code || error?.message || error),
+        };
+      }
+    }
+
     const releaseMethod = typeof driver.release === "function"
       ? "release"
       : (typeof driver.close === "function" ? "close" : null);
@@ -795,6 +864,7 @@ export function createRoutineRun({
       && activeLeases === 0
       && restored === true;
     run.cleanup = Object.freeze({
+      authorityClose,
       releaseMethod,
       releaseOk,
       releaseError,
@@ -863,6 +933,7 @@ export function createRoutineRun({
       items: run.items,
       effects: run.effects,
       transport: { count: run.transport.count },
+      reconciles: run.reconciles,
       cleanup: run.cleanup,
       vision: run.vision,
       videoPauseTaps: run.videoPauseTaps || 0,

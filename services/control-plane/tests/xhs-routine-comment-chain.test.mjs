@@ -22,6 +22,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
 import { StateStore } from "../control-plane/lib/state-store.mjs";
@@ -116,10 +117,10 @@ function llmOf(result) {
   return { draft: async () => (typeof result === "function" ? result() : result) };
 }
 
-function makeBridge(f, { transport, llm, clock } = {}) {
+function makeBridge(f, { transport, llm, clock, ownerOverride } = {}) {
   return createRoutineEffectBridge({
     state: f.state,
-    owner: OWNER,
+    owner: ownerOverride ?? OWNER,
     transport: transport ?? commentTransport(),
     llm: llm ?? llmOf(GOOD_LLM),
     clock: clock ?? mkClock(),
@@ -540,4 +541,127 @@ test("machine x bridge: ambiguous comment closes remaining comments but read-onl
     // closure recorded server-side too
     assert.equal(f.state.isRoutineRunActionClosed(owner.routineRunId, "comment"), true);
   } finally { f.cleanup(); }
+});
+// --- V2.1: full account binding (P1-COMMENT-RECONCILE-LIFECYCLE) ----------------
+
+test("V2.1: comment draft + effect rows carry the authoritative account fingerprint", async () => {
+  const f = setup();
+  try {
+    const t = commentTransport({ panelTexts: [GOOD_TEXT] });
+    const bridge = makeBridge(f, {
+      transport: t,
+      llm: llmOf(GOOD_LLM),
+      ownerOverride: { ...OWNER, accountFingerprint: "acct-owner-03" },
+    });
+    const res = await bridge.commitRoutineEffect(ctx(), { action: "comment" });
+    assert.equal(res.outcome, "verified");
+    // the stored intent is deliberately redacted (draftId stripped), so the
+    // bound draftId is read off the transport call
+    const draftId = t.calls.commitComment[0].draftId;
+    const draft = f.state.getCommentDraft(draftId);
+    // the registered authority tuple is authoritative over the observation's
+    // own account fingerprint — never a client-supplied value
+    assert.equal(draft.accountFingerprint, "acct-owner-03");
+    assert.equal(f.state.listRoutineEffects(OWNER.routineRunId)[0].accountFingerprint, "acct-owner-03");
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("V2.1: owner without an account fingerprint falls back to the receipt's own binding", async () => {
+  const f = setup();
+  try {
+    // OWNER (legacy tuple) has no accountFingerprint; the note-context
+    // observation pins acct-04 and the sealed draft must carry exactly that
+    const t = commentTransport({ panelTexts: [GOOD_TEXT] });
+    const bridge = makeBridge(f, { transport: t, llm: llmOf(GOOD_LLM) });
+    const res = await bridge.commitRoutineEffect(ctx(), { action: "comment" });
+    assert.equal(res.outcome, "verified");
+    const draftId = t.calls.commitComment[0].draftId;
+    assert.equal(f.state.getCommentDraft(draftId).accountFingerprint, "acct-04");
+    assert.equal(f.state.listRoutineEffects(OWNER.routineRunId)[0].accountFingerprint, null, "legacy owner tuple writes null into the ledger (append-only compat)");
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("V2.1: pre-column databases migrate in place — old rows read null, new rows bind the account", async () => {
+  const root = mkdtempSync(join(tmpdir(), "xhs-comment-chain-mig-"));
+  const dbPath = join(root, "control.db");
+  try {
+    // a database frozen at the pre-V2.1 schema: both routine tables WITHOUT
+    // account_fingerprint, plus one seeded effect row
+    const legacy = new DatabaseSync(dbPath);
+    legacy.exec(`
+      CREATE TABLE IF NOT EXISTS routine_effects (
+        effect_id TEXT PRIMARY KEY,
+        routine_run_id TEXT NOT NULL,
+        plan_hash TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL UNIQUE,
+        action TEXT NOT NULL,
+        target_hash TEXT NOT NULL,
+        observation_hash TEXT,
+        payload_hash TEXT,
+        intent_json TEXT NOT NULL,
+        status TEXT NOT NULL,
+        reservation_consumed INTEGER NOT NULL DEFAULT 0,
+        retry_blocked INTEGER NOT NULL DEFAULT 0,
+        evidence_refs_json TEXT NOT NULL DEFAULT '[]',
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        finished_at INTEGER
+      );
+      CREATE TABLE IF NOT EXISTS comment_drafts (
+        draft_id TEXT PRIMARY KEY,
+        draft_hash TEXT NOT NULL UNIQUE,
+        receipt_hash TEXT NOT NULL,
+        routine_run_id TEXT NOT NULL,
+        plan_hash TEXT NOT NULL,
+        target_fingerprint TEXT NOT NULL,
+        detail_state_version TEXT NOT NULL,
+        text TEXT NOT NULL,
+        text_hash TEXT NOT NULL,
+        source_observation_hash TEXT NOT NULL,
+        evidence_refs_json TEXT NOT NULL DEFAULT '[]',
+        model_id TEXT,
+        prompt_hash TEXT,
+        risk_flags_json TEXT NOT NULL DEFAULT '[]',
+        validation_json TEXT,
+        status TEXT NOT NULL DEFAULT 'sealed',
+        expires_at INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+    `);
+    legacy.prepare(`
+      INSERT INTO routine_effects (
+        effect_id, routine_run_id, plan_hash, idempotency_key, action, target_hash,
+        intent_json, status, created_at, updated_at
+      ) VALUES ('legacy-effect', 'rr_legacy', 'ph', 'ik_legacy', 'like', 'fp', '{}', 'verified', 1, 1)
+    `).run();
+    legacy.close();
+
+    const state = new StateStore({ dbPath });
+    try {
+      // the old row survives untouched and reads back as null (append-only)
+      assert.equal(state.listRoutineEffects("rr_legacy")[0].accountFingerprint, null);
+      assert.equal(state.db.prepare("SELECT status FROM routine_effects WHERE effect_id='legacy-effect'").get()?.status, "verified");
+      // a new reservation binds the supplied account
+      const { effect } = state.beginRoutineEffect({
+        routineRunId: "rr_new",
+        planHash: "ph",
+        action: "like",
+        targetFingerprint: "fp_new",
+        intent: {},
+        idempotencyKey: "ik_new",
+        budget: { mode: "hard", actions: { like: { max: 1, perTarget: 1 }, comment: { max: 2, perTarget: 1 } } },
+        accountFingerprint: "acct-new",
+      });
+      assert.equal(effect.accountFingerprint, "acct-new");
+    } finally {
+      state.close();
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
