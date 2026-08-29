@@ -65,6 +65,10 @@ CP ledger（只读查询，绝不直写）：`C:/Users/Public/xw-runtime/state/c
 - **CP 启动**：用 `launch-control-plane.simple.ps1`（Gate F launcher 的 binding 还钉在旧 c7b0695，会 `M6_C1_RELEASE_REBINDING` 拒启）。**用 `Start-Process powershell ... -WindowStyle Hidden` 分离启动**，别挂在本会话后台任务上（否则任务清理会连带杀掉 CP——已发生并恢复过一次）
 - **release 切换**：junction 用 `cmd /c rmdir` + `mklink /J`（在 PowerShell 里托管，别在 Git Bash 裸跑）；serve 启动配置 `state/control-plane/fast-operator/serve-launch-{03,04}.json` 每次切换要重绑 releaseId/sourceCommit
 - 打 release 用干净 detached worktree（`git worktree add --detach ... dc41e2e`），CLI 是 `node packages/cli/xw.mjs cutover package --out C:/Users/Public/xw-runtime --release-id <id>`
+- **`xw cutover snapshot` 的 M3-R 默认 DB 路径已过期**：必须显式 `--control-db C:/Users/Public/xw-runtime/state/control-plane/control.db --registry-db C:/Users/Public/xw-runtime/state/orchestrator/registry.db`（registry 老路径 `xhs-registry\registry.db` 随 Route B 销毁）
+- **`collect-rollback-tuple.ps1` 在 PS 5.1 会因 ConvertTo-Json 参数越界死掉**（artifact 落了、tuple JSON 没落）→ 用 node 按同 schema 组装（先例：`C:/Users/Public/xw-runtime/tmp-canary/build-rollback-tuple.mjs`），verify-rollback-tuple PASS
+- **feed 内容轮换导致 video 卡稀疏**：S1 video 重跑 6 连 BLOCKED（NO_MATCHING_CARD_EXHAUSTED）后第 7 次 `--items 2` 才 SUCCEEDED——video 重放要准备多次尝试或加 seed/轮换，观测要耐心（发送后渲染滞后同类坑）
+- **并行 runner 父 receipt 的 cleanup 是 lane 聚合形状**（`{verified}`，无 primitiveTrace）→ accept 工具已按 `mode:"parallel-batch"` 分支断言 lanes（S_B7），单-run 断言不要套在并行收据上
 
 ## 9. 下一步建议（新会话的活）
 
@@ -97,7 +101,7 @@ npm run test:xhs-routine && npm run test:gate   # 在 worktree xhs-r03
 
 ---
 
-# V2.1 Closure — 2026-08-29（离线闭环完成，live 段待逐段授权）
+# V2.1 Closure — 2026-08-29（离线闭环完成 + live 只读验收完成）
 
 > 依据：执行复核裁决 `FIX_REQUIRED`（5 findings）+ 用户三项范围决定：
 > ①分阶段（先离线闭环→只读 live 验收）；②SYSTEM launcher 重绑单列不做（部署按裁决标 unverified）；③续 `xhs-r03` worktree，不 push 不 merge。
@@ -113,7 +117,7 @@ npm run test:xhs-routine && npm run test:gate   # 在 worktree xhs-r03
 **原 §9 follow-up #1/#2/#3 已全部修复**；#4（视觉 provider）仍单列。
 测试基线：**214/214** test:xhs-routine、**144/144** test:xhs-pack、**20/20** test:fusion（fusion allowlist +3 新文件）。27 个 KNOWN_FAILURE_MATCH gate 项不动。
 
-## B. W4 — 只读 live 验收 runbook（待操作者逐段授权；每段明确列出）
+## B. W4 — 只读 live 验收 runbook（已执行，实际见 §D）
 
 前置已满足：W1-W3 全绿；source-ledger 已以 S_B6 重生成并随本窗口 commit。
 
@@ -138,3 +142,48 @@ npm run test:xhs-routine && npm run test:gate   # 在 worktree xhs-r03
 - CP ledger 只读查询，绝不直写；receipt/trace append-only（工具层 wx 语义拒绝覆盖：`CLOSEOUT_RECEIPT_EXISTS`）
 - 04 永不社交/永不 fallback；每轮写传输 ≤2、动作间隔数分钟
 - 所有新增日志 console.log（Windows stderr 红线），不打印 token/body
+
+---
+
+# V2.1 Closure §D — W4 live 只读验收实际（2026-08-29，已执行）
+
+> 全程零社交传输；操作者授权延续前置会话。`S1_S4_LIVE_VERIFIED` 仍为 false（视觉 provider 未落地）。
+
+## D.1 部署与门禁
+
+| 步骤 | 实际 | 结果 |
+|---|---|---|
+| Release B4 | **`xw-xhs-routine-b4-8aaba01`**（manifest sha256 `44e8bf53…ed8f55c`，sourceCommit `8aaba01` = V2.1 docs 封口 commit，非 runbook 里的 703fb29——docs commit 在打包前已落） | packaged+verify+preflight PASS |
+| DB snapshot | `xw cutover snapshot` 显式 `--control-db …/control-plane/control.db --registry-db …/orchestrator/registry.db`（M3-R 默认路径已废） | ok:true，userVersion 20 |
+| Rollback tuple | `pre-b4-8aaba01.rollback-tuple.json`（node 组装，PS5.1 ConvertTo-Json 越界坑）+ `verify-rollback-tuple.mjs` | PASS |
+| Junction flip | `switch-release.ps1` manifest-sha 硬门禁 → owner-lock recovery AUDIT_OK → CP/Orch 分离拉起 | PASS，回滚 junction `current.pre-xw-xhs-routine-b4-8aaba01` → b3-dc41e2e |
+| Serve 重绑 | `fast-operator-serve-task.ps1` Install+Restart 03/04（自动取 current manifest） | PASS |
+| `xw-start 03 --check` | ready / allHealthy / releaseGate.ok / adb 5038 / activeLeases 0 | 全绿 |
+
+## D.2 验收 waves（全部只读，零社交传输）
+
+| wave | seed/run | verdict |
+|---|---|---|
+| S1 note | s1b4-note，`xe_8e70b505…` | **PASS**（contract receipt `S1-wave-receipt.v1.json`，note-only source） |
+| S1 video | **7 次尝试**（feed 轮换 video 卡稀疏，1-6 BLOCKED NO_MATCHING_CARD_EXHAUSTED），第 7 次 `--items 2` | **PASS**（`S1V-xe_f13a067f…` 两卡均 VIDEO_NOTE） |
+| S2 | backfill（不可重跑，immutable） | TRANSPORTED_AMBIGUOUS_NOT_VERIFIED |
+| S3 | backfill（同上） | TRANSPORTED_AMBIGUOUS_NOT_VERIFIED |
+| S4 | backfill --held | NOT_VERIFIED_NO_PROVIDER |
+| [03,04] 并行 | `xe_24c81da7…`，两 lane SUCCEEDED、transport=0 | **PASS**（`parallel-03-04-wave-receipt.v1.json`） |
+
+`final-s1-s4-aggregate-receipt.v1.json`：**CLOSEOUT_PARTIAL**，liveVerified 硬 false（v2 schema，逐文件重哈希）。
+completion `s1-s4-multi-model-execution-completion.v1.json`：6 items 中 complete=1（P1-PLACEMENT-AUTHORITY-03-FIRST），unverified=5：P1-EXACT-RELEASE-ROLLBACK（`GATE_F_SYSTEM_LAUNCHER_REBIND_DEFERRED`）、P1-FORMAL-SESSION-CLEANUP-TRACE、P1-SOCIAL-OWNER-BUDGET-GROUNDING（合同描述性伪 artifact，如实 fallthrough）、P1-REAL-VISION-CORPUS-PERMIT（`VISION_PROVIDER_ABSENT`）、P1-LIVE-S1-S4-CLOSEOUT（自引 completion 条目，按测试设计）。
+
+## D.3 执行中的偏差（如实留痕）
+
+1. **S1 note contract receipt 是 note-only source**（video 在独立 seed 验证，未合并进同一 contract receipt）
+2. **accept/closeout 修复不在 B4 包内**：releaseIdentity stamping + parallel-batch 断言 widening + cmdBackfill dashed-key 三修（S_B7 `5dab77f`）是 live 执行时才发现的缺陷，accept 从 worktree 以显式 `--release-id/--source-commit` 跑——身份已在 receipt 里如实记录，但下次 release 应包含 S_B7
+3. **completion 首发文件作废**：首次从 `services/orchestrator` CWD 发射导致相对路径错解、3 个 item 误判 unverified → 移为 `…cwd-misderived-superseded.json`，从 worktree 根重发（append-only 合规）
+4. 视频验证消耗 7 次只读尝试——观测类结论：发送后渲染滞后同类坑，**观测要耐心+只读复查兜底**
+
+## D.4 收口状态
+
+- 冻结链：S_B4 `083de25` → S_B5 `83436c6` → S_B6 `703fb29` → S_B6-docs `8aaba01` → **S_B7 `5dab77f`（工具链修复+fusion allowlist）**
+- 测试基线：**216/216** test:xhs-routine、**144/144** test:xhs-pack、**20/20** test:fusion（27 个 KNOWN_FAILURE_MATCH gate 项不动）
+- §11 开放矩阵变化：无本质变化——S1 note/video 与 [03,04] 并行在 B4 上重新验证为 PASS，**只读能力维持已开放**；S2/S3 verified 日常化、S4 视觉 canary 仍关闭；部署身份仍 unverified（Gate F launcher 重绑单列）
+- 未 push、未 merge（分阶段决定 ③）；merge 前剩余阻塞 = 部署身份 unverified + 视觉 provider 单项
