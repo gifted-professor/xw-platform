@@ -44,6 +44,20 @@ native `SYSTEM_TCB_ACL_TARGET_DACL_INVALID` verification code. Every other error
 monotonic legacy migration, not a general repair surface; its public receipt contains release identities and hashes,
 never filesystem paths.
 
+Then run the zero-argument legacy-database TCB provisioner from the same successor formal release:
+
+```text
+npm run m6-4:qualification-legacy-database-tcb-provision-fixed
+```
+
+It opens read-only handles to exactly `state/control-plane/control.db` and `state/orchestrator/registry.db`, plus any
+existing fixed `-wal`/`-shm` sidecars. Before any protect it snapshots their existence, identity, size, mtime, and
+SHA-256, and preflights both fixed state-directory closures and both target-only database ACLs. Only the exact native
+`SYSTEM_TCB_ACL_TARGET_DACL_INVALID` condition permits normalization. Directory closure migration is explicit in the
+public receipt; database files then use the target-only ACL primitive. It revalidates current and every private
+content snapshot around each ACL operation. Sidecars are never ACL targets and no database-related file is opened
+writable or has its bytes mutated by the provisioner.
+
 After the release-pinned legacy window has been quiesced, use exactly one of:
 
 ```text
@@ -61,6 +75,7 @@ The mechanically fixed per-release order is therefore:
 npm run m6-4:qualification-tcb-provision-fixed
 npm run m6-4:qualification-package-fixed -- <releaseId> <sourceCommit>
 npm run m6-4:qualification-legacy-current-tcb-provision-fixed
+npm run m6-4:qualification-legacy-database-tcb-provision-fixed
 node services/control-plane/ops/m6-qualification-legacy-window-operator.mjs quiesce-fixed <releaseId> <sourceCommit>
 npm run m6-4:qualification-rotation-preflight-fixed -- <releaseId> <sourceCommit> <packageHash>
 npm run m6-4:qualification-rotation-execute-fixed -- <releaseId> <sourceCommit> <packageHash>

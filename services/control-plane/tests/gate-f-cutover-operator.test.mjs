@@ -40,6 +40,7 @@ import {
   normalizeGateFTaskOwnedProcessClosure,
   prepareGateFCutoverTargetFromFixedCandidate,
   parseFormalTaskDefinition,
+  parseLegacyTaskDefinition,
   parseGateFCutoverCommand,
   replaceCurrentJunction,
   replaceFileWithBackup,
@@ -789,6 +790,42 @@ function materializeTargetPrepareFixture(t) {
     node,
   };
 }
+
+test("legacy task parser accepts only the native SYSTEM SID and default-enabled omission", () => {
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<Task>
+  <Principals><Principal><UserId>S-1-5-18</UserId></Principal></Principals>
+  <Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy></Settings>
+  <Actions><Exec>
+    <Command>C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe</Command>
+    <Arguments>-NoProfile -File &quot;C:\\Users\\Public\\xw-runtime\\launch-control-plane.simple.ps1&quot;</Arguments>
+    <WorkingDirectory>C:\\Users\\Public\\xw-runtime</WorkingDirectory>
+  </Exec></Actions>
+</Task>`;
+  assert.deepEqual(parseLegacyTaskDefinition(xml), {
+    principal: "SYSTEM",
+    enabled: true,
+    action: {
+      command: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      arguments: "-NoProfile -File \"C:\\Users\\Public\\xw-runtime\\launch-control-plane.simple.ps1\"",
+      workingDirectory: "C:\\Users\\Public\\xw-runtime",
+    },
+  });
+  assert.throws(() => parseFormalTaskDefinition(xml), { code: "GATE_F_CUTOVER_TASK_INVALID" });
+  assert.equal(parseLegacyTaskDefinition(xml.replace("S-1-5-18", "S-1-5-19")).principal, "S-1-5-19");
+  assert.equal(parseLegacyTaskDefinition(xml.replace(
+    "<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>",
+    "<Enabled>false</Enabled>",
+  )).enabled, false);
+  assert.throws(() => parseLegacyTaskDefinition(xml.replace(
+    "<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>",
+    "<Enabled>true</Enabled><Enabled>true</Enabled>",
+  )), { code: "GATE_F_CUTOVER_TASK_INVALID" });
+  assert.throws(() => parseLegacyTaskDefinition(xml.replace(
+    "<Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy></Settings>",
+    "",
+  )), { code: "GATE_F_CUTOVER_TASK_INVALID" });
+});
 
 test("tuple schema pins every rollback byte set, fixed identity, and tracked operator", () => {
   const runtimeRoot = join(tmpdir(), "xw-gate-cutover-shape");

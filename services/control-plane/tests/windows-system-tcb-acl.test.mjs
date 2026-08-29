@@ -111,6 +111,39 @@ test("Windows controller uses only the native protected-DACL probe and a minimal
   assert.equal(calls[0][2].env.DEEPSEEK_API_KEY, undefined);
 });
 
+test("target-only controller action never selects a directory or recursive tree", (t) => {
+  const f = fixture(t);
+  const calls = [];
+  const controller = createSystemTcbAclController({
+    platform: "win32",
+    systemRoot: "C:\\Windows",
+    execFileSyncFn: (...args) => {
+      calls.push(args);
+      return "TCB_ACL_OK";
+    },
+  });
+  const filePlan = buildSystemTcbAclPlan({
+    boundaryPath: f.boundary,
+    targetPath: join(f.tree, "entry.ps1"),
+    recursive: false,
+  });
+  assert.equal(controller.verifyTarget(filePlan).operation, "verify-target");
+  assert.equal(controller.protectTarget(filePlan).operation, "protect-target-and-verify");
+  assert.deepEqual(calls.map((row) => row[2].env.XW_TCB_ACL_ACTION), [
+    "VerifyTarget", "ProtectTarget", "Verify",
+  ]);
+  assert.throws(() => controller.protectTarget(buildSystemTcbAclPlan({
+    boundaryPath: f.boundary,
+    targetPath: f.tree,
+    recursive: false,
+  })), /SYSTEM_TCB_ACL_(?:PLAN|STRUCTURE)_INVALID/u);
+  assert.throws(() => controller.verifyTarget(buildSystemTcbAclPlan({
+    boundaryPath: f.boundary,
+    targetPath: join(f.tree, "entry.ps1"),
+    recursive: true,
+  })), /SYSTEM_TCB_ACL_PLAN_INVALID/u);
+});
+
 test("reparse directories and hard-linked executable bytes fail before the native probe", async (t) => {
   await t.test("junction", (st) => {
     const f = fixture(st);
@@ -164,7 +197,7 @@ test("native program encodes protected owner/DACL, ancestor delete defense and P
   for (const token of [
     "S-1-5-18", "S-1-5-32-544", "SetAccessRuleProtection($true, $false)",
     "ANCESTOR_WRITABLE", "FileAttributes]::ReparsePoint", "Get-ChildItem",
-    "Assert-ElevatedWriter", "rules.Count -ne 2",
+    "Assert-ElevatedWriter", "rules.Count -ne 2", "ProtectTarget", "VerifyTarget",
   ]) assert.equal(WINDOWS_SYSTEM_TCB_ACL_PROGRAM.includes(token), true, `missing native ACL token: ${token}`);
   assert.doesNotMatch(WINDOWS_SYSTEM_TCB_ACL_PROGRAM, /DEEPSEEK|M6_GATE|LIVE_ENTRY|keyBase64/iu);
 });

@@ -545,12 +545,20 @@ function oneXmlValue(xml, tag, code) {
   return xmlUnescape(matches[0][1]);
 }
 
-function taskEnabledValue(xml) {
-  const settings = /<Settings>([\s\S]*?)<\/Settings>/u.exec(xml)?.[1] ?? "";
-  return oneXmlValue(settings, "Enabled", "GATE_F_CUTOVER_TASK_INVALID");
+function taskEnabledValue(xml, { allowMissing = false } = {}) {
+  const code = "GATE_F_CUTOVER_TASK_INVALID";
+  const settingsMatches = [...xml.matchAll(/<Settings>([\s\S]*?)<\/Settings>/gu)];
+  if (settingsMatches.length !== 1) fail(code, "task XML must contain exactly one Settings");
+  const enabledMatches = [...settingsMatches[0][1].matchAll(/<Enabled>([\s\S]*?)<\/Enabled>/gu)];
+  if (enabledMatches.length === 0 && allowMissing) return "true";
+  if (enabledMatches.length !== 1) fail(code, "task Settings must contain exactly one Enabled");
+  return xmlUnescape(enabledMatches[0][1]);
 }
 
-function parseTaskDefinition(xml, { allowLegacyLauncher = false } = {}) {
+function parseTaskDefinition(xml, {
+  allowLegacyLauncher = false,
+  allowNativeLegacyDefaults = false,
+} = {}) {
   if (typeof xml !== "string" || xml.length < 64 || xml.length > 256 * 1024
     || (!allowLegacyLauncher && /\.simple(?:\.|\s|&quot;|<)/iu.test(xml))) {
     fail(
@@ -558,9 +566,10 @@ function parseTaskDefinition(xml, { allowLegacyLauncher = false } = {}) {
       `task XML is absent, oversized, or invokes ${allowLegacyLauncher ? "an invalid" : "a legacy"} launcher`,
     );
   }
+  const principal = oneXmlValue(xml, "UserId", "GATE_F_CUTOVER_TASK_INVALID");
   return Object.freeze({
-    principal: oneXmlValue(xml, "UserId", "GATE_F_CUTOVER_TASK_INVALID"),
-    enabled: taskEnabledValue(xml) === "true",
+    principal: allowNativeLegacyDefaults && principal === "S-1-5-18" ? "SYSTEM" : principal,
+    enabled: taskEnabledValue(xml, { allowMissing: allowNativeLegacyDefaults }) === "true",
     action: Object.freeze({
       command: oneXmlValue(xml, "Command", "GATE_F_CUTOVER_TASK_INVALID"),
       arguments: oneXmlValue(xml, "Arguments", "GATE_F_CUTOVER_TASK_INVALID"),
@@ -574,7 +583,10 @@ export function parseFormalTaskDefinition(xml) {
 }
 
 export function parseLegacyTaskDefinition(xml) {
-  return parseTaskDefinition(xml, { allowLegacyLauncher: true });
+  return parseTaskDefinition(xml, {
+    allowLegacyLauncher: true,
+    allowNativeLegacyDefaults: true,
+  });
 }
 
 function sameTaskDefinition(actual, expected) {

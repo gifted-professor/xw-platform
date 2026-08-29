@@ -173,7 +173,9 @@ function Assert-ElevatedWriter {
 
 try {
     $action = [string]$env:XW_TCB_ACL_ACTION
-    if (@("Protect", "Verify") -notcontains $action) { Stop-TcbAcl "ACTION_INVALID" }
+    if (@("Protect", "ProtectTarget", "Verify", "VerifyTarget") -notcontains $action) {
+        Stop-TcbAcl "ACTION_INVALID"
+    }
     $boundary = Full-Path ([string]$env:XW_TCB_ACL_BOUNDARY)
     $target = Full-Path ([string]$env:XW_TCB_ACL_TARGET)
     $recursive = [string]$env:XW_TCB_ACL_RECURSIVE -ceq "1"
@@ -232,9 +234,21 @@ try {
         foreach ($item in @($items | Sort-Object { $_.FullName.Length })) {
             Set-ProtectedTcbAcl $item
         }
+    } elseif ($action -ceq "ProtectTarget") {
+        Assert-ElevatedWriter
+        if ($recursive -or $targetItem.PSIsContainer) { Stop-TcbAcl "ACTION_INVALID" }
+        foreach ($item in @($managedChain | Where-Object { $_.PSIsContainer })) {
+            Assert-ProtectedTcbAcl $item
+        }
+        Set-ProtectedTcbAcl $targetItem
     }
-    foreach ($item in $managedChain) { Assert-ProtectedTcbAcl $item }
-    foreach ($item in $items) { Assert-ProtectedTcbAcl $item }
+    if ($action -ceq "VerifyTarget") {
+        if ($recursive -or $targetItem.PSIsContainer) { Stop-TcbAcl "ACTION_INVALID" }
+        Assert-ProtectedTcbAcl $targetItem
+    } else {
+        foreach ($item in $managedChain) { Assert-ProtectedTcbAcl $item }
+        foreach ($item in $items) { Assert-ProtectedTcbAcl $item }
+    }
     [Console]::Out.Write("TCB_ACL_OK")
 } catch {
     Stop-TcbAcl "NATIVE_FAILURE"
@@ -477,5 +491,37 @@ export function createSystemTcbAclController({
     return Object.freeze({ ...receipt, operation: "protect-and-verify" });
   }
 
-  return Object.freeze({ protect, verify });
+  function verifyTarget(rawPlan) {
+    const plan = validatePlan(rawPlan);
+    const targetStat = assertPlainItem(plan.targetPath, { expectDirectory: false, ...deps });
+    if (plan.recursive || !targetStat.isFile()) {
+      throw tcbError("SYSTEM_TCB_ACL_PLAN_INVALID", "target-only verification requires one non-recursive file plan");
+    }
+    assertAncestorChain(plan, deps);
+    invokeNative("VerifyTarget", plan);
+    return Object.freeze({
+      ok: true,
+      schemaId: SYSTEM_TCB_ACL_RECEIPT_SCHEMA_ID,
+      operation: "verify-target",
+      platform,
+      entryCount: 1,
+      boundaryPath: plan.boundaryPath,
+      targetPath: plan.targetPath,
+      protectedDacl: platform === "win32" ? "verified" : "not-applicable",
+    });
+  }
+
+  function protectTarget(rawPlan) {
+    const plan = validatePlan(rawPlan);
+    const targetStat = assertPlainItem(plan.targetPath, { expectDirectory: false, ...deps });
+    if (plan.recursive || !targetStat.isFile()) {
+      throw tcbError("SYSTEM_TCB_ACL_PLAN_INVALID", "target-only protect requires one non-recursive file plan");
+    }
+    assertAncestorChain(plan, deps);
+    invokeNative("ProtectTarget", plan);
+    const receipt = verify(plan);
+    return Object.freeze({ ...receipt, operation: "protect-target-and-verify" });
+  }
+
+  return Object.freeze({ protect, protectTarget, verify, verifyTarget });
 }

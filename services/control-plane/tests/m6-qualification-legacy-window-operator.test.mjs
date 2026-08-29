@@ -102,8 +102,8 @@ function materializeRelease(runtimeRoot, { releaseId, sourceCommit, values }) {
 function taskXml(runtimeRoot) {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Task>
-  <Principals><Principal><UserId>SYSTEM</UserId></Principal></Principals>
-  <Settings><Enabled>true</Enabled></Settings>
+  <Principals><Principal><UserId>S-1-5-18</UserId></Principal></Principals>
+  <Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy></Settings>
   <Actions><Exec>
     <Command>%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe</Command>
     <Arguments>-NoProfile -File &quot;${runtimeRoot}\\launch-control-plane.simple.ps1&quot; -RuntimeRoot &quot;${runtimeRoot}&quot; -Opaque ${COMMAND_LINE_SECRET}</Arguments>
@@ -354,6 +354,25 @@ test("preflight binds current manifest, fixed task, trusted Node, exact modules,
   assert.deepEqual(plan.listeners.map((row) => row.port), [17920, 17930]);
   assert.equal("commandLine" in plan.listeners[0], false);
   assert.doesNotMatch(JSON.stringify(plan.listeners), /command-line-secret/u);
+});
+
+test("legacy native defaults never admit a non-SYSTEM SID or explicitly disabled task", async (t) => {
+  const value = fixture(t);
+  const invalidXml = [
+    value.xml.replace("S-1-5-18", "S-1-5-19"),
+    value.xml.replace(
+      "<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>",
+      "<Enabled>false</Enabled>",
+    ),
+  ];
+  for (const xml of invalidXml) {
+    await assert.rejects(planM6QualificationLegacyWindow({
+      ...value.options,
+      taskInspector: () => ({ exists: true, state: "RUNNING", xml }),
+      listenerInspector: value.activeListeners,
+      healthInspector: value.health,
+    }), { code: "M6_QUALIFICATION_LEGACY_TASK_INVALID" });
+  }
 });
 
 test("listener oracle rejects missing, shared, foreign executable, or wrong-module owners", (t) => {
