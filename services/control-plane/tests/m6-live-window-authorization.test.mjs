@@ -24,7 +24,7 @@ import {
   deriveM6GateFSafetyClosePackageHash,
   deriveM6GateFSafetyCloseProofHash,
 } from "../control-plane/lib/m6-gate-safety-close-arm.mjs";
-import { StateStore } from "../control-plane/lib/state-store.mjs";
+import { CURRENT_CONTROL_SCHEMA_VERSION, StateStore } from "../control-plane/lib/state-store.mjs";
 
 const NOW = Date.parse("2030-01-01T00:10:00.000Z");
 const H = (character) => character.repeat(64);
@@ -390,7 +390,7 @@ test("v20 consumes owner authorization only inside the gate-fence promotion tran
         }),
       },
     }), { code: "M64_LIVE_AUTH_GENERATION_CAS_MISMATCH" });
-    assert.equal(state.db.prepare("PRAGMA user_version").get().user_version, 20);
+    assert.equal(state.db.prepare("PRAGMA user_version").get().user_version, CURRENT_CONTROL_SCHEMA_VERSION);
   } finally {
     try { state.close(); } catch {}
     rmSync(root, { recursive: true, force: true });
@@ -590,7 +590,7 @@ test("user_version 19 migrates to v20 and adds the durable normal-close proof co
   state.close();
   state = new StateStore({ dbPath, now: () => NOW });
   try {
-    assert.equal(state.db.prepare("PRAGMA user_version").get().user_version, 20);
+    assert.equal(state.db.prepare("PRAGMA user_version").get().user_version, CURRENT_CONTROL_SCHEMA_VERSION);
     assert.equal(state.db.prepare("SELECT COUNT(*) AS count FROM m6_live_window_authorization_consumptions").get().count, 0);
     assert.equal(state.db.prepare("SELECT COUNT(*) AS count FROM m6_gate_safety_close_arms").get().count, 0);
     assert.ok(state.db.prepare("PRAGMA table_info(m6_gate_safety_close_arms)").all()

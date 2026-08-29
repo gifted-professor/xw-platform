@@ -56,7 +56,7 @@ import { createExplorationPermitPolicy } from "./xhs-exploration-permit.mjs";
 
 // Visual navigation roles spend the visionPermits budget at permit issuance
 // (V3-I07); observation-only roles (BACK/RESTORE) do not.
-const EXPLORATION_VISUAL_ROLES = new Set(["OPEN_CONTENT_CARD", "OPEN_COMMENT_PANEL", "PAUSE_VIDEO_SAFE_ZONE"]);
+const EXPLORATION_VISUAL_ROLES = new Set(["PAUSE_VIDEO_SAFE_ZONE"]);
 
 function ledgerView(row) {
   if (!row) return null;
@@ -2532,7 +2532,10 @@ export class ControlPlane {
   }
 
   // Visual navigation roles spend the visionPermits budget at issuance
-  // (V3-I07); observation-only roles (BACK/RESTORE) do not.
+  // (V3-I07); observation-only roles (BACK/RESTORE) do not. ONLY the
+  // vision-provider-derived role is visual: DUMP-resolved surface taps
+  // (OPEN_CONTENT_CARD / OPEN_COMMENT_PANEL) are DUMP-authorized navigation,
+  // gated by reservedPrimitives instead (P2 clarification, plan §5.5).
   issueExplorationPermit({ sessionId, token, authorityId, navigationRole, page, evidenceHash, resolvedPayload, ttlMs = 5000 }) {
     const { session, authority } = this.requireExplorationAuthority({ authorityId, sessionId, token });
     if (EXPLORATION_VISUAL_ROLES.has(navigationRole)) {

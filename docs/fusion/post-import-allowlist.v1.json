@@ -150,7 +150,17 @@
         "scripts/lib/xhs-routine-artifact.mjs",
         "scripts/lib/xhs-routine-authority.mjs",
         "scripts/lib/xhs-routine-vision-navigator.mjs",
-        "tests/xhs-routine-vision-navigator.test.mjs"
+        "tests/xhs-routine-vision-navigator.test.mjs",
+        "scripts/lib/xhs-exploration-mission.mjs",
+        "scripts/lib/xhs-goal-explore-machine.mjs",
+        "scripts/lib/xhs-explore-driver.mjs",
+        "scripts/lib/xhs-explore-surface.mjs",
+        "tests/fixtures/xhs-explore-fixtures.mjs",
+        "tests/xhs-exploration-evidence.test.mjs",
+        "tests/xhs-exploration-mission.test.mjs",
+        "tests/xhs-exploration-public-privacy.test.mjs",
+        "tests/xhs-explore-driver.test.mjs",
+        "tests/xhs-goal-explore-machine.test.mjs"
       ]
     },
     "control-plane": {
@@ -317,7 +327,14 @@
         "apps/xhs/routine-draft-provider.mjs",
         "apps/xhs/routine-effect-transport.mjs",
         "tests/cp-structured-error-log.test.mjs",
-        "tests/xhs-routine-authority.test.mjs"
+        "tests/xhs-routine-authority.test.mjs",
+        "control-plane/lib/xhs-evidence-digest-keyring.mjs",
+        "control-plane/lib/xhs-exploration-authority.mjs",
+        "control-plane/lib/xhs-exploration-permit.mjs",
+        "tests/xhs-exploration-budget.test.mjs",
+        "tests/xhs-exploration-hard-zero.test.mjs",
+        "tests/xhs-exploration-novelty-ledger.test.mjs",
+        "tests/xhs-exploration-permit.test.mjs"
       ]
     }
   }

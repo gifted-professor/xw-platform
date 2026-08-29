@@ -470,7 +470,7 @@
       "implementation": {
         "adapter": "xiaowei",
         "action": "m6_grounded_run",
-        "implementationClosureHash": "dd2317fe66e9c2efd27797c11d9e1220bc3e7861082ef2a4602f75e829ea29e3",
+        "implementationClosureHash": "12980fcbcb2fc4e47a9043e06f5085a62236341ceae4266d638d1055197f754c",
         "tcbManifestRef": "xw.m6-grounded-run.tcb.v1"
       },
       "evidence": ["M6-4-A01", "M6-4-A02", "M6-4-A03-BOUNDED_READ_TRACE"],

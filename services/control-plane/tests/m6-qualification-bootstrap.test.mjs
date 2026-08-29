@@ -35,7 +35,7 @@ import {
   M6_QUALIFICATION_BOOTSTRAP_SCENARIO_SCHEMA_ID,
   validateM6QualificationBootstrapPackage,
 } from "../control-plane/lib/m6-qualification-bootstrap.mjs";
-import { StateStore } from "../control-plane/lib/state-store.mjs";
+import { CURRENT_CONTROL_SCHEMA_VERSION, StateStore } from "../control-plane/lib/state-store.mjs";
 
 const NOW = Date.parse("2030-01-01T00:00:05.000Z");
 const ACTOR = "operator:m6-qualification-bootstrap-test";
@@ -302,7 +302,7 @@ test("production bootstrap snapshots v18 before migration, preserves legacy rows
     assert.equal(result.actionCount, 0);
     assert.deepEqual(result.resourceCounts, { jobs: 0, leases: 0, runs: 0, sessions: 0 });
     assert.equal(f.snapshotCalls(), 1);
-    assert.equal(userVersion(f.dbPath), 20);
+    assert.equal(userVersion(f.dbPath), CURRENT_CONTROL_SCHEMA_VERSION);
     const migrated = new DatabaseSync(f.dbPath, { readOnly: true });
     try {
       assert.equal(migrated.prepare("SELECT metadata_json FROM nodes WHERE node_id='legacy-node'").get().metadata_json, '{"sentinel":"unchanged"}');
@@ -346,7 +346,7 @@ test("qualification-only migration preserves expired resources and interrupted l
     assert.equal(result.mode, "CLOSED");
     assert.deepEqual(result.resourceCounts, { jobs: 0, leases: 0, runs: 0, sessions: 0 });
     assert.equal(result.actionCount, 0);
-    assert.equal(userVersion(qualification.dbPath), 20);
+    assert.equal(userVersion(qualification.dbPath), CURRENT_CONTROL_SCHEMA_VERSION);
     assert.deepEqual(recoveryResidue(qualification.dbPath), before, "bootstrap migration must not run ordinary recovery before the legacy-state assertion");
   } finally { qualification.cleanup(); }
 
@@ -390,7 +390,7 @@ for (const stage of ["snapshotReceipt", "artifacts", "migration", "dbFence", "po
         assert.equal(userVersion(f.dbPath), 18);
         assert.equal(existsSync(join(f.m6Root, "m6-gate", GATE, "current.json")), false);
       } else {
-        assert.equal(userVersion(f.dbPath), 20);
+        assert.equal(userVersion(f.dbPath), CURRENT_CONTROL_SCHEMA_VERSION);
       }
       result = bootstrapM6Qualification({ ...f.args, snapshotDatabase: () => { throw new Error("must reuse receipt"); } });
       assert.equal(result.generation, 0);

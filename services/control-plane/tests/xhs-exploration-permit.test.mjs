@@ -137,15 +137,17 @@ function fixture() {
 
 const evidenceHash = () => createHash("sha256").update("cp-owned-dump-evidence").digest("hex");
 const tapPayload = () => ({ primitive: "tap", x: TAP_X, y: TAP_Y });
-const freshObservation = () => ({ page: "HOME_FEED", overlaySafe: true, evidenceHash: evidenceHash() });
+const freshObservation = (page = "HOME_FEED") => ({ page, overlaySafe: true, evidenceHash: evidenceHash() });
 
 test("permit happy path: issue → byte-exact consume → exactly one physical tap on the lane device", async () => {
   const f = fixture();
   try {
     const { s03, authority } = await f.registerAuthority();
+    // PAUSE_VIDEO_SAFE_ZONE is the only VISION-derived role; it alone spends
+    // the visionPermits budget (DUMP-resolved taps spend reservedPrimitives)
     const permit = f.control.issueExplorationPermit({
       sessionId: s03.sessionId, token: s03.token, authorityId: authority.authorityId,
-      navigationRole: "OPEN_CONTENT_CARD", page: "HOME_FEED",
+      navigationRole: "PAUSE_VIDEO_SAFE_ZONE", page: "VIDEO_NOTE",
       evidenceHash: evidenceHash(), resolvedPayload: tapPayload(),
     });
     assert.equal(permit.actionClass, "tap");
@@ -154,7 +156,7 @@ test("permit happy path: issue → byte-exact consume → exactly one physical t
 
     const { job } = await f.control.consumeExplorationPermit({
       sessionId: s03.sessionId, token: s03.token, authorityId: authority.authorityId,
-      permitId: permit.permitId, payload: tapPayload(), freshObservation: freshObservation(),
+      permitId: permit.permitId, payload: tapPayload(), freshObservation: freshObservation("VIDEO_NOTE"),
     });
     assert.ok(job);
     assert.deepEqual(f.screen.taps, [{ x: TAP_X, y: TAP_Y }]);
@@ -163,7 +165,7 @@ test("permit happy path: issue → byte-exact consume → exactly one physical t
     await assert.rejects(
       () => f.control.consumeExplorationPermit({
         sessionId: s03.sessionId, token: s03.token, authorityId: authority.authorityId,
-        permitId: permit.permitId, payload: tapPayload(), freshObservation: freshObservation(),
+        permitId: permit.permitId, payload: tapPayload(), freshObservation: freshObservation("VIDEO_NOTE"),
       }),
       (error) => error.code === "EXPLORATION_PERMIT_REPLAY",
     );
@@ -193,12 +195,14 @@ test("budget enforcement: visionMaxIssuedPermits=1 exhausts the global visual la
       navigationRole: role, page, evidenceHash: evidenceHash(),
       resolvedPayload: { primitive: "tap", x: 1, y: 1 },
     });
-    issue(s03, "OPEN_CONTENT_CARD", "HOME_FEED");
+    // both roles are VISION-derived (PAUSE_VIDEO_SAFE_ZONE) → the global
+    // visionMaxIssuedPermits=1 lane exhausts in either direction
+    issue(s03, "PAUSE_VIDEO_SAFE_ZONE", "VIDEO_NOTE");
     assert.throws(
-      () => issue(s04, "OPEN_COMMENT_PANEL", "VIDEO_NOTE"),
+      () => issue(s04, "PAUSE_VIDEO_SAFE_ZONE", "VIDEO_NOTE"),
       (error) => error.code === "EXPLORATION_BUDGET_EXCEEDED",
     );
-    // observation-only roles never spend the visual budget
+    // DUMP-resolved navigation roles never spend the visual budget
     f.control.issueExplorationPermit({
       sessionId: s04.sessionId, token: s04.token, authorityId: authority.authorityId,
       navigationRole: "BACK", page: "SEARCH_RESULTS",

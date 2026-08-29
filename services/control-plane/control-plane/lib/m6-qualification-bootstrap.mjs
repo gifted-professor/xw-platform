@@ -39,7 +39,7 @@ import {
   deriveM6EpochHash,
   evaluateM6Gate,
 } from "./m6-live-gate.mjs";
-import { StateStore } from "./state-store.mjs";
+import { CURRENT_CONTROL_SCHEMA_VERSION, StateStore } from "./state-store.mjs";
 
 export const M6_QUALIFICATION_BOOTSTRAP_PACKAGE_SCHEMA_ID = "xw.m6-c1-qualification-bootstrap-package.v1";
 export const M6_QUALIFICATION_BOOTSTRAP_SCENARIO_SCHEMA_ID = "xw.m6-c1-qualification-bootstrap-scenario-manifest.v1";
@@ -750,8 +750,9 @@ function bootstrapM6QualificationInternal({
 
   const initialSourceState = inspectLogicalState(controlDbPath);
   const sourceVersion = initialSourceState.userVersion;
-  if (![18, 20].includes(sourceVersion)) {
-    fail("M6_QUALIFICATION_BOOTSTRAP_DB_VERSION_INVALID", "qualification bootstrap requires the production v18 source or an exact v20 replay");
+  if (![18, CURRENT_CONTROL_SCHEMA_VERSION].includes(sourceVersion)) {
+    fail("M6_QUALIFICATION_BOOTSTRAP_DB_VERSION_INVALID",
+      `qualification bootstrap requires the production v18 source or an exact v${CURRENT_CONTROL_SCHEMA_VERSION} replay`);
   }
   if (sourceVersion === 18 && existingPointer) {
     fail("M6_QUALIFICATION_BOOTSTRAP_POINTER_AHEAD", "generation-0 pointer may never be published before the DB fence");
@@ -818,9 +819,11 @@ function bootstrapM6QualificationInternal({
     state = stateFactory({ dbPath: controlDbPath, now, m6RuntimeMode: "QUALIFICATION_ONLY" });
     assertDatabaseIdentity(initialDbIdentity, { allowContentChange: true });
     const migrated = inspectLogicalState(controlDbPath, snapshotReceipt.legacyState.tables);
-    if (migrated.userVersion !== 20 || migrated.logicalStateHash !== snapshotReceipt.legacyState.logicalStateHash
+    if (migrated.userVersion !== CURRENT_CONTROL_SCHEMA_VERSION
+      || migrated.logicalStateHash !== snapshotReceipt.legacyState.logicalStateHash
       || canonicalJson(migrated.tables) !== canonicalJson(snapshotReceipt.legacyState.tables)) {
-      fail("M6_QUALIFICATION_BOOTSTRAP_LEGACY_STATE_DRIFT", "v18-to-v20 migration changed legacy table rows");
+      fail("M6_QUALIFICATION_BOOTSTRAP_LEGACY_STATE_DRIFT",
+        `v18-to-v${CURRENT_CONTROL_SCHEMA_VERSION} migration changed legacy table rows`);
     }
     if (faultAfter === "migration") injectedFault("migration");
 

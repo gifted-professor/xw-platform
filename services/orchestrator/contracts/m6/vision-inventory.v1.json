@@ -498,7 +498,8 @@
         "packages/cutover/lib/tasks.mjs",
         "services/orchestrator/ops/xw-mission.mjs",
         "services/orchestrator/ops/xw-repair.mjs",
-        "services/orchestrator/ops/xw-start.mjs"
+        "services/orchestrator/ops/xw-start.mjs",
+        "services/orchestrator/ops/xw-xhs-routine-closeout.mjs"
       ],
       "category": "runtime-root",
       "compatException": false

@@ -36,12 +36,12 @@ function closedEpoch(overrides = {}) {
   return { ...raw, epochHash: sha256(`xw.m6-live-gate.v1:${canonicalJson(raw)}`) };
 }
 
-test("v20 migration creates an empty fence and seeds generation 0 only from a self-hashed v1 CLOSED tail", () => {
+test("v21 migration creates an empty fence and seeds generation 0 only from a self-hashed v1 CLOSED tail", () => {
   const root = mkdtempSync(join(tmpdir(), "m6-fence-"));
   const state = new StateStore({ dbPath: join(root, "control.db") });
   try {
-    assert.equal(CURRENT_CONTROL_SCHEMA_VERSION, 20);
-    assert.equal(state.db.prepare("PRAGMA user_version").get().user_version, 20);
+    assert.equal(CURRENT_CONTROL_SCHEMA_VERSION, 21);
+    assert.equal(state.db.prepare("PRAGMA user_version").get().user_version, CURRENT_CONTROL_SCHEMA_VERSION);
     assert.equal(state.getM6GateFence(), null);
     assert.throws(() => state.seedM6GateFence({ epoch: closedEpoch({ mode: "OBSERVE_ONLY", status: "active" }), locksHash: "6".repeat(64) }), {
       code: "M6_GATE_FENCE_SEED_INVALID",

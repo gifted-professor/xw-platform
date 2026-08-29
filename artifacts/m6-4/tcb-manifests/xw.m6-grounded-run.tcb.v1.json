@@ -2,7 +2,7 @@
   "schemaId": "xhs.tcb.manifest.v1",
   "schemaVersion": 1,
   "manifestId": "xw.m6-grounded-run.tcb.v1",
-  "implementationClosureHash": "dd2317fe66e9c2efd27797c11d9e1220bc3e7861082ef2a4602f75e829ea29e3",
+  "implementationClosureHash": "12980fcbcb2fc4e47a9043e06f5085a62236341ceae4266d638d1055197f754c",
   "contentHashProfile": "xhs.m6-grounded-run-capability-self-binding.v1",
   "paths": [
     "artifacts/m6-4/cohort-manifests/m6_4_action_smoke.json",
@@ -149,6 +149,8 @@
     "services/control-plane/control-plane/lib/transport-action-authorization.mjs",
     "services/control-plane/control-plane/lib/trusted-human-issuer.mjs",
     "services/control-plane/control-plane/lib/typed-transport.mjs",
+    "services/control-plane/control-plane/lib/xhs-exploration-authority.mjs",
+    "services/control-plane/control-plane/lib/xhs-exploration-permit.mjs",
     "services/control-plane/control-plane/lib/xiaowei-transport.mjs",
     "services/control-plane/control-plane/router.mjs",
     "services/control-plane/control-plane/schema/effect-intent.schema.json",
@@ -448,7 +450,7 @@
       },
       {
         "path": "services/control-plane/apps/xhs/routine-comment-chain.mjs",
-        "sha256": "c2acd05796208d9845e6524aa85963a8b16bebf8c9d7e9e8d8793e2aa2f4375d"
+        "sha256": "048122226fbb6c29b47313c77a3c67fab726268bacb8983b539b425e9502fe5c"
       },
       {
         "path": "services/control-plane/apps/xhs/routine-draft-provider.mjs",
@@ -456,7 +458,7 @@
       },
       {
         "path": "services/control-plane/apps/xhs/routine-effect-bridge.mjs",
-        "sha256": "4db9525b460e4c9c3acad8447937cdcedff0cd5881c1f7b2508648c69c71fa19"
+        "sha256": "20e436088774930a8865ec34e787fd8a1edddf0fd71369761b388250f2462dcb"
       },
       {
         "path": "services/control-plane/apps/xhs/routine-effect-transport.mjs",
@@ -524,7 +526,7 @@
       },
       {
         "path": "services/control-plane/control-plane/lib/control-plane.mjs",
-        "sha256": "9611ffdcc1220437812d3d74505d1f8e3a6dfca1ae4ce57ff1d098cdd544e74b"
+        "sha256": "e58175074246237f5060beebf795ee4630ffc3f3ed73a7fa9097e30aa498e2f1"
       },
       {
         "path": "services/control-plane/control-plane/lib/delegation-grant-policy.mjs",
@@ -556,7 +558,7 @@
       },
       {
         "path": "services/control-plane/control-plane/lib/errors.mjs",
-        "sha256": "6c5495a2ec31f9606c8b91cd3b2a1c807217212d2bf0b7f6a7202b04be00f645"
+        "sha256": "aeebd88a434f41fe074c31ba45662188acf1d3f20810658d108e8c6bab60a883"
       },
       {
         "path": "services/control-plane/control-plane/lib/evidence-store.mjs",
@@ -664,7 +666,7 @@
       },
       {
         "path": "services/control-plane/control-plane/lib/m6-qualification-bootstrap.mjs",
-        "sha256": "8087dfbd4ced610b7f9d624e01ddb219dc4d778f0a874ed7e374d89763d43a74"
+        "sha256": "a1f8109104ec4e101418b66b59c537c9dd98f978d39b942f2a9ff0b85cee7c0f"
       },
       {
         "path": "services/control-plane/control-plane/lib/m6-typed-transport.mjs",
@@ -740,7 +742,7 @@
       },
       {
         "path": "services/control-plane/control-plane/lib/state-store.mjs",
-        "sha256": "97925f12aef93952cc6a291859e09c3ce0f53031b1458ec1fd09d0762abd6932"
+        "sha256": "d67c22b4adb8810db21a27780022b8490821d0dfdc936b8e0f03b5f5ad6ad844"
       },
       {
         "path": "services/control-plane/control-plane/lib/tcb-manifest.mjs",
@@ -759,12 +761,20 @@
         "sha256": "2641ec86c5bed99947df71f1961d9d7b63c085b2566645db7701d040f1261a17"
       },
       {
+        "path": "services/control-plane/control-plane/lib/xhs-exploration-authority.mjs",
+        "sha256": "6b6f81b83f27038808f32772dfee624d167f66685b9553e07eb96c642244d5da"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/xhs-exploration-permit.mjs",
+        "sha256": "004354f3b5a12d7850919299841537cbceecf3d8e45c06ab084b58e0a3209955"
+      },
+      {
         "path": "services/control-plane/control-plane/lib/xiaowei-transport.mjs",
         "sha256": "c500c857096a6b7e8445cbdc733387277c6253a9e0375507c4c3ae9ece839623"
       },
       {
         "path": "services/control-plane/control-plane/router.mjs",
-        "sha256": "c38aac469c1ad7e1bcf260d3e5a3ed39cef192b503fd0b52d7459caeee8d7840"
+        "sha256": "88302c827fa6bb569ce0a9a59b0d9743bec9b67540bcd07d2b76f554a6480b6c"
       },
       {
         "path": "services/control-plane/control-plane/schema/effect-intent.schema.json",
@@ -780,7 +790,7 @@
       },
       {
         "path": "services/control-plane/control-plane/server.mjs",
-        "sha256": "cf98442cc983972e2e2f49020876b9dcbb35ba7bc4724f0e11af22ac93ecb06b"
+        "sha256": "7cb74ad7c6ba97914feca7485a3b53a168ca22dae6ebdf765712aa6210868fcc"
       },
       {
         "path": "services/control-plane/docs/adr/0008-mission-driven-exploration-authorization.md",
