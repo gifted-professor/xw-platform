@@ -1,0 +1,56 @@
+{
+  "schema": "multi-model-execution-route.v1",
+  "advisory_only": true,
+  "execute_authorized": false,
+  "status": "READY",
+  "plan_status": "READY_FOR_EXECUTION",
+  "review_snapshot_sha256": "305686655033f57c5e56683c502bbfc020f32c7070d69e74328f7a8ca33b5e70",
+  "execution_contract_sha256": "8c4190b15fcbb1546e85553210fa347e3e77ff2b086350a4f3190a70ca1bd4b7",
+  "runtime": "opencode",
+  "inventory_source": "opencode models (verified exact candidate IDs)",
+  "inventory_observed_at": "2026-08-29T06:46:52.777434+00:00",
+  "risk_tier": "HIGH",
+  "profiles": [
+    "agentic",
+    "long-horizon",
+    "security",
+    "terminal-heavy"
+  ],
+  "profile": "SECURITY",
+  "execution_unit": "WHOLE_PLAN",
+  "default_execution_units": 1,
+  "max_macro_units": 2,
+  "primary": {
+    "family": "glm-5.x",
+    "resolved_exact_id": "opencode-go/glm-5.3",
+    "model_id_availability": "VERIFIED_IN_INVENTORY"
+  },
+  "fallback": {
+    "family": "deepseek-v4-pro",
+    "resolved_exact_id": "opencode-go/deepseek-v4-pro",
+    "model_id_availability": "VERIFIED_IN_INVENTORY"
+  },
+  "max_model_switches": 1,
+  "switch_only_on": [
+    "CAPABILITY_MISMATCH",
+    "CONTEXT_LIMIT",
+    "PROVIDER_UNAVAILABLE",
+    "BLOCKED_AFTER_ACCEPTANCE_CHECKS"
+  ],
+  "handoff_requires": [
+    "frozen_current_state_or_diff",
+    "completed_commands_and_acceptance_output",
+    "external_side_effects",
+    "evidenced_blocker",
+    "exact_plan_and_execution_contract_reload",
+    "unresolved_contract_item_ledger"
+  ],
+  "completion_requires": [
+    "matching_plan_sha256",
+    "all_contract_items_and_artifacts_accounted_for",
+    "all_probe_paths_exercised",
+    "model_and_context_rehydration_events"
+  ],
+  "tool_execution_capability": "REQUIRES_TARGET_RUNTIME_CHECK",
+  "exhausted_verdict": "BLOCKED_EXECUTION_ROUTE"
+}
