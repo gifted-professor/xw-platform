@@ -28,13 +28,14 @@ import {
   LIKE_MAX_CAP,
 } from "../scripts/lib/xhs-routine-plan.mjs";
 
-test("catalog has exactly the four V2 templates", () => {
+test("catalog has the four V2 templates plus the V3 exploration template", () => {
   const ids = listRoutineTemplates().map((t) => t.id);
   assert.deepEqual(ids, [
     "xhs.scout.home.v1",
     "xhs.feed-play.v1",
     "xhs.nurture-lite.v1",
     "xhs.nurture-grounded.v1",
+    "xhs.explore.goal.v1",
   ]);
 });
 

@@ -51,6 +51,12 @@ import {
 } from "./open-action-executor.mjs";
 import { SingleDeviceRecipeRunner, resolveFixedRpaAlias } from "./single-device-recipe-runner.mjs";
 import { filterOverlayRecipes, resolveOverlayMode } from "./generated-overlay.mjs";
+import { createExplorationAuthorityPolicy, EXPLORATION_PROFILE } from "./xhs-exploration-authority.mjs";
+import { createExplorationPermitPolicy } from "./xhs-exploration-permit.mjs";
+
+// Visual navigation roles spend the visionPermits budget at permit issuance
+// (V3-I07); observation-only roles (BACK/RESTORE) do not.
+const EXPLORATION_VISUAL_ROLES = new Set(["OPEN_CONTENT_CARD", "OPEN_COMMENT_PANEL", "PAUSE_VIDEO_SAFE_ZONE"]);
 
 function ledgerView(row) {
   if (!row) return null;
@@ -351,6 +357,11 @@ export class ControlPlane {
     // Injected at construction (never selected by a CLI flag) — the bridge reads
     // only { text, modelId, promptHash } from it.
     this.routineDraftProvider = createRoutineDraftProvider();
+    // V3 exploration (plan §5.2): hard-zero authority + single-use permit
+    // policies. Fail-closed regardless of policyMode — the exploration profile
+    // never inherits nonpayment_v1 softness.
+    this.explorationAuthority = createExplorationAuthorityPolicy({ state });
+    this.explorationPermits = createExplorationPermitPolicy({ state, now: this.now ?? now });
     this.rpaAlias = resolveFixedRpaAlias();
     this.recipeRuns = new SingleDeviceRecipeRunner({
       fixedAlias: this.rpaAlias,
@@ -2458,6 +2469,11 @@ export class ControlPlane {
   }) {
     const session = this.state.validateSession(sessionId, token);
     assertSessionKind(session, "capability");
+    // V3-I01: an exploration-profile session can never register a routine
+    // SOCIAL authority — no mixed profile, no ECP bridge, no effect transport.
+    if (session.profile === EXPLORATION_PROFILE) {
+      throw new ControlPlaneError("EXPLORATION_EFFECT_FORBIDDEN", "xhs_goal_explore_v1 sessions cannot register a routine social authority", { status: 403 });
+    }
     const { authority } = this.state.registerRoutineAuthority({
       executionRunId,
       routineRunId,
@@ -2472,6 +2488,202 @@ export class ControlPlane {
       accountFingerprint,
     });
     return authority;
+  }
+
+  // --- V3 exploration authority (plan §5.2) ----------------------------------
+
+  requireExplorationAuthority({ authorityId, sessionId, token }) {
+    const session = this.state.validateSession(sessionId, token);
+    assertSessionKind(session, "capability");
+    if (session.profile !== EXPLORATION_PROFILE) {
+      throw new ControlPlaneError("EXPLORATION_PROFILE_REQUIRED", "session does not carry the exploration profile", { status: 403 });
+    }
+    const authority = this.state.getExplorationAuthority(authorityId);
+    if (!authority) {
+      throw new ControlPlaneError("EXPLORATION_AUTHORITY_NOT_FOUND", `unknown exploration authority ${authorityId}`, { status: 404 });
+    }
+    const binding = authority.sessionBindings.find((b) => b.sessionId === session.sessionId);
+    if (!binding) {
+      throw new ControlPlaneError("EXPLORATION_SESSION_NOT_BOUND", "session is not bound to this exploration authority", { status: 403 });
+    }
+    if (binding.leaseId !== session.leaseId) {
+      throw new ControlPlaneError("EXPLORATION_LEASE_DRIFT", "session lease drifted from the authority binding", { status: 409 });
+    }
+    return { session, authority, binding };
+  }
+
+  registerExplorationAuthority({ sessions, executionRunId, routineRunId, mission, planHash, releaseId = null, accountFingerprint = null }) {
+    for (const s of sessions ?? []) {
+      const session = this.state.validateSession(s.sessionId, s.token);
+      assertSessionKind(session, "capability");
+      if (session.profile === EXPLORATION_PROFILE) {
+        throw new ControlPlaneError("EXPLORATION_SESSION_ALREADY_PROFILED", "session already carries an exploration profile", { status: 409 });
+      }
+    }
+    return this.explorationAuthority.registerAuthority({
+      sessions,
+      executionRunId,
+      routineRunId,
+      mission,
+      planHash,
+      releaseId,
+      accountFingerprint,
+    });
+  }
+
+  // Visual navigation roles spend the visionPermits budget at issuance
+  // (V3-I07); observation-only roles (BACK/RESTORE) do not.
+  issueExplorationPermit({ sessionId, token, authorityId, navigationRole, page, evidenceHash, resolvedPayload, ttlMs = 5000 }) {
+    const { session, authority } = this.requireExplorationAuthority({ authorityId, sessionId, token });
+    if (EXPLORATION_VISUAL_ROLES.has(navigationRole)) {
+      this.state.reserveExplorationBudget({
+        authorityId: authority.authorityId,
+        missionHash: authority.missionHash,
+        alias: null,
+        kind: "visionPermits",
+        amount: 1,
+        detail: { navigationRole, page, evidenceHash },
+      });
+    }
+    return this.explorationPermits.issuePermit({
+      session,
+      authority,
+      navigationRole,
+      page,
+      evidenceHash,
+      resolvedPayload,
+      ttlMs,
+    });
+  }
+
+  async consumeExplorationPermit({ sessionId, token, authorityId, permitId, payload = null, freshObservation = null }) {
+    const { session, authority } = this.requireExplorationAuthority({ authorityId, sessionId, token });
+    const { permit, payload: resolvedPayload } = this.explorationPermits.consumePermit({
+      session,
+      authority,
+      permitId,
+      requestedPayload: payload,
+      freshObservation,
+    });
+    // the atomic one-shot consume above is the ONLY route that precedes
+    // createJob; the job then runs the SAME formal session pipeline
+    const job = await this.#runSessionJob(session, {
+      idempotencyKey: `exploration:${permit.permitId}`,
+      capabilityId: "xiaowei.explorer.primitive",
+      params: resolvedPayload,
+      token,
+    });
+    // conservative per-permit primitive accounting (V3-I06)
+    this.state.reserveExplorationBudget({
+      authorityId: authority.authorityId,
+      missionHash: authority.missionHash,
+      alias: permit.alias,
+      kind: "primitives",
+      amount: 1,
+      detail: { permitId: permit.permitId, jobId: job.jobId },
+    });
+    return { permit, job };
+  }
+
+  reserveExplorationBudget({ sessionId, token, authorityId, alias = null, kind, amount = 1, detail = null }) {
+    const { authority, binding } = this.requireExplorationAuthority({ authorityId, sessionId, token });
+    return this.state.reserveExplorationBudget({
+      authorityId: authority.authorityId,
+      missionHash: authority.missionHash,
+      alias: alias ?? binding.alias,
+      kind,
+      amount,
+      detail,
+    });
+  }
+
+  settleExplorationReservation({ sessionId, token, authorityId, reservationId, outcome }) {
+    this.requireExplorationAuthority({ authorityId, sessionId, token });
+    return this.state.settleExplorationReservation({ reservationId, outcome });
+  }
+
+  claimExplorationTarget({ sessionId, token, authorityId, keyKind, keyValue, alias = null }) {
+    const { authority, binding } = this.requireExplorationAuthority({ authorityId, sessionId, token });
+    const result = this.state.claimExplorationTarget({
+      authorityId: authority.authorityId,
+      missionHash: authority.missionHash,
+      keyKind,
+      keyValue,
+      alias: alias ?? binding.alias,
+    });
+    return { ...result, alias: alias ?? binding.alias };
+  }
+
+  confirmExplorationTarget({ sessionId, token, authorityId, targetId, stableKeyValue = null }) {
+    const { authority } = this.requireExplorationAuthority({ authorityId, sessionId, token });
+    return this.state.confirmExplorationTarget({
+      authorityId: authority.authorityId,
+      missionHash: authority.missionHash,
+      targetId,
+      stableKeyValue,
+    });
+  }
+
+  markExplorationTargetUnknown({ sessionId, token, authorityId, targetId }) {
+    const { authority } = this.requireExplorationAuthority({ authorityId, sessionId, token });
+    return this.state.markExplorationTargetUnknown({
+      authorityId: authority.authorityId,
+      missionHash: authority.missionHash,
+      targetId,
+    });
+  }
+
+  appendExplorationJournal({ sessionId, token, authorityId, alias = null, type, payload = {} }) {
+    const { authority, binding } = this.requireExplorationAuthority({ authorityId, sessionId, token });
+    const laneAlias = alias ?? binding.alias;
+    const journal = this.state.readExplorationLaneJournal(authority.authorityId, laneAlias);
+    const seq = (journal.length > 0 ? journal[journal.length - 1].seq : 0) + 1;
+    const prevHash = journal.length > 0 ? journal[journal.length - 1].recordHash : "genesis";
+    const recordHash = sha256(`${prevHash} ${seq} ${type} ${canonicalJson(payload)}`);
+    const record = this.state.appendExplorationJournal({
+      authorityId: authority.authorityId,
+      alias: laneAlias,
+      seq,
+      type,
+      recordHash,
+      payload,
+    });
+    return record?.recordHash ?? recordHash;
+  }
+
+  commitExplorationLane({ sessionId, token, authorityId }) {
+    const { binding } = this.requireExplorationAuthority({ authorityId, sessionId, token });
+    const journal = this.state.readExplorationLaneJournal(authorityId, binding.alias);
+    if (journal.some((r) => r.type === "COMMITTED")) {
+      throw new ControlPlaneError("EXPLORATION_LANE_ALREADY_COMMITTED", "lane journal already carries a COMMITTED marker", { status: 409 });
+    }
+    const receiptHash = sha256(canonicalJson(journal.map((r) => r.recordHash)));
+    this.appendExplorationJournal({ sessionId, token, authorityId, alias: binding.alias, type: "COMMITTED", payload: { receiptHash } });
+    return { alias: binding.alias, receiptHash, journalLength: journal.length + 1 };
+  }
+
+  getExplorationAuthorityView({ sessionId, token, authorityId }) {
+    const { authority } = this.requireExplorationAuthority({ authorityId, sessionId, token });
+    const lanes = {};
+    let allSettled = true;
+    for (const b of authority.sessionBindings) {
+      const journal = this.state.readExplorationLaneJournal(authorityId, b.alias);
+      const committed = journal.some((r) => r.type === "COMMITTED");
+      if (!committed) allSettled = false;
+      lanes[b.alias] = { laneRole: b.laneRole, journalLength: journal.length, committed };
+    }
+    return { authority, lanes, allSettled };
+  }
+
+  closeExplorationAuthority({ sessionId, token, authorityId, reason = "closed" }) {
+    const { authority, binding } = this.requireExplorationAuthority({ authorityId, sessionId, token });
+    const lanes = authority.sessionBindings
+      .map((b) => this.state.readExplorationLaneJournal(authorityId, b.alias))
+      .map((journal) => journal.some((r) => r.type === "COMMITTED"));
+    if (lanes.length > 0 && !lanes.every(Boolean)) {
+      throw new ControlPlaneError("EXPLORATION_LANES_UNSETTLED", "every lane journal must carry a COMMITTED marker before close", { status: 409 });
+    }
+    return this.state.closeExplorationAuthority(authorityId, { reason });
   }
 
   #routineEffectBridge(authority, token) {
@@ -2627,10 +2839,25 @@ export class ControlPlane {
     idempotencyKey,
     capabilityId,
     params = {},
-  }) {
+  } = {}) {
     const session = this.state.validateSession(sessionId, token);
     assertSessionKind(session, "capability");
-    if (this.state.getDiscoveryRunForSession(sessionId)) {
+    // V3-I02: exploration-profile sessions reject every interactive primitive
+    // and every non-Explorer capability on the GENERIC path — even with the
+    // caller's real session token and even when policyMode.active=true.
+    // Navigation happens only through consumeExplorationPermit.
+    if (session.profile === EXPLORATION_PROFILE) {
+      this.explorationAuthority.assertGenericSessionAction(session, { capabilityId, params });
+    }
+    return this.#runSessionJob(session, { idempotencyKey, capabilityId, params, token });
+  }
+
+  async #runSessionJob(session, { idempotencyKey, capabilityId, params = {}, token = null }) {
+    // #runJob heartbeats with the RAW lease token; the caller must have
+    // validated a raw token and pass it through verbatim — fail closed.
+    if (!token) throw new ControlPlaneError("SESSION_TOKEN_REQUIRED", "session job execution requires the raw session token", { status: 403 });
+    const leaseToken = token;
+    if (this.state.getDiscoveryRunForSession(session.sessionId)) {
       throw new ControlPlaneError("DISCOVERY_SESSION_EXCLUSIVE", "Discovery-owned sessions only accept the fenced Discovery primitive path", { status: 403 });
     }
     if (session.scopeCapabilityId && session.scopeCapabilityId !== capabilityId) {
@@ -2668,7 +2895,7 @@ export class ControlPlane {
       throw new ControlPlaneError(
         "DEVICE_BUSY",
         "device already has an action in progress",
-        { status: 423, details: { sessionId } },
+        { status: 423, details: { sessionId: session.sessionId } },
       );
     }
     this.evidence.assertCapacity(this.capacityBypassOpts(policy.externalEffect, sessionPolicyMode));
@@ -2681,13 +2908,13 @@ export class ControlPlane {
       capability,
       params,
       canary: session.canary,
-      sessionId,
+      sessionId: session.sessionId,
       status: "queued",
       approvalRequired: false,
       externalEffect: policy.externalEffect,
     });
     if (created.reused) {
-      if (created.job.sessionId !== sessionId) {
+      if (created.job.sessionId !== session.sessionId) {
         throw new ControlPlaneError(
           "IDEMPOTENCY_CONFLICT",
           "idempotency key belongs to a different session",
@@ -2702,7 +2929,7 @@ export class ControlPlane {
     const device = this.state.requireDevice(session.deviceId);
     this.evidence.initializeRun({ job: created.job, device, ...this.capacityOpts(policy.externalEffect, sessionPolicyMode) });
     const promise = this.#runJob(created.job, {
-      lease: { leaseId: session.leaseId, token },
+      lease: { leaseId: session.leaseId, token: leaseToken },
       releaseLease: false,
     }).finally(() => {
       if (this.activeJobs.get(session.deviceId) === promise) {

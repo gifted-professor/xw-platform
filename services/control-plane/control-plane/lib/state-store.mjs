@@ -9,6 +9,18 @@ import {
 } from "../../../../packages/kernel/lib/m6-4-live-window-authorization.mjs";
 import { canonicalJson, fingerprint, newId, sha256 } from "./canonical.mjs";
 import { ControlPlaneError } from "./errors.mjs";
+
+// V3 exploration: reservation kind → mission cap name (§3.3). Untyped kinds
+// address the cap table directly.
+const EXPLORATION_KIND_TO_CAP = Object.freeze({
+  primitives: "reservedPrimitives",
+  novelOpens: "novelOpens",
+  queries: "sealedQueries",
+  resultScreens: "resultScreensPerQuery",
+  commentScreens: "commentScreens",
+  visionAnalysis: "visionAnalysisAttempts",
+  visionPermits: "visionMaxIssuedPermits",
+});
 import {
   deriveM6GateFSafetyClosePackageHash,
   deriveM6GateFSafetyCloseProofHash,
@@ -25,7 +37,7 @@ import {
   consumeTransportActionAuthorization as consumeTransportAuthKernel,
 } from "./transport-action-authorization.mjs";
 
-export const CURRENT_CONTROL_SCHEMA_VERSION = 20;
+export const CURRENT_CONTROL_SCHEMA_VERSION = 21;
 
 const ACTIVE_JOB_STATES = new Set(["running", "verifying", "restoring"]);
 const TERMINAL_JOB_STATES = new Set(["succeeded", "failed", "ambiguous", "recovery_required", "cancelled"]);
@@ -362,6 +374,14 @@ export class StateStore {
     // revocation without treating the emergency proof as interchangeable.
     this.#ensureV19LiveWindowAuthorizationSchema();
     this.#ensureColumn("m6_gate_safety_close_arms", "terminal_proof_hash", "TEXT");
+  }
+
+  #migrateV20ToV21() {
+    // V3 exploration (plan §5.2): sessions may carry an exploration profile.
+    // The exploration_* tables are created unconditionally in the bootstrap
+    // block above (CREATE IF NOT EXISTS on every open), so nothing else to
+    // migrate here.
+    this.#ensureColumn("sessions", "profile", "TEXT");
   }
 
   #recoverInFlightActions() {
@@ -896,7 +916,90 @@ export class StateStore {
       );
       CREATE UNIQUE INDEX IF NOT EXISTS routine_authorities_session_active
         ON routine_authorities(session_id) WHERE status='active';
+      CREATE TABLE IF NOT EXISTS exploration_authorities (
+        authority_id TEXT PRIMARY KEY,
+        execution_run_id TEXT NOT NULL,
+        routine_run_id TEXT NOT NULL UNIQUE,
+        mission_hash TEXT NOT NULL,
+        plan_hash TEXT NOT NULL,
+        template_id TEXT NOT NULL,
+        release_id TEXT,
+        account_fingerprint TEXT,
+        actor_id TEXT NOT NULL,
+        lanes_json TEXT NOT NULL,
+        budgets_json TEXT NOT NULL,
+        profile TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'active',
+        created_at INTEGER NOT NULL,
+        closed_at INTEGER,
+        closed_reason TEXT
+      );
+      CREATE TABLE IF NOT EXISTS exploration_session_bindings (
+        authority_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        lease_id TEXT NOT NULL,
+        alias TEXT NOT NULL,
+        lane_role TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (authority_id, session_id)
+      );
+      CREATE TABLE IF NOT EXISTS exploration_permits (
+        permit_id TEXT PRIMARY KEY,
+        authority_id TEXT NOT NULL,
+        mission_hash TEXT NOT NULL,
+        alias TEXT NOT NULL,
+        lane_role TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        navigation_role TEXT NOT NULL,
+        action_class TEXT NOT NULL,
+        page TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        payload_hash TEXT NOT NULL,
+        evidence_hash TEXT NOT NULL,
+        issued_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        consumed_at INTEGER,
+        consumed_job TEXT
+      );
+      CREATE TABLE IF NOT EXISTS exploration_reservations (
+        reservation_id TEXT PRIMARY KEY,
+        authority_id TEXT NOT NULL,
+        mission_hash TEXT NOT NULL,
+        alias TEXT,
+        kind TEXT NOT NULL,
+        amount INTEGER NOT NULL,
+        state TEXT NOT NULL DEFAULT 'reserved',
+        detail_json TEXT,
+        created_at INTEGER NOT NULL,
+        settled_at INTEGER
+      );
+      CREATE TABLE IF NOT EXISTS exploration_targets (
+        authority_id TEXT NOT NULL,
+        mission_hash TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        claim_seq INTEGER NOT NULL,
+        key_kind TEXT NOT NULL,
+        key_value TEXT NOT NULL,
+        state TEXT NOT NULL,
+        novelty INTEGER NOT NULL DEFAULT 0,
+        opened_by_alias TEXT,
+        opened_at INTEGER,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (authority_id, target_id)
+      );
+      CREATE TABLE IF NOT EXISTS exploration_lane_journals (
+        authority_id TEXT NOT NULL,
+        alias TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        type TEXT NOT NULL,
+        record_hash TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (authority_id, alias, seq)
+      );
     `);
+    this.#ensureColumn("sessions", "profile", "TEXT");
     this.#ensureColumn("jobs", "operation_key", "TEXT");
     this.#ensureColumn("jobs", "authorization_snapshot_json", "TEXT");
     // V2.1 P1-COMMENT-RECONCILE-LIFECYCLE: full account binding on the effect
@@ -938,6 +1041,7 @@ export class StateStore {
         if (current < 18) this.#migrateV17ToV18();
         if (current < 19) this.#migrateV18ToV19();
         if (current < 20) this.#migrateV19ToV20();
+        if (current < 21) this.#migrateV20ToV21();
         this.#setUserVersion(CURRENT_CONTROL_SCHEMA_VERSION);
       });
     }
@@ -2270,6 +2374,7 @@ export class StateStore {
       canary: Boolean(row.canary),
       sessionKind: row.session_kind || "capability",
       scopeCapabilityId: row.scope_capability_id,
+      profile: row.profile ?? null,
       routeDecision: parseJson(row.placement_decision_json),
       createdAt: iso(row.created_at),
       expiresAt: iso(row.expires_at),
@@ -4887,6 +4992,362 @@ export class StateStore {
   listActiveRoutineAuthorities() {
     return this.db.prepare("SELECT * FROM routine_authorities WHERE status='active' ORDER BY created_at")
       .all().map((row) => this.#publicRoutineAuthority(row));
+  }
+
+  // --- V3 exploration authority (plan §5.2): hard-zero storage primitives ----
+  // Policy lives in lib/xhs-exploration-authority.mjs + xhs-exploration-permit.mjs;
+  // these are the narrow SQL primitives they compose under BEGIN IMMEDIATE.
+
+  markSessionsExplorationProfile(sessionIds, profile = "xhs_goal_explore_v1") {
+    const ids = [...new Set(sessionIds.map(String))];
+    if (ids.length === 0) throw new ControlPlaneError("EXPLORATION_SESSIONS_REQUIRED", "at least one session is required");
+    return this.transaction(() => {
+      for (const sessionId of ids) {
+        const row = this.db.prepare("SELECT session_id FROM sessions WHERE session_id=?").get(sessionId);
+        if (!row) throw new ControlPlaneError("SESSION_NOT_FOUND", `session ${sessionId} not found`, { status: 404 });
+        const existing = this.db.prepare("SELECT profile FROM sessions WHERE session_id=?").get(sessionId);
+        if (existing.profile && existing.profile !== profile) {
+          throw new ControlPlaneError("SESSION_PROFILE_CONFLICT", "session already carries a different profile", { status: 409 });
+        }
+        this.db.prepare("UPDATE sessions SET profile=? WHERE session_id=?").run(profile, sessionId);
+      }
+      return ids.length;
+    });
+  }
+
+  insertExplorationAuthority(row) {
+    return this.transaction(() => {
+      // one immutable authority per routineRunId — a re-registration is a replay
+      const existing = this.db.prepare("SELECT authority_id FROM exploration_authorities WHERE routine_run_id=?").get(row.routineRunId);
+      if (existing) return this.getExplorationAuthority(existing.authority_id);
+      this.db.prepare(`
+        INSERT INTO exploration_authorities (
+          authority_id, execution_run_id, routine_run_id, mission_hash, plan_hash,
+          template_id, release_id, account_fingerprint, actor_id, lanes_json,
+          budgets_json, profile, status, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)
+      `).run(
+        row.authorityId, row.executionRunId, row.routineRunId, row.missionHash, row.planHash,
+        row.templateId, row.releaseId, row.accountFingerprint, row.actorId,
+        canonicalJson(row.lanes), canonicalJson(row.budgets), row.profile, row.createdAt,
+      );
+      for (const lane of row.laneBindings) {
+        this.db.prepare(`
+          INSERT INTO exploration_session_bindings (
+            authority_id, session_id, lease_id, alias, lane_role, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?)
+        `).run(row.authorityId, lane.sessionId, lane.leaseId, lane.alias, lane.laneRole, row.createdAt);
+      }
+      return this.getExplorationAuthority(row.authorityId);
+    });
+  }
+
+  getExplorationAuthority(authorityId) {
+    const row = this.db.prepare("SELECT * FROM exploration_authorities WHERE authority_id=?").get(String(authorityId || ""));
+    if (!row) return null;
+    const bindings = this.db.prepare(
+      "SELECT * FROM exploration_session_bindings WHERE authority_id=? ORDER BY alias",
+    ).all(authorityId);
+    return {
+      authorityId: row.authority_id,
+      executionRunId: row.execution_run_id,
+      routineRunId: row.routine_run_id,
+      missionHash: row.mission_hash,
+      planHash: row.plan_hash,
+      templateId: row.template_id,
+      releaseId: row.release_id ?? null,
+      accountFingerprint: row.account_fingerprint ?? null,
+      actorId: row.actor_id,
+      lanes: parseJson(row.lanes_json, []),
+      budgets: parseJson(row.budgets_json, {}),
+      profile: row.profile,
+      status: row.status,
+      sessionBindings: bindings.map((b) => ({
+        sessionId: b.session_id, leaseId: b.lease_id, alias: b.alias, laneRole: b.lane_role,
+      })),
+      createdAt: iso(row.created_at),
+      closedAt: row.closed_at ? iso(row.closed_at) : null,
+      closedReason: row.closed_reason ?? null,
+    };
+  }
+
+  closeExplorationAuthority(authorityId, { reason = "released" } = {}) {
+    const now = this.now();
+    return this.transaction(() => {
+      const row = this.db.prepare("SELECT * FROM exploration_authorities WHERE authority_id=?").get(String(authorityId || ""));
+      if (!row) throw new ControlPlaneError("EXPLORATION_AUTHORITY_NOT_FOUND", `unknown exploration authority ${authorityId}`, { status: 404 });
+      if (row.status === "active") {
+        this.db.prepare("UPDATE exploration_authorities SET status='closed', closed_at=?, closed_reason=? WHERE authority_id=?")
+          .run(now, String(reason), authorityId);
+      }
+      return this.getExplorationAuthority(authorityId);
+    });
+  }
+
+  getExplorationBindingBySession(sessionId) {
+    const row = this.db.prepare(
+      "SELECT b.*, a.status AS authority_status, a.profile AS authority_profile FROM exploration_session_bindings b JOIN exploration_authorities a ON a.authority_id=b.authority_id WHERE b.session_id=?",
+    ).get(String(sessionId || ""));
+    if (!row) return null;
+    return {
+      authorityId: row.authority_id,
+      sessionId: row.session_id,
+      leaseId: row.lease_id,
+      alias: row.alias,
+      laneRole: row.lane_role,
+      authorityStatus: row.authority_status,
+      profile: row.authority_profile,
+    };
+  }
+
+  reserveExplorationBudget({ authorityId, missionHash, alias, kind, amount, detail = null }) {
+    const now = this.now();
+    return this.transaction(() => {
+      // ATOMIC cap check + reserve in one BEGIN IMMEDIATE: two lanes racing
+      // for the final slot can yield at most one reservation (V3-I06).
+      const auth = this.db.prepare("SELECT * FROM exploration_authorities WHERE authority_id=?").get(authorityId);
+      if (!auth || auth.status !== "active") {
+        throw new ControlPlaneError("EXPLORATION_AUTHORITY_INACTIVE", "exploration authority is missing or inactive", { status: 404 });
+      }
+      if (auth.mission_hash !== missionHash) {
+        throw new ControlPlaneError("EXPLORATION_PARTITION_MISMATCH", "reservation mission does not match the authority partition", { status: 409 });
+      }
+      // reservation kinds address cap names via the V3 mapping (e.g.
+      // visionPermits → visionMaxIssuedPermits); untyped kinds are rejected
+      const capName = EXPLORATION_KIND_TO_CAP[kind] ?? kind;
+      const caps = parseJson(auth.budgets_json, {});
+      // shared budget ledger (V3-I06): reservations are capped across BOTH
+      // lanes in total; alias is attribution on the row, not a partition
+      // CONSERVATIVE (V3-I06): every reservation row counts — reserved,
+      // consumed, AND failed — so a crashed navigation never frees its slot
+      const used = this.db.prepare(
+        "SELECT COALESCE(SUM(amount),0) AS n FROM exploration_reservations WHERE authority_id=? AND kind=?",
+      ).get(authorityId, kind).n;
+      if (used + Number(amount) > Number(caps[capName] ?? 0)) {
+        throw new ControlPlaneError("EXPLORATION_BUDGET_EXCEEDED", `budget ${kind} exhausted (${used}/${caps[capName]})`, { status: 409 });
+      }
+      const reservationId = newId("expl-res");
+      this.db.prepare(`
+        INSERT INTO exploration_reservations (
+          reservation_id, authority_id, mission_hash, alias, kind, amount, state, detail_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, 'reserved', ?, ?)
+      `).run(reservationId, authorityId, missionHash, alias ?? null, kind, Number(amount),
+        detail ? canonicalJson(detail) : null, now);
+      return { reservationId, kind: capName, alias: alias ?? null, amount: Number(amount), used: used + Number(amount), cap: Number(caps[capName] ?? 0) };
+    });
+  }
+
+  settleExplorationReservation({ reservationId, outcome }) {
+    const now = this.now();
+    return this.transaction(() => {
+      const row = this.db.prepare("SELECT * FROM exploration_reservations WHERE reservation_id=?").get(String(reservationId || ""));
+      if (!row) throw new ControlPlaneError("EXPLORATION_RESERVATION_NOT_FOUND", `unknown reservation ${reservationId}`, { status: 404 });
+      // started/timed-out/crashed conservatively consumes; replay after a
+      // terminal settle never transitions state again (V3-I06)
+      if (row.state !== "reserved") {
+        return { reservationId, state: row.state, replayed: true };
+      }
+      if (!["consumed", "failed"].includes(outcome)) {
+        throw new ControlPlaneError("EXPLORATION_SETTLE_INVALID", "outcome must be consumed|failed", { status: 400 });
+      }
+      this.db.prepare("UPDATE exploration_reservations SET state=?, settled_at=? WHERE reservation_id=?").run(outcome, now, reservationId);
+      return { reservationId, state: outcome, replayed: false };
+    });
+  }
+
+  claimExplorationTarget({ authorityId, missionHash, keyKind, keyValue, alias = null }) {
+    if (keyKind !== "stable" && keyKind !== "fallback") {
+      throw new ControlPlaneError("EXPLORATION_TARGET_KEY_INVALID", "key kind must be stable|fallback", { status: 400 });
+    }
+    const now = this.now();
+    return this.transaction(() => {
+      // partition guard: cross-mission mutation is rejected (probe C)
+      const auth = this.db.prepare("SELECT * FROM exploration_authorities WHERE authority_id=?").get(authorityId);
+      if (!auth || auth.mission_hash !== missionHash) {
+        throw new ControlPlaneError("EXPLORATION_PARTITION_MISMATCH", "claim mission does not match the authority partition", { status: 409 });
+      }
+      // stable reconciliation (V3-I05): a stable key unifies every pending/
+      // confirmed fallback alias proving the same stable id; earliest durable
+      // claim wins canonical later when a fallback row resolves
+      if (keyKind === "stable") {
+        const canonical = this.db.prepare(
+          "SELECT * FROM exploration_targets WHERE authority_id=? AND key_kind='stable' AND key_value=?",
+        ).get(authorityId, keyValue);
+        if (canonical) {
+          this.db.prepare("UPDATE exploration_targets SET updated_at=? WHERE authority_id=? AND target_id=?")
+            .run(now, authorityId, canonical.target_id);
+          // a re-claim of an already-known stable id never re-credits novelty
+          return { targetId: canonical.target_id, state: canonical.state, novel: false, claimSeq: canonical.claim_seq };
+        }
+        // a stable claim arriving with no prior record is canonical for this
+        // stable id: one novelty credit; later fallback aliases that prove the
+        // same id reconcile to duplicate via confirmExplorationTarget
+        const seq = (this.db.prepare("SELECT COALESCE(MAX(claim_seq),0) AS n FROM exploration_targets WHERE authority_id=?").get(authorityId).n) + 1;
+        const targetId = `stable:${keyValue.slice(0, 32)}`;
+        this.db.prepare(`
+          INSERT INTO exploration_targets (
+            authority_id, mission_hash, target_id, claim_seq, key_kind, key_value,
+            state, novelty, opened_by_alias, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, 'stable', ?, 'confirmed', 1, ?, ?, ?)
+        `).run(authorityId, missionHash, targetId, seq, keyValue, alias, now, now);
+        return { targetId, state: "confirmed", novel: true, claimSeq: seq };
+      }
+      // fallback claim: identity not yet stable-resolved
+      const existing = this.db.prepare(
+        "SELECT * FROM exploration_targets WHERE authority_id=? AND key_kind='fallback' AND key_value=?",
+      ).get(authorityId, keyValue);
+      if (existing) {
+        return { targetId: existing.target_id, state: existing.state, novel: false, claimSeq: existing.claim_seq };
+      }
+      const seq = (this.db.prepare("SELECT COALESCE(MAX(claim_seq),0) AS n FROM exploration_targets WHERE authority_id=?").get(authorityId).n) + 1;
+      const targetId = `fb:${keyValue.slice(0, 20)}:${seq}`;
+      this.db.prepare(`
+        INSERT INTO exploration_targets (
+          authority_id, mission_hash, target_id, claim_seq, key_kind, key_value,
+          state, novelty, opened_by_alias, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, 'fallback', ?, 'pending', 0, ?, ?, ?)
+      `).run(authorityId, missionHash, targetId, seq, keyValue, alias, now, now);
+      return { targetId, state: "pending", novel: false, claimSeq: seq };
+    });
+  }
+
+  confirmExplorationTarget({ authorityId, missionHash, targetId, stableKeyValue = null, alias = null }) {
+    // BEGIN IMMEDIATE post-open identity application + fallback→stable
+    // reconciliation in the SAME transaction (V3-I05)
+    const now = this.now();
+    return this.transaction(() => {
+      const auth = this.db.prepare("SELECT * FROM exploration_authorities WHERE authority_id=?").get(authorityId);
+      if (!auth || auth.mission_hash !== missionHash) {
+        throw new ControlPlaneError("EXPLORATION_PARTITION_MISMATCH", "confirm mission does not match the authority partition", { status: 409 });
+      }
+      const target = this.db.prepare("SELECT * FROM exploration_targets WHERE authority_id=? AND target_id=?").get(authorityId, String(targetId || ""));
+      if (!target) throw new ControlPlaneError("EXPLORATION_TARGET_NOT_FOUND", `unknown target ${targetId}`, { status: 404 });
+      if (target.state === "unknown") {
+        return { targetId: target.target_id, state: "unknown", novel: false };
+      }
+      // rekey to the canonical stable record when the stable id is now proven
+      if (stableKeyValue) {
+        const stable = this.db.prepare(
+          "SELECT * FROM exploration_targets WHERE authority_id=? AND key_kind='stable' AND key_value=?",
+        ).get(authorityId, stableKeyValue);
+        if (stable && stable.target_id !== target.target_id) {
+          // canonical is the earliest durable claim; this later fallback row
+          // becomes duplicate and gets ZERO novelty credit
+          this.db.prepare(
+            "UPDATE exploration_targets SET state=?, novelty=?, updated_at=? WHERE authority_id=? AND target_id=?",
+          ).run("duplicate", 0, now, authorityId, target.target_id);
+          return { targetId: stable.target_id, state: "duplicate", novel: false };
+        }
+        this.db.prepare(
+          "UPDATE exploration_targets SET key_kind=?, key_value=? WHERE authority_id=? AND target_id=?",
+        ).run("stable", stableKeyValue, authorityId, target.target_id);
+      }
+      const already = target.novelty === 1 || target.state === "confirmed" || target.state === "duplicate";
+      this.db.prepare(
+        "UPDATE exploration_targets SET state=?, novelty=?, opened_by_alias=COALESCE(opened_by_alias,?), opened_at=?, updated_at=? WHERE authority_id=? AND target_id=?",
+      ).run(already ? "duplicate" : "confirmed", already ? target.novelty : 1, alias, now, now, authorityId, target.target_id);
+      const updated = this.db.prepare("SELECT * FROM exploration_targets WHERE authority_id=? AND target_id=?").get(authorityId, target.target_id);
+      // novel loses its meaning once the credit was taken (even by an earlier
+      // claim of the same row): only a 0→1 transition reports novel=true
+      return { targetId: updated.target_id, state: updated.state, novel: updated.novelty === 1 && updated.state === "confirmed" && target.novelty === 0 && target.state !== "confirmed" };
+    });
+  }
+
+  markExplorationTargetUnknown({ authorityId, missionHash, targetId }) {
+    const now = this.now();
+    return this.transaction(() => {
+      const auth = this.db.prepare("SELECT * FROM exploration_authorities WHERE authority_id=?").get(authorityId);
+      if (!auth || auth.mission_hash !== missionHash) {
+        throw new ControlPlaneError("EXPLORATION_PARTITION_MISMATCH", "unknown-mark mission does not match the authority partition", { status: 409 });
+      }
+      this.db.prepare(
+        "UPDATE exploration_targets SET state='unknown', novelty=0, updated_at=? WHERE authority_id=? AND target_id=?",
+      ).run(now, authorityId, String(targetId || ""));
+      return { targetId, state: "unknown", novel: false };
+    });
+  }
+
+  insertExplorationPermit(permit) {
+    return this.transaction(() => {
+      // permit-budget counting happens inside the same transaction as the
+      // insert — issuance consumes the global visual budget even if the permit
+      // later expires unused (V3-I07)
+      this.db.prepare(`
+        INSERT INTO exploration_permits (
+          permit_id, authority_id, mission_hash, alias, lane_role, session_id,
+          navigation_role, action_class, page, payload_json, payload_hash,
+          evidence_hash, issued_at, expires_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        permit.permitId, permit.authorityId, permit.missionHash, permit.alias,
+        permit.laneRole, permit.sessionId, permit.navigationRole, permit.actionClass,
+        permit.page, canonicalJson(permit.payload), permit.payloadHash,
+        permit.evidenceHash, permit.issuedAt, permit.expiresAt,
+      );
+      return permit;
+    });
+  }
+
+  getExplorationPermit(permitId) {
+    const row = this.db.prepare("SELECT * FROM exploration_permits WHERE permit_id=?").get(String(permitId || ""));
+    if (!row) return null;
+    return {
+      permitId: row.permit_id,
+      authorityId: row.authority_id,
+      missionHash: row.mission_hash,
+      alias: row.alias,
+      laneRole: row.lane_role,
+      sessionId: row.session_id,
+      navigationRole: row.navigation_role,
+      actionClass: row.action_class,
+      page: row.page,
+      payload: parseJson(row.payload_json),
+      payloadHash: row.payload_hash,
+      evidenceHash: row.evidence_hash,
+      issuedAt: iso(row.issued_at),
+      expiresAtMs: row.expires_at,
+      issuedAtMs: row.issued_at,
+      consumedAt: row.consumed_at ? iso(row.consumed_at) : null,
+      consumedJob: row.consumed_job ?? null,
+    };
+  }
+
+  consumeExplorationPermitRow({ permitId, now, jobId }) {
+    // ATOMIC one-shot: exactly one consume can precede exactly one createJob
+    // (V3-I02). Racing duplicate consumes hit the WHERE guard.
+    const result = this.db.prepare(
+      "UPDATE exploration_permits SET consumed_at=?, consumed_job=? WHERE permit_id=? AND consumed_at IS NULL",
+    ).run(now, jobId ?? null, String(permitId || ""));
+    return result.changes === 1;
+  }
+
+  countExplorationPermits({ authorityId, alias = null }) {
+    if (alias) {
+      return this.db.prepare("SELECT COUNT(*) AS n FROM exploration_permits WHERE authority_id=? AND alias=?").get(authorityId, alias).n;
+    }
+    return this.db.prepare("SELECT COUNT(*) AS n FROM exploration_permits WHERE authority_id=?").get(authorityId).n;
+  }
+
+  appendExplorationJournal({ authorityId, alias, seq, type, recordHash, payload }) {
+    return this.transaction(() => {
+      this.db.prepare(`
+        INSERT INTO exploration_lane_journals (authority_id, alias, seq, type, record_hash, payload_json, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(authorityId, alias, seq, type, recordHash, canonicalJson(payload), this.now());
+      return { seq, type, recordHash };
+    });
+  }
+
+  readExplorationLaneJournal(authorityId, alias) {
+    return this.db.prepare(
+      "SELECT * FROM exploration_lane_journals WHERE authority_id=? AND alias=? ORDER BY seq",
+    ).all(String(authorityId || ""), String(alias || "")).map((row) => ({
+      seq: row.seq,
+      type: row.type,
+      recordHash: row.record_hash,
+      payload: parseJson(row.payload_json, {}),
+      createdAt: iso(row.created_at),
+    }));
   }
 
   // --- Mission effects (ECP) -------------------------------------------------

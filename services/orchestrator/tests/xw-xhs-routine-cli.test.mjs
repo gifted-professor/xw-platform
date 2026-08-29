@@ -133,7 +133,7 @@ test("/xw xhs routine delegates to the same 03-first planner", async () => {
   assert.deepEqual(delegatedPlan.placement.aliases, ["03"]);
 });
 
-test("catalog lists four templates and versioned 03-first placement", async () => {
+test("catalog lists five templates and versioned 03-first placement", async () => {
   const { code, stdout } = await runCli(["catalog"]);
   assert.equal(code, 0);
   const out = JSON.parse(stdout);
@@ -148,6 +148,7 @@ test("catalog lists four templates and versioned 03-first placement", async () =
     "xhs.feed-play.v1",
     "xhs.nurture-lite.v1",
     "xhs.nurture-grounded.v1",
+    "xhs.explore.goal.v1",
   ]);
 });
 

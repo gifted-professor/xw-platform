@@ -740,6 +740,160 @@ export class ControlRouter {
       };
     }
 
+    // --- V3 free exploration (plan §5.2): hard-zero authority + single-use
+    // permits + shared budgets/targets/lane journals. Sessions already carry
+    // the exploration profile; see xhs-exploration-authority.mjs.
+    if (method === "POST" && path === "/control/v1/exploration-authority") {
+      const input = requireBody(body);
+      const authority = this.control.registerExplorationAuthority({
+        sessions: input.sessions ?? [],
+        executionRunId: input.executionRunId,
+        routineRunId: input.routineRunId,
+        mission: input.mission ?? null,
+        planHash: input.planHash,
+        releaseId: input.releaseId ?? null,
+        accountFingerprint: input.accountFingerprint ?? null,
+      });
+      return { status: 201, body: { authority } };
+    }
+    match = path.match(/^\/control\/v1\/exploration-authority\/([^/]+)$/);
+    if (method === "POST" && match) {
+      const input = requireBody(body);
+      const authorityId = decodeURIComponent(match[1]);
+      if (input.action === "close") {
+        return {
+          status: 200,
+          body: { authority: this.control.closeExplorationAuthority({
+            sessionId: input.sessionId,
+            token: tokenOf(input, headers),
+            authorityId,
+            reason: input.reason ?? "closed",
+          }) },
+        };
+      }
+      return {
+        status: 200,
+        body: this.control.getExplorationAuthorityView({
+          sessionId: input.sessionId,
+          token: tokenOf(input, headers),
+          authorityId,
+        }),
+      };
+    }
+    match = path.match(/^\/control\/v1\/exploration-authority\/([^/]+)\/permits$/);
+    if (method === "POST" && match) {
+      const input = requireBody(body);
+      return {
+        status: 201,
+        body: { permit: this.control.issueExplorationPermit({
+          sessionId: input.sessionId,
+          token: tokenOf(input, headers),
+          authorityId: decodeURIComponent(match[1]),
+          navigationRole: input.navigationRole,
+          page: input.page,
+          evidenceHash: input.evidenceHash,
+          resolvedPayload: input.resolvedPayload ?? null,
+          ttlMs: input.ttlMs,
+        }) },
+      };
+    }
+    match = path.match(/^\/control\/v1\/exploration-authority\/([^/]+)\/permits\/([^/]+)\/consume$/);
+    if (method === "POST" && match) {
+      const input = requireBody(body);
+      const { permit, job } = await this.control.consumeExplorationPermit({
+        sessionId: input.sessionId,
+        token: tokenOf(input, headers),
+        authorityId: decodeURIComponent(match[1]),
+        permitId: decodeURIComponent(match[2]),
+        payload: input.payload ?? null,
+        freshObservation: input.freshObservation ?? null,
+      });
+      return { status: 200, body: { permit, job: publicJob(job) } };
+    }
+    match = path.match(/^\/control\/v1\/exploration-authority\/([^/]+)\/budget$/);
+    if (method === "POST" && match) {
+      const input = requireBody(body);
+      const authorityId = decodeURIComponent(match[1]);
+      const token = tokenOf(input, headers);
+      const sessionId = input.sessionId;
+      if (input.action === "settle") {
+        return {
+          status: 200,
+          body: { reservation: this.control.settleExplorationReservation({
+            sessionId, token, authorityId,
+            reservationId: input.reservationId,
+            outcome: input.outcome,
+          }) },
+        };
+      }
+      return {
+        status: 201,
+        body: { reservation: this.control.reserveExplorationBudget({
+          sessionId, token, authorityId,
+          alias: input.alias ?? null,
+          kind: input.kind,
+          amount: input.amount ?? 1,
+          detail: input.detail ?? null,
+        }) },
+      };
+    }
+    match = path.match(/^\/control\/v1\/exploration-authority\/([^/]+)\/targets\/claim$/);
+    if (method === "POST" && match) {
+      const input = requireBody(body);
+      const authorityId = decodeURIComponent(match[1]);
+      const token = tokenOf(input, headers);
+      const sessionId = input.sessionId;
+      if (input.action === "confirm") {
+        return {
+          status: 200,
+          body: { target: this.control.confirmExplorationTarget({
+            sessionId, token, authorityId,
+            targetId: input.targetId,
+            stableKeyValue: input.stableKeyValue ?? null,
+          }) },
+        };
+      }
+      if (input.action === "unknown") {
+        return {
+          status: 200,
+          body: { target: this.control.markExplorationTargetUnknown({
+            sessionId, token, authorityId, targetId: input.targetId,
+          }) },
+        };
+      }
+      return {
+        status: 201,
+        body: { target: this.control.claimExplorationTarget({
+          sessionId, token, authorityId,
+          keyKind: input.keyKind,
+          keyValue: input.keyValue,
+          alias: input.alias ?? null,
+        }) },
+      };
+    }
+    match = path.match(/^\/control\/v1\/exploration-authority\/([^/]+)\/journal$/);
+    if (method === "POST" && match) {
+      const input = requireBody(body);
+      const authorityId = decodeURIComponent(match[1]);
+      const token = tokenOf(input, headers);
+      const sessionId = input.sessionId;
+      if (input.action === "commit") {
+        return {
+          status: 200,
+          body: { lane: this.control.commitExplorationLane({ sessionId, token, authorityId }) },
+        };
+      }
+      return {
+        status: 201,
+        body: { recordHash: this.control.appendExplorationJournal({
+          sessionId, token, authorityId,
+          alias: input.alias ?? null,
+          type: input.type,
+          payload: input.payload ?? {},
+        }) },
+      };
+    }
+
     if (method === "POST" && path === "/control/v1/device-sessions") {
       const input = requireBody(body);
       const { faultAfter: _ignoredFaultAfter, ...safe } = input;

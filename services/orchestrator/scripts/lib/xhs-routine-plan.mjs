@@ -22,6 +22,7 @@
  *     same executor. No second business script set.
  */
 import { createHash, randomUUID } from "node:crypto";
+import { validateSealedMission } from "./xhs-exploration-mission.mjs";
 
 export const ROUTINE_SCHEMA_ID = "xw.xhs.routine-plan.v1";
 export const ROUTINE_SCHEMA_VERSION = 2;
@@ -139,9 +140,26 @@ export const ROUTINE_TEMPLATE_CATALOG = Object.freeze({
       "package drift",
     ],
   }),
+  "xhs.explore.goal.v1": Object.freeze({
+    id: "xhs.explore.goal.v1",
+    effectClass: "none",
+    behavior: "goal-driven read-only free exploration; nested xw.xhs.exploration-mission.v1; exact [03=feed_lane,04=search_lane]",
+    externalEffects: 0,
+    params: {},
+    stopConditions: [
+      "externalEffects=0; every forbidden action hard-blocked (V3-I01)",
+      "every interactive primitive via single-use CP navigation permit (V3-I02)",
+      "budget/deadline/no-novelty stop is a cap, never a quota",
+      "lane failure -> peer safe checkpoint + all-settled shielded cleanup (V3-I08)",
+      "package drift",
+    ],
+  }),
 });
 
 const BY_TEMPLATE = new Map(Object.entries(ROUTINE_TEMPLATE_CATALOG));
+
+/** Templates that carry a nested sealed exploration mission (V3 §3.2). */
+const MISSION_TEMPLATES = new Set(["xhs.explore.goal.v1"]);
 
 export class RoutinePlanError extends Error {
   constructor(code, message) {
@@ -247,8 +265,8 @@ export function normalizeRoutineParams(template, raw = {}) {
   return Object.freeze(out);
 }
 
-function canonicalPlanBody({ template, alias, parallel, placement, children, params, stopConditions, effectClass }) {
-  return {
+function canonicalPlanBody({ template, alias, parallel, placement, children, params, stopConditions, effectClass, mission = null }) {
+  const body = {
     schemaId: ROUTINE_SCHEMA_ID,
     schemaVersion: ROUTINE_SCHEMA_VERSION,
     template,
@@ -261,6 +279,10 @@ function canonicalPlanBody({ template, alias, parallel, placement, children, par
     params,
     stopConditions,
   };
+  // V3 (§5.1): the nested mission enters the canonical plan body ONLY when
+  // present — legacy V2 plan bytes stay identical when the field is absent.
+  if (mission && MISSION_TEMPLATES.has(template)) body.mission = mission;
+  return body;
 }
 
 function normalizeParallel(raw) {
@@ -274,12 +296,41 @@ function normalizeParallel(raw) {
   return Number(text);
 }
 
-function placementFor({ requestedAlias, parallel, effectClass }) {
+function placementFor({ requestedAlias, parallel, effectClass, templateId = null }) {
   if (![ROUTINE_PRIMARY_ALIAS, ROUTINE_SECONDARY_ALIAS].includes(requestedAlias)) {
     throw new RoutinePlanError(
       "ROUTINE_ALIAS_NOT_ALLOWED",
       `alias ${requestedAlias} rejected: placement policy permits only 03, plus 04 as an explicit parallel=2 secondary; 01/02 produce zero job/lease/I/O`,
     );
+  }
+
+  // V3 (§3.2/§5.1): the exploration mission fixes exact [03=feed_lane,04=search_lane].
+  // Alias 01/02, alias 04 alone, role changes, work stealing and single-lane
+  // fallback are all whole-plan rejections.
+  if (MISSION_TEMPLATES.has(templateId)) {
+    if (parallel !== 2) {
+      throw new RoutinePlanError(
+        "ROUTINE_PARALLEL_PLAN_REQUIRED",
+        "xhs.explore.goal.v1 is exactly-parallel-2 [03,04] by mission contract; no single-lane or downgraded execution",
+      );
+    }
+    if (effectClass !== "none") {
+      throw new RoutinePlanError("ROUTINE_SECONDARY_EFFECT_CLASS_FORBIDDEN", "exploration missions are read-only only");
+    }
+    const placement = Object.freeze({
+      policyId: ROUTINE_PLACEMENT_POLICY_ID,
+      policyVersion: ROUTINE_PLACEMENT_POLICY_VERSION,
+      mode: "exploration_mission",
+      primaryAlias: ROUTINE_PRIMARY_ALIAS,
+      aliases: Object.freeze([ROUTINE_PRIMARY_ALIAS, ROUTINE_SECONDARY_ALIAS]),
+      parallel: 2,
+      automaticFallback: false,
+    });
+    const children = Object.freeze([
+      Object.freeze({ index: 0, alias: ROUTINE_PRIMARY_ALIAS, role: "feed_lane", effectClass, externalEffects: 0 }),
+      Object.freeze({ index: 1, alias: ROUTINE_SECONDARY_ALIAS, role: "search_lane", effectClass, externalEffects: 0 }),
+    ]);
+    return Object.freeze({ placement, children });
   }
 
   if (parallel === 1 && requestedAlias === ROUTINE_SECONDARY_ALIAS) {
@@ -329,6 +380,7 @@ function semanticHashOf(planLike) {
     params: planLike.params,
     stopConditions: planLike.stopConditions,
     effectClass: planLike.effectClass,
+    mission: planLike.mission ?? null,
   })));
 }
 
@@ -476,37 +528,79 @@ export function bindRoutineExecutionBatch(plan, { randomUUIDFn = randomUUID } = 
 }
 
 /**
+ * Build the sealed exploration plan from a sealed mission (V3 §3.2). The
+ * mission is re-validated fail-closed (unknown fields/tampered hash/caps)
+ * and enters the canonical plan body as-is; raw goal/query text is never
+ * part of the plan.
+ */
+export function planExplorationGoalRoutine({ mission, actor = null } = {}) {
+  let sealed = mission;
+  if (typeof sealed === "string" || sealed instanceof Buffer) {
+    sealed = JSON.parse(String(sealed));
+  }
+  const validated = validateSealedMission(sealed);
+  return planRoutine({
+    templateId: validated.templateId,
+    params: {},
+    actor,
+    goalSignature: null,
+    mission: validated,
+  });
+}
+
+/**
  * Plan a routine run. Pure + deterministic: identical semantic input always
  * yields the same planHash. No executionRunId/routineRunId is serialized here;
  * bindRoutineExecution() allocates those only when execution is actually
  * being prepared.
  */
-export function planRoutine({ templateId, params = {}, alias = ROUTINE_ALIAS, parallel = 1, actor = null, goalSignature = null } = {}) {
+export function planRoutine({
+  templateId,
+  params = {},
+  alias = ROUTINE_ALIAS,
+  parallel = 1,
+  actor = null,
+  goalSignature = null,
+  mission = null,
+} = {}) {
   const template = BY_TEMPLATE.get(String(templateId || ""));
   if (!template) {
     throw new RoutinePlanError("ROUTINE_TEMPLATE_UNKNOWN", `unknown xhs routine template: ${templateId}`);
   }
   const requestedAlias = String(alias || ROUTINE_ALIAS).trim();
-  const resolvedParallel = normalizeParallel(parallel);
+  // V3 exploration missions fix parallel=2 [03,04]; any caller alias narrower
+  // than the default is rejected (no alias 04 alone, no role changes)
+  const effParallel = MISSION_TEMPLATES.has(template.id) ? 2 : normalizeParallel(parallel);
+  if (MISSION_TEMPLATES.has(template.id) && requestedAlias !== ROUTINE_PRIMARY_ALIAS) {
+    throw new RoutinePlanError(
+      "ROUTINE_ALIAS_NOT_ALLOWED",
+      `exploration missions fix lanes exactly [03=feed_lane,04=search_lane]; alias argument ${requestedAlias} rejected`,
+    );
+  }
+  const effAlias = MISSION_TEMPLATES.has(template.id) ? ROUTINE_PRIMARY_ALIAS : requestedAlias;
   const normParams = normalizeRoutineParams(template, params);
   const { placement, children } = placementFor({
-    requestedAlias,
-    parallel: resolvedParallel,
+    requestedAlias: effAlias,
+    parallel: effParallel,
     effectClass: template.effectClass,
+    templateId: template.id,
   });
 
   // actor/goalSignature are provenance, not execution semantics — they stay on
   // the plan for audit but never change the planHash, so the three call
-  // surfaces converge on the same hash for the same semantic plan.
+  // surfaces converge on the same hash for the same semantic plan. The V3
+  // mission is the sealed authority source for exploration plans (plan V2
+  // §3.2): its missionHash (not goalSignature) gates the CP authority.
   const planBody = canonicalPlanBody({
     template: template.id,
     alias: ROUTINE_PRIMARY_ALIAS,
-    parallel: resolvedParallel,
+    parallel: effParallel,
     placement,
     children,
     params: normParams,
     stopConditions: template.stopConditions,
     effectClass: template.effectClass,
+    mission,
   });
   const planHash = sha256Hex(canonicalJson(planBody));
   const plan = {
@@ -552,7 +646,7 @@ export function acceptSealedRoutinePlan(submitted) {
     "ok", "mode", "executionReady", "planHash", "schemaId", "schemaVersion",
     "template", "alias", "parallel", "placement", "children",
     "perDeviceConcurrency", "effectClass", "params", "stopConditions",
-    "actor", "goalSignature",
+    "actor", "goalSignature", "mission",
   ]);
   for (const key of Object.keys(submitted)) {
     if (!allowedPlanKeys.has(key)) {
@@ -585,6 +679,7 @@ export function acceptSealedRoutinePlan(submitted) {
     params: body.params,
     stopConditions: body.stopConditions,
     effectClass: body.effectClass,
+    mission: body.mission ?? null,
   })));
   if (recomputedHash !== planHash) {
     throw new RoutinePlanError("ROUTINE_PLAN_TAMPERED", "planHash does not match canonical plan content — reject before I/O");
@@ -596,6 +691,7 @@ export function acceptSealedRoutinePlan(submitted) {
     parallel: body.parallel,
     actor: body.actor,
     goalSignature: body.goalSignature,
+    mission: body.mission ?? null,
   });
   if (replanned.planHash !== planHash) {
     throw new RoutinePlanError("ROUTINE_PLAN_TAMPERED", "planHash does not match canonical plan content — reject before I/O");
