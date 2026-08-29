@@ -160,7 +160,9 @@
         "tests/xhs-exploration-mission.test.mjs",
         "tests/xhs-exploration-public-privacy.test.mjs",
         "tests/xhs-explore-driver.test.mjs",
-        "tests/xhs-goal-explore-machine.test.mjs"
+        "tests/xhs-goal-explore-machine.test.mjs",
+        "scripts/lib/xhs-exploration-coordinator.mjs",
+        "tests/xhs-exploration-coordinator.test.mjs"
       ]
     },
     "control-plane": {
