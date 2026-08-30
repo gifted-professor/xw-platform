@@ -269,7 +269,7 @@ test("qualification task is SYSTEM Highest, triggerless and exposes only the fix
   const { plan, runtimeRoot } = planFixture(t);
   const xml = taskXml(plan);
   assert.match(xml, /<UserId>SYSTEM<\/UserId>/u);
-  assert.match(xml, /<LogonType>ServiceAccount<\/LogonType>/u);
+  assert.doesNotMatch(xml, /<LogonType>/u);
   assert.match(xml, /<RunLevel>HighestAvailable<\/RunLevel>/u);
   assert.match(xml, /<Triggers \/>/u);
   assert.match(xml, /-Mode QUALIFICATION_ONLY/u);

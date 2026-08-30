@@ -378,7 +378,6 @@ export function buildM6QualificationTaskXml(input = {}) {
   <Principals>
     <Principal id="System">
       <UserId>SYSTEM</UserId>
-      <LogonType>ServiceAccount</LogonType>
       <RunLevel>HighestAvailable</RunLevel>
     </Principal>
   </Principals>
@@ -424,9 +423,15 @@ function qualificationTaskDefinition(xml) {
   if (!triggers || String(triggers[1] || "").trim() !== "") {
     fail(code, "qualification task must have no automatic trigger");
   }
+  // NOTE: LogonType is deliberately absent.  This Task Scheduler build rejects
+  // the literal value "ServiceAccount" at XML deserialization time
+  // (0x8004131A); for a SYSTEM principal the logon type is implied, and the
+  // healthy system tasks registered by this platform omit it as well.
+  if (/<LogonType>/u.test(xml)) {
+    fail(code, "qualification task principal must omit LogonType");
+  }
   return Object.freeze({
     userId: oneXmlValue(xml, "UserId", code),
-    logonType: oneXmlValue(xml, "LogonType", code),
     runLevel: oneXmlValue(xml, "RunLevel", code),
     command: oneXmlValue(xml, "Command", code),
     arguments: oneXmlValue(xml, "Arguments", code),
@@ -621,7 +626,7 @@ export function planM6QualificationLauncher({
     "xw-platform-m6-qualification.xml",
   );
   const definition = qualificationTaskDefinition(taskXml);
-  if (definition.userId !== "SYSTEM" || definition.logonType !== "ServiceAccount"
+  if (definition.userId !== "SYSTEM"
     || definition.runLevel !== "HighestAvailable" || definition.multipleInstances !== "IgnoreNew"
     || definition.allowStartOnDemand !== "true" || definition.executionTimeLimit !== "PT0S"
     || definition.enabled !== "true" || !definition.arguments.endsWith("-Mode QUALIFICATION_ONLY")

@@ -274,7 +274,10 @@ function Set-ItemAcl([System.IO.FileSystemInfo]$Item, [string]$ReviewerSid, [boo
         $security = [IO.File]::GetAccessControl($Item.FullName)
         $inheritance = [Security.AccessControl.InheritanceFlags]::None
     }
-    if ($Item.PSIsContainer) { $security.SetOwner((New-Object Security.Principal.SecurityIdentifier($AdministratorsSid))) }
+    # The workspace owner check requires SYSTEM/Administrators ownership for
+    # every managed item, files included; otherwise a file created by the
+    # invoking user (e.g. under "C:\Program Files") fails Protect.
+    $security.SetOwner((New-Object Security.Principal.SecurityIdentifier($AdministratorsSid)))
     $security.SetAccessRuleProtection($true, $false)
     foreach ($existingRule in @($security.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))) {
         [void]$security.RemoveAccessRuleSpecific($existingRule)
