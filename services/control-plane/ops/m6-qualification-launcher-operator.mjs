@@ -408,7 +408,18 @@ export function buildM6QualificationTaskXml(input = {}) {
 
 function oneXmlValue(xml, tag, code) {
   const matches = [...String(xml).matchAll(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`, "gu"))];
-  if (matches.length !== 1) fail(code, `task XML requires exactly one ${tag}`);
+  if (matches.length !== 1) {
+    // Task Scheduler's COM re-serialization omits <AllowStartOnDemand>true</AllowStartOnDemand>,
+    // <StartWhenAvailable>false</StartWhenAvailable> and <Enabled>true</Enabled> when they carry
+    // the API default values.  Treat an omitted default-carrying element as present.
+    if ((tag === "AllowStartOnDemand" || tag === "Enabled") && !String(xml).includes(`<${tag}>`)) {
+      return "true";
+    }
+    if (tag === "StartWhenAvailable" && !String(xml).includes(`<${tag}>`)) {
+      return "false";
+    }
+    fail(code, `task XML requires exactly one ${tag}`);
+  }
   return matches[0][1]
     .replaceAll("&quot;", '"')
     .replaceAll("&apos;", "'")
