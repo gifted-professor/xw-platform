@@ -449,7 +449,13 @@ function qualificationTaskDefinition(xml) {
 }
 
 function sameTaskDefinition(left, right) {
-  return JSON.stringify(left) === JSON.stringify(right);
+  // Task Scheduler's COM API normalizes the well-known SYSTEM account to its
+  // SID (S-1-5-18) when re-serializing a registered task's XML.  Treat the two
+  // spellings as the same principal; every other field must match exactly.
+  const normalize = (value) => value?.userId === "S-1-5-18"
+    ? { ...value, userId: "SYSTEM" }
+    : value;
+  return JSON.stringify(normalize(left)) === JSON.stringify(normalize(right));
 }
 
 function verifyTaskInspection(inspection, plan) {
