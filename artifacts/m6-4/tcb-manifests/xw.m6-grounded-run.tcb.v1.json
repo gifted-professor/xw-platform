@@ -2,7 +2,7 @@
   "schemaId": "xhs.tcb.manifest.v1",
   "schemaVersion": 1,
   "manifestId": "xw.m6-grounded-run.tcb.v1",
-  "implementationClosureHash": "91b8bea5f809beb07dbf1a42709f32578f00770a0749d047ea740f7563307b49",
+  "implementationClosureHash": "27feb848260b3d7b213b2b7e3427df15405e086bf921944118138e70ce8de790",
   "contentHashProfile": "xhs.m6-grounded-run-capability-self-binding.v1",
   "paths": [
     "artifacts/m6-4/cohort-manifests/m6_4_action_smoke.json",
@@ -638,7 +638,7 @@
       },
       {
         "path": "services/control-plane/control-plane/lib/m6-c1-runtime-owner-lock.mjs",
-        "sha256": "a4d862b52b49225d6973cbe28662cbb1233af58a783a034864568741e039bf28"
+        "sha256": "a12b46200fe3b8f579d83445fad49ce4b8b8338be28a6e12ad491bee2ca3c0f4"
       },
       {
         "path": "services/control-plane/control-plane/lib/m6-device-read-snapshot.mjs",
@@ -822,7 +822,7 @@
       },
       {
         "path": "services/control-plane/control-plane/lib/windows-system-tcb-acl.mjs",
-        "sha256": "e9bcc86bcde13d86a58db60664d1bc256bb4596da4fb18aac8c1cd957e2363d8"
+        "sha256": "6e35e267de281709f5c8ae07aefd9d6f88ece95f1aff42ecf3e37f8d29c60cb4"
       },
       {
         "path": "services/control-plane/control-plane/lib/xhs-e-corpus-pass.mjs",

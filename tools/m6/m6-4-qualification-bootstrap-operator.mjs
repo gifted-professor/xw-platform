@@ -153,23 +153,27 @@ function inspectNativeQualificationRuntimeStopped({ includePorts = true } = {}) 
   );
   const script = [
     "$ErrorActionPreference='Stop'",
-    "$names=@(ConvertFrom-Json $args[0])",
-    "$ports=@(ConvertFrom-Json $args[1])",
+    // NOTE: PS 5.1 wraps ConvertFrom-Json array output in an extra Object[]
+    // layer here, so iterate by index instead of foreach over the wrapped value.
+    // Also, `powershell -Command <script> <extras>` does NOT bind extras to
+    // $args, so the JSON inputs travel via environment variables instead.
+    "$namesRaw=ConvertFrom-Json $env:XW_ROTATION_TASKS",
+    "$portsRaw=ConvertFrom-Json $env:XW_ROTATION_PORTS",
     "$tasks=@()",
-    "foreach($name in $names){",
-    "  $rows=@(Get-ScheduledTask -TaskName ([string]$name) -ErrorAction SilentlyContinue)",
+    "for($ni=0;$ni -lt $namesRaw.Count;$ni++){",
+    "  $name=[string]$namesRaw[$ni]",
+    "  $rows=@(Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue)",
     "  if($rows.Count -gt 1){ throw ('TASK_IDENTITY_AMBIGUOUS:' + $name) }",
-    "  if($rows.Count -eq 0){ $tasks += [ordered]@{name=[string]$name;state='ABSENT'}; continue }",
+    "  if($rows.Count -eq 0){ $tasks += [ordered]@{name=$name;state='ABSENT'}; continue }",
     "  $state=[string]$rows[0].State",
     "  if($state -ne 'Ready' -and $state -ne 'Disabled'){ throw ('TASK_NOT_STOPPED:' + $name + ':' + $state) }",
-    "  $tasks += [ordered]@{name=[string]$name;state=$state}",
+    "  $tasks += [ordered]@{name=$name;state=$state}",
     "}",
     "$free=@()",
-    "foreach($port in $ports){",
-    "  $listener=[System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback,[int]$port)",
-    "  try { $listener.Server.ExclusiveAddressUse=$true; $listener.Start(); $free += [int]$port }",
-    "  catch { throw ('LISTENER_NOT_STOPPED:' + [string]$port) }",
-    "  finally { try { $listener.Stop() } catch {} }",
+    "for($pi=0;$pi -lt $portsRaw.Count;$pi++){",
+    "  $port=[int]$portsRaw[$pi]",
+    "  $listener=[System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback,$port)",
+    "  try { $listener.Server.ExclusiveAddressUse=$true; $listener.Start(); $free += $port } catch { throw ('LISTENER_NOT_STOPPED:' + [string]$port) } finally { try { $listener.Stop() } catch {} }",
     "}",
     "[ordered]@{tasks=$tasks;exclusivePorts=$free} | ConvertTo-Json -Compress -Depth 4",
   ].join("; ");
@@ -181,14 +185,17 @@ function inspectNativeQualificationRuntimeStopped({ includePorts = true } = {}) 
         "-NonInteractive",
         "-Command",
         script,
-        JSON.stringify(QUALIFICATION_ROTATION_TASKS),
-        JSON.stringify(includePorts ? QUALIFICATION_ROTATION_PORTS : []),
       ],
       {
         encoding: "utf8",
         windowsHide: true,
         stdio: ["ignore", "pipe", "pipe"],
         timeout: 30_000,
+        env: {
+          ...process.env,
+          XW_ROTATION_TASKS: JSON.stringify(QUALIFICATION_ROTATION_TASKS),
+          XW_ROTATION_PORTS: JSON.stringify(includePorts ? QUALIFICATION_ROTATION_PORTS : []),
+        },
       },
     );
     const proof = JSON.parse(raw.trim());
