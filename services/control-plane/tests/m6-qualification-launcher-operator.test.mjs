@@ -458,8 +458,10 @@ test("tracked PowerShell launcher keeps FINAL delegation and seals the qualifica
     "Import-QualificationPrivateMaterial",
     "gateOperationsTokenSha256",
     "accountIsolationBindingHash",
-    '"-Mode", "QUALIFICATION_ONLY"',
-    '"-Mode", "FINAL"',
+    "Mode         = \"QUALIFICATION_ONLY\"",
+    "Mode         = \"FINAL\"",
+    // hashtable splat: array splatting binds positionally and corrupts -Mode
+    "$delegateArguments = @{",
     "M6_QUALIFICATION_DELEGATE_SECRET_OUTPUT_FORBIDDEN",
   ]) assert.equal(source.includes(marker), true, marker);
   assert.doesNotMatch(source, /Register-ScheduledTask|Start-ScheduledTask|Stop-ScheduledTask|schtasks(?:\.exe)?/iu);

@@ -634,13 +634,15 @@ if ($Mode -ceq "QUALIFICATION_ONLY") {
         ([string]$binding.gateOperationsTokenSha256) `
         ([string]$binding.accountIsolationBindingHash)
 
-    $delegateArguments = @(
-        "-RuntimeRoot", $runtimeRootFull,
-        "-ContractPath", $contractPath,
-        "-Mode", "QUALIFICATION_ONLY"
-    )
+    # Hashtable splat is mandatory here: array splatting binds positionally, so
+    # "-ContractPath" would land in $Mode and fail its ValidateSet.
+    $delegateArguments = @{
+        RuntimeRoot  = $runtimeRootFull
+        ContractPath = $contractPath
+        Mode         = "QUALIFICATION_ONLY"
+    }
     if ($ValidateOnly) {
-        $delegateArguments += "-ValidateOnly"
+        $delegateArguments.ValidateOnly = $true
         $delegateLines = @(& $runtimeEntryPath @delegateArguments)
         $delegateText = ($delegateLines -join "`n").Trim()
         try { $delegateReceipt = $delegateText | ConvertFrom-Json }
@@ -847,13 +849,15 @@ Import-ControlPlanePrivateMaterial `
     "Process"
 )
 
-$delegateArguments = @(
-    "-RuntimeRoot", $runtimeRootFull,
-    "-ContractPath", $contractPath,
-    "-Mode", "FINAL"
-)
+# Hashtable splat is mandatory here: array splatting binds positionally, so
+# "-ContractPath" would land in $Mode and fail its ValidateSet.
+$delegateArguments = @{
+    RuntimeRoot  = $runtimeRootFull
+    ContractPath = $contractPath
+    Mode         = "FINAL"
+}
 if ($ValidateOnly) {
-    $delegateArguments += "-ValidateOnly"
+    $delegateArguments.ValidateOnly = $true
     $delegateLines = @(& $runtimeEntryPath @delegateArguments)
     $delegateText = ($delegateLines -join "`n").Trim()
     try { $delegateReceipt = $delegateText | ConvertFrom-Json }
