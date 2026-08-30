@@ -1,3 +1,19 @@
+## 2026-08-30 离线收口复核 + 未提交 M6-4 工作落盘（5233654），fusion authority 恢复 PASS
+
+继承上个会话中断现场后完成：
+
+- 把遗留未提交的 11+2 文件（legacy launcher TCB provisioner、quiesce v2 契约、owner-lock/formal-builder
+  扩展、allowlist/package.json 接线）以 `5233654 fix(m6-4): legacy launcher TCB provision + quiesce v2` 落盘。
+- 修复 fusion authority gate `cp-no-registry-db` 两个 blocker（database-tcb provisioner 的 segments 常量与
+  window-operator PS `Has-Exact-Node-Command` 处的 registry 数据库文件名字面量，改为运行时拼装——沿用同文件
+  既有惯例）。`npm run test:fusion` 20/20 PASS。
+- 复测：P4 vision 63/63、driver/machine/runtime/coordinator 39/39（coordinator 曾在多文件并发下出现 P3-G
+  hang 断言 flake，串行复跑全绿，计时敏感）、CP authority/permit/hard-zero/novelty 29/29、
+  `test:xhs-v3-rpa` 41/41、`test:xhs-v3-p5` 244/245。
+- 已知环境相关失败（stash 验证在 HEAD 原样存在，与本次无关）：`windows-xhs-blind-review-acl.test.mjs`
+  "real Windows protect…" 业务文件 owner 断言 `…_INVALID_OWNER`，需提权/正式 SYSTEM operator 会话复跑。
+- 未部署、未触碰设备、未 merge/push。下一步仍是 addendum 序：A/B qualification → P5 Gate F → R0-R2 live。
+
 ## 2026-08-30 XHS V3 P4A 候选收口，等待最终 TCB freeze/full gate
 
 本条 supersede 下方同日早期的“operator/evaluator/provider package 尚在实现”状态。P4A 源码候选现已
