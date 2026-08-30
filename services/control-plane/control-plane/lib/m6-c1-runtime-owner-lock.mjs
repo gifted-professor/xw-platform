@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createServer, isIP } from "node:net";
 import {
   closeSync,
@@ -407,6 +407,58 @@ export function assertM6C1ControlDbIdentity({
   });
 }
 
+export const WINDOWS_SEAL_OWNER_LOCK_PROGRAM = String.raw`
+$ErrorActionPreference = "Stop"
+$path = [string]$env:XW_M6_OWNER_LOCK_PATH
+Get-Item -LiteralPath $path -Force | Out-Null
+$administrators = New-Object Security.Principal.SecurityIdentifier("S-1-5-32-544")
+$system = New-Object Security.Principal.SecurityIdentifier("S-1-5-18")
+$security = New-Object Security.AccessControl.FileSecurity($path, [Security.AccessControl.AccessControlSections]::All)
+$security.SetOwner($administrators)
+$security.SetAccessRuleProtection($true, $false)
+foreach ($sid in @($system, $administrators)) {
+    $rule = New-Object Security.AccessControl.FileSystemAccessRule(
+        $sid,
+        [Security.AccessControl.FileSystemRights]::FullControl,
+        [Security.AccessControl.InheritanceFlags]::None,
+        [Security.AccessControl.PropagationFlags]::None,
+        [Security.AccessControl.AccessControlType]::Allow
+    )
+    $security.AddAccessRule($rule)
+}
+[IO.File]::SetAccessControl($path, $security)
+$verify = New-Object Security.AccessControl.FileSecurity($path, [Security.AccessControl.AccessControlSections]::All)
+$owner = [string]$verify.GetOwner([Security.Principal.SecurityIdentifier]).Value
+$rules = @($verify.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))
+if ($verify.AreAccessRulesProtected -ne $true -or (@("S-1-5-18", "S-1-5-32-544") -notcontains $owner) -or $rules.Count -ne 2) {
+    exit 23
+}
+exit 0
+`;
+
+function sealWindowsOwnerLockAcl(lockPath) {
+  if (process.platform !== "win32") return;
+  try {
+    spawnSync("powershell.exe", [
+      "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
+      WINDOWS_SEAL_OWNER_LOCK_PROGRAM,
+    ], {
+      encoding: "utf8",
+      windowsHide: true,
+      timeout: 30_000,
+      env: {
+        SystemRoot: process.env.SystemRoot || process.env.WINDIR || "C:\\Windows",
+        WINDIR: process.env.WINDIR || process.env.SystemRoot || "C:\\Windows",
+        PATHEXT: process.env.PATHEXT || ".COM;.EXE;.BAT;.CMD",
+        XW_M6_OWNER_LOCK_PATH: lockPath,
+      },
+    });
+  } catch {
+    // Best-effort sealing: the quiesce/qualification TCB verification is the
+    // enforcing gate; a sealed lock that later drifts fails closed there.
+  }
+}
+
 export function acquireM6C1RuntimeOwnerLock({
   runtimeRoot,
   ownerKind,
@@ -436,6 +488,10 @@ export function acquireM6C1RuntimeOwnerLock({
     });
     writeFileSync(fd, `${JSON.stringify(record, null, 2)}\n`, "utf8");
     fsyncSync(fd);
+    // Seal the create-only lock into the SYSTEM/Administrators TCB ACL shape
+    // (owner Administrators + protected 2-rule DACL) so qualification/quiesce
+    // TCB verification accepts the lock the live control-plane just created.
+    sealWindowsOwnerLockAcl(lockPath);
     identity = fstatSync(fd, { bigint: true });
     if (!identity.isFile() || identity.nlink !== 1n) {
       fail("M6_C1_RUNTIME_OWNER_LOCK_IDENTITY_INVALID", "new M6-C1 runtime owner lock is not one single-link file");
