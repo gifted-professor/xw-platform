@@ -2221,9 +2221,13 @@ function loadSealedPrestate({ runtimeRoot, expectedReleaseId, expectedSourceComm
 }
 
 function safeWindowsEnvironment(extra = {}) {
+  // PATHEXT is required for native executables (e.g. taskkill.exe) to report
+  // $LASTEXITCODE under a stripped environment; without it PowerShell launches
+  // the process but leaves $LASTEXITCODE null, which fails closed on receipt checks.
   return Object.freeze({
     SystemRoot: process.env.SystemRoot || process.env.WINDIR || "C:\\Windows",
     WINDIR: process.env.WINDIR || process.env.SystemRoot || "C:\\Windows",
+    PATHEXT: process.env.PATHEXT || ".COM;.EXE;.BAT;.CMD",
     ...extra,
   });
 }
