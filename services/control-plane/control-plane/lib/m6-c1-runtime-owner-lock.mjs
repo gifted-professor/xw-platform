@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { createServer } from "node:net";
+import { spawn } from "node:child_process";
+import { createServer, isIP } from "node:net";
 import {
   closeSync,
   constants as fsConstants,
@@ -21,11 +22,277 @@ const OWNER_KINDS = new Set([
   "STAGE_LIVE_WINDOW",
   "QUALIFICATION_BOOTSTRAP",
   "QUALIFICATION_ROTATION",
+  "QUALIFICATION_LEGACY_WINDOW",
 ]);
 const HELD_LOCKS = new WeakSet();
+const WINDOWS_EXCLUSIVE_SOCKET_PROGRAM = String.raw`
+$ErrorActionPreference = "Stop"
+$sockets = [Collections.Generic.List[Net.Sockets.Socket]]::new()
+$stage = "parse"
+try {
+    $document = $env:XW_M6_GUARD_ENDPOINTS | ConvertFrom-Json -ErrorAction Stop
+    $rows = @($document.rows)
+    foreach ($row in $rows) {
+        $stage = "address"
+        $address = [Net.IPAddress]::Parse([string]$row.host)
+        $stage = "socket"
+        $socket = [Net.Sockets.Socket]::new(
+            $address.AddressFamily,
+            [Net.Sockets.SocketType]::Stream,
+            [Net.Sockets.ProtocolType]::Tcp
+        )
+        $socket.ExclusiveAddressUse = $true
+        if ($address.AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetworkV6) {
+            $socket.DualMode = $false
+        }
+        $stage = "bind"
+        $socket.Bind([Net.IPEndPoint]::new($address, [int]$row.port))
+        $socket.Listen(1)
+        $sockets.Add($socket)
+    }
+    [Console]::Out.WriteLine('{"ready":true}')
+    [Console]::Out.Flush()
+    while ($null -ne ($line = [Console]::In.ReadLine())) {
+        if ($line -notmatch '^PING ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$') {
+            throw [InvalidOperationException]::new("heartbeat command invalid")
+        }
+        [Console]::Out.WriteLine('{"owned":"' + $Matches[1] + '"}')
+        [Console]::Out.Flush()
+    }
+} catch {
+    $deepest = $_.Exception
+    while ($null -ne $deepest.InnerException) { $deepest = $deepest.InnerException }
+    $socketError = if ($deepest -is [Net.Sockets.SocketException]) { $deepest } else { $null }
+    $reason = if ($null -ne $socketError) {
+        [string]$socketError.SocketErrorCode
+    } else { $deepest.GetType().Name }
+    [Console]::Out.WriteLine(([ordered]@{ ready = $false; stage = $stage; reason = $reason } | ConvertTo-Json -Compress))
+    [Console]::Out.Flush()
+    exit 23
+} finally {
+    foreach ($socket in $sockets) { try { $socket.Dispose() } catch {} }
+}
+`;
 
 function fail(code, message, details = {}) {
   throw new ControlPlaneError(code, message, { status: 503, details });
+}
+
+function minimalWindowsEnvironment(extra) {
+  const root = process.env.SystemRoot || process.env.WINDIR || "C:\\Windows";
+  return Object.freeze(Object.fromEntries(Object.entries({
+    SystemRoot: root,
+    WINDIR: root,
+    ComSpec: process.env.ComSpec || join(root, "System32", "cmd.exe"),
+    TEMP: process.env.TEMP,
+    TMP: process.env.TMP,
+    ...extra,
+  }).filter(([, value]) => typeof value === "string" && value !== "")));
+}
+
+function childHasExited(child) {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
+async function waitForChildExitProof(child, timeoutMs) {
+  if (childHasExited(child)) return true;
+  return new Promise((resolveExit) => {
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      child.off("exit", onExit);
+      resolveExit(value);
+    };
+    const onExit = () => finish(true);
+    const timer = setTimeout(() => finish(childHasExited(child)), timeoutMs);
+    child.once("exit", onExit);
+  });
+}
+
+async function acquireWindowsExclusiveSocketAuthority({ hosts, ports }) {
+  const root = process.env.SystemRoot || process.env.WINDIR || "C:\\Windows";
+  const executable = join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+  const endpoints = hosts.flatMap((host) => ports.map((port) => Object.freeze({ host, port })));
+  const child = spawn(executable, [
+    "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+    "-Command", WINDOWS_EXCLUSIVE_SOCKET_PROGRAM,
+  ], {
+    windowsHide: true,
+    stdio: ["pipe", "pipe", "ignore"],
+    env: minimalWindowsEnvironment({ XW_M6_GUARD_ENDPOINTS: JSON.stringify({ rows: endpoints }) }),
+  });
+  let startupBuffer = "";
+  await new Promise((resolveReady, rejectReady) => {
+    let settled = false;
+    const finish = (error = null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      child.stdout.off("data", onData);
+      child.off("error", onError);
+      child.off("exit", onExit);
+      if (error) rejectReady(error); else resolveReady();
+    };
+    const onError = (cause) => finish(cause);
+    const onExit = () => finish(Object.assign(new Error("exclusive socket helper exited"), {
+      code: "M6_C1_WINDOWS_SOCKET_HELPER_EXITED",
+    }));
+    const onData = (chunk) => {
+      startupBuffer += chunk.toString("utf8");
+      if (Buffer.byteLength(startupBuffer, "utf8") > 256) {
+        finish(Object.assign(new Error("exclusive socket helper output invalid"), {
+          code: "M6_C1_WINDOWS_SOCKET_HELPER_INVALID",
+        }));
+        return;
+      }
+      const newline = startupBuffer.indexOf("\n");
+      if (newline === -1) return;
+      const line = startupBuffer.slice(0, newline).trim();
+      if (line !== '{"ready":true}') {
+        let reason = "INVALID";
+        try {
+          const value = JSON.parse(line);
+          if (value?.ready === false && ["parse", "address", "socket", "bind"].includes(value.stage)
+            && /^[A-Za-z][A-Za-z0-9]{0,63}$/u.test(value.reason || "")) {
+            reason = `${value.stage.toUpperCase()}_${value.reason.toUpperCase()}`;
+          }
+        } catch {}
+        finish(Object.assign(new Error("exclusive socket helper refused endpoints"), {
+          code: `M6_C1_WINDOWS_SOCKET_HELPER_REFUSED_${reason}`,
+        }));
+        return;
+      }
+      finish();
+    };
+    const timer = setTimeout(() => finish(Object.assign(new Error("exclusive socket helper timed out"), {
+      code: "M6_C1_WINDOWS_SOCKET_HELPER_TIMEOUT",
+    })), 10_000);
+    child.once("error", onError);
+    child.once("exit", onExit);
+    child.stdout.on("data", onData);
+  }).catch(async (cause) => {
+    try { child.stdin.end(); } catch {}
+    let exited = await waitForChildExitProof(child, 5_000);
+    if (!exited) {
+      try { child.kill(); } catch {}
+      exited = await waitForChildExitProof(child, 5_000);
+    }
+    if (!exited) {
+      throw Object.assign(new Error("exclusive socket helper startup cleanup was not proven"), {
+        code: "M6_C1_WINDOWS_SOCKET_HELPER_RELEASE_UNPROVEN",
+      });
+    }
+    throw cause;
+  });
+  child.stdout.pause();
+  let released = false;
+  let releasing = false;
+  let releasePromise = null;
+  let fault = null;
+  child.once("error", (cause) => { fault = cause; });
+  child.once("exit", (code) => {
+    if (!released && !releasing) {
+      fault = Object.assign(new Error("exclusive socket helper exited"), { code });
+    }
+  });
+  const heartbeat = async () => {
+    if (released || releasing || fault !== null || childHasExited(child)) {
+      fail(
+        "M6_C1_STOPPED_RUNTIME_GUARD_DRIFT",
+        "M6-C1 stopped runtime guard lost its Windows exclusive socket helper",
+      );
+    }
+    const nonce = randomUUID();
+    try {
+      await new Promise((resolveHeartbeat, rejectHeartbeat) => {
+        let settled = false;
+        let buffer = "";
+        const finish = (cause = null) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          child.stdout.off("data", onData);
+          child.stdout.off("end", onEnd);
+          child.off("exit", onExit);
+          child.stdout.pause();
+          if (cause) rejectHeartbeat(cause); else resolveHeartbeat();
+        };
+        const onEnd = () => finish(new Error("exclusive socket helper stdout ended"));
+        const onExit = () => finish(new Error("exclusive socket helper exited"));
+        const onData = (chunk) => {
+          buffer += chunk.toString("utf8");
+          if (Buffer.byteLength(buffer, "utf8") > 128) {
+            finish(new Error("exclusive socket helper heartbeat output invalid"));
+            return;
+          }
+          const newline = buffer.indexOf("\n");
+          if (newline === -1) return;
+          const line = buffer.slice(0, newline).trim();
+          if (line !== `{"owned":"${nonce}"}`) {
+            finish(new Error("exclusive socket helper heartbeat mismatch"));
+            return;
+          }
+          finish();
+        };
+        const timer = setTimeout(() => finish(new Error("exclusive socket helper heartbeat timed out")), 5_000);
+        child.stdout.on("data", onData);
+        child.stdout.once("end", onEnd);
+        child.once("exit", onExit);
+        child.stdout.resume();
+        try {
+          child.stdin.write(`PING ${nonce}\n`, "utf8", (cause) => {
+            if (cause) finish(cause);
+          });
+        } catch (cause) { finish(cause); }
+      });
+    } catch (cause) {
+      fault = cause;
+      fail(
+        "M6_C1_STOPPED_RUNTIME_GUARD_DRIFT",
+        "M6-C1 stopped runtime guard lost its Windows exclusive socket helper",
+      );
+    }
+    return true;
+  };
+  let heartbeatChain = Promise.resolve();
+  return Object.freeze({
+    async assertOwned() {
+      heartbeatChain = heartbeatChain.then(heartbeat, heartbeat);
+      return heartbeatChain;
+    },
+    async release() {
+      if (released) return true;
+      if (releasePromise !== null) return releasePromise;
+      const driftedBeforeRelease = fault !== null || childHasExited(child);
+      releasing = true;
+      releasePromise = (async () => {
+        try { child.stdin.end(); } catch {}
+        let exited = await waitForChildExitProof(child, 5_000);
+        if (!exited) {
+          try { child.kill(); } catch {}
+          exited = await waitForChildExitProof(child, 5_000);
+        }
+        if (!exited) {
+          fault = new Error("exclusive socket helper exit was not proven");
+          fail(
+            "M6_C1_WINDOWS_SOCKET_HELPER_RELEASE_UNPROVEN",
+            "M6-C1 stopped runtime guard could not prove Windows helper exit",
+          );
+        }
+        released = true;
+        if (driftedBeforeRelease) {
+          fail(
+            "M6_C1_STOPPED_RUNTIME_GUARD_DRIFT",
+            "M6-C1 stopped runtime guard lost its Windows exclusive socket helper",
+          );
+        }
+        return true;
+      })().finally(() => { releasing = false; });
+      return releasePromise;
+    },
+  });
 }
 
 function normalizedPath(value) {
@@ -243,40 +510,156 @@ export async function acquireM6C1StoppedRuntimeGuard({
   runtimeRoot,
   ownerKind,
   host = "127.0.0.1",
+  hosts = undefined,
   port = 17920,
+  ports = undefined,
+  beforeOwner = undefined,
 } = {}) {
-  const server = createServer();
-  await new Promise((resolveListen, reject) => {
-    server.once("error", reject);
-    server.listen({ host, port, exclusive: true }, resolveListen);
-  }).catch((cause) => {
-    try { server.close(); } catch {}
+  if (beforeOwner !== undefined && typeof beforeOwner !== "function") {
+    fail(
+      "M6_C1_STOPPED_RUNTIME_GUARD_INPUT_INVALID",
+      "M6-C1 stopped runtime guard beforeOwner must be a function when supplied",
+    );
+  }
+  const portInput = ports === undefined ? [port] : ports;
+  const hostInput = hosts === undefined ? [host] : hosts;
+  if (!Array.isArray(portInput) || portInput.length < 1 || portInput.length > 16) {
+    fail(
+      "M6_C1_STOPPED_RUNTIME_GUARD_INPUT_INVALID",
+      "M6-C1 stopped runtime guard ports must be one bounded list of distinct TCP ports",
+    );
+  }
+  const requestedPorts = Object.freeze([...portInput]);
+  if (!Array.isArray(hostInput) || hostInput.length < 1 || hostInput.length > 4
+    || hostInput.some((value) => typeof value !== "string" || value.length < 2
+      || value.length > 64 || isIP(value) === 0)
+    || new Set(hostInput.map((value) => value.toLowerCase())).size !== hostInput.length) {
+    fail(
+      "M6_C1_STOPPED_RUNTIME_GUARD_INPUT_INVALID",
+      "M6-C1 stopped runtime guard hosts must be one bounded list of distinct IP literals",
+    );
+  }
+  const requestedHosts = Object.freeze([...hostInput]);
+  const fixedPorts = requestedPorts.filter((value) => value !== 0);
+  if (requestedPorts.some((value) => !Number.isInteger(value) || value < 0 || value > 65_535)
+    || new Set(fixedPorts).size !== fixedPorts.length) {
+    fail(
+      "M6_C1_STOPPED_RUNTIME_GUARD_INPUT_INVALID",
+      "M6-C1 stopped runtime guard ports must be one bounded list of distinct TCP ports",
+    );
+  }
+  const servers = [];
+  const serverErrors = new WeakMap();
+  let windowsSocketAuthority = null;
+  const closeServers = async () => {
+    if (windowsSocketAuthority !== null) await windowsSocketAuthority.release();
+    await Promise.all(servers.map((server) => new Promise((resolveClose) => {
+      if (!server.listening) {
+        resolveClose();
+        return;
+      }
+      server.close(() => resolveClose());
+    })));
+  };
+  try {
+    if (process.platform === "win32") {
+      windowsSocketAuthority = await acquireWindowsExclusiveSocketAuthority({
+        hosts: requestedHosts,
+        ports: requestedPorts,
+      });
+    } else {
+      for (const requestedHost of requestedHosts) {
+        for (const requestedPort of requestedPorts) {
+          const server = createServer((socket) => socket.destroy());
+          await new Promise((resolveListen, rejectListen) => {
+            const onError = (cause) => rejectListen(cause);
+            server.once("error", onError);
+            server.listen({
+              host: requestedHost,
+              port: requestedPort,
+              exclusive: true,
+              ...(requestedHost.includes(":") ? { ipv6Only: true } : {}),
+            }, () => {
+              server.off("error", onError);
+              server.on("error", (cause) => serverErrors.set(server, cause));
+              resolveListen();
+            });
+          });
+          servers.push(server);
+        }
+      }
+    }
+  } catch (cause) {
+    await closeServers();
     fail("M6_C1_RUNTIME_NOT_STOPPED", "M6-C1 mutation requires exclusive ownership of the control-plane loopback port", {
       cause: cause?.code ?? null,
     });
-  });
+  }
+  if (beforeOwner !== undefined) {
+    try {
+      await beforeOwner();
+    } catch (cause) {
+      await closeServers();
+      throw cause;
+    }
+  }
   let owner;
   try {
     owner = acquireM6C1RuntimeOwnerLock({ runtimeRoot, ownerKind });
   } catch (cause) {
-    await new Promise((resolveClose) => server.close(resolveClose));
+    await closeServers();
     throw cause;
   }
+  let drifted = false;
   return Object.freeze({
     schemaId: "xw.m6-c1-stopped-runtime-guard.v1",
     owner,
-    assertOwned() {
-      return owner.assertOwned();
+    async assertOwned() {
+      try {
+        owner.assertOwned();
+        if (windowsSocketAuthority !== null) await windowsSocketAuthority.assertOwned();
+        if (servers.some((server) => !server.listening || serverErrors.has(server))) {
+          fail(
+            "M6_C1_STOPPED_RUNTIME_GUARD_DRIFT",
+            "M6-C1 stopped runtime guard lost one or more exclusive listener sockets",
+          );
+        }
+        return true;
+      } catch (cause) {
+        drifted = true;
+        throw cause;
+      }
     },
     async release() {
-      await new Promise((resolveClose) => server.close(resolveClose));
       owner.assertOwned();
-      owner.release();
+      if (drifted) {
+        try { await closeServers(); } catch {}
+        owner.assertOwned();
+        owner.retainStaleLock();
+        fail(
+          "M6_C1_STOPPED_RUNTIME_GUARD_DRIFT",
+          "M6-C1 stopped runtime guard drifted and retained its owner lock",
+        );
+      }
+      try {
+        await closeServers();
+      } catch (cause) {
+        owner.assertOwned();
+        owner.retainStaleLock();
+        throw cause;
+      }
+      owner.assertOwned();
+      return owner.release();
     },
     async retainStaleLock() {
-      await new Promise((resolveClose, rejectClose) => server.close((error) => (
-        error ? rejectClose(error) : resolveClose()
-      )));
+      owner.assertOwned();
+      try {
+        await closeServers();
+      } catch (cause) {
+        owner.assertOwned();
+        owner.retainStaleLock();
+        throw cause;
+      }
       owner.assertOwned();
       return owner.retainStaleLock();
     },

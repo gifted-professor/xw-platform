@@ -1,13 +1,18 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
+import { isIP } from "node:net";
 import {
+  closeSync,
   existsSync,
+  fstatSync,
   lstatSync,
   mkdirSync,
+  openSync,
   readFileSync,
   readdirSync,
   realpathSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -28,6 +33,11 @@ import {
   createSystemTcbAclController,
 } from "../control-plane/lib/windows-system-tcb-acl.mjs";
 import { canonicalJson as domainCanonicalJson } from "../control-plane/lib/canonical.mjs";
+import {
+  acquireM6C1StoppedRuntimeGuard,
+  M6_C1_RUNTIME_OWNER_LOCK_FILE,
+  m6C1RuntimeOwnerLockPath,
+} from "../control-plane/lib/m6-c1-runtime-owner-lock.mjs";
 import { loadM6Gate } from "../control-plane/lib/m6-gate-loader.mjs";
 import { assertM6FileDbPointerConsistency } from "../control-plane/lib/m6-gate-promoter.mjs";
 import { evaluateM6Gate } from "../control-plane/lib/m6-live-gate.mjs";
@@ -54,11 +64,11 @@ import {
 export const M6_QUALIFICATION_LEGACY_WINDOW_OPERATOR_RELEASE_PATH =
   "services/control-plane/ops/m6-qualification-legacy-window-operator.mjs";
 export const M6_QUALIFICATION_LEGACY_WINDOW_PRESTATE_SCHEMA_ID =
-  "xw.runtime.m6-qualification-legacy-window-prestate.v1";
+  "xw.runtime.m6-qualification-legacy-window-prestate.v2";
 export const M6_QUALIFICATION_LEGACY_WINDOW_REFERENCE_SCHEMA_ID =
-  "xw.runtime.m6-qualification-legacy-window-reference.v1";
+  "xw.runtime.m6-qualification-legacy-window-reference.v2";
 export const M6_QUALIFICATION_LEGACY_WINDOW_RECEIPT_SCHEMA_ID =
-  "xw.runtime.m6-qualification-legacy-window-receipt.v1";
+  "xw.runtime.m6-qualification-legacy-window-receipt.v2";
 export const M6_QUALIFICATION_FINAL_RELAY_SCHEMA_ID =
   "xw.runtime.m6-qualification-final-relay.v1";
 export const M6_QUALIFICATION_FINAL_RELAY_AUTHORIZATION_SCHEMA_ID =
@@ -113,6 +123,12 @@ const WINDOWS_TASKKILL_EXECUTABLE = join(
   "taskkill.exe",
 );
 const REGISTRY_DATABASE_FILENAME = ["registry", "db"].join(".");
+const LEGACY_CONTROL_LAUNCHER_FILENAME = "launch-control-plane.simple.ps1";
+const LEGACY_REGISTRY_LAUNCHER_FILENAME = "launch-orchestrator.current-user.ps1";
+const LEGACY_LAUNCHER_TARGETS = Object.freeze([
+  Object.freeze({ key: "controlPlane", filename: LEGACY_CONTROL_LAUNCHER_FILENAME, port: 17920 }),
+  Object.freeze({ key: "registry", filename: LEGACY_REGISTRY_LAUNCHER_FILENAME, port: 17930 }),
+]);
 const DB_TARGETS = Object.freeze([
   Object.freeze({ key: "controlDb", path: ["state", "control-plane", "control.db"] }),
   Object.freeze({ key: "registryDb", path: ["state", "orchestrator", REGISTRY_DATABASE_FILENAME] }),
@@ -147,19 +163,95 @@ $state = if ($index -ge 0 -and $index -lt $states.Count) { $states[$index] } els
 `;
 const LISTENER_INSPECTION_PROGRAM = String.raw`
 $ErrorActionPreference = "Stop"
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class XwNativeCommandLine {
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern IntPtr CommandLineToArgvW(string commandLine, out int argc);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr LocalFree(IntPtr value);
+    public static string[] Parse(string commandLine) {
+        int argc;
+        IntPtr argv = CommandLineToArgvW(commandLine, out argc);
+        if (argv == IntPtr.Zero || argc < 1) throw new InvalidOperationException("argv parse failed");
+        try {
+            string[] values = new string[argc];
+            for (int index = 0; index < argc; index++) {
+                values[index] = Marshal.PtrToStringUni(Marshal.ReadIntPtr(argv, index * IntPtr.Size));
+            }
+            return values;
+        } finally { LocalFree(argv); }
+    }
+}
+'@
 function Same-Path([string]$Left, [string]$Right) {
     try { return [IO.Path]::GetFullPath($Left).Equals([IO.Path]::GetFullPath($Right), [StringComparison]::OrdinalIgnoreCase) }
     catch { return $false }
 }
-function Has-Exact-Token([string]$CommandLine, [string]$Expected) {
+function Same-Text([string]$Left, [string]$Right) {
+    return [string]::Equals($Left, $Right, [StringComparison]::Ordinal)
+}
+function Is-Opaque-Argument([string]$Value) {
+    return $null -ne $Value -and $Value.Length -ge 1 -and $Value.Length -le 8192 -and
+        -not $Value.StartsWith("--", [StringComparison]::Ordinal) -and
+        -not [Regex]::IsMatch($Value, '[\x00-\x1f\x7f]')
+}
+function Has-Exact-Node-Command(
+    [string]$CommandLine,
+    [string]$Node,
+    [string]$Module,
+    [string]$ModuleAlias,
+    [int]$Port,
+    [string]$RuntimeRoot
+) {
     if ([string]::IsNullOrWhiteSpace($CommandLine)) { return $false }
-    $escaped = [Regex]::Escape($Expected)
-    return [Regex]::IsMatch($CommandLine, '(?i)(?:^|[\s"]){0}(?=$|[\s"])' -f $escaped)
+    try { [string[]]$argv = [XwNativeCommandLine]::Parse($CommandLine) } catch { return $false }
+    if ($argv.Count -lt 2 -or -not (Same-Path $argv[0] $Node) -or
+        (-not (Same-Path $argv[1] $Module) -and -not (Same-Path $argv[1] $ModuleAlias))) { return $false }
+    if ($Port -eq 17920) {
+        return $argv.Count -eq 3 -and (Same-Text $argv[2] "serve")
+    }
+    if ($Port -ne 17930 -or $argv.Count -ne 22) { return $false }
+    # Assembled without a literal registry database filename (fusion authority scan).
+    $registryDb = [IO.Path]::Combine($RuntimeRoot, "state", "orchestrator", ("registry" + ".db"))
+    $controlDb = [IO.Path]::Combine($RuntimeRoot, "state", "control-plane", "control.db")
+    $runsRoot = [IO.Path]::Combine($RuntimeRoot, "evidence")
+    return (Same-Text $argv[2] "--port") -and (Same-Text $argv[3] "17930") -and
+        (Same-Text $argv[4] "--host") -and (Same-Text $argv[5] "0.0.0.0") -and
+        (Same-Text $argv[6] "--control") -and (Same-Text $argv[7] "http://127.0.0.1:17920") -and
+        (Same-Text $argv[8] "--db") -and (Same-Path $argv[9] $registryDb) -and
+        (Same-Text $argv[10] "--control-db") -and (Same-Path $argv[11] $controlDb) -and
+        (Same-Text $argv[12] "--runs-root") -and (Same-Path $argv[13] $runsRoot) -and
+        (Same-Text $argv[14] "--agent-token") -and (Is-Opaque-Argument $argv[15]) -and
+        (Same-Text $argv[16] "--human-token") -and (Is-Opaque-Argument $argv[17]) -and
+        (Same-Text $argv[18] "--human-actor") -and (Is-Opaque-Argument $argv[19]) -and
+        (Same-Text $argv[20] "--observer-token") -and (Is-Opaque-Argument $argv[21])
+}
+function Has-Exact-Launcher-Command([string]$CommandLine, [string]$PowerShell, [string]$Launcher) {
+    if ([string]::IsNullOrWhiteSpace($CommandLine)) { return $false }
+    $powerShellEscaped = [Regex]::Escape($PowerShell)
+    $launcherEscaped = [Regex]::Escape($Launcher)
+    $pattern = '^\s*(?:"{0}"|{0})\s+-NoLogo\s+-NoProfile\s+-NonInteractive\s+-ExecutionPolicy\s+Bypass\s+-File\s+(?:"{1}"|{1})\s*$' -f $powerShellEscaped, $launcherEscaped
+    return [Regex]::IsMatch($CommandLine, $pattern, [Text.RegularExpressions.RegexOptions]::IgnoreCase)
+}
+function Sha256-Text([string]$Value) {
+    $algorithm = [Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = [Text.Encoding]::UTF8.GetBytes($Value)
+        return ([BitConverter]::ToString($algorithm.ComputeHash($bytes))).Replace("-", "").ToLowerInvariant()
+    } finally { $algorithm.Dispose() }
 }
 $ports = @(17920, 17930)
 $expected = @{ 17920 = [string]$env:XW_LEGACY_CP_MODULE; 17930 = [string]$env:XW_LEGACY_REGISTRY_MODULE }
 $aliases = @{ 17920 = [string]$env:XW_LEGACY_CP_MODULE_ALIAS; 17930 = [string]$env:XW_LEGACY_REGISTRY_MODULE_ALIAS }
+$launchers = @{ 17920 = [string]$env:XW_LEGACY_CP_LAUNCHER; 17930 = [string]$env:XW_LEGACY_REGISTRY_LAUNCHER }
 $node = [string]$env:XW_LEGACY_TRUSTED_NODE
+$powershell = [string]$env:XW_LEGACY_POWERSHELL
+$runtimeRoot = [string]$env:XW_LEGACY_RUNTIME_ROOT
+$callerIdentity = [Security.Principal.WindowsIdentity]::GetCurrent()
+$callerSidHash = Sha256-Text ([string]$callerIdentity.User.Value)
+$callerSession = [int64][Diagnostics.Process]::GetCurrentProcess().SessionId
 $rows = @(
     Get-NetTCPConnection -State Listen -ErrorAction Stop |
         Where-Object { $ports -contains [int]$_.LocalPort } |
@@ -170,18 +262,42 @@ $rows = @(
             $port = [int]$first.LocalPort
             $pidValue = [int64]$first.OwningProcess
             $proc = Get-CimInstance Win32_Process -Filter ("ProcessId={0}" -f $pidValue) -ErrorAction Stop
+            $parent = Get-CimInstance Win32_Process -Filter ("ProcessId={0}" -f ([int64]$proc.ParentProcessId)) -ErrorAction SilentlyContinue
+            $owner = Invoke-CimMethod -InputObject $proc -MethodName GetOwnerSid -ErrorAction SilentlyContinue
+            $parentOwner = if ($null -ne $parent) { Invoke-CimMethod -InputObject $parent -MethodName GetOwnerSid -ErrorAction SilentlyContinue } else { $null }
             $module = [string]$expected[$port]
+            $moduleAlias = [string]$aliases[$port]
+            $launcher = [string]$launchers[$port]
+            $childShape = $null -ne $owner -and
+                (Same-Path ([string]$proc.ExecutablePath) $node) -and
+                (Has-Exact-Node-Command ([string]$proc.CommandLine) $node $module $moduleAlias $port $runtimeRoot)
+            $parentShape = $null -ne $parent -and $null -ne $parentOwner -and
+                (Same-Path ([string]$parent.ExecutablePath) $powershell) -and
+                (Has-Exact-Launcher-Command ([string]$parent.CommandLine) $powershell $launcher)
             [ordered]@{
                 port = $port
                 pid = $pidValue
                 parentPid = [int64]$proc.ParentProcessId
                 createdAt = [string]$proc.CreationDate
-                executablePath = [string]$proc.ExecutablePath
-                modulePath = if ((Same-Path ([string]$proc.ExecutablePath) $node) -and ((Has-Exact-Token ([string]$proc.CommandLine) $module) -or (Has-Exact-Token ([string]$proc.CommandLine) ([string]$aliases[$port])))) { $module } else { $null }
+                executablePath = if ($childShape) { [string]$proc.ExecutablePath } else { $null }
+                modulePath = if ($childShape) { $module } else { $null }
+                localAddresses = [object[]]@($_.Group | ForEach-Object { [string]$_.LocalAddress } | Sort-Object -Unique)
+                sessionId = if ($childShape) { [int64]$proc.SessionId } else { -1 }
+                sidSha256 = if ($childShape) { Sha256-Text ([string]$owner.Sid) } else { $null }
+                parentCreatedAt = if ($parentShape) { [string]$parent.CreationDate } else { $null }
+                parentExecutablePath = if ($parentShape) { [string]$parent.ExecutablePath } else { $null }
+                parentSessionId = if ($parentShape) { [int64]$parent.SessionId } else { -1 }
+                parentSidSha256 = if ($parentShape) { Sha256-Text ([string]$parentOwner.Sid) } else { $null }
+                launcherPath = if ($parentShape) { $launcher } else { $null }
             }
         }
 )
-[ordered]@{ host = "127.0.0.1"; ports = $ports; listeners = $rows } | ConvertTo-Json -Depth 4 -Compress
+[ordered]@{
+    scope = "ALL_INTERFACES"
+    ports = $ports
+    caller = [ordered]@{ sidSha256 = $callerSidHash; sessionId = $callerSession }
+    listeners = $rows
+} | ConvertTo-Json -Depth 4 -Compress
 `;
 const TERMINATE_VERIFIED_PROCESS_PROGRAM = String.raw`
 $ErrorActionPreference = "Stop"
@@ -210,6 +326,19 @@ if ([string]$proc.CreationDate -cne $expectedCreatedAt -or -not (Same-Path ([str
 & $env:XW_LEGACY_TASKKILL /PID ([string]$pidValue) /T /F *> $null
 if ($LASTEXITCODE -ne 0) { exit 42 }
 [ordered]@{ status = "terminated" } | ConvertTo-Json -Compress
+`;
+const CALLER_INSPECTION_PROGRAM = String.raw`
+$ErrorActionPreference = "Stop"
+$algorithm = [Security.Cryptography.SHA256]::Create()
+try {
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $bytes = [Text.Encoding]::UTF8.GetBytes([string]$identity.User.Value)
+    $hash = ([BitConverter]::ToString($algorithm.ComputeHash($bytes))).Replace("-", "").ToLowerInvariant()
+    [ordered]@{
+        sidSha256 = $hash
+        sessionId = [int64][Diagnostics.Process]::GetCurrentProcess().SessionId
+    } | ConvertTo-Json -Compress
+} finally { $algorithm.Dispose() }
 `;
 
 function fail(code, message, details = undefined) {
@@ -287,6 +416,44 @@ function readCanonicalJson(path, code, label, maximumBytes = 64 * 1024 * 1024) {
   const value = parseJsonBytes(bytes, code, label);
   if (!bytes.equals(canonicalJsonBytes(value))) fail(code, `${label} is not canonical JSON`);
   return Object.freeze({ bytes, value });
+}
+
+function inspectLegacyRuntimeOwnerLock({ runtimeRoot, expectedPid = null, allowAbsent = false }) {
+  const code = "M6_QUALIFICATION_LEGACY_OWNER_LOCK_INVALID";
+  if (expectedPid !== null && (!Number.isSafeInteger(expectedPid) || expectedPid < 4)) {
+    fail(code, "legacy control-plane PID is invalid");
+  }
+  let path;
+  try { path = m6C1RuntimeOwnerLockPath(runtimeRoot); }
+  catch { fail(code, "fixed runtime owner-lock path is invalid"); }
+  if (basename(path) !== M6_C1_RUNTIME_OWNER_LOCK_FILE) {
+    fail(code, "fixed runtime owner-lock filename drifted");
+  }
+  if (!existsSync(path) && allowAbsent) return null;
+  const { bytes, value } = readCanonicalJson(path, code, "legacy runtime owner lock", 64 * 1024);
+  if (!exactObject(value, [
+    "acquiredAt", "ownerKind", "ownerNonce", "pid", "schemaId", "secretMaterialPresent",
+  ]) || value.schemaId !== "xw.m6-c1-runtime-owner-lock.v1"
+    || value.ownerKind !== "CONTROL_PLANE_M6_C1"
+    || !Number.isSafeInteger(value.pid) || value.pid < 4
+    || (expectedPid !== null && value.pid !== expectedPid)
+    || typeof value.ownerNonce !== "string"
+    || !/^[A-Za-z0-9._:-]{16,200}$/u.test(value.ownerNonce)
+    || typeof value.acquiredAt !== "string"
+    || !Number.isFinite(Date.parse(value.acquiredAt))
+    || value.secretMaterialPresent !== false) {
+    fail(code, "legacy runtime owner lock does not match the active control-plane listener");
+  }
+  return Object.freeze({ path, pid: value.pid, sha256: sha256(bytes) });
+}
+
+function inspectLegacyLaunchers({ runtimeRoot }) {
+  const code = "M6_QUALIFICATION_LEGACY_LAUNCHER_INVALID";
+  return Object.freeze(Object.fromEntries(LEGACY_LAUNCHER_TARGETS.map((target) => {
+    const path = join(runtimeRoot, target.filename);
+    const bytes = readPlainBytes(path, code, `${target.key} legacy launcher`, 1024 * 1024);
+    return [target.key, Object.freeze({ key: target.key, path, sha256: sha256(bytes) })];
+  })));
 }
 
 function manifestEntry(manifest, releasePath, code) {
@@ -468,20 +635,62 @@ export function normalizeM6QualificationLegacyListeners(value, {
   trustedNode,
   requireActive = true,
   allowPartial = false,
+  launchers = null,
+  caller = null,
 } = {}) {
   const code = "M6_QUALIFICATION_LEGACY_LISTENER_INVALID";
-  if (!exactObject(value, ["host", "listeners", "ports"])
-    || value.host !== "127.0.0.1"
+  const topologyRequired = launchers !== null || caller !== null;
+  if (!exactObject(value, topologyRequired
+    ? ["caller", "listeners", "ports", "scope"]
+    : (Object.hasOwn(value || {}, "caller")
+      ? ["caller", "listeners", "ports", "scope"]
+      : ["listeners", "ports", "scope"]))
+    || value.scope !== "ALL_INTERFACES"
     || JSON.stringify(value.ports) !== JSON.stringify(FIXED_PORTS)
     || !Array.isArray(value.listeners)) {
     fail(code, "listener oracle receipt is malformed");
   }
+  let normalizedCaller = null;
+  if (topologyRequired) {
+    if (!exactObject(launchers, ["controlPlane", "registry"])
+      || !exactObject(caller, ["sessionId", "sidSha256"])
+      || !Number.isSafeInteger(caller.sessionId) || caller.sessionId < 0
+      || !HEX64.test(caller.sidSha256 || "")
+      || !exactObject(value.caller, ["sessionId", "sidSha256"])
+      || value.caller.sessionId !== caller.sessionId
+      || value.caller.sidSha256 !== caller.sidSha256) {
+      fail(code, "listener caller identity differs from the sealed current-user authority");
+    }
+    normalizedCaller = caller;
+    for (const target of LEGACY_LAUNCHER_TARGETS) {
+      const ref = launchers[target.key];
+      if (!exactObject(ref, ["key", "path", "sha256"])
+        || ref.key !== target.key || !samePath(ref.path, join(dirname(ref.path), target.filename))
+        || basename(ref.path).toLowerCase() !== target.filename.toLowerCase()
+        || !HEX64.test(ref.sha256 || "")) {
+        fail(code, "sealed legacy launcher identity is malformed");
+      }
+    }
+  }
   const rows = value.listeners.map((row) => {
-    if (!exactObject(row, ["createdAt", "executablePath", "modulePath", "parentPid", "pid", "port"])
+    const baseKeys = [
+      "createdAt", "executablePath", "localAddresses", "modulePath", "parentPid", "pid", "port",
+    ];
+    const topologyKeys = [
+      ...baseKeys, "launcherPath", "parentCreatedAt", "parentExecutablePath",
+      "parentSessionId", "parentSidSha256", "sessionId", "sidSha256",
+    ];
+    if (!exactObject(row, topologyRequired ? topologyKeys : (
+      Object.hasOwn(row || {}, "launcherPath") ? topologyKeys : baseKeys
+    ))
       || !FIXED_PORTS.includes(row.port)
       || !Number.isSafeInteger(row.pid) || row.pid < 4
       || !Number.isSafeInteger(row.parentPid) || row.parentPid < 0
       || typeof row.createdAt !== "string" || row.createdAt === ""
+      || !Array.isArray(row.localAddresses) || row.localAddresses.length === 0
+      || row.localAddresses.length > 8
+      || row.localAddresses.some((address) => typeof address !== "string" || isIP(address) === 0)
+      || JSON.stringify(row.localAddresses) !== JSON.stringify([...new Set(row.localAddresses)].sort())
       || !samePath(row.executablePath, trustedNode.path)) {
       fail(code, "listener process identity is malformed or uses an untrusted executable");
     }
@@ -489,7 +698,7 @@ export function normalizeM6QualificationLegacyListeners(value, {
     if (!samePath(row.modulePath, expected.path)) {
       fail(code, "listener command line did not bind the exact release module");
     }
-    return Object.freeze({
+    const normalized = {
       port: row.port,
       pid: row.pid,
       parentPid: row.parentPid,
@@ -497,7 +706,33 @@ export function normalizeM6QualificationLegacyListeners(value, {
       executablePath: resolve(row.executablePath),
       modulePath: expected.path,
       moduleSha256: expected.sha256,
-    });
+      localAddresses: Object.freeze([...row.localAddresses]),
+    };
+    if (topologyRequired) {
+      const launcherKey = row.port === 17920 ? "controlPlane" : "registry";
+      const launcher = launchers[launcherKey];
+      if (typeof row.parentCreatedAt !== "string" || row.parentCreatedAt === ""
+        || !samePath(row.parentExecutablePath, WINDOWS_POWERSHELL_EXECUTABLE)
+        || !Number.isSafeInteger(row.parentSessionId) || row.parentSessionId !== normalizedCaller.sessionId
+        || row.parentSidSha256 !== normalizedCaller.sidSha256
+        || !Number.isSafeInteger(row.sessionId) || row.sessionId !== normalizedCaller.sessionId
+        || row.sidSha256 !== normalizedCaller.sidSha256
+        || !samePath(row.launcherPath, launcher.path)) {
+        fail(code, "listener parent does not reproduce the sealed current-user launcher topology");
+      }
+      Object.assign(normalized, {
+        parentCreatedAt: row.parentCreatedAt,
+        parentExecutablePath: resolve(row.parentExecutablePath),
+        parentSessionId: row.parentSessionId,
+        parentSidSha256: row.parentSidSha256,
+        sessionId: row.sessionId,
+        sidSha256: row.sidSha256,
+        launcherKey,
+        launcherPath: launcher.path,
+        launcherSha256: launcher.sha256,
+      });
+    }
+    return Object.freeze(normalized);
   }).sort((left, right) => left.port - right.port);
   if (new Set(rows.map((row) => row.port)).size !== rows.length
     || new Set(rows.map((row) => row.pid)).size !== rows.length) {
@@ -505,7 +740,8 @@ export function normalizeM6QualificationLegacyListeners(value, {
   }
   if (requireActive) {
     if (rows.length !== 2 || rows[0].port !== 17920 || rows[1].port !== 17930
-      || rows[0].pid === rows[1].pid) {
+      || rows[0].pid === rows[1].pid
+      || (topologyRequired && rows[0].parentPid === rows[1].parentPid)) {
       fail(code, "17920 and 17930 must each have one distinct exact legacy listener");
     }
   } else if (!allowPartial && rows.length !== 0) {
@@ -1307,6 +1543,8 @@ export async function planM6QualificationLegacyWindow({
   taskInspector,
   listenerInspector,
   healthInspector,
+  ownerLockInspector = inspectLegacyRuntimeOwnerLock,
+  launcherInspector = inspectLegacyLaunchers,
   tcbAclController = createSystemTcbAclController(),
 } = {}) {
   const code = "M6_QUALIFICATION_LEGACY_PREFLIGHT_INVALID";
@@ -1314,8 +1552,9 @@ export async function planM6QualificationLegacyWindow({
   assertPlainDirectory(runtime, code, "runtime root");
   if (typeof releaseVerifier !== "function" || typeof trustedNodeInspector !== "function"
     || typeof taskInspector !== "function" || typeof listenerInspector !== "function"
-    || typeof healthInspector !== "function") {
-    fail(code, "release/node/task/listener/health inspectors are required");
+    || typeof healthInspector !== "function" || typeof ownerLockInspector !== "function"
+    || typeof launcherInspector !== "function") {
+    fail(code, "release/node/task/listener/health/runtime inspectors are required");
   }
   const targetRelease = inspectTargetRelease({
     runtimeRoot: runtime,
@@ -1358,10 +1597,50 @@ export async function planM6QualificationLegacyWindow({
     targetRelease,
     modules,
   });
-  const listeners = normalizeM6QualificationLegacyListeners(await listenerInspector({
+  const launchers = await launcherInspector({ runtimeRoot: runtime });
+  if (!exactObject(launchers, ["controlPlane", "registry"])) {
+    fail(code, "fixed legacy launcher set is malformed");
+  }
+  for (const target of LEGACY_LAUNCHER_TARGETS) {
+    const ref = launchers[target.key];
+    const expectedPath = join(runtime, target.filename);
+    if (!exactObject(ref, ["key", "path", "sha256"])
+      || ref.key !== target.key || !samePath(ref.path, expectedPath)
+      || !HEX64.test(ref.sha256 || "")
+      || sha256(readPlainBytes(expectedPath, code, `${target.key} launcher`, 1024 * 1024))
+        !== ref.sha256) {
+      fail(code, "fixed legacy launcher identity drifted");
+    }
+    verifyTcb(tcbAclController, runtime, expectedPath, false, code);
+  }
+  const listenerInspection = await listenerInspector({
     modules,
     trustedNode,
-  }), { modules, trustedNode, requireActive: true });
+    launchers,
+  });
+  const caller = listenerInspection?.caller;
+  const listeners = normalizeM6QualificationLegacyListeners(listenerInspection, {
+    modules,
+    trustedNode,
+    requireActive: true,
+    launchers,
+    caller,
+  });
+  const controlListener = listeners.find((row) => row.port === 17920);
+  const ownerLock = await ownerLockInspector({ runtimeRoot: runtime, expectedPid: controlListener.pid });
+  if (!exactObject(ownerLock, ["path", "pid", "sha256"])
+    || !samePath(ownerLock.path, m6C1RuntimeOwnerLockPath(runtime))
+    || ownerLock.pid !== controlListener.pid || !HEX64.test(ownerLock.sha256 || "")
+    || !exactObject(caller, ["sessionId", "sidSha256"])
+    || !Number.isSafeInteger(caller.sessionId) || caller.sessionId < 0
+    || !HEX64.test(caller.sidSha256 || "")) {
+    fail(code, "legacy runtime owner-lock or caller identity is invalid");
+  }
+  const legacyRuntime = Object.freeze({
+    ownerLock,
+    launchers,
+    caller: Object.freeze({ ...caller }),
+  });
   const health = assertHealthIdentity(
     await healthInspector(),
     legacyRelease,
@@ -1373,7 +1652,7 @@ export async function planM6QualificationLegacyWindow({
     verifyTcb(tcbAclController, runtime, path, false, code);
   }
   return Object.freeze({
-    schemaId: "xw.runtime.m6-qualification-legacy-window-plan.v1",
+    schemaId: "xw.runtime.m6-qualification-legacy-window-plan.v2",
     runtimeRoot: runtime,
     targetRelease,
     legacyRelease,
@@ -1385,11 +1664,48 @@ export async function planM6QualificationLegacyWindow({
     modules,
     task,
     listeners,
+    legacyRuntime,
     health,
   });
 }
 
-async function snapshotSqliteDatabase(sourcePath, { tempRoot, runtimeRoot, tcbAclController }) {
+async function snapshotSqliteDatabase(sourcePath, {
+  tempRoot,
+  runtimeRoot,
+  tcbAclController,
+  standalone = false,
+}) {
+  if (standalone) {
+    const code = "M6_QUALIFICATION_LEGACY_SNAPSHOT_INVALID";
+    if (["-wal", "-shm"].some((suffix) => existsSync(`${sourcePath}${suffix}`))) {
+      fail(code, "stopped SQLite snapshot requires absent WAL/SHM sidecars");
+    }
+    let fd;
+    try {
+      fd = openSync(sourcePath, "r");
+      const opened = fstatSync(fd, { bigint: true });
+      const named = lstatSync(sourcePath, { bigint: true });
+      if (!opened.isFile() || opened.nlink !== 1n || opened.isSymbolicLink()
+        || !sameOpenFileIdentity(opened, named)) {
+        fail(code, "stopped SQLite snapshot source is not one stable single-link file");
+      }
+      const bytes = readFileSync(fd);
+      const descriptorAfter = fstatSync(fd, { bigint: true });
+      const pathAfter = lstatSync(sourcePath, { bigint: true });
+      if (!sameOpenFileIdentity(opened, descriptorAfter)
+        || !sameOpenFileIdentity(descriptorAfter, pathAfter)
+        || ["-wal", "-shm"].some((suffix) => existsSync(`${sourcePath}${suffix}`))) {
+        fail(code, "stopped SQLite snapshot source drifted while copied");
+      }
+      verifyTcb(tcbAclController, runtimeRoot, sourcePath, false, code);
+      return bytes;
+    } catch (cause) {
+      if (cause?.code === code) throw cause;
+      fail(code, "stopped SQLite snapshot failed closed");
+    } finally {
+      try { if (fd !== undefined) closeSync(fd); } catch {}
+    }
+  }
   const { DatabaseSync, backup } = await import("node:sqlite");
   if (!existsSync(tempRoot)) mkdirSync(tempRoot, { recursive: true });
   protectTcb(tcbAclController, runtimeRoot, tempRoot, false, "M6_QUALIFICATION_LEGACY_SNAPSHOT_INVALID");
@@ -1490,9 +1806,19 @@ async function captureSealedPrestate(plan, {
   databaseSnapshotter,
   publisher,
   tcbAclController,
+  boundary,
+  publishReference = true,
 }) {
   const code = "M6_QUALIFICATION_LEGACY_SNAPSHOT_INVALID";
   const runtime = plan.runtimeRoot;
+  if (!exactObject(boundary, ["checkpointHash", "kind", "ownerRecoveryHash"])
+    || !["ONLINE_ROLLBACK", "STOPPED"].includes(boundary.kind)
+    || !HEX64.test(boundary.checkpointHash || "")
+    || !HEX64.test(boundary.ownerRecoveryHash || "")
+    || (publishReference && boundary.kind !== "STOPPED")
+    || (!publishReference && boundary.kind !== "ONLINE_ROLLBACK")) {
+    fail(code, "prestate boundary identity does not match its publication role");
+  }
   const tempRoot = join(publisher.base, ".sqlite-captures");
   const databaseRefs = {};
   for (const row of DB_TARGETS) {
@@ -1501,6 +1827,7 @@ async function captureSealedPrestate(plan, {
       tempRoot,
       runtimeRoot: runtime,
       tcbAclController,
+      standalone: boundary.kind === "STOPPED",
     });
     if (!Buffer.isBuffer(bytes)) fail(code, "database snapshotter must return bytes");
     const artifact = publisher.publishBytes({ namespace: "artifacts", filename: basename(targetPath), bytes });
@@ -1550,14 +1877,14 @@ async function captureSealedPrestate(plan, {
     bytes: canonicalJsonBytes(currentValue),
   });
   const processValue = {
-    schemaId: "xw.runtime.m6-qualification-legacy-process-prestate.v1",
+    schemaId: "xw.runtime.m6-qualification-legacy-process-prestate.v2",
     releaseId: plan.legacyRelease.releaseId,
     sourceCommit: plan.legacyRelease.sourceCommit,
     listeners: plan.listeners.map((row) => ({ ...row })),
   };
   const processArtifact = publisher.publishBytes({
     namespace: "artifacts",
-    filename: "process-prestate.v1.json",
+    filename: "process-prestate.v2.json",
     bytes: canonicalJsonBytes(processValue),
   });
   const prestate = {
@@ -1585,6 +1912,8 @@ async function captureSealedPrestate(plan, {
       state: plan.task.state,
       xml: taskArtifact,
     },
+    legacyRuntime: plan.legacyRuntime,
+    boundary,
     trustedNode: plan.trustedNode,
     modules: plan.modules,
     processes: { snapshot: processArtifact },
@@ -1597,11 +1926,11 @@ async function captureSealedPrestate(plan, {
   };
   const prestateBytes = canonicalJsonBytes(prestate);
   const prestateArtifact = publisher.publishBytes({
-    namespace: "prestates",
-    filename: "m6-qualification-legacy-window-prestate.v1.json",
+    namespace: publishReference ? "prestates" : "rollback-drafts",
+    filename: "m6-qualification-legacy-window-prestate.v2.json",
     bytes: prestateBytes,
   });
-  const reference = {
+  const reference = publishReference ? {
     schemaId: M6_QUALIFICATION_LEGACY_WINDOW_REFERENCE_SCHEMA_ID,
     targetRelease: {
       releaseId: plan.targetRelease.releaseId,
@@ -1612,18 +1941,18 @@ async function captureSealedPrestate(plan, {
       sourceCommit: plan.legacyRelease.sourceCommit,
     },
     prestate: prestateArtifact,
-  };
+  } : null;
   const referencePath = join(
     publisher.base,
     "by-release",
     plan.targetRelease.releaseId,
     plan.targetRelease.sourceCommit,
-    "window-reference.v1.json",
+    "window-reference.v2.json",
   );
-  const referenceArtifact = publisher.publishIdentity({
+  const referenceArtifact = publishReference ? publisher.publishIdentity({
     path: referencePath,
     bytes: canonicalJsonBytes(reference),
-  });
+  }) : null;
   return Object.freeze({ prestate, prestateArtifact, reference, referenceArtifact });
 }
 
@@ -1647,8 +1976,8 @@ export function validateM6QualificationLegacyPrestate(prestate, {
 } = {}) {
   const code = "M6_QUALIFICATION_LEGACY_PRESTATE_INVALID";
   if (!exactObject(prestate, [
-    "current", "legacyRelease", "modules", "processes", "resources", "runtimeRoot", "schemaId",
-    "targetRelease", "task", "trustedNode",
+    "boundary", "current", "legacyRelease", "legacyRuntime", "modules", "processes", "resources", "runtimeRoot",
+    "schemaId", "targetRelease", "task", "trustedNode",
   ]) || prestate.schemaId !== M6_QUALIFICATION_LEGACY_WINDOW_PRESTATE_SCHEMA_ID
     || !samePath(prestate.runtimeRoot, runtimeRoot)
     || !exactObject(prestate.targetRelease, ["operatorSha256", "releaseId", "sourceCommit"])
@@ -1670,12 +1999,38 @@ export function validateM6QualificationLegacyPrestate(prestate, {
     || prestate.task.name !== FORMAL_CONTROL_PLANE_TASK_NAME
     || !["READY", "RUNNING"].includes(prestate.task.state)
     || !exactObject(prestate.processes, ["snapshot"])
+    || !exactObject(prestate.legacyRuntime, ["caller", "launchers", "ownerLock"])
+    || !exactObject(prestate.legacyRuntime.ownerLock, ["path", "pid", "sha256"])
+    || !samePath(prestate.legacyRuntime.ownerLock.path, m6C1RuntimeOwnerLockPath(runtimeRoot))
+    || !Number.isSafeInteger(prestate.legacyRuntime.ownerLock.pid)
+    || prestate.legacyRuntime.ownerLock.pid < 4
+    || !HEX64.test(prestate.legacyRuntime.ownerLock.sha256 || "")
+    || !exactObject(prestate.legacyRuntime.caller, ["sessionId", "sidSha256"])
+    || !Number.isSafeInteger(prestate.legacyRuntime.caller.sessionId)
+    || prestate.legacyRuntime.caller.sessionId < 0
+    || !HEX64.test(prestate.legacyRuntime.caller.sidSha256 || "")
+    || !exactObject(prestate.legacyRuntime.launchers, ["controlPlane", "registry"])
+    || !exactObject(prestate.boundary, ["checkpointHash", "kind", "ownerRecoveryHash"])
+    || prestate.boundary.kind !== "STOPPED"
+    || !HEX64.test(prestate.boundary.checkpointHash || "")
+    || !HEX64.test(prestate.boundary.ownerRecoveryHash || "")
     || !exactObject(prestate.resources, [
       "controlDb", "privateMaterial", "qualificationBinding", "registryDb",
     ])
     || !Array.isArray(prestate.resources.privateMaterial)
     || prestate.resources.privateMaterial.length !== 2) {
     fail(code, "current/task/process/resource prestate drifted");
+  }
+  for (const target of LEGACY_LAUNCHER_TARGETS) {
+    const ref = prestate.legacyRuntime.launchers[target.key];
+    const expectedPath = join(runtimeRoot, target.filename);
+    if (!exactObject(ref, ["key", "path", "sha256"])
+      || ref.key !== target.key || !samePath(ref.path, expectedPath)
+      || !HEX64.test(ref.sha256 || "")
+      || sha256(readPlainBytes(expectedPath, code, `${target.key} launcher`, 1024 * 1024))
+        !== ref.sha256) {
+      fail(code, "sealed legacy launcher identity drifted");
+    }
   }
   if (!exactObject(prestate.trustedNode, ["path", "sha256", "version"])
     || !samePath(prestate.trustedNode.path, TRUSTED_NODE_EXECUTABLE)
@@ -1726,7 +2081,7 @@ export function validateM6QualificationLegacyPrestate(prestate, {
   const processValue = parseJsonBytes(processBytes, code, "process prestate");
   if (!processBytes.equals(canonicalJsonBytes(processValue))
     || !exactObject(processValue, ["listeners", "releaseId", "schemaId", "sourceCommit"])
-    || processValue.schemaId !== "xw.runtime.m6-qualification-legacy-process-prestate.v1"
+    || processValue.schemaId !== "xw.runtime.m6-qualification-legacy-process-prestate.v2"
     || processValue.releaseId !== prestate.legacyRelease.releaseId
     || processValue.sourceCommit !== prestate.legacyRelease.sourceCommit
     || !Array.isArray(processValue.listeners) || processValue.listeners.length !== 2) {
@@ -1736,15 +2091,34 @@ export function validateM6QualificationLegacyPrestate(prestate, {
     const row = processValue.listeners[index];
     const expectedModule = port === 17920 ? prestate.modules.controlPlane : prestate.modules.registry;
     if (!exactObject(row, [
-      "createdAt", "executablePath", "modulePath", "moduleSha256", "parentPid", "pid", "port",
+      "createdAt", "executablePath", "launcherKey", "launcherPath", "launcherSha256", "modulePath",
+      "localAddresses", "moduleSha256", "parentCreatedAt", "parentExecutablePath", "parentPid",
+      "parentSessionId", "parentSidSha256", "pid", "port", "sessionId", "sidSha256",
     ]) || row.port !== port || !Number.isSafeInteger(row.pid) || row.pid < 4
       || !Number.isSafeInteger(row.parentPid) || row.parentPid < 0
       || typeof row.createdAt !== "string" || row.createdAt === ""
+      || typeof row.parentCreatedAt !== "string" || row.parentCreatedAt === ""
+      || !samePath(row.parentExecutablePath, WINDOWS_POWERSHELL_EXECUTABLE)
+      || row.parentSessionId !== prestate.legacyRuntime.caller.sessionId
+      || row.parentSidSha256 !== prestate.legacyRuntime.caller.sidSha256
+      || row.sessionId !== prestate.legacyRuntime.caller.sessionId
+      || row.sidSha256 !== prestate.legacyRuntime.caller.sidSha256
+      || !Array.isArray(row.localAddresses) || row.localAddresses.length === 0
+      || row.localAddresses.length > 8
+      || row.localAddresses.some((address) => typeof address !== "string" || isIP(address) === 0)
+      || JSON.stringify(row.localAddresses) !== JSON.stringify([...new Set(row.localAddresses)].sort())
       || !samePath(row.executablePath, prestate.trustedNode.path)
       || !samePath(row.modulePath, expectedModule.path)
-      || row.moduleSha256 !== expectedModule.sha256) {
+      || row.moduleSha256 !== expectedModule.sha256
+      || row.launcherKey !== (port === 17920 ? "controlPlane" : "registry")
+      || !samePath(row.launcherPath, prestate.legacyRuntime.launchers[row.launcherKey].path)
+      || row.launcherSha256 !== prestate.legacyRuntime.launchers[row.launcherKey].sha256) {
       fail(code, "process snapshot listener identity drifted");
     }
+  }
+  if (processValue.listeners[0].parentPid === processValue.listeners[1].parentPid
+    || prestate.legacyRuntime.ownerLock.pid !== processValue.listeners[0].pid) {
+    fail(code, "legacy runtime launch topology drifted after sealing");
   }
   validateArtifactRef(prestate.resources.controlDb, {
     base: baseRoot,
@@ -1809,7 +2183,7 @@ function loadSealedPrestate({ runtimeRoot, expectedReleaseId, expectedSourceComm
     "by-release",
     expectedReleaseId,
     expectedSourceCommit,
-    "window-reference.v1.json",
+    "window-reference.v2.json",
   );
   verifyTcb(tcbAclController, runtimeRoot, referencePath, false, code);
   const reference = readCanonicalJson(referencePath, code, "window reference").value;
@@ -1834,6 +2208,15 @@ function loadSealedPrestate({ runtimeRoot, expectedReleaseId, expectedSourceComm
     expectedSourceCommit,
     baseRoot: base,
   });
+  for (const target of LEGACY_LAUNCHER_TARGETS) {
+    verifyTcb(
+      tcbAclController,
+      runtimeRoot,
+      prestate.legacyRuntime.launchers[target.key].path,
+      false,
+      code,
+    );
+  }
   return Object.freeze({ referencePath, reference, prestate });
 }
 
@@ -1843,6 +2226,192 @@ function safeWindowsEnvironment(extra = {}) {
     WINDIR: process.env.WINDIR || process.env.SystemRoot || "C:\\Windows",
     ...extra,
   });
+}
+
+function sameOpenFileIdentity(left, right) {
+  return String(left?.dev) === String(right?.dev)
+    && String(left?.ino) === String(right?.ino)
+    && String(left?.mode) === String(right?.mode)
+    && String(left?.nlink) === String(right?.nlink)
+    && String(left?.size) === String(right?.size)
+    && String(left?.mtimeNs ?? left?.mtimeMs) === String(right?.mtimeNs ?? right?.mtimeMs);
+}
+
+function processIsAlive(pid) {
+  try { process.kill(pid, 0); return true; }
+  catch (error) {
+    if (error?.code === "ESRCH") return false;
+    return true;
+  }
+}
+
+export function archiveStaleLegacyOwnerLock({
+  runtimeRoot,
+  expected,
+  publisher,
+  tcbAclController,
+}) {
+  const code = "M6_QUALIFICATION_LEGACY_OWNER_LOCK_RECOVERY_INVALID";
+  const path = m6C1RuntimeOwnerLockPath(runtimeRoot);
+  if (!exactObject(expected, ["path", "pid", "sha256"])
+    || !samePath(expected.path, path)
+    || !Number.isSafeInteger(expected.pid) || expected.pid < 4
+    || !HEX64.test(expected.sha256 || "")
+    || !samePath(publisher?.base, join(runtimeRoot, M6_QUALIFICATION_LEGACY_WINDOW_ROOT_NAME))) {
+    fail(code, "sealed owner-lock recovery input is invalid");
+  }
+  const archivePath = join(
+    publisher.base,
+    "stale-owner-locks",
+    expected.sha256,
+    "m6-c1-runtime-owner-lock.v1.json",
+  );
+  const validateBytes = (bytes) => {
+    if (sha256(bytes) !== expected.sha256) fail(code, "runtime owner lock hash changed after sealing");
+    const value = parseJsonBytes(bytes, code, "runtime owner lock");
+    if (!bytes.equals(canonicalJsonBytes(value))
+      || !exactObject(value, [
+        "acquiredAt", "ownerKind", "ownerNonce", "pid", "schemaId", "secretMaterialPresent",
+      ])
+      || value.schemaId !== "xw.m6-c1-runtime-owner-lock.v1"
+      || value.pid !== expected.pid || value.ownerKind !== "CONTROL_PLANE_M6_C1"
+      || value.secretMaterialPresent !== false) {
+      fail(code, "runtime owner lock no longer matches the sealed control-plane owner");
+    }
+    return value;
+  };
+  const sourceExists = existsSync(path);
+  const archiveExists = existsSync(archivePath);
+  if (sourceExists && archiveExists) {
+    fail(code, "source owner lock and its sealed archive must never coexist");
+  }
+  if (!sourceExists) {
+    if (!archiveExists) fail(code, "sealed owner lock is absent without its exact archive");
+    verifyTcb(tcbAclController, runtimeRoot, archivePath, false, code);
+    const bytes = readPlainBytes(archivePath, code, "archived runtime owner lock", 64 * 1024);
+    validateBytes(bytes);
+    return Object.freeze({
+      status: "REPLAYED",
+      artifact: Object.freeze({ path: archivePath, sha256: expected.sha256 }),
+    });
+  }
+  verifyTcb(tcbAclController, runtimeRoot, path, false, code);
+  let fd;
+  try {
+    fd = openSync(path, "r");
+    const opened = fstatSync(fd, { bigint: true });
+    const named = lstatSync(path, { bigint: true });
+    if (!opened.isFile() || opened.isSymbolicLink() || opened.nlink !== 1n
+      || !sameOpenFileIdentity(opened, named)) {
+      fail(code, "runtime owner lock is not one stable single-link file");
+    }
+    const bytes = readFileSync(fd);
+    validateBytes(bytes);
+    if (processIsAlive(expected.pid)) fail(code, "sealed control-plane owner PID is still alive");
+    if (!existsSync(dirname(archivePath))) mkdirSync(dirname(archivePath), { recursive: true });
+    assertPlainDirectory(dirname(archivePath), code, "stale owner-lock archive directory");
+    protectTcb(tcbAclController, runtimeRoot, dirname(archivePath), false, code);
+    const descriptorAfter = fstatSync(fd, { bigint: true });
+    const pathAfter = lstatSync(path, { bigint: true });
+    if (!sameOpenFileIdentity(opened, descriptorAfter)
+      || !sameOpenFileIdentity(descriptorAfter, pathAfter)) {
+      fail(code, "runtime owner lock changed before atomic quarantine");
+    }
+    renameSync(path, archivePath);
+    if (existsSync(path) || !existsSync(archivePath)) {
+      fail(code, "atomic owner-lock quarantine did not remove the source name");
+    }
+    const archiveStat = lstatSync(archivePath, { bigint: true });
+    const descriptorFinal = fstatSync(fd, { bigint: true });
+    if (!sameOpenFileIdentity(opened, descriptorFinal)
+      || !sameOpenFileIdentity(descriptorFinal, archiveStat)) {
+      fail(code, "quarantined owner-lock identity differs from the opened source");
+    }
+    protectTcb(tcbAclController, runtimeRoot, archivePath, false, code);
+    const readback = readPlainBytes(archivePath, code, "quarantined runtime owner lock", 64 * 1024);
+    if (!readback.equals(bytes)) fail(code, "quarantined owner-lock readback changed");
+    validateBytes(readback);
+    return Object.freeze({
+      status: "ARCHIVED",
+      artifact: Object.freeze({ path: archivePath, sha256: expected.sha256 }),
+    });
+  } catch (cause) {
+    if (cause?.code === code) throw cause;
+    fail(code, "stale runtime owner lock could not be archived safely");
+  } finally {
+    try { if (fd !== undefined) closeSync(fd); } catch {}
+  }
+}
+
+function exactQuickCheck(row) {
+  return row && typeof row === "object" && !Array.isArray(row)
+    && Object.keys(row).length === 1 && Object.values(row)[0] === "ok";
+}
+
+export function checkpointM6QualificationLegacyDatabases({
+  runtimeRoot,
+  tcbAclController = createSystemTcbAclController(),
+}) {
+  const code = "M6_QUALIFICATION_LEGACY_WAL_CHECKPOINT_FAILED";
+  const rows = [];
+  for (const target of DB_TARGETS) {
+    const path = join(runtimeRoot, ...target.path);
+    const initial = assertPlainFile(path, code, target.key);
+    verifyTcb(tcbAclController, runtimeRoot, path, false, code);
+    let database;
+    try {
+      database = new DatabaseSync(path, { allowExtension: false });
+      database.exec("PRAGMA busy_timeout=5000");
+      const before = database.prepare("PRAGMA quick_check").get();
+      if (!exactQuickCheck(before)) {
+        fail(code, `${target.key} failed its pre-checkpoint quick_check`);
+      }
+      const checkpoint = database.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get();
+      if (!exactObject(checkpoint, ["busy", "checkpointed", "log"])
+        || !Number.isSafeInteger(checkpoint.busy) || checkpoint.busy !== 0
+        || !Number.isSafeInteger(checkpoint.log) || checkpoint.log < 0
+        || !Number.isSafeInteger(checkpoint.checkpointed) || checkpoint.checkpointed < 0
+        || checkpoint.checkpointed > checkpoint.log) {
+        fail(code, `${target.key} WAL checkpoint receipt is invalid or remained busy`);
+      }
+      const after = database.prepare("PRAGMA quick_check").get();
+      if (!exactQuickCheck(after)) {
+        fail(code, `${target.key} failed its post-checkpoint quick_check`);
+      }
+      database.close();
+      database = null;
+      const final = assertPlainFile(path, code, target.key);
+      if (String(initial.dev) !== String(final.dev) || String(initial.ino) !== String(final.ino)
+        || initial.nlink !== final.nlink) {
+        fail(code, `${target.key} main-file identity changed during checkpoint`);
+      }
+      for (const suffix of ["-wal", "-shm"]) {
+        if (existsSync(`${path}${suffix}`)) {
+          fail(code, `${target.key} retained a WAL/SHM sidecar after checkpoint close`);
+        }
+      }
+      verifyTcb(tcbAclController, runtimeRoot, path, false, code);
+      rows.push(Object.freeze({
+        key: target.key,
+        busy: checkpoint.busy,
+        log: checkpoint.log,
+        checkpointed: checkpoint.checkpointed,
+        databaseSha256: sha256(readPlainBytes(path, code, target.key, 1024 * 1024 * 1024)),
+        quickCheck: "ok",
+        sidecarsAbsent: true,
+      }));
+    } catch (cause) {
+      if (cause?.code === code) throw cause;
+      fail(code, `${target.key} WAL checkpoint failed closed`);
+    } finally {
+      try { database?.close(); } catch {}
+    }
+  }
+  const body = Object.freeze({
+    schemaId: "xw.runtime.m6-qualification-legacy-db-checkpoint.v1",
+    rows: Object.freeze(rows),
+  });
+  return Object.freeze({ ...body, checkpointHash: sha256(domainCanonicalJson(body)) });
 }
 
 function runPowerShellJson(program, { env = {}, code, label }) {
@@ -1897,13 +2466,17 @@ export function createNativeM6QualificationLegacyWindowAdapter({
       label: "fixed relay task inspection",
     });
   };
-  const inspectListeners = ({ modules, trustedNode }) => runPowerShellJson(LISTENER_INSPECTION_PROGRAM, {
+  const inspectListeners = ({ modules, trustedNode, launchers = inspectLegacyLaunchers({ runtimeRoot }) }) => runPowerShellJson(LISTENER_INSPECTION_PROGRAM, {
     env: {
       XW_LEGACY_CP_MODULE: modules.controlPlane.path,
       XW_LEGACY_CP_MODULE_ALIAS: join(runtimeRoot, "current", ...CONTROL_MODULE_RELEASE_PATH.split("/")),
       XW_LEGACY_REGISTRY_MODULE: modules.registry.path,
       XW_LEGACY_REGISTRY_MODULE_ALIAS: join(runtimeRoot, "current", ...REGISTRY_MODULE_RELEASE_PATH.split("/")),
       XW_LEGACY_TRUSTED_NODE: trustedNode.path,
+      XW_LEGACY_CP_LAUNCHER: launchers.controlPlane.path,
+      XW_LEGACY_REGISTRY_LAUNCHER: launchers.registry.path,
+      XW_LEGACY_POWERSHELL: WINDOWS_POWERSHELL_EXECUTABLE,
+      XW_LEGACY_RUNTIME_ROOT: runtimeRoot,
     },
     code: "M6_QUALIFICATION_LEGACY_LISTENER_INVALID",
     label: "fixed listener inspection",
@@ -1925,6 +2498,18 @@ export function createNativeM6QualificationLegacyWindowAdapter({
   return Object.freeze({
     inspectTask,
     inspectFixedTask,
+    async inspectOwnerLock({ expectedPid = null, allowAbsent = false } = {}) {
+      return inspectLegacyRuntimeOwnerLock({ runtimeRoot, expectedPid, allowAbsent });
+    },
+    async inspectLaunchers() {
+      return inspectLegacyLaunchers({ runtimeRoot });
+    },
+    async inspectCaller() {
+      return runPowerShellJson(CALLER_INSPECTION_PROGRAM, {
+        code: "M6_QUALIFICATION_LEGACY_CALLER_INVALID",
+        label: "fixed current-user caller inspection",
+      });
+    },
     async inspectQualificationTask() {
       return inspectFixedTask(QUALIFICATION_TASK_NAME);
     },
@@ -1971,6 +2556,26 @@ export function createNativeM6QualificationLegacyWindowAdapter({
         }
       }
     },
+    async archiveStaleOwnerLock({ expected, publisher }) {
+      return archiveStaleLegacyOwnerLock({
+        runtimeRoot,
+        expected,
+        publisher,
+        tcbAclController,
+      });
+    },
+    async checkpointDatabases() {
+      return checkpointM6QualificationLegacyDatabases({ runtimeRoot, tcbAclController });
+    },
+    async acquireStoppedGuard({ beforeOwner }) {
+      return acquireM6C1StoppedRuntimeGuard({
+        runtimeRoot,
+        ownerKind: "QUALIFICATION_LEGACY_WINDOW",
+        hosts: ["0.0.0.0", "::"],
+        ports: FIXED_PORTS,
+        beforeOwner,
+      });
+    },
     async inspectCurrent() {
       const path = join(runtimeRoot, "current");
       let stat;
@@ -1982,6 +2587,42 @@ export function createNativeM6QualificationLegacyWindowAdapter({
     },
     async switchCurrent(target) {
       replaceCurrentJunction({ runtimeRoot, targetPath: target });
+    },
+    async runLauncher(ref, caller) {
+      const code = "M6_QUALIFICATION_LEGACY_LAUNCHER_INVALID";
+      const target = LEGACY_LAUNCHER_TARGETS.find((row) => row.key === ref?.key);
+      const expectedPath = target ? join(runtimeRoot, target.filename) : "";
+      const actualCaller = runPowerShellJson(CALLER_INSPECTION_PROGRAM, {
+        code: "M6_QUALIFICATION_LEGACY_CALLER_INVALID",
+        label: "fixed current-user caller inspection",
+      });
+      if (!target || !exactObject(ref, ["key", "path", "sha256"])
+        || !samePath(ref.path, expectedPath) || !HEX64.test(ref.sha256 || "")
+        || !exactObject(caller, ["sessionId", "sidSha256"])
+        || domainCanonicalJson(actualCaller) !== domainCanonicalJson(caller)
+        || sha256(readPlainBytes(expectedPath, code, `${target.key} legacy launcher`, 1024 * 1024))
+          !== ref.sha256) {
+        fail(code, "sealed legacy launcher or caller drifted before restart");
+      }
+      verifyTcb(tcbAclController, runtimeRoot, expectedPath, false, code);
+      let child;
+      try {
+        child = spawn(WINDOWS_POWERSHELL_EXECUTABLE, [
+          "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+          "-File", expectedPath,
+        ], {
+          cwd: runtimeRoot,
+          detached: true,
+          env: safeWindowsEnvironment(),
+          stdio: "ignore",
+          windowsHide: true,
+        });
+        child.unref();
+      } catch { fail(code, "sealed legacy registry launcher could not be started"); }
+      if (!Number.isSafeInteger(child.pid) || child.pid < 4) {
+        fail(code, "legacy launcher returned no stable parent PID");
+      }
+      return Object.freeze({ key: target.key, parentPid: child.pid, started: true });
     },
     async restoreFile(ref) {
       const allowed = new Set([
@@ -2109,8 +2750,9 @@ export function createNativeM6QualificationLegacyWindowAdapter({
 
 function assertAdapter(adapter) {
   const methods = [
-    "assertWalSafe", "endTask", "inspectCurrent", "inspectHealth", "inspectListeners",
-    "inspectTask", "registerTaskXml", "restoreCurrent", "restoreFile", "runTask",
+    "acquireStoppedGuard", "archiveStaleOwnerLock", "assertWalSafe", "checkpointDatabases", "endTask",
+    "inspectCaller", "inspectCurrent", "inspectHealth", "inspectLaunchers", "inspectListeners",
+    "inspectOwnerLock", "inspectTask", "registerTaskXml", "restoreCurrent", "restoreFile", "runLauncher",
     "switchCurrent", "terminateVerifiedProcess",
   ];
   if (methods.some((name) => typeof adapter?.[name] !== "function")) {
@@ -2132,7 +2774,66 @@ async function waitFor({ probe, predicate, timeoutMs, pollMs, delayFn, code, mes
   }
 }
 
-function publicReceipt({ operation, plan, prestateArtifact, outcome, autoRestore = null }) {
+function normalizeOwnerRecoveryEvidence(value, publisher) {
+  const code = "M6_QUALIFICATION_LEGACY_OWNER_LOCK_RECOVERY_INVALID";
+  if (!exactObject(value, ["artifact", "status"])
+    || !["ARCHIVED", "REPLAYED"].includes(value.status)
+    || !exactObject(value.artifact, ["path", "sha256"])
+    || !HEX64.test(value.artifact.sha256 || "")
+    || !within(join(publisher.base, "stale-owner-locks"), value.artifact.path)) {
+    fail(code, "owner-lock recovery did not return one sealed archive identity");
+  }
+  const body = Object.freeze({
+    schemaId: "xw.runtime.m6-qualification-legacy-owner-recovery.v1",
+    status: value.status,
+    archiveSha256: value.artifact.sha256,
+  });
+  return Object.freeze({ ...body, ownerRecoveryHash: sha256(domainCanonicalJson(body)) });
+}
+
+function normalizeCheckpointEvidence(value) {
+  const code = "M6_QUALIFICATION_LEGACY_WAL_CHECKPOINT_FAILED";
+  if (!exactObject(value, ["checkpointHash", "rows", "schemaId"])
+    || value.schemaId !== "xw.runtime.m6-qualification-legacy-db-checkpoint.v1"
+    || !Array.isArray(value.rows) || value.rows.length !== DB_TARGETS.length) {
+    fail(code, "database checkpoint evidence schema drifted");
+  }
+  for (const [index, target] of DB_TARGETS.entries()) {
+    const row = value.rows[index];
+    if (!exactObject(row, [
+      "busy", "checkpointed", "databaseSha256", "key", "log", "quickCheck", "sidecarsAbsent",
+    ]) || row.key !== target.key || row.busy !== 0
+      || !Number.isSafeInteger(row.log) || row.log < 0
+      || !Number.isSafeInteger(row.checkpointed) || row.checkpointed < 0
+      || row.checkpointed > row.log || !HEX64.test(row.databaseSha256 || "")
+      || row.quickCheck !== "ok" || row.sidecarsAbsent !== true) {
+      fail(code, "database checkpoint evidence row drifted");
+    }
+  }
+  const body = Object.freeze({ schemaId: value.schemaId, rows: value.rows });
+  if (!HEX64.test(value.checkpointHash || "")
+    || value.checkpointHash !== sha256(domainCanonicalJson(body))) {
+    fail(code, "database checkpoint evidence hash is not reproducible");
+  }
+  return Object.freeze({ ...body, checkpointHash: value.checkpointHash });
+}
+
+function stoppedBoundary(settlement) {
+  return Object.freeze({
+    kind: "STOPPED",
+    ownerRecoveryHash: settlement.ownerRecovery.ownerRecoveryHash,
+    checkpointHash: settlement.checkpoint.checkpointHash,
+  });
+}
+
+function publicReceipt({
+  operation,
+  plan,
+  prestateArtifact,
+  outcome,
+  boundary,
+  autoRestore = null,
+}) {
   return Object.freeze({
     schemaId: M6_QUALIFICATION_LEGACY_WINDOW_RECEIPT_SCHEMA_ID,
     operation,
@@ -2146,68 +2847,344 @@ function publicReceipt({ operation, plan, prestateArtifact, outcome, autoRestore
       sourceCommit: plan.legacyRelease.sourceCommit,
     }),
     prestateSha256: prestateArtifact.sha256,
+    boundary: Object.freeze({ ...boundary }),
     listeners: Object.freeze(FIXED_PORTS.map((port) => Object.freeze({ port, state: outcome === "QUIESCED" ? "ABSENT" : "ACTIVE" }))),
     ...(autoRestore === null ? {} : { autoRestore }),
   });
+}
+
+function exactListenerIdentity(left, right) {
+  return domainCanonicalJson(left) === domainCanonicalJson(right);
+}
+
+function hasSealedListenerAddresses(actual, sealed) {
+  return actual?.port === sealed?.port
+    && domainCanonicalJson(actual.localAddresses) === domainCanonicalJson(sealed.localAddresses);
+}
+
+function readSealedListeners(prestate, code = "M6_QUALIFICATION_LEGACY_PRESTATE_INVALID") {
+  const bytes = readPlainBytes(prestate.processes.snapshot.path, code, "sealed process prestate", 4 * 1024 * 1024);
+  if (sha256(bytes) !== prestate.processes.snapshot.sha256) fail(code, "sealed process prestate hash drifted");
+  const value = parseJsonBytes(bytes, code, "sealed process prestate");
+  if (!bytes.equals(canonicalJsonBytes(value)) || !Array.isArray(value.listeners)) {
+    fail(code, "sealed process prestate content drifted");
+  }
+  return Object.freeze(value.listeners.map((row) => Object.freeze({ ...row })));
+}
+
+async function settleSealedLegacyRuntime({
+  modules,
+  trustedNode,
+  ownerLock,
+  launchers,
+  caller,
+  expectedListeners,
+  adapter,
+  publisher,
+  delayFn,
+  timeoutMs,
+  pollMs,
+}) {
+  const task = await adapter.inspectTask();
+  if (task?.exists === true && ["RUNNING", "QUEUED"].includes(task.state)) {
+    await adapter.endTask();
+    await waitFor({
+      probe: () => adapter.inspectTask(),
+      predicate: (value) => value?.exists !== true || ["READY", "DISABLED"].includes(value.state),
+      timeoutMs,
+      pollMs,
+      delayFn,
+      code: "M6_QUALIFICATION_LEGACY_TASK_STOP_TIMEOUT",
+      message: "fixed legacy task did not stop",
+    });
+  }
+  const residual = normalizeM6QualificationLegacyListeners(await adapter.inspectListeners({
+    modules,
+    trustedNode,
+    launchers,
+  }), {
+    modules, trustedNode, requireActive: false, allowPartial: true, launchers, caller,
+  });
+  if (residual.some((row) => !expectedListeners.some((expected) => exactListenerIdentity(row, expected)))) {
+    fail(
+      "M6_QUALIFICATION_LEGACY_LISTENER_DRIFT",
+      "a residual listener is not an exact subset of the sealed legacy processes",
+    );
+  }
+  for (const row of residual) await adapter.terminateVerifiedProcess(row);
+  await waitFor({
+    probe: () => adapter.inspectListeners({ modules, trustedNode, launchers }),
+    predicate: (value) => {
+      try {
+        normalizeM6QualificationLegacyListeners(value, {
+          modules,
+          trustedNode,
+          requireActive: false,
+          launchers,
+          caller,
+        });
+        return true;
+      } catch { return false; }
+    },
+    timeoutMs,
+    pollMs,
+    delayFn,
+    code: "M6_QUALIFICATION_LEGACY_LISTENER_STOP_TIMEOUT",
+    message: "fixed legacy listener ports did not become empty",
+  });
+  let ownerRecovery = null;
+  const guard = await adapter.acquireStoppedGuard({
+    beforeOwner: async () => {
+      ownerRecovery = normalizeOwnerRecoveryEvidence(
+        await adapter.archiveStaleOwnerLock({ expected: ownerLock, publisher }),
+        publisher,
+      );
+    },
+  });
+  try {
+    await guard.assertOwned();
+    if (ownerRecovery === null) {
+      fail("M6_QUALIFICATION_LEGACY_OWNER_LOCK_RECOVERY_INVALID", "guard acquired without owner recovery");
+    }
+    const checkpoint = normalizeCheckpointEvidence(await adapter.checkpointDatabases());
+    await adapter.assertWalSafe();
+    await guard.assertOwned();
+    return Object.freeze({ guard, ownerRecovery, checkpoint });
+  } catch (cause) {
+    try { await guard.release(); } catch {}
+    throw cause;
+  }
+}
+
+async function rollbackStartedLegacyLaunchers({
+  starts,
+  prestate,
+  adapter,
+  publisher,
+  delayFn,
+  timeoutMs,
+  pollMs,
+}) {
+  const code = "M6_QUALIFICATION_LEGACY_LAUNCH_ROLLBACK_INCOMPLETE";
+  const rows = normalizeM6QualificationLegacyListeners(await adapter.inspectListeners({
+    modules: prestate.modules,
+    trustedNode: prestate.trustedNode,
+    launchers: prestate.legacyRuntime.launchers,
+  }), {
+    modules: prestate.modules,
+    trustedNode: prestate.trustedNode,
+    requireActive: false,
+    allowPartial: true,
+    launchers: prestate.legacyRuntime.launchers,
+    caller: prestate.legacyRuntime.caller,
+  });
+  if (rows.some((row) => !starts.some((start) => (
+    start.key === row.launcherKey && start.parentPid === row.parentPid
+  )))) {
+    fail(code, "launcher rollback observed a process not created by this restore attempt");
+  }
+  for (const row of rows) await adapter.terminateVerifiedProcess(row);
+  await waitFor({
+    probe: () => adapter.inspectListeners({
+      modules: prestate.modules,
+      trustedNode: prestate.trustedNode,
+      launchers: prestate.legacyRuntime.launchers,
+    }),
+    predicate: (value) => {
+      try {
+        normalizeM6QualificationLegacyListeners(value, {
+          modules: prestate.modules,
+          trustedNode: prestate.trustedNode,
+          requireActive: false,
+          launchers: prestate.legacyRuntime.launchers,
+          caller: prestate.legacyRuntime.caller,
+        });
+        return true;
+      } catch { return false; }
+    },
+    timeoutMs,
+    pollMs,
+    delayFn,
+    code,
+    message: "started legacy listeners did not stop during rollback",
+  });
+  const staleOwner = await adapter.inspectOwnerLock({ allowAbsent: true });
+  let recovery = null;
+  const guard = await adapter.acquireStoppedGuard({
+    beforeOwner: async () => {
+      if (staleOwner !== null) {
+        recovery = normalizeOwnerRecoveryEvidence(
+          await adapter.archiveStaleOwnerLock({ expected: staleOwner, publisher }),
+          publisher,
+        );
+      }
+    },
+  });
+  try {
+    await guard.assertOwned();
+    normalizeCheckpointEvidence(await adapter.checkpointDatabases());
+    await adapter.assertWalSafe();
+    await guard.assertOwned();
+    await guard.release();
+    return Object.freeze({ stopped: true, ownerRecovery: recovery });
+  } catch (cause) {
+    try { await guard.release(); } catch {}
+    throw cause;
+  }
 }
 
 async function restoreFromPrestate({
   prestate,
   prestateArtifact,
   adapter,
+  publisher,
   delayFn,
   timeoutMs,
   pollMs,
   resourcesAlreadyRestored = false,
 }) {
-  await adapter.assertWalSafe();
-  const taskBefore = await adapter.inspectTask();
-  if (taskBefore?.exists === true && taskBefore.state === "RUNNING") {
-    fail("M6_QUALIFICATION_LEGACY_RESTORE_PRECONDITION_FAILED", "fixed legacy task is unexpectedly RUNNING");
-  }
-  normalizeM6QualificationLegacyListeners(await adapter.inspectListeners({
+  const expectedListeners = readSealedListeners(prestate);
+  const settlement = await settleSealedLegacyRuntime({
     modules: prestate.modules,
     trustedNode: prestate.trustedNode,
-  }), { modules: prestate.modules, trustedNode: prestate.trustedNode, requireActive: false });
-  if (!resourcesAlreadyRestored) {
-    const rows = await restoreLegacyResourceSet({ adapter, prestate });
-    if (rows.some((row) => row.status !== "fulfilled")) {
-      fail("M6_QUALIFICATION_LEGACY_RESTORE_FAILED", "one or more sealed legacy resources failed restore", { rows });
+    ownerLock: prestate.legacyRuntime.ownerLock,
+    launchers: prestate.legacyRuntime.launchers,
+    caller: prestate.legacyRuntime.caller,
+    expectedListeners,
+    adapter,
+    publisher,
+    delayFn,
+    timeoutMs,
+    pollMs,
+  });
+  let guardReleased = false;
+  try {
+    await settlement.guard.assertOwned();
+    if (!resourcesAlreadyRestored) {
+      const rows = await restoreLegacyResourceSet({ adapter, prestate });
+      if (rows.some((row) => row.status !== "fulfilled")) {
+        fail("M6_QUALIFICATION_LEGACY_RESTORE_FAILED", "one or more sealed legacy resources failed restore", { rows });
+      }
     }
+    await adapter.restoreCurrent(prestate.current.target);
+    if (!samePath(await adapter.inspectCurrent(), prestate.current.target)) {
+      fail("M6_QUALIFICATION_LEGACY_RESTORE_FAILED", "current junction did not restore exact legacy target");
+    }
+    await adapter.registerTaskXml(prestate.task.xml.path);
+    const taskReady = await adapter.inspectTask();
+    if (taskReady?.exists !== true || !["READY", "DISABLED"].includes(taskReady.state)
+      || sha256(Buffer.from(taskReady.xml || "", "utf8")) !== prestate.task.xml.sha256) {
+      fail("M6_QUALIFICATION_LEGACY_RESTORE_FAILED", "restored fixed task does not match sealed stopped XML");
+    }
+    await settlement.guard.assertOwned();
+    await settlement.guard.release();
+    guardReleased = true;
+  } catch (cause) {
+    if (!guardReleased) {
+      try { await settlement.guard.release(); } catch {}
+    }
+    throw cause;
   }
-  await adapter.restoreCurrent(prestate.current.target);
-  if (!samePath(await adapter.inspectCurrent(), prestate.current.target)) {
-    fail("M6_QUALIFICATION_LEGACY_RESTORE_FAILED", "current junction did not restore exact legacy target");
-  }
-  await adapter.registerTaskXml(prestate.task.xml.path);
-  const taskReady = await adapter.inspectTask();
-  if (taskReady?.exists !== true || taskReady.state === "RUNNING"
-    || sha256(Buffer.from(taskReady.xml || "", "utf8")) !== prestate.task.xml.sha256) {
-    fail("M6_QUALIFICATION_LEGACY_RESTORE_FAILED", "restored fixed task does not match sealed XML");
-  }
-  await adapter.runTask();
-  const result = await waitFor({
+  const starts = [];
+  try {
+    const controlStart = await adapter.runLauncher(
+    prestate.legacyRuntime.launchers.controlPlane,
+    prestate.legacyRuntime.caller,
+    );
+    starts.push(controlStart);
+    await waitFor({
+    probe: async () => {
+      try {
+        const rows = normalizeM6QualificationLegacyListeners(await adapter.inspectListeners({
+          modules: prestate.modules,
+          trustedNode: prestate.trustedNode,
+          launchers: prestate.legacyRuntime.launchers,
+        }), {
+          modules: prestate.modules,
+          trustedNode: prestate.trustedNode,
+          requireActive: false,
+          allowPartial: true,
+          launchers: prestate.legacyRuntime.launchers,
+          caller: prestate.legacyRuntime.caller,
+        });
+        const sealedControl = expectedListeners.find((row) => row.port === 17920);
+        return rows.length === 1 && rows[0].port === 17920
+          && rows[0].parentPid === controlStart.parentPid
+          && hasSealedListenerAddresses(rows[0], sealedControl) ? rows : null;
+      } catch { return null; }
+    },
+    predicate: (value) => value !== null,
+    timeoutMs,
+    pollMs,
+    delayFn,
+    code: "M6_QUALIFICATION_LEGACY_CONTROL_RESTORE_TIMEOUT",
+    message: "legacy control-plane launcher did not reproduce its sealed topology",
+    });
+    const registryStart = await adapter.runLauncher(
+    prestate.legacyRuntime.launchers.registry,
+    prestate.legacyRuntime.caller,
+    );
+    starts.push(registryStart);
+    const result = await waitFor({
     probe: async () => {
       try {
         const task = await adapter.inspectTask();
         const listeners = normalizeM6QualificationLegacyListeners(await adapter.inspectListeners({
           modules: prestate.modules,
           trustedNode: prestate.trustedNode,
-        }), { modules: prestate.modules, trustedNode: prestate.trustedNode, requireActive: true });
+          launchers: prestate.legacyRuntime.launchers,
+        }), {
+          modules: prestate.modules,
+          trustedNode: prestate.trustedNode,
+          requireActive: true,
+          launchers: prestate.legacyRuntime.launchers,
+          caller: prestate.legacyRuntime.caller,
+        });
+        if (listeners[0].parentPid !== controlStart.parentPid
+          || listeners[1].parentPid !== registryStart.parentPid
+          || !listeners.every((row) => hasSealedListenerAddresses(
+            row,
+            expectedListeners.find((sealed) => sealed.port === row.port),
+          ))) return null;
         const health = assertHealthIdentity(await adapter.inspectHealth(), prestate.legacyRelease,
           "M6_QUALIFICATION_LEGACY_RESTORE_FAILED");
         return { task, listeners, health };
       } catch { return null; }
     },
     predicate: (value) => value?.task?.exists === true
-      && ["READY", "RUNNING"].includes(value.task.state),
+      && ["READY", "DISABLED"].includes(value.task.state),
     timeoutMs,
     pollMs,
     delayFn,
     code: "M6_QUALIFICATION_LEGACY_RESTORE_TIMEOUT",
     message: "legacy task/listeners/health did not converge",
-  });
-  return Object.freeze({ result, prestateArtifact });
+    });
+    return Object.freeze({ result, prestateArtifact, settlement });
+  } catch (cause) {
+    if (starts.length > 0) {
+      try {
+        await rollbackStartedLegacyLaunchers({
+          starts,
+          prestate,
+          adapter,
+          publisher,
+          delayFn,
+          timeoutMs,
+          pollMs,
+        });
+      } catch (rollbackCause) {
+        fail(
+          "M6_QUALIFICATION_LEGACY_LAUNCH_ROLLBACK_INCOMPLETE",
+          "legacy launcher restore failed and its started processes did not settle safely",
+          {
+            causeCode: cause?.code || "M6_QUALIFICATION_LEGACY_RESTORE_FAILED",
+            rollbackCode: rollbackCause?.code || "M6_QUALIFICATION_LEGACY_LAUNCH_ROLLBACK_FAILED",
+          },
+        );
+      }
+    }
+    throw cause;
+  }
 }
 
 async function settleRelaySteps(steps) {
@@ -2275,47 +3252,52 @@ export async function executeM6QualificationLegacyQuiesce({
     taskInspector: () => adapter.inspectTask(),
     listenerInspector: (value) => adapter.inspectListeners(value),
     healthInspector: () => adapter.inspectHealth(),
+    ownerLockInspector: (value) => adapter.inspectOwnerLock(value),
+    launcherInspector: () => adapter.inspectLaunchers(),
     tcbAclController,
   });
   const sealedPublisher = publisher || createSealedPublisher({ runtimeRoot: plan.runtimeRoot, tcbAclController });
-  const captured = await captureSealedPrestate(plan, {
+  const rollbackBoundary = Object.freeze({
+    kind: "ONLINE_ROLLBACK",
+    ownerRecoveryHash: sha256("xw.m6-qualification.online-owner.v1"),
+    checkpointHash: sha256("xw.m6-qualification.online-checkpoint.v1"),
+  });
+  const rollbackCapture = await captureSealedPrestate(plan, {
     databaseSnapshotter,
     publisher: sealedPublisher,
     tcbAclController,
+    boundary: rollbackBoundary,
+    publishReference: false,
   });
   let mutationStarted = false;
+  let settlement = null;
+  let captured = null;
+  let guardReleased = false;
   try {
     mutationStarted = true;
-    await adapter.endTask();
-    await waitFor({
-      probe: () => adapter.inspectTask(),
-      predicate: (value) => value?.exists === true && ["READY", "DISABLED"].includes(value.state),
+    settlement = await settleSealedLegacyRuntime({
+      modules: plan.modules,
+      trustedNode: plan.trustedNode,
+      ownerLock: plan.legacyRuntime.ownerLock,
+      launchers: plan.legacyRuntime.launchers,
+      caller: plan.legacyRuntime.caller,
+      expectedListeners: plan.listeners,
+      adapter,
+      publisher: sealedPublisher,
+      delayFn,
       timeoutMs,
       pollMs,
-      delayFn,
-      code: "M6_QUALIFICATION_LEGACY_TASK_STOP_TIMEOUT",
-      message: "fixed legacy task did not stop",
     });
-    for (const row of plan.listeners) await adapter.terminateVerifiedProcess(row);
-    await waitFor({
-      probe: () => adapter.inspectListeners({ modules: plan.modules, trustedNode: plan.trustedNode }),
-      predicate: (value) => {
-        try {
-          normalizeM6QualificationLegacyListeners(value, {
-            modules: plan.modules,
-            trustedNode: plan.trustedNode,
-            requireActive: false,
-          });
-          return true;
-        } catch { return false; }
-      },
-      timeoutMs,
-      pollMs,
-      delayFn,
-      code: "M6_QUALIFICATION_LEGACY_LISTENER_STOP_TIMEOUT",
-      message: "fixed legacy listener ports did not become empty",
+    await settlement.guard.assertOwned();
+    captured = await captureSealedPrestate(plan, {
+      databaseSnapshotter,
+      publisher: sealedPublisher,
+      tcbAclController,
+      boundary: stoppedBoundary(settlement),
+      publishReference: true,
     });
     await adapter.assertWalSafe();
+    await settlement.guard.assertOwned();
     if (!samePath(await adapter.inspectCurrent(), plan.legacyRelease.root)) {
       fail("M6_QUALIFICATION_LEGACY_CURRENT_DRIFT", "current changed before target activation");
     }
@@ -2323,24 +3305,36 @@ export async function executeM6QualificationLegacyQuiesce({
     if (!samePath(await adapter.inspectCurrent(), plan.targetRelease.root)) {
       fail("M6_QUALIFICATION_LEGACY_TARGET_ACTIVATION_FAILED", "current did not activate the new formal qualification release");
     }
+    await settlement.guard.assertOwned();
+    await settlement.guard.release();
+    guardReleased = true;
     return publicReceipt({
       operation: "quiesce",
       plan,
       prestateArtifact: captured.prestateArtifact,
       outcome: "QUIESCED",
+      boundary: captured.prestate.boundary,
     });
   } catch (cause) {
     if (!mutationStarted) throw cause;
+    if (settlement !== null && !guardReleased) {
+      try { await settlement.guard.release(); } catch {}
+      guardReleased = true;
+    }
     let restored = false;
     let restoreCode = null;
+    let restoreResult = null;
+    const recoveryCapture = captured || rollbackCapture;
     try {
-      await restoreFromPrestate({
-        prestate: captured.prestate,
-        prestateArtifact: captured.prestateArtifact,
+      restoreResult = await restoreFromPrestate({
+        prestate: recoveryCapture.prestate,
+        prestateArtifact: recoveryCapture.prestateArtifact,
         adapter,
+        publisher: sealedPublisher,
         delayFn,
         timeoutMs,
         pollMs,
+        resourcesAlreadyRestored: true,
       });
       restored = true;
     } catch (restoreError) { restoreCode = restoreError?.code || "M6_QUALIFICATION_LEGACY_AUTO_RESTORE_FAILED"; }
@@ -2354,8 +3348,11 @@ export async function executeM6QualificationLegacyQuiesce({
       receipt: publicReceipt({
         operation: "quiesce",
         plan,
-        prestateArtifact: captured.prestateArtifact,
+        prestateArtifact: recoveryCapture.prestateArtifact,
         outcome: restored ? "RESTORED" : "RESTORE_INCOMPLETE",
+        boundary: restored
+          ? stoppedBoundary(restoreResult.settlement)
+          : recoveryCapture.prestate.boundary,
         autoRestore: restored,
       }),
     });
@@ -2424,10 +3421,25 @@ export async function executeM6QualificationLegacyRestore({
     targetRelease,
     modules: loaded.prestate.modules,
   });
-  await restoreFromPrestate({
+  for (const target of LEGACY_LAUNCHER_TARGETS) {
+    verifyTcb(
+      tcbAclController,
+      runtime,
+      loaded.prestate.legacyRuntime.launchers[target.key].path,
+      false,
+      "M6_QUALIFICATION_LEGACY_PRESTATE_INVALID",
+    );
+  }
+  const actualCaller = await adapter.inspectCaller();
+  if (domainCanonicalJson(actualCaller) !== domainCanonicalJson(loaded.prestate.legacyRuntime.caller)) {
+    fail("M6_QUALIFICATION_LEGACY_CALLER_INVALID", "restore caller differs from sealed current-user authority");
+  }
+  const sealedPublisher = createSealedPublisher({ runtimeRoot: runtime, tcbAclController });
+  const restored = await restoreFromPrestate({
     prestate: loaded.prestate,
     prestateArtifact: loaded.reference.prestate,
     adapter,
+    publisher: sealedPublisher,
     delayFn,
     timeoutMs,
     pollMs,
@@ -2437,6 +3449,7 @@ export async function executeM6QualificationLegacyRestore({
     plan: planFromPrestate(loaded.prestate, targetRelease),
     prestateArtifact: loaded.reference.prestate,
     outcome: "RESTORED",
+    boundary: stoppedBoundary(restored.settlement),
   });
 }
 
@@ -2563,9 +3576,10 @@ async function assertM6QualificationFinalRelayPrestateUnchanged({ adapter, relay
 }
 
 function assertFinalRelayAdapters(adapter, cutoverAdapter) {
-  for (const name of ["assertWalSafe", "cleanupFinalTasks", "inspectCurrent", "inspectListeners",
+  for (const name of ["acquireStoppedGuard", "archiveStaleOwnerLock", "assertWalSafe",
+    "checkpointDatabases", "cleanupFinalTasks", "inspectCaller", "inspectCurrent", "inspectLaunchers", "inspectListeners",
     "inspectFixedTask", "inspectQualificationTask", "inspectTask", "registerFixedTaskXml",
-    "registerTaskXml", "restoreCurrent", "restoreFile", "restoreRelaySlot", "runTask",
+    "registerTaskXml", "restoreCurrent", "restoreFile", "restoreRelaySlot", "runLauncher",
     "terminateVerifiedProcess"]) {
     if (typeof adapter?.[name] !== "function") {
       fail("M6_QUALIFICATION_FINAL_RELAY_DEPENDENCY_INVALID", `legacy relay adapter is missing ${name}`);
@@ -2768,6 +3782,7 @@ export async function executeM6QualificationFinalRelay({
     expectedSourceCommit,
     tcbAclController,
   });
+  const sealedPublisher = createSealedPublisher({ runtimeRoot: runtime, tcbAclController });
   if (loaded.prestate.targetRelease.operatorSha256 !== targetRelease.operator.sha256) {
     fail("M6_QUALIFICATION_FINAL_RELAY_PRESTATE_INVALID", "sealed relay operator identity drifted");
   }
@@ -3038,6 +4053,7 @@ export async function executeM6QualificationFinalRelay({
             prestate: loaded.prestate,
             prestateArtifact: loaded.reference.prestate,
             adapter,
+            publisher: sealedPublisher,
             delayFn,
             timeoutMs,
             pollMs,

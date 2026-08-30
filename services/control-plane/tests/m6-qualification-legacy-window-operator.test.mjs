@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -10,17 +12,21 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
 import {
+  archiveStaleLegacyOwnerLock,
   executeM6QualificationFinalRelay,
   executeM6QualificationLegacyQuiesce,
   executeM6QualificationLegacyRestore,
+  checkpointM6QualificationLegacyDatabases,
   M6_QUALIFICATION_LEGACY_WINDOW_OPERATOR_RELEASE_PATH,
   M6_QUALIFICATION_FINAL_RELAY_RECEIPT_SCHEMA_ID,
   normalizeM6QualificationLegacyListeners,
   parseM6QualificationLegacyWindowCommand,
   planM6QualificationLegacyWindow,
+  validateM6QualificationLegacyPrestate,
 } from "../ops/m6-qualification-legacy-window-operator.mjs";
 import { canonicalJson as domainCanonicalJson } from "../control-plane/lib/canonical.mjs";
 import { GATE_F_CUTOVER_OPERATOR_RELEASE_PATH } from "../ops/gate-f-cutover-operator.mjs";
@@ -37,6 +43,10 @@ const REGISTRY_MODULE = "services/orchestrator/registry.mjs";
 const STATE_STORE_MODULE = "services/control-plane/control-plane/lib/state-store.mjs";
 const REGISTRY_DATABASE_FILENAME = ["registry", "db"].join(".");
 const COMMAND_LINE_SECRET = "command-line-secret-must-never-enter-receipt";
+const POWERSHELL_EXECUTABLE = join(
+  process.env.SystemRoot || process.env.WINDIR || "C:\\Windows",
+  "System32", "WindowsPowerShell", "v1.0", "powershell.exe",
+);
 const LEGACY_QUALIFICATION_BINDING = Object.freeze({
   schemaId: "xw.runtime.m6-c1-qualification-bootstrap.v1",
   gateId: "m6-legacy-gate",
@@ -144,6 +154,19 @@ function fixture(t) {
     [["secrets", "xhs-evidence-digest-keyring.v1.json"], canonical({ key: "private-digest-key" })],
     [["config", "m6-c1-qualification-bootstrap.v1.json"], canonical(LEGACY_QUALIFICATION_BINDING)],
   ]) write(join(runtimeRoot, ...path), bytes);
+  const controlLauncherPath = join(runtimeRoot, "launch-control-plane.simple.ps1");
+  write(controlLauncherPath, "$ErrorActionPreference = 'Stop'\n");
+  const registryLauncherPath = join(runtimeRoot, "launch-orchestrator.current-user.ps1");
+  write(registryLauncherPath, `$legacyOpaque = "${COMMAND_LINE_SECRET}"\n`);
+  const ownerLockPath = join(runtimeRoot, "state", "control-plane", ".m6-c1-runtime-owner.lock");
+  write(ownerLockPath, canonical({
+    schemaId: "xw.m6-c1-runtime-owner-lock.v1",
+    ownerKind: "CONTROL_PLANE_M6_C1",
+    ownerNonce: "fixture-owner-nonce-0001",
+    pid: 4200,
+    acquiredAt: "2026-08-30T01:01:01.000Z",
+    secretMaterialPresent: false,
+  }));
   const xml = taskXml(runtimeRoot);
   const modules = {
     controlPlane: {
@@ -156,9 +179,23 @@ function fixture(t) {
     },
   };
   const trustedNode = { path: TRUSTED_NODE_EXECUTABLE, sha256: "9".repeat(64), version: "24.11.1" };
+  const caller = { sidSha256: "8".repeat(64), sessionId: 3 };
+  const launchers = {
+    controlPlane: {
+      key: "controlPlane",
+      path: controlLauncherPath,
+      sha256: sha256(readFileSync(controlLauncherPath)),
+    },
+    registry: {
+      key: "registry",
+      path: registryLauncherPath,
+      sha256: sha256(readFileSync(registryLauncherPath)),
+    },
+  };
   const activeListeners = () => ({
-    host: "127.0.0.1",
+    scope: "ALL_INTERFACES",
     ports: [17920, 17930],
+    caller,
     listeners: [
       {
         port: 17920,
@@ -166,15 +203,31 @@ function fixture(t) {
         parentPid: 4100,
         createdAt: "20260830010101.000000+000",
         executablePath: TRUSTED_NODE_EXECUTABLE,
+        localAddresses: ["127.0.0.1"],
         modulePath: modules.controlPlane.path,
+        sessionId: caller.sessionId,
+        sidSha256: caller.sidSha256,
+        parentCreatedAt: "20260830010058.000000+000",
+        parentExecutablePath: POWERSHELL_EXECUTABLE,
+        parentSessionId: caller.sessionId,
+        parentSidSha256: caller.sidSha256,
+        launcherPath: launchers.controlPlane.path,
       },
       {
         port: 17930,
         pid: 4300,
-        parentPid: 4100,
+        parentPid: 4150,
         createdAt: "20260830010102.000000+000",
         executablePath: TRUSTED_NODE_EXECUTABLE,
+        localAddresses: ["0.0.0.0"],
         modulePath: modules.registry.path,
+        sessionId: caller.sessionId,
+        sidSha256: caller.sidSha256,
+        parentCreatedAt: "20260830010059.000000+000",
+        parentExecutablePath: POWERSHELL_EXECUTABLE,
+        parentSessionId: caller.sessionId,
+        parentSidSha256: caller.sidSha256,
+        launcherPath: launchers.registry.path,
       },
     ],
   });
@@ -201,6 +254,9 @@ function fixture(t) {
     trustedNode,
     activeListeners,
     health,
+    caller,
+    launchers,
+    ownerLock: { path: ownerLockPath, pid: 4200, sha256: sha256(readFileSync(ownerLockPath)) },
     options,
   };
 }
@@ -211,11 +267,15 @@ function createAdapter(fixtureValue, {
 } = {}) {
   const calls = [];
   let active = true;
+  let residualPorts = new Set([17920, 17930]);
   let listenerModules = fixtureValue.modules;
   let task = { exists: true, state: "RUNNING", xml: fixtureValue.xml };
   let current = fixtureValue.legacyRoot;
   let terminated = 0;
   let targetSwitches = 0;
+  let ownerArchiveCount = 0;
+  const startedParents = new Map();
+  const startedNodePids = new Map();
   return {
     calls,
     commandLine: `node server.mjs --token ${COMMAND_LINE_SECRET}`,
@@ -224,11 +284,30 @@ function createAdapter(fixtureValue, {
     set current(value) { current = value; },
     activateRelay(modules) {
       active = true;
+      residualPorts = new Set([17920, 17930]);
       listenerModules = modules;
+    },
+    setResidualPorts(ports) {
+      residualPorts = new Set(ports);
+      active = residualPorts.size > 0;
     },
     inspectTask() {
       calls.push(["inspect-task", task.state]);
       return structuredClone(task);
+    },
+    inspectOwnerLock({ expectedPid = null, allowAbsent = false } = {}) {
+      calls.push(["inspect-owner-lock"]);
+      if (allowAbsent && expectedPid === null && !active) return null;
+      const controlPid = expectedPid ?? (startedNodePids.get(17920) || 4200);
+      return { ...structuredClone(fixtureValue.ownerLock), pid: controlPid };
+    },
+    inspectLaunchers() {
+      calls.push(["inspect-launchers"]);
+      return structuredClone(fixtureValue.launchers);
+    },
+    inspectCaller() {
+      calls.push(["inspect-caller"]);
+      return structuredClone(fixtureValue.caller);
     },
     inspectFixedTask(name) {
       calls.push(["inspect-fixed-task", name]);
@@ -245,14 +324,27 @@ function createAdapter(fixtureValue, {
       return active
         ? {
           ...fixtureValue.activeListeners(),
-          listeners: fixtureValue.activeListeners().listeners.map((row) => ({
-            ...row,
-            modulePath: row.port === 17920
-              ? listenerModules.controlPlane.path
-              : listenerModules.registry.path,
-          })),
+          listeners: fixtureValue.activeListeners().listeners.map((row) => {
+            const startedParent = startedParents.get(row.port);
+            return {
+              ...row,
+              ...(startedParent ? {
+                pid: startedNodePids.get(row.port),
+                parentPid: startedParent,
+                createdAt: row.port === 17920
+                  ? "20260830020101.000000+000" : "20260830020102.000000+000",
+                parentCreatedAt: row.port === 17920
+                  ? "20260830020058.000000+000" : "20260830020059.000000+000",
+              } : {}),
+              modulePath: row.port === 17920
+                ? listenerModules.controlPlane.path
+                : listenerModules.registry.path,
+            };
+          }).filter((row) => residualPorts.has(row.port)),
         }
-        : { host: "127.0.0.1", ports: [17920, 17930], listeners: [] };
+        : {
+          scope: "ALL_INTERFACES", ports: [17920, 17930], caller: fixtureValue.caller, listeners: [],
+        };
     },
     inspectHealth() {
       calls.push(["inspect-health"]);
@@ -265,13 +357,62 @@ function createAdapter(fixtureValue, {
     terminateVerifiedProcess(row) {
       calls.push(["terminate", row.port, row.pid]);
       terminated += 1;
-      if (terminated === 2) {
-        active = false;
-      }
+      residualPorts.delete(row.port);
+      active = residualPorts.size > 0;
       return "terminated";
     },
     assertWalSafe() {
       calls.push(["wal-safe"]);
+    },
+    archiveStaleOwnerLock({ expected, publisher }) {
+      calls.push(["archive-owner-lock"]);
+      ownerArchiveCount += 1;
+      return {
+        status: ownerArchiveCount === 1 ? "ARCHIVED" : "REPLAYED",
+        artifact: {
+          path: join(
+            publisher.base,
+            "stale-owner-locks",
+            expected.sha256,
+            "m6-c1-runtime-owner-lock.v1.json",
+          ),
+          sha256: expected.sha256,
+        },
+      };
+    },
+    checkpointDatabases() {
+      calls.push(["checkpoint-databases"]);
+      const body = {
+        schemaId: "xw.runtime.m6-qualification-legacy-db-checkpoint.v1",
+        rows: ["controlDb", "registryDb"].map((key, index) => ({
+          key,
+          busy: 0,
+          log: 0,
+          checkpointed: 0,
+          databaseSha256: String(index + 1).repeat(64),
+          quickCheck: "ok",
+          sidecarsAbsent: true,
+        })),
+      };
+      return { ...body, checkpointHash: sha256(domainCanonicalJson(body)) };
+    },
+    async acquireStoppedGuard({ beforeOwner }) {
+      calls.push(["guard-acquire"]);
+      await beforeOwner();
+      calls.push(["guard-owner"]);
+      let held = true;
+      return {
+        assertOwned() {
+          calls.push(["guard-assert"]);
+          assert.equal(held, true);
+          return true;
+        },
+        async release() {
+          calls.push(["guard-release"]);
+          assert.equal(held, true);
+          held = false;
+        },
+      };
     },
     inspectCurrent() {
       calls.push(["inspect-current", current]);
@@ -298,15 +439,24 @@ function createAdapter(fixtureValue, {
       calls.push(["register-task", path]);
       task = { exists: true, state: "READY", xml: readFileSync(path, "utf8") };
     },
-    runTask() {
-      calls.push(["run-task"]);
-      task = { ...task, state: detachedAfterStart ? "READY" : "RUNNING" };
+    runLauncher(ref) {
+      calls.push(["run-launcher", ref.key, ref.sha256]);
+      task = { ...task, state: "READY" };
+      listenerModules = fixtureValue.modules;
       terminated = 0;
+      const port = ref.key === "controlPlane" ? 17920 : 17930;
+      const parentPid = ref.key === "controlPlane" ? 5100 : 5200;
+      const nodePid = ref.key === "controlPlane" ? 6200 : 6300;
+      startedParents.set(port, parentPid);
+      startedNodePids.set(port, nodePid);
+      residualPorts.add(port);
       active = true;
+      return { key: ref.key, parentPid, started: true };
     },
     cleanupFinalTasks() {
       calls.push(["cleanup-final-tasks"]);
       task = { exists: false, state: "ABSENT", xml: null };
+      residualPorts = new Set();
       active = false;
     },
     restoreRelaySlot(ref) {
@@ -398,9 +548,136 @@ test("listener oracle rejects missing, shared, foreign executable, or wrong-modu
     listeners: base.listeners.map((row, index) => index === 1
       ? { ...row, modulePath: value.modules.controlPlane.path } : row),
   }), /LISTENER_INVALID/u);
+  assert.throws(() => normalizeM6QualificationLegacyListeners({
+    ...base,
+    listeners: base.listeners.map((row) => ({ ...row, parentPid: 4100 })),
+  }, {
+    modules: value.modules,
+    trustedNode: value.trustedNode,
+    requireActive: true,
+    launchers: value.launchers,
+    caller: value.caller,
+  }), /LISTENER_INVALID/u);
 });
 
-test("quiesce seals content-addressed prestate before stopping only the verified legacy listeners", async (t) => {
+test("listener oracle seals all-interface addresses and both child and parent current-user identities", (t) => {
+  const value = fixture(t);
+  const base = value.activeListeners();
+  const normalize = (receipt) => normalizeM6QualificationLegacyListeners(receipt, {
+    modules: value.modules,
+    trustedNode: value.trustedNode,
+    requireActive: true,
+    launchers: value.launchers,
+    caller: value.caller,
+  });
+  assert.deepEqual(normalize(base).map((row) => row.localAddresses), [["127.0.0.1"], ["0.0.0.0"]]);
+  for (const patch of [
+    { sessionId: value.caller.sessionId + 1 },
+    { sidSha256: "7".repeat(64) },
+    { localAddresses: ["not-an-ip"] },
+    { localAddresses: ["127.0.0.1", "0.0.0.0"] },
+  ]) {
+    assert.throws(() => normalize({
+      ...base,
+      listeners: base.listeners.map((row, index) => index === 0 ? { ...row, ...patch } : row),
+    }), /LISTENER_INVALID/u);
+  }
+});
+
+test("fixed database checkpoint folds crash-left WALs and removes every sidecar", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "xw-m6-legacy-wal-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const runtimeRoot = join(root, "runtime");
+  const targets = [
+    join(runtimeRoot, "state", "control-plane", "control.db"),
+    join(runtimeRoot, "state", "orchestrator", "registry.db"),
+  ];
+  const crashWriter = `
+    const { DatabaseSync } = require("node:sqlite");
+    const database = new DatabaseSync(process.argv[1]);
+    database.exec("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE items(value TEXT); INSERT INTO items VALUES ('sealed');");
+    process.kill(process.pid, "SIGKILL");
+  `;
+  for (const path of targets) {
+    mkdirSync(dirname(path), { recursive: true });
+    const child = spawnSync(process.execPath, ["-e", crashWriter, path], {
+      encoding: "utf8",
+      windowsHide: true,
+    });
+    assert.notEqual(child.status, 0);
+    assert.equal(existsSync(`${path}-wal`), true);
+  }
+  checkpointM6QualificationLegacyDatabases({ runtimeRoot, tcbAclController: noopTcb });
+  for (const path of targets) {
+    assert.equal(existsSync(`${path}-wal`), false);
+    assert.equal(existsSync(`${path}-shm`), false);
+    const database = new DatabaseSync(path, { readOnly: true, allowExtension: false });
+    assert.equal(database.prepare("SELECT value FROM items").get().value, "sealed");
+    database.close();
+  }
+});
+
+test("stale owner lock is atomically quarantined and only exact archive replay is accepted", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "xw-m6-owner-quarantine-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const runtimeRoot = join(root, "runtime");
+  const path = join(runtimeRoot, "state", "control-plane", ".m6-c1-runtime-owner.lock");
+  const bytes = Buffer.from(canonical({
+    schemaId: "xw.m6-c1-runtime-owner-lock.v1",
+    ownerKind: "CONTROL_PLANE_M6_C1",
+    ownerNonce: "dead-owner-fixture-0001",
+    pid: 99_999_999,
+    acquiredAt: "2026-08-30T01:01:01.000Z",
+    secretMaterialPresent: false,
+  }), "utf8");
+  write(path, bytes);
+  const expected = { path, pid: 99_999_999, sha256: sha256(bytes) };
+  const publisher = { base: join(runtimeRoot, "qualification-legacy-windows") };
+  const archived = archiveStaleLegacyOwnerLock({
+    runtimeRoot, expected, publisher, tcbAclController: noopTcb,
+  });
+  assert.equal(archived.status, "ARCHIVED");
+  assert.equal(existsSync(path), false);
+  assert.deepEqual(readFileSync(archived.artifact.path), bytes);
+  const replay = archiveStaleLegacyOwnerLock({
+    runtimeRoot, expected, publisher, tcbAclController: noopTcb,
+  });
+  assert.equal(replay.status, "REPLAYED");
+  write(path, bytes);
+  assert.throws(() => archiveStaleLegacyOwnerLock({
+    runtimeRoot, expected, publisher, tcbAclController: noopTcb,
+  }), /must never coexist/u);
+  rmSync(path);
+  writeFileSync(archived.artifact.path, Buffer.from("drift", "utf8"));
+  assert.throws(() => archiveStaleLegacyOwnerLock({
+    runtimeRoot, expected, publisher, tcbAclController: noopTcb,
+  }), /hash changed/u);
+});
+
+test("live owner PID can never be quarantined", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "xw-m6-owner-live-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const runtimeRoot = join(root, "runtime");
+  const path = join(runtimeRoot, "state", "control-plane", ".m6-c1-runtime-owner.lock");
+  const bytes = Buffer.from(canonical({
+    schemaId: "xw.m6-c1-runtime-owner-lock.v1",
+    ownerKind: "CONTROL_PLANE_M6_C1",
+    ownerNonce: "live-owner-fixture-0001",
+    pid: process.pid,
+    acquiredAt: "2026-08-30T01:01:01.000Z",
+    secretMaterialPresent: false,
+  }), "utf8");
+  write(path, bytes);
+  assert.throws(() => archiveStaleLegacyOwnerLock({
+    runtimeRoot,
+    expected: { path, pid: process.pid, sha256: sha256(bytes) },
+    publisher: { base: join(runtimeRoot, "qualification-legacy-windows") },
+    tcbAclController: noopTcb,
+  }), /PID is still alive/u);
+  assert.equal(existsSync(path), true);
+});
+
+test("quiesce seals a stopped content-addressed prestate for only the verified legacy listeners", async (t) => {
   const value = fixture(t);
   const adapter = createAdapter(value);
   const receipt = await executeM6QualificationLegacyQuiesce({
@@ -418,6 +695,11 @@ test("quiesce seals content-addressed prestate before stopping only the verified
     adapter.calls.filter((row) => row[0] === "terminate").map((row) => row.slice(1)),
     [[17920, 4200], [17930, 4300]],
   );
+  const callNames = adapter.calls.map((row) => row[0]);
+  assert.ok(callNames.lastIndexOf("terminate") < callNames.indexOf("archive-owner-lock"));
+  assert.ok(callNames.indexOf("archive-owner-lock") < callNames.indexOf("checkpoint-databases"));
+  assert.ok(callNames.indexOf("checkpoint-databases") < callNames.indexOf("wal-safe"));
+  assert.ok(callNames.indexOf("wal-safe") < callNames.indexOf("switch-current"));
   assert.match(receipt.prestateSha256, /^[0-9a-f]{64}$/u);
   assert.doesNotMatch(JSON.stringify(receipt), /command-line-secret|private-token|private-digest-key/u);
   const referencePath = join(
@@ -426,13 +708,16 @@ test("quiesce seals content-addressed prestate before stopping only the verified
     "by-release",
     TARGET_ID,
     TARGET_COMMIT,
-    "window-reference.v1.json",
+    "window-reference.v2.json",
   );
   const reference = JSON.parse(readFileSync(referencePath, "utf8"));
   const prestateRaw = readFileSync(reference.prestate.path, "utf8");
   assert.equal(sha256(prestateRaw), receipt.prestateSha256);
   assert.doesNotMatch(prestateRaw, /command-line-secret|private-token|private-digest-key/u);
   const prestate = JSON.parse(prestateRaw);
+  assert.deepEqual(Object.keys(prestate.legacyRuntime).sort(), ["caller", "launchers", "ownerLock"]);
+  assert.equal(prestate.legacyRuntime.ownerLock.pid, 4200);
+  assert.equal(prestate.legacyRuntime.launchers.registry.sha256, value.launchers.registry.sha256);
   assert.equal(prestate.resources.qualificationBinding.present, true);
   assert.equal(
     prestate.resources.qualificationBinding.targetPath,
@@ -440,6 +725,122 @@ test("quiesce seals content-addressed prestate before stopping only the verified
   );
   const processRaw = readFileSync(prestate.processes.snapshot.path, "utf8");
   assert.doesNotMatch(processRaw, /command-line-secret/u);
+});
+
+test("final stopped snapshots do not recreate SQLite WAL or SHM sidecars", async (t) => {
+  const value = fixture(t);
+  const adapter = createAdapter(value);
+  const paths = [
+    join(value.runtimeRoot, "state", "control-plane", "control.db"),
+    join(value.runtimeRoot, "state", "orchestrator", "registry.db"),
+  ];
+  for (const path of paths) {
+    rmSync(path);
+    const database = new DatabaseSync(path);
+    database.exec("PRAGMA journal_mode=WAL; CREATE TABLE items(value TEXT); INSERT INTO items VALUES ('sealed');");
+    database.close();
+  }
+  adapter.checkpointDatabases = () => {
+    adapter.calls.push(["checkpoint-databases"]);
+    return checkpointM6QualificationLegacyDatabases({
+      runtimeRoot: value.runtimeRoot,
+      tcbAclController: noopTcb,
+    });
+  };
+  adapter.assertWalSafe = () => {
+    adapter.calls.push(["wal-safe"]);
+    for (const path of paths) {
+      assert.equal(existsSync(`${path}-wal`), false);
+      assert.equal(existsSync(`${path}-shm`), false);
+    }
+  };
+  const receipt = await executeM6QualificationLegacyQuiesce({
+    ...value.options,
+    adapter,
+    timeoutMs: 100,
+    pollMs: 0,
+    delayFn: async () => {},
+  });
+  assert.equal(receipt.outcome, "QUIESCED");
+  for (const path of paths) {
+    assert.equal(existsSync(`${path}-wal`), false);
+    assert.equal(existsSync(`${path}-shm`), false);
+  }
+});
+
+test("same-module restarted PID is rejected before any termination, archive, or checkpoint", async (t) => {
+  const value = fixture(t);
+  const adapter = createAdapter(value);
+  const inspect = adapter.inspectListeners.bind(adapter);
+  let inspections = 0;
+  adapter.inspectListeners = (...args) => {
+    const result = inspect(...args);
+    inspections += 1;
+    if (inspections < 2 || result.listeners.length === 0) return result;
+    return {
+      ...result,
+      listeners: result.listeners.map((row) => row.port === 17920
+        ? { ...row, pid: 9200, createdAt: "20260830030101.000000+000" }
+        : row),
+    };
+  };
+  await assert.rejects(executeM6QualificationLegacyQuiesce({
+    ...value.options,
+    adapter,
+    databaseSnapshotter: async (path) => Buffer.from(`consistent-backup:${path}`, "utf8"),
+    timeoutMs: 20,
+    pollMs: 0,
+    delayFn: async () => {},
+  }), (error) => {
+    assert.equal(error.causeCode, "M6_QUALIFICATION_LEGACY_LISTENER_DRIFT");
+    return true;
+  });
+  assert.equal(adapter.calls.some((row) => row[0] === "terminate"), false);
+  assert.equal(adapter.calls.some((row) => row[0] === "archive-owner-lock"), false);
+  assert.equal(adapter.calls.some((row) => row[0] === "checkpoint-databases"), false);
+});
+
+test("two-port guard acquisition failure prevents owner archive and database checkpoint", async (t) => {
+  const value = fixture(t);
+  const adapter = createAdapter(value);
+  adapter.acquireStoppedGuard = async () => {
+    adapter.calls.push(["guard-acquire-failed"]);
+    throw Object.assign(new Error("fixture guard conflict"), { code: "M6_C1_RUNTIME_NOT_STOPPED" });
+  };
+  await assert.rejects(executeM6QualificationLegacyQuiesce({
+    ...value.options,
+    adapter,
+    databaseSnapshotter: async (path) => Buffer.from(`consistent-backup:${path}`, "utf8"),
+    timeoutMs: 20,
+    pollMs: 0,
+    delayFn: async () => {},
+  }), (error) => {
+    assert.equal(error.causeCode, "M6_C1_RUNTIME_NOT_STOPPED");
+    return true;
+  });
+  assert.equal(adapter.calls.some((row) => row[0] === "archive-owner-lock"), false);
+  assert.equal(adapter.calls.some((row) => row[0] === "checkpoint-databases"), false);
+});
+
+test("launcher byte drift fails preflight before stopping the legacy runtime", async (t) => {
+  const value = fixture(t);
+  const adapter = createAdapter(value);
+  const inspect = adapter.inspectLaunchers.bind(adapter);
+  adapter.inspectLaunchers = () => {
+    const refs = inspect();
+    writeFileSync(refs.controlPlane.path, "drift\n");
+    return refs;
+  };
+  await assert.rejects(executeM6QualificationLegacyQuiesce({
+    ...value.options,
+    adapter,
+    databaseSnapshotter: async (path) => Buffer.from(`consistent-backup:${path}`, "utf8"),
+    timeoutMs: 20,
+    pollMs: 0,
+    delayFn: async () => {},
+  }), /M6_QUALIFICATION_LEGACY_PREFLIGHT_INVALID/u);
+  assert.equal(adapter.calls.some((row) => row[0] === "end-task"), false);
+  assert.equal(adapter.calls.some((row) => row[0] === "terminate"), false);
 });
 
 test("restore uses only sealed prestate, restores fixed resources/current/task, then proves health", async (t) => {
@@ -466,8 +867,103 @@ test("restore uses only sealed prestate, restores fixed resources/current/task, 
   assert.equal(adapter.active, true);
   assert.equal(adapter.calls.filter((row) => row[0] === "restore-file").length, 5);
   assert.equal(adapter.calls.some((row) => row[0] === "register-task"), true);
-  assert.equal(adapter.calls.some((row) => row[0] === "run-task"), true);
+  assert.equal(adapter.calls.some((row) => row[0] === "run-task"), false);
+  const runControlIndex = adapter.calls.findIndex((row) => row[0] === "run-launcher" && row[1] === "controlPlane");
+  const runRegistryIndex = adapter.calls.findIndex((row) => row[0] === "run-launcher" && row[1] === "registry");
+  assert.ok(runControlIndex > -1 && runRegistryIndex > runControlIndex);
   assert.doesNotMatch(JSON.stringify(receipt), /command-line-secret|private-token/u);
+});
+
+test("control launcher failure never starts the registry launcher", async (t) => {
+  const value = fixture(t);
+  const adapter = createAdapter(value);
+  const timing = { timeoutMs: 50, pollMs: 0, delayFn: async () => {} };
+  await executeM6QualificationLegacyQuiesce({
+    ...value.options,
+    adapter,
+    databaseSnapshotter: async (path) => Buffer.from(`consistent-backup:${path}`, "utf8"),
+    ...timing,
+  });
+  const run = adapter.runLauncher.bind(adapter);
+  adapter.runLauncher = (ref, caller) => {
+    if (ref.key === "controlPlane") {
+      adapter.calls.push(["run-launcher-failed", ref.key]);
+      throw Object.assign(new Error("fixture control launch failure"), {
+        code: "M6_QUALIFICATION_LEGACY_CONTROL_LAUNCH_FAILED",
+      });
+    }
+    return run(ref, caller);
+  };
+  await assert.rejects(executeM6QualificationLegacyRestore({
+    ...value.options,
+    adapter,
+    ...timing,
+  }), { code: "M6_QUALIFICATION_LEGACY_CONTROL_LAUNCH_FAILED" });
+  assert.equal(adapter.calls.some((row) => row[0] === "run-launcher" && row[1] === "registry"), false);
+  assert.equal(adapter.active, false);
+});
+
+test("registry launcher failure rolls back the control listener to a stopped checkpointed boundary", async (t) => {
+  const value = fixture(t);
+  const adapter = createAdapter(value);
+  const timing = { timeoutMs: 50, pollMs: 0, delayFn: async () => {} };
+  await executeM6QualificationLegacyQuiesce({
+    ...value.options,
+    adapter,
+    databaseSnapshotter: async (path) => Buffer.from(`consistent-backup:${path}`, "utf8"),
+    ...timing,
+  });
+  const run = adapter.runLauncher.bind(adapter);
+  adapter.runLauncher = (ref, caller) => {
+    if (ref.key === "registry") {
+      adapter.calls.push(["run-launcher-failed", ref.key]);
+      throw Object.assign(new Error("fixture registry launch failure"), {
+        code: "M6_QUALIFICATION_LEGACY_REGISTRY_LAUNCH_FAILED",
+      });
+    }
+    return run(ref, caller);
+  };
+  const before = adapter.calls.length;
+  await assert.rejects(executeM6QualificationLegacyRestore({
+    ...value.options,
+    adapter,
+    ...timing,
+  }), { code: "M6_QUALIFICATION_LEGACY_REGISTRY_LAUNCH_FAILED" });
+  const recovery = adapter.calls.slice(before);
+  assert.equal(recovery.some((row) => row[0] === "terminate" && row[1] === 17920 && row[2] === 6200), true);
+  assert.equal(recovery.filter((row) => row[0] === "checkpoint-databases").length, 2);
+  assert.equal(adapter.active, false);
+});
+
+test("restore terminates one verified residual listener before owner-lock archive and WAL checkpoint", async (t) => {
+  const value = fixture(t);
+  const adapter = createAdapter(value);
+  const timing = { timeoutMs: 50, pollMs: 0, delayFn: async () => {} };
+  await executeM6QualificationLegacyQuiesce({
+    ...value.options,
+    adapter,
+    databaseSnapshotter: async (path) => Buffer.from(`consistent-backup:${path}`, "utf8"),
+    ...timing,
+  });
+  adapter.current = value.targetRoot;
+  adapter.setResidualPorts([17930]);
+  const before = adapter.calls.length;
+  const receipt = await executeM6QualificationLegacyRestore({
+    ...value.options,
+    adapter,
+    ...timing,
+  });
+  assert.equal(receipt.outcome, "RESTORED");
+  const recoveryCalls = adapter.calls.slice(before);
+  assert.deepEqual(
+    recoveryCalls.filter((row) => row[0] === "terminate").map((row) => row.slice(1)),
+    [[17930, 4300]],
+  );
+  const names = recoveryCalls.map((row) => row[0]);
+  assert.ok(names.indexOf("terminate") < names.indexOf("archive-owner-lock"));
+  assert.ok(names.indexOf("archive-owner-lock") < names.indexOf("checkpoint-databases"));
+  assert.ok(names.indexOf("checkpoint-databases") < names.indexOf("restore-file"));
+  assert.equal(adapter.active, true);
 });
 
 test("A restore reinstalls the sealed legacy binding before B quiesce and old-identity rotation check", async (t) => {
@@ -498,7 +994,7 @@ test("A restore reinstalls the sealed legacy binding before B quiesce and old-id
     "by-release",
     TARGET_ID,
     TARGET_COMMIT,
-    "window-reference.v1.json",
+    "window-reference.v2.json",
   );
   const aReference = JSON.parse(readFileSync(aReferencePath, "utf8"));
   const aPrestateBytes = readFileSync(aReference.prestate.path);
@@ -585,6 +1081,52 @@ test("a post-stop failure automatically restores the exact sealed legacy authori
   });
   assert.equal(adapter.current, value.legacyRoot);
   assert.equal(adapter.active, true);
+  assert.equal(adapter.calls.filter((row) => row[0] === "restore-file").length, 0);
+});
+
+test("a stopped-capture second database failure restores service without writing any online snapshot", async (t) => {
+  const value = fixture(t);
+  const adapter = createAdapter(value);
+  const controlPath = join(value.runtimeRoot, "state", "control-plane", "control.db");
+  const registryPath = join(value.runtimeRoot, "state", "orchestrator", REGISTRY_DATABASE_FILENAME);
+  const before = new Map([
+    [controlPath, readFileSync(controlPath)],
+    [registryPath, readFileSync(registryPath)],
+  ]);
+  const recordedRestore = adapter.restoreFile.bind(adapter);
+  adapter.restoreFile = (ref) => {
+    recordedRestore(ref);
+    writeFileSync(ref.targetPath, "stale-online-overwrite");
+  };
+  let stoppedSnapshots = 0;
+  await assert.rejects(executeM6QualificationLegacyQuiesce({
+    ...value.options,
+    adapter,
+    databaseSnapshotter: async (path, { standalone }) => {
+      if (standalone) {
+        stoppedSnapshots += 1;
+        if (stoppedSnapshots === 2) {
+          throw Object.assign(new Error("fixture stopped snapshot failure"), {
+            code: "M6_QUALIFICATION_LEGACY_SNAPSHOT_INVALID",
+          });
+        }
+      }
+      return Buffer.from(`consistent-backup:${path}`, "utf8");
+    },
+    timeoutMs: 50,
+    pollMs: 0,
+    delayFn: async () => {},
+  }), (error) => {
+    assert.equal(error.code, "M6_QUALIFICATION_LEGACY_QUIESCE_ROLLED_BACK");
+    assert.equal(error.causeCode, "M6_QUALIFICATION_LEGACY_SNAPSHOT_INVALID");
+    return true;
+  });
+  assert.equal(stoppedSnapshots, 2);
+  assert.equal(adapter.calls.filter((row) => row[0] === "restore-file").length, 0);
+  assert.deepEqual(readFileSync(controlPath), before.get(controlPath));
+  assert.deepEqual(readFileSync(registryPath), before.get(registryPath));
+  assert.equal(adapter.current, value.legacyRoot);
+  assert.equal(adapter.active, true);
 });
 
 test("restore rejects any drift in the content-addressed sealed prestate", async (t) => {
@@ -604,7 +1146,7 @@ test("restore rejects any drift in the content-addressed sealed prestate", async
     "by-release",
     TARGET_ID,
     TARGET_COMMIT,
-    "window-reference.v1.json",
+    "window-reference.v2.json",
   ), "utf8"));
   writeFileSync(reference.prestate.path, `${readFileSync(reference.prestate.path, "utf8")} `);
   await assert.rejects(executeM6QualificationLegacyRestore({
@@ -613,6 +1155,31 @@ test("restore rejects any drift in the content-addressed sealed prestate", async
     timeoutMs: 50,
     pollMs: 0,
     delayFn: async () => {},
+  }), /M6_QUALIFICATION_LEGACY_PRESTATE_INVALID/u);
+});
+
+test("legacy-window prestate v1 is rejected after the v2 topology contract", async (t) => {
+  const value = fixture(t);
+  const adapter = createAdapter(value);
+  await executeM6QualificationLegacyQuiesce({
+    ...value.options,
+    adapter,
+    databaseSnapshotter: async (path) => Buffer.from(`consistent-backup:${path}`, "utf8"),
+    timeoutMs: 50,
+    pollMs: 0,
+    delayFn: async () => {},
+  });
+  const base = join(value.runtimeRoot, "qualification-legacy-windows");
+  const reference = JSON.parse(readFileSync(join(
+    base, "by-release", TARGET_ID, TARGET_COMMIT, "window-reference.v2.json",
+  ), "utf8"));
+  const prestate = JSON.parse(readFileSync(reference.prestate.path, "utf8"));
+  prestate.schemaId = "xw.runtime.m6-qualification-legacy-window-prestate.v1";
+  assert.throws(() => validateM6QualificationLegacyPrestate(prestate, {
+    runtimeRoot: value.runtimeRoot,
+    expectedReleaseId: TARGET_ID,
+    expectedSourceCommit: TARGET_COMMIT,
+    baseRoot: base,
   }), /M6_QUALIFICATION_LEGACY_PRESTATE_INVALID/u);
 });
 
@@ -646,7 +1213,7 @@ function relayFixtureState(value) {
     "by-release",
     TARGET_ID,
     TARGET_COMMIT,
-    "window-reference.v1.json",
+    "window-reference.v2.json",
   ), "utf8"));
   const prestate = JSON.parse(readFileSync(reference.prestate.path, "utf8"));
   const snapshots = {
@@ -830,12 +1397,6 @@ test("relay-final preserves qualified schema-21 DB and activates the exact Gate-
 test("relay-final rolls back when health is live but task-owned ancestry proof is absent", async (t) => {
   const value = fixture(t);
   const adapter = createAdapter(value, { detachedAfterStart: true });
-  const restoreCurrent = adapter.restoreCurrent.bind(adapter);
-  adapter.restoreCurrent = (target) => {
-    restoreCurrent(target);
-    // Model the sealed legacy launcher resolving its modules from restored current.
-    adapter.activateRelay(value.modules);
-  };
   await executeM6QualificationLegacyQuiesce({
     ...value.options,
     adapter,

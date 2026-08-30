@@ -871,7 +871,7 @@ export async function stageM64LiveWindow({
         || typeof guard.retainStaleLock !== "function") {
         stageError("M64_STAGE_OWNER_GUARD_INVALID", "stage-window requires a held shared M6-C1 runtime owner guard");
       }
-      guard.assertOwned();
+      await guard.assertOwned();
     }
     if (execute) stateCleanupProven = false;
     state = openReadOnlyState({ dbPath, nowMs });
@@ -983,7 +983,7 @@ export async function stageM64LiveWindow({
       || sha256(readPlainBytes(final.binding.productionDependencyBindingPath, "production dependency binding final check")) !== final.binding.productionDependencyBindingHash) {
       stageError("M64_STAGE_CONCURRENT_INPUT_CHANGE", "sealed stage inputs changed before snapshot publication");
     }
-    guard.assertOwned();
+    await guard.assertOwned();
     const persisted = persistStage({
       runtime,
       binding: final.binding,

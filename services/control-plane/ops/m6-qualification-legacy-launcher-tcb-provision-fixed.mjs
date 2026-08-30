@@ -20,36 +20,22 @@ import {
   createSystemTcbAclController,
 } from "../control-plane/lib/windows-system-tcb-acl.mjs";
 
-export const M64_QUALIFICATION_LEGACY_DATABASE_TCB_RUNTIME_ROOT =
+export const M64_QUALIFICATION_LEGACY_LAUNCHER_TCB_RUNTIME_ROOT =
   "C:\\Users\\Public\\xw-runtime";
-export const M64_QUALIFICATION_LEGACY_DATABASE_TCB_SELF_RELEASE_PATH =
-  "services/control-plane/ops/m6-qualification-legacy-database-tcb-provision-fixed.mjs";
+export const M64_QUALIFICATION_LEGACY_LAUNCHER_TCB_SELF_RELEASE_PATH =
+  "services/control-plane/ops/m6-qualification-legacy-launcher-tcb-provision-fixed.mjs";
 
 const RELEASE_MANIFEST_SCHEMA_ID = "xw.runtime.release-manifest.v1";
-const RECEIPT_SCHEMA_ID = "xw.runtime.m6-qualification-legacy-database-tcb-fixed-provision.v1";
+const RECEIPT_SCHEMA_ID = "xw.runtime.m6-qualification-legacy-launcher-tcb-fixed-provision.v1";
 const HASH = /^(?!0{64}$)[0-9a-f]{64}$/u;
 const COMMIT = /^(?!0{40}$)[0-9a-f]{40}$/u;
 const RELEASE_ID = /^[a-z0-9][a-z0-9._-]{2,127}$/u;
-// Assembled at runtime so the source never carries the literal registry database
-// filename that the fusion authority scan forbids inside control-plane code.
-const REGISTRY_DATABASE_FILENAME = ["registry", "db"].join(".");
-const DATABASE_TARGETS = Object.freeze([
-  Object.freeze({
-    key: "controlDb",
-    parentKey: "controlState",
-    segments: Object.freeze(["state", "control-plane", "control.db"]),
-  }),
-  Object.freeze({
-    key: "registryDb",
-    parentKey: "registryState",
-    segments: Object.freeze(["state", "orchestrator", REGISTRY_DATABASE_FILENAME]),
-  }),
+const MAX_SCRIPT_BYTES = 16 * 1024 * 1024;
+const ANCESTOR_CLOSURE_KEY = "runtimeBoundary";
+const LAUNCHER_TARGETS = Object.freeze([
+  Object.freeze({ key: "controlPlaneLauncher", filename: "launch-control-plane.simple.ps1" }),
+  Object.freeze({ key: "orchestratorLauncher", filename: "launch-orchestrator.current-user.ps1" }),
 ]);
-const SIDECAR_SUFFIXES = Object.freeze([
-  Object.freeze({ keySuffix: "Wal", suffix: "-wal" }),
-  Object.freeze({ keySuffix: "Shm", suffix: "-shm" }),
-]);
-const MAX_SNAPSHOT_BYTES = 2 * 1024 * 1024 * 1024;
 
 function fail(code, message, causeCode = null) {
   throw Object.assign(new Error(`${code}: ${message}`), {
@@ -124,14 +110,14 @@ function verifyManifestSnapshot({ releaseRoot, releasesRoot, verifyManifest, cod
   });
 }
 
-function assertSameReleaseSnapshot(before, after, code) {
+function assertSameReleaseSnapshot(before, after, code, label) {
   if (!samePath(before.root, after.root)
     || before.releaseId !== after.releaseId
     || before.sourceCommit !== after.sourceCommit
     || before.sourceTreeSha !== after.sourceTreeSha
     || before.manifestSha256 !== after.manifestSha256
     || before.fileCount !== after.fileCount) {
-    fail(code, "legacy current manifest identity changed during database TCB provisioning");
+    fail(code, `${label} manifest identity changed during launcher TCB provisioning`);
   }
 }
 
@@ -154,12 +140,12 @@ function resolveCurrentTarget(runtimeRoot, code) {
 function assertCurrentTarget(runtimeRoot, expectedTarget) {
   const observed = resolveCurrentTarget(
     runtimeRoot,
-    "M64_QUALIFICATION_LEGACY_DATABASE_TCB_CURRENT_DRIFT",
+    "M64_QUALIFICATION_LEGACY_LAUNCHER_TCB_CURRENT_DRIFT",
   );
   if (!samePath(observed.target, expectedTarget)) {
     fail(
-      "M64_QUALIFICATION_LEGACY_DATABASE_TCB_CURRENT_DRIFT",
-      "current changed during legacy database TCB provisioning",
+      "M64_QUALIFICATION_LEGACY_LAUNCHER_TCB_CURRENT_DRIFT",
+      "current changed during legacy launcher TCB provisioning",
     );
   }
 }
@@ -178,15 +164,15 @@ function sameFileIdentity(left, right) {
     && left.birthtimeNs === right.birthtimeNs;
 }
 
-function inspectOpenFile(path, key, { requireNonEmpty = true } = {}) {
-  const code = "M64_QUALIFICATION_LEGACY_DATABASE_TCB_TARGET_INVALID";
+function inspectOpenLauncher(path, key) {
+  const code = "M64_QUALIFICATION_LEGACY_LAUNCHER_TCB_TARGET_INVALID";
   let pathStat;
   try { pathStat = lstatSync(path, { bigint: true }); }
   catch { fail(code, `${key} is unavailable`); }
   if (!pathStat.isFile() || pathStat.isSymbolicLink() || pathStat.nlink !== 1n
-    || (requireNonEmpty && pathStat.size < 1n) || pathStat.size > BigInt(MAX_SNAPSHOT_BYTES)
+    || pathStat.size < 1n || pathStat.size > BigInt(MAX_SCRIPT_BYTES)
     || !samePath(realpathSync(path), path)) {
-    fail(code, `${key} is not one bounded plain file`);
+    fail(code, `${key} is not one bounded plain launcher file`);
   }
   let fd;
   try { fd = openSync(path, "r"); }
@@ -199,13 +185,13 @@ function inspectOpenFile(path, key, { requireNonEmpty = true } = {}) {
     }
     return Object.freeze({ fd, key, path: resolve(path), identity: fileIdentity(openStat) });
   } catch (error) {
-    closeSync(fd);
+    try { closeSync(fd); } catch {}
     throw error;
   }
 }
 
-function assertOpenDatabaseIdentity(handle) {
-  const code = "M64_QUALIFICATION_LEGACY_DATABASE_TCB_TARGET_DRIFT";
+function assertOpenLauncherIdentity(handle) {
+  const code = "M64_QUALIFICATION_LEGACY_LAUNCHER_TCB_TARGET_DRIFT";
   let pathStat;
   let openStat;
   try {
@@ -221,18 +207,16 @@ function assertOpenDatabaseIdentity(handle) {
   }
 }
 
-function contentSnapshot(handle, { requireSqliteHeader = false } = {}) {
-  const code = "M64_QUALIFICATION_LEGACY_DATABASE_TCB_CONTENT_DRIFT";
-  assertOpenDatabaseIdentity(handle);
+function contentSnapshot(handle) {
+  const code = "M64_QUALIFICATION_LEGACY_LAUNCHER_TCB_CONTENT_DRIFT";
+  assertOpenLauncherIdentity(handle);
   const before = fstatSync(handle.fd, { bigint: true });
-  if (before.size < 0n || before.size > BigInt(MAX_SNAPSHOT_BYTES)) {
-    fail(code, `${handle.key} exceeds the bounded snapshot size`);
+  if (before.size < 1n || before.size > BigInt(MAX_SCRIPT_BYTES)) {
+    fail(code, `${handle.key} exceeds the bounded launcher snapshot size`);
   }
   const size = Number(before.size);
   const digest = createHash("sha256");
   const chunk = Buffer.allocUnsafe(1024 * 1024);
-  const header = Buffer.alloc(16);
-  let headerLength = 0;
   let position = 0;
   while (position < size) {
     const length = Math.min(chunk.length, size - position);
@@ -240,11 +224,6 @@ function contentSnapshot(handle, { requireSqliteHeader = false } = {}) {
     try { bytesRead = readSync(handle.fd, chunk, 0, length, position); }
     catch { fail(code, `${handle.key} could not be hashed through its read-only handle`); }
     if (bytesRead < 1) fail(code, `${handle.key} ended during its content snapshot`);
-    if (headerLength < header.length) {
-      const copyLength = Math.min(bytesRead, header.length - headerLength);
-      chunk.copy(header, headerLength, 0, copyLength);
-      headerLength += copyLength;
-    }
     digest.update(chunk.subarray(0, bytesRead));
     position += bytesRead;
   }
@@ -256,10 +235,6 @@ function contentSnapshot(handle, { requireSqliteHeader = false } = {}) {
     || before.size !== after.size || before.mtimeNs !== after.mtimeNs) {
     fail(code, `${handle.key} changed while its content snapshot was read`);
   }
-  if (requireSqliteHeader
-    && (headerLength !== header.length || !header.equals(Buffer.from("SQLite format 3\0", "binary")))) {
-    fail(code, `${handle.key} is not a SQLite database`);
-  }
   return Object.freeze({
     identity: beforeIdentity,
     size: String(before.size),
@@ -268,40 +243,9 @@ function contentSnapshot(handle, { requireSqliteHeader = false } = {}) {
   });
 }
 
-function inspectOptionalSidecar(path, key) {
-  try { lstatSync(path); }
-  catch (error) {
-    if (error?.code === "ENOENT") return Object.freeze({ key, path: resolve(path), present: false });
-    fail("M64_QUALIFICATION_LEGACY_DATABASE_TCB_TARGET_INVALID", `${key} state is unavailable`);
-  }
-  const handle = inspectOpenFile(path, key, { requireNonEmpty: false });
-  try {
-    return Object.freeze({
-      key,
-      path: handle.path,
-      present: true,
-      handle,
-      snapshot: contentSnapshot(handle),
-    });
-  } catch (error) {
-    try { closeSync(handle.fd); } catch {}
-    throw error;
-  }
-}
-
-function assertFileState(state) {
-  const code = "M64_QUALIFICATION_LEGACY_DATABASE_TCB_CONTENT_DRIFT";
-  if (state.present === false) {
-    try { lstatSync(state.path); }
-    catch (error) {
-      if (error?.code === "ENOENT") return;
-      fail(code, `${state.key} state became unreadable`);
-    }
-    fail(code, `${state.key} appeared during TCB provisioning`);
-  }
-  const observed = contentSnapshot(state.handle, {
-    requireSqliteHeader: state.key === "controlDb" || state.key === "registryDb",
-  });
+function assertLauncherState(state) {
+  const code = "M64_QUALIFICATION_LEGACY_LAUNCHER_TCB_CONTENT_DRIFT";
+  const observed = contentSnapshot(state.handle);
   if (!sameFileIdentity(state.snapshot.identity, observed.identity)
     || state.snapshot.size !== observed.size
     || state.snapshot.mtimeNs !== observed.mtimeNs
@@ -310,27 +254,27 @@ function assertFileState(state) {
   }
 }
 
-function assertFileStates(states) {
-  for (const state of states) assertFileState(state);
+function assertLauncherStates(states) {
+  for (const state of states) assertLauncherState(state);
 }
 
-export function parseM64QualificationLegacyDatabaseTcbProvisionFixedArgs(argv) {
+export function parseM64QualificationLegacyLauncherTcbProvisionFixedArgs(argv) {
   if (!Array.isArray(argv) || argv.length !== 0) {
     fail(
-      "M64_QUALIFICATION_LEGACY_DATABASE_TCB_CLI_INVALID",
-      "fixed legacy-database TCB provision accepts no paths, roots, identities, or options",
+      "M64_QUALIFICATION_LEGACY_LAUNCHER_TCB_CLI_INVALID",
+      "fixed legacy-launcher TCB provision accepts no paths, roots, identities, or options",
     );
   }
   return Object.freeze({ provision: true });
 }
 
-export function resolveM64QualificationLegacyDatabaseTcbExecutingRelease({
-  runtimeRoot = M64_QUALIFICATION_LEGACY_DATABASE_TCB_RUNTIME_ROOT,
+export function resolveM64QualificationLegacyLauncherTcbExecutingRelease({
+  runtimeRoot = M64_QUALIFICATION_LEGACY_LAUNCHER_TCB_RUNTIME_ROOT,
   operatorPath = fileURLToPath(import.meta.url),
   verifyManifest = verifyReleaseManifest,
   tcbAclController = createSystemTcbAclController(),
 } = {}) {
-  const code = "M64_QUALIFICATION_LEGACY_DATABASE_TCB_EXECUTING_RELEASE_INVALID";
+  const code = "M64_QUALIFICATION_LEGACY_LAUNCHER_TCB_EXECUTING_RELEASE_INVALID";
   const runtime = resolve(runtimeRoot);
   const releasesRoot = join(runtime, "releases");
   const executingPath = resolve(operatorPath);
@@ -340,7 +284,7 @@ export function resolveM64QualificationLegacyDatabaseTcbExecutingRelease({
   const parts = relative(releasesRoot, executingPath).split(/[\\/]/u);
   const releaseId = parts.shift();
   if (!RELEASE_ID.test(releaseId ?? "")
-    || parts.join("/") !== M64_QUALIFICATION_LEGACY_DATABASE_TCB_SELF_RELEASE_PATH) {
+    || parts.join("/") !== M64_QUALIFICATION_LEGACY_LAUNCHER_TCB_SELF_RELEASE_PATH) {
     fail(code, "executing provisioner is not in one exact formal release slot");
   }
   const release = verifyManifestSnapshot({
@@ -350,9 +294,9 @@ export function resolveM64QualificationLegacyDatabaseTcbExecutingRelease({
     code,
     label: "executing formal release",
   });
-  const selfPath = join(release.root, ...M64_QUALIFICATION_LEGACY_DATABASE_TCB_SELF_RELEASE_PATH.split("/"));
+  const selfPath = join(release.root, ...M64_QUALIFICATION_LEGACY_LAUNCHER_TCB_SELF_RELEASE_PATH.split("/"));
   const matches = release.manifest.files.filter(
-    (entry) => entry?.path === M64_QUALIFICATION_LEGACY_DATABASE_TCB_SELF_RELEASE_PATH,
+    (entry) => entry?.path === M64_QUALIFICATION_LEGACY_LAUNCHER_TCB_SELF_RELEASE_PATH,
   );
   if (!samePath(selfPath, executingPath) || matches.length !== 1
     || !HASH.test(matches[0].sha256 ?? "")
@@ -371,31 +315,32 @@ export function resolveM64QualificationLegacyDatabaseTcbExecutingRelease({
   return Object.freeze({ ...release, runtimeRoot: runtime });
 }
 
-export function provisionM64QualificationLegacyDatabaseTcbFixed({
-  runtimeRoot = M64_QUALIFICATION_LEGACY_DATABASE_TCB_RUNTIME_ROOT,
+export function provisionM64QualificationLegacyLauncherTcbFixed({
+  runtimeRoot = M64_QUALIFICATION_LEGACY_LAUNCHER_TCB_RUNTIME_ROOT,
   operatorPath = fileURLToPath(import.meta.url),
   verifyManifest = verifyReleaseManifest,
   tcbAclController = createSystemTcbAclController(),
 } = {}) {
-  const executing = resolveM64QualificationLegacyDatabaseTcbExecutingRelease({
+  const executing = resolveM64QualificationLegacyLauncherTcbExecutingRelease({
     runtimeRoot,
     operatorPath,
     verifyManifest,
     tcbAclController,
   });
   const runtime = executing.runtimeRoot;
-  const current = resolveCurrentTarget(runtime, "M64_QUALIFICATION_LEGACY_DATABASE_TCB_CURRENT_INVALID");
+  const releasesRoot = join(runtime, "releases");
+  const current = resolveCurrentTarget(runtime, "M64_QUALIFICATION_LEGACY_LAUNCHER_TCB_CURRENT_INVALID");
   if (samePath(current.target, executing.root)) {
     fail(
-      "M64_QUALIFICATION_LEGACY_DATABASE_TCB_CURRENT_INVALID",
+      "M64_QUALIFICATION_LEGACY_LAUNCHER_TCB_CURRENT_INVALID",
       "legacy current must differ from the executing successor release",
     );
   }
   const before = verifyManifestSnapshot({
     releaseRoot: current.target,
-    releasesRoot: join(runtime, "releases"),
+    releasesRoot,
     verifyManifest,
-    code: "M64_QUALIFICATION_LEGACY_DATABASE_TCB_CURRENT_INVALID",
+    code: "M64_QUALIFICATION_LEGACY_LAUNCHER_TCB_CURRENT_INVALID",
     label: "legacy current release",
   });
   const currentPlan = buildSystemTcbAclPlan({
@@ -406,172 +351,156 @@ export function provisionM64QualificationLegacyDatabaseTcbFixed({
   try { tcbAclController.verify(currentPlan); }
   catch (error) {
     fail(
-      "M64_QUALIFICATION_LEGACY_DATABASE_TCB_CURRENT_INVALID",
+      "M64_QUALIFICATION_LEGACY_LAUNCHER_TCB_CURRENT_INVALID",
       "legacy current release TCB verification failed",
       error?.code ?? null,
     );
   }
-
   if (typeof tcbAclController.verify !== "function"
     || typeof tcbAclController.protect !== "function"
     || typeof tcbAclController.verifyTarget !== "function"
     || typeof tcbAclController.protectTarget !== "function") {
     fail(
-      "M64_QUALIFICATION_LEGACY_DATABASE_TCB_CONTROLLER_INVALID",
-      "fixed database TCB controller lacks the required closure and target-only operations",
+      "M64_QUALIFICATION_LEGACY_LAUNCHER_TCB_CONTROLLER_INVALID",
+      "fixed launcher TCB controller lacks the required closure and target-only operations",
     );
   }
 
   const handles = [];
   try {
-    const fileStates = [];
+    const states = [];
     const rows = [];
-    for (const target of DATABASE_TARGETS) {
-      const handle = inspectOpenFile(join(runtime, ...target.segments), target.key);
+    for (const target of LAUNCHER_TARGETS) {
+      const handle = inspectOpenLauncher(join(runtime, target.filename), target.key);
       handles.push(handle);
-      fileStates.push(Object.freeze({
+      const snapshot = contentSnapshot(handle);
+      const state = Object.freeze({
         key: target.key,
-        path: handle.path,
-        present: true,
         handle,
-        snapshot: contentSnapshot(handle, { requireSqliteHeader: true }),
-      }));
-      for (const sidecar of SIDECAR_SUFFIXES) {
-        const state = inspectOptionalSidecar(`${handle.path}${sidecar.suffix}`, `${target.key}${sidecar.keySuffix}`);
-        fileStates.push(state);
-        if (state.present) handles.push(state.handle);
-      }
-      const parentPlan = buildSystemTcbAclPlan({
-        boundaryPath: runtime,
-        targetPath: dirname(handle.path),
-        recursive: false,
+        snapshot,
       });
-      const targetPlan = buildSystemTcbAclPlan({
-        boundaryPath: runtime,
-        targetPath: handle.path,
-        recursive: false,
+      states.push(state);
+      rows.push({
+        key: target.key,
+        handle,
+        snapshot,
+        plan: buildSystemTcbAclPlan({
+          boundaryPath: runtime,
+          targetPath: handle.path,
+          recursive: false,
+        }),
+        normalize: false,
       });
-      rows.push({ handle, parentKey: target.parentKey, parentPlan, targetPlan });
     }
-
-    const directoryRows = [];
+    const closurePlan = buildSystemTcbAclPlan({
+      boundaryPath: runtime,
+      targetPath: runtime,
+      recursive: false,
+    });
+    let normalizeClosure = false;
+    try { tcbAclController.verify(closurePlan); }
+    catch (error) {
+      if (error?.code !== "SYSTEM_TCB_ACL_TARGET_DACL_INVALID") {
+        fail(
+          "M64_QUALIFICATION_LEGACY_LAUNCHER_TCB_VERIFICATION_FAILED",
+          "fixed runtime ancestor closure failed outside the exact migration condition",
+          error?.code ?? null,
+        );
+      }
+      normalizeClosure = true;
+    }
     for (const row of rows) {
-      let normalize = false;
-      try { tcbAclController.verify(row.parentPlan); }
+      try { tcbAclController.verifyTarget(row.plan); }
       catch (error) {
         if (error?.code !== "SYSTEM_TCB_ACL_TARGET_DACL_INVALID") {
           fail(
-            "M64_QUALIFICATION_LEGACY_DATABASE_TCB_VERIFICATION_FAILED",
-            `${row.parentKey} closure failed outside the exact migration condition`,
+            "M64_QUALIFICATION_LEGACY_LAUNCHER_TCB_VERIFICATION_FAILED",
+            `${row.key} failed outside the exact target migration condition`,
             error?.code ?? null,
           );
         }
-        normalize = true;
+        row.normalize = true;
       }
-      directoryRows.push({ key: row.parentKey, plan: row.parentPlan, normalize });
-    }
-    for (const row of rows) {
-      let normalize = false;
-      try { tcbAclController.verifyTarget(row.targetPlan); }
-      catch (error) {
-        if (error?.code !== "SYSTEM_TCB_ACL_TARGET_DACL_INVALID") {
-          fail(
-            "M64_QUALIFICATION_LEGACY_DATABASE_TCB_VERIFICATION_FAILED",
-            `${row.handle.key} failed outside the exact target migration condition`,
-            error?.code ?? null,
-          );
-        }
-        normalize = true;
-      }
-      row.normalize = normalize;
     }
 
     assertCurrentTarget(runtime, before.root);
-    assertFileStates(fileStates);
-    for (const row of directoryRows.filter((candidate) => candidate.normalize)) {
+    assertLauncherStates(states);
+    if (normalizeClosure) {
       assertCurrentTarget(runtime, before.root);
-      assertFileStates(fileStates);
-      try { tcbAclController.protect(row.plan); }
+      assertLauncherStates(states);
+      try { tcbAclController.protect(closurePlan); }
       catch (error) {
         fail(
-          "M64_QUALIFICATION_LEGACY_DATABASE_TCB_PROTECTION_FAILED",
-          `${row.key} closure protection failed closed`,
+          "M64_QUALIFICATION_LEGACY_LAUNCHER_TCB_PROTECTION_FAILED",
+          "fixed runtime ancestor closure protection failed closed",
           error?.code ?? null,
         );
       }
       assertCurrentTarget(runtime, before.root);
-      assertFileStates(fileStates);
+      assertLauncherStates(states);
     }
 
-    const verifiedDirectories = [];
-    for (const row of directoryRows) {
-      let receipt;
-      try { receipt = tcbAclController.verify(row.plan); }
-      catch (error) {
-        fail(
-          "M64_QUALIFICATION_LEGACY_DATABASE_TCB_VERIFICATION_FAILED",
-          `${row.key} closure did not verify after provisioning`,
-          error?.code ?? null,
-        );
-      }
-      if (!Number.isSafeInteger(receipt?.entryCount) || receipt.entryCount < 1) {
-        fail(
-          "M64_QUALIFICATION_LEGACY_DATABASE_TCB_RECEIPT_INVALID",
-          `${row.key} native verification receipt is invalid`,
-        );
-      }
-      verifiedDirectories.push(Object.freeze({
-        key: row.key,
-        status: "VERIFIED",
-        normalized: row.normalize,
-        entryCount: receipt.entryCount,
-      }));
+    let closureReceipt;
+    try { closureReceipt = tcbAclController.verify(closurePlan); }
+    catch (error) {
+      fail(
+        "M64_QUALIFICATION_LEGACY_LAUNCHER_TCB_VERIFICATION_FAILED",
+        "fixed runtime ancestor closure did not verify after provisioning",
+        error?.code ?? null,
+      );
+    }
+    if (closureReceipt?.entryCount !== 1) {
+      fail(
+        "M64_QUALIFICATION_LEGACY_LAUNCHER_TCB_RECEIPT_INVALID",
+        "fixed runtime ancestor closure verification receipt is invalid",
+      );
     }
 
     for (const row of rows.filter((candidate) => candidate.normalize)) {
       assertCurrentTarget(runtime, before.root);
-      assertFileStates(fileStates);
-      try { tcbAclController.verify(row.parentPlan); }
+      assertLauncherStates(states);
+      try { tcbAclController.verify(closurePlan); }
       catch (error) {
         fail(
-          "M64_QUALIFICATION_LEGACY_DATABASE_TCB_VERIFICATION_FAILED",
-          `${row.parentKey} closure drifted before target protection`,
+          "M64_QUALIFICATION_LEGACY_LAUNCHER_TCB_VERIFICATION_FAILED",
+          "fixed runtime ancestor closure drifted before target protection",
           error?.code ?? null,
         );
       }
-      try { tcbAclController.protectTarget(row.targetPlan); }
+      try { tcbAclController.protectTarget(row.plan); }
       catch (error) {
         fail(
-          "M64_QUALIFICATION_LEGACY_DATABASE_TCB_PROTECTION_FAILED",
-          `${row.handle.key} target-only TCB protection failed closed`,
+          "M64_QUALIFICATION_LEGACY_LAUNCHER_TCB_PROTECTION_FAILED",
+          `${row.key} target-only TCB protection failed closed`,
           error?.code ?? null,
         );
       }
       assertCurrentTarget(runtime, before.root);
-      assertFileStates(fileStates);
+      assertLauncherStates(states);
     }
 
     const verifiedRows = [];
     for (const row of rows) {
-      assertFileStates(fileStates);
+      assertCurrentTarget(runtime, before.root);
+      assertLauncherStates(states);
       let receipt;
-      try { receipt = tcbAclController.verify(row.targetPlan); }
+      try { receipt = tcbAclController.verifyTarget(row.plan); }
       catch (error) {
         fail(
-          "M64_QUALIFICATION_LEGACY_DATABASE_TCB_VERIFICATION_FAILED",
-          `${row.handle.key} did not verify after provisioning`,
+          "M64_QUALIFICATION_LEGACY_LAUNCHER_TCB_VERIFICATION_FAILED",
+          `${row.key} did not verify after provisioning`,
           error?.code ?? null,
         );
       }
-      if (!Number.isSafeInteger(receipt?.entryCount) || receipt.entryCount < 1) {
+      if (receipt?.entryCount !== 1) {
         fail(
-          "M64_QUALIFICATION_LEGACY_DATABASE_TCB_RECEIPT_INVALID",
-          `${row.handle.key} native verification receipt is invalid`,
+          "M64_QUALIFICATION_LEGACY_LAUNCHER_TCB_RECEIPT_INVALID",
+          `${row.key} target-only verification receipt is invalid`,
         );
       }
       verifiedRows.push(Object.freeze({
-        key: row.handle.key,
-        status: "VERIFIED",
+        key: row.key,
+        sha256: row.snapshot.sha256,
         normalized: row.normalize,
         entryCount: receipt.entryCount,
       }));
@@ -579,30 +508,54 @@ export function provisionM64QualificationLegacyDatabaseTcbFixed({
 
     const after = verifyManifestSnapshot({
       releaseRoot: before.root,
-      releasesRoot: join(runtime, "releases"),
+      releasesRoot,
       verifyManifest,
-      code: "M64_QUALIFICATION_LEGACY_DATABASE_TCB_POSTVERIFY_FAILED",
+      code: "M64_QUALIFICATION_LEGACY_LAUNCHER_TCB_POSTVERIFY_FAILED",
       label: "post-provision legacy current release",
     });
-    assertSameReleaseSnapshot(before, after, "M64_QUALIFICATION_LEGACY_DATABASE_TCB_POSTVERIFY_FAILED");
+    assertSameReleaseSnapshot(
+      before,
+      after,
+      "M64_QUALIFICATION_LEGACY_LAUNCHER_TCB_POSTVERIFY_FAILED",
+      "legacy current",
+    );
+    const executingAfter = verifyManifestSnapshot({
+      releaseRoot: executing.root,
+      releasesRoot,
+      verifyManifest,
+      code: "M64_QUALIFICATION_LEGACY_LAUNCHER_TCB_POSTVERIFY_FAILED",
+      label: "post-provision executing formal release",
+    });
+    assertSameReleaseSnapshot(
+      executing,
+      executingAfter,
+      "M64_QUALIFICATION_LEGACY_LAUNCHER_TCB_POSTVERIFY_FAILED",
+      "executing formal release",
+    );
     assertCurrentTarget(runtime, before.root);
-    assertFileStates(fileStates);
+    assertLauncherStates(states);
 
+    const closureRow = Object.freeze({
+      key: ANCESTOR_CLOSURE_KEY,
+      normalized: normalizeClosure,
+      entryCount: closureReceipt.entryCount,
+    });
     const body = Object.freeze({
       schemaId: RECEIPT_SCHEMA_ID,
       status: "VERIFIED",
-      operatorReleaseId: executing.releaseId,
-      operatorSourceCommit: executing.sourceCommit,
+      operatorReleaseId: executingAfter.releaseId,
+      operatorSourceCommit: executingAfter.sourceCommit,
+      operatorManifestSha256: executingAfter.manifestSha256,
       legacyReleaseId: after.releaseId,
       legacySourceCommit: after.sourceCommit,
       legacySourceTreeSha: after.sourceTreeSha,
       legacyManifestSha256: after.manifestSha256,
-      directoryClosureCount: verifiedDirectories.length,
-      normalizedDirectoryClosureCount: verifiedDirectories.filter((row) => row.normalized).length,
-      directoryClosures: Object.freeze(verifiedDirectories),
-      databaseCount: verifiedRows.length,
+      ancestorClosureCount: 1,
+      normalizedAncestorClosureCount: normalizeClosure ? 1 : 0,
+      ancestorClosures: Object.freeze([closureRow]),
+      launcherCount: verifiedRows.length,
       normalizedCount: verifiedRows.filter((row) => row.normalized).length,
-      databases: Object.freeze(verifiedRows),
+      launchers: Object.freeze(verifiedRows),
     });
     return Object.freeze({
       ...body,
@@ -619,8 +572,8 @@ export function main(argv = process.argv.slice(2), {
   stdout = process.stdout,
   dependencies = {},
 } = {}) {
-  parseM64QualificationLegacyDatabaseTcbProvisionFixedArgs(argv);
-  const result = provisionM64QualificationLegacyDatabaseTcbFixed(dependencies);
+  parseM64QualificationLegacyLauncherTcbProvisionFixedArgs(argv);
+  const result = provisionM64QualificationLegacyLauncherTcbFixed(dependencies);
   stdout.write(`${JSON.stringify(result)}\n`);
   return result;
 }
@@ -630,7 +583,7 @@ if (entry === fileURLToPath(import.meta.url)) {
   try { main(); }
   catch (error) {
     process.stderr.write(
-      `${error?.code ?? "M64_QUALIFICATION_LEGACY_DATABASE_TCB_FAILED"}: fixed legacy-database TCB provision failed\n`,
+      `${error?.code ?? "M64_QUALIFICATION_LEGACY_LAUNCHER_TCB_FAILED"}: fixed legacy-launcher TCB provision failed\n`,
     );
     process.exitCode = 1;
   }

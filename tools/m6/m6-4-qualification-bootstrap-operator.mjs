@@ -1421,7 +1421,7 @@ export async function operateM64QualificationBootstrapRotation(input = {}, {
         "qualification rotation stopped-runtime guard is unavailable",
       );
     }
-    guard.assertOwned();
+    await guard.assertOwned();
     auxiliaryPortGuard = await deps.acquireAuxiliaryPortGuard({
       host: "127.0.0.1",
       port: 17930,
@@ -1451,10 +1451,10 @@ export async function operateM64QualificationBootstrapRotation(input = {}, {
         "qualification rotation identity changed between preflight and stopped execution",
       );
     }
-    guard.assertOwned();
+    await guard.assertOwned();
     snapshots = await createQualificationRotationSnapshots(plan, deps);
     faultAfter("snapshots", { plan, snapshots });
-    guard.assertOwned();
+    await guard.assertOwned();
 
     ensureControlledDirectory(resolve(input.runtimeRoot), relative(resolve(input.runtimeRoot), plan.archiveRoot));
     const archivedBinding = writeExactCreateOnly(
@@ -1504,7 +1504,7 @@ export async function operateM64QualificationBootstrapRotation(input = {}, {
       },
     );
     faultAfter("archive", { plan, archiveIndex });
-    guard.assertOwned();
+    await guard.assertOwned();
     assertSentinelsUnavailable(plan.paths);
 
     const staged = deps.stageArtifacts({
@@ -1514,7 +1514,7 @@ export async function operateM64QualificationBootstrapRotation(input = {}, {
       nowMs: Number(deps.now()),
     });
     faultAfter("artifacts", { plan, staged });
-    guard.assertOwned();
+    await guard.assertOwned();
     assertSentinelsUnavailable(plan.paths);
 
     cleanupProven = false;
@@ -1540,7 +1540,7 @@ export async function operateM64QualificationBootstrapRotation(input = {}, {
       );
     }
     faultAfter("database", { plan, rotated });
-    guard.assertOwned();
+    await guard.assertOwned();
     writeExactCreateOnly(
       staged.paths.current,
       jsonBytes(staged.pointer),
@@ -1550,7 +1550,7 @@ export async function operateM64QualificationBootstrapRotation(input = {}, {
       },
     );
     faultAfter("pointer", { plan, staged });
-    guard.assertOwned();
+    await guard.assertOwned();
 
     let bindingCas;
     try {
@@ -1579,7 +1579,7 @@ export async function operateM64QualificationBootstrapRotation(input = {}, {
     }
     faultAfter("bindingTcb", { plan, bindingCas, sealedBinding });
     faultAfter("binding", { plan, bindingCas });
-    guard.assertOwned();
+    await guard.assertOwned();
     assertSentinelsUnavailable(plan.paths);
 
     const postDatabase = inspectControlDatabase(plan.paths.controlDbPath, Number(deps.now()));
@@ -1821,9 +1821,9 @@ export async function operateM64QualificationBootstrap(input = {}, {
         "shared M6-C1 stopped-runtime guard is unavailable",
       );
     }
-    guard.assertOwned();
+    await guard.assertOwned();
     const plan = planM64QualificationBootstrap(input, deps);
-    guard.assertOwned();
+    await guard.assertOwned();
     bootstrapCleanupProven = false;
     let result;
     try {
@@ -1844,7 +1844,7 @@ export async function operateM64QualificationBootstrap(input = {}, {
       throw error;
     }
     publicationFaultAfter("bootstrap");
-    guard.assertOwned();
+    await guard.assertOwned();
     assertSentinelsUnavailable(plan.paths);
     const postPlan = planM64QualificationBootstrap(input, deps);
     if (postPlan.packageHash !== plan.packageHash
@@ -1867,7 +1867,7 @@ export async function operateM64QualificationBootstrap(input = {}, {
       },
     );
     publicationFaultAfter("binding");
-    guard.assertOwned();
+    await guard.assertOwned();
     assertSentinelsUnavailable(plan.paths);
     const receipt = deriveOperatorReceipt({
       plan,
@@ -1886,7 +1886,7 @@ export async function operateM64QualificationBootstrap(input = {}, {
       },
     );
     publicationFaultAfter("receipt");
-    guard.assertOwned();
+    await guard.assertOwned();
     assertSentinelsUnavailable(plan.paths);
     const status = receiptPublication.replay
       ? "EXACT_REPLAY"

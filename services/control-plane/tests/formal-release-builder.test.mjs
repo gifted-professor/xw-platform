@@ -60,6 +60,7 @@ function fixture(t) {
   write(repo, "services/control-plane/ops/gate-f-cutover-operator.mjs", "export default true;\n");
   write(repo, "services/control-plane/ops/m6-qualification-legacy-current-tcb-provision-fixed.mjs", "export default true;\n");
   write(repo, "services/control-plane/ops/m6-qualification-legacy-database-tcb-provision-fixed.mjs", "export default true;\n");
+  write(repo, "services/control-plane/ops/m6-qualification-legacy-launcher-tcb-provision-fixed.mjs", "export default true;\n");
   write(repo, "services/control-plane/ops/m6-qualification-legacy-window-operator.mjs", "export default true;\n");
   write(repo, "services/control-plane/ops/m6-qualification-launcher-operator.mjs", "export default true;\n");
   write(repo, "services/control-plane/ops/m6-qualification-tcb-provision-fixed.mjs", "export default true;\n");
@@ -123,6 +124,7 @@ test("materializeReleaseManifest verifies exact Git blobs and emits canonical co
     "services/control-plane/ops/gate-f-cutover-operator.mjs",
     "services/control-plane/ops/m6-qualification-legacy-current-tcb-provision-fixed.mjs",
     "services/control-plane/ops/m6-qualification-legacy-database-tcb-provision-fixed.mjs",
+    "services/control-plane/ops/m6-qualification-legacy-launcher-tcb-provision-fixed.mjs",
     "services/control-plane/ops/m6-qualification-legacy-window-operator.mjs",
     "services/control-plane/ops/m6-qualification-launcher-operator.mjs",
     "services/control-plane/ops/m6-qualification-tcb-provision-fixed.mjs",
@@ -190,6 +192,10 @@ test("formal builder materializes one clean exact HEAD without switching current
   assert.equal(existsSync(join(
     receipt.releaseRoot,
     "services/control-plane/ops/m6-qualification-legacy-database-tcb-provision-fixed.mjs",
+  )), true);
+  assert.equal(existsSync(join(
+    receipt.releaseRoot,
+    "services/control-plane/ops/m6-qualification-legacy-launcher-tcb-provision-fixed.mjs",
   )), true);
   assert.deepEqual(
     readFileSync(join(receipt.releaseRoot, "package.json")),
@@ -264,6 +270,7 @@ test("production CLI fixes repository/runtime identity and exposes no path selec
   assert.match(source, /createSystemTcbAclController/u);
   assert.match(source, /services\/control-plane\/ops\/m6-qualification-legacy-current-tcb-provision-fixed\.mjs/u);
   assert.match(source, /services\/control-plane\/ops\/m6-qualification-legacy-database-tcb-provision-fixed\.mjs/u);
+  assert.match(source, /services\/control-plane\/ops\/m6-qualification-legacy-launcher-tcb-provision-fixed\.mjs/u);
   assert.match(source, /protect\(releasesRoot, false\)/u);
   assert.doesNotMatch(source, /protect\(releasesRoot, true\)/u);
   assert.match(source, /protect\(payloadRoot, true\)/u);
