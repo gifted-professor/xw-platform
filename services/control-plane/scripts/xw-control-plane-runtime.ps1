@@ -881,7 +881,7 @@ $env:CONTROL_PLANE_GIT_COMMIT = [string]$manifest.sourceCommit
 $env:CONTROL_PLANE_RELEASE_ID = [string]$manifest.releaseId
 $env:AUTONOMY_POLICY_MODE = "nonpayment_v1"
 $env:EVIDENCE_MODE = "dual"
-# xhs-routine 03-first plan V2 §5.2: the deployed canary policy admits exactly
+# xhs-routine 03-first plan V2 section 5.2: the deployed canary policy admits exactly
 # actor "agent:xhs-routine" on alias 03 for xiaowei.explorer.primitive sessions.
 # No other actor/alias is widened by this change; the runner's
 # AUTONOMY_PILOT_SCOPE_MISS negative case is pinned in control-plane tests.

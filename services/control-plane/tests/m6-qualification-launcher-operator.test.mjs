@@ -464,3 +464,19 @@ test("tracked PowerShell launcher keeps FINAL delegation and seals the qualifica
   ]) assert.equal(source.includes(marker), true, marker);
   assert.doesNotMatch(source, /Register-ScheduledTask|Start-ScheduledTask|Stop-ScheduledTask|schtasks(?:\.exe)?/iu);
 });
+
+test("PS 5.1 scripts stay ASCII-only (no-BOM files are misread as ANSI)", () => {
+  for (const relative of [
+    ["services", "control-plane", "ops", "launch-control-plane.ps1"],
+    ["services", "control-plane", "scripts", "xw-control-plane-runtime.ps1"],
+    ["services", "control-plane", "scripts", "control-plane-task.ps1"],
+    ["services", "control-plane", "scripts", "control-plane-worker.ps1"],
+  ]) {
+    const source = readFileSync(join(REPO_ROOT, ...relative), "utf8");
+    assert.doesNotMatch(
+      source,
+      /[^\x00-\x7F]/u,
+      `${relative} must be ASCII-only: PS 5.1 reads UTF-8-no-BOM as ANSI and a single non-ASCII char corrupts param binding`,
+    );
+  }
+});
