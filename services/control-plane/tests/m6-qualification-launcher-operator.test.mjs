@@ -187,7 +187,9 @@ test("qualification launcher preflight fails closed when the current-closure TCB
 });
 
 function taskXml(plan) {
-  return plan.artifacts.find((artifact) => artifact.kind === "task-xml").bytes.toString("utf8");
+  const bytes = plan.artifacts.find((artifact) => artifact.kind === "task-xml").bytes;
+  assert.equal(bytes[0], 0xff, "task XML must carry a UTF-16 LE BOM");
+  return bytes.subarray(2).toString("utf16le");
 }
 
 function bindingValue(plan) {

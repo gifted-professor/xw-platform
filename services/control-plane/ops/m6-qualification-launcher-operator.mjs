@@ -368,7 +368,12 @@ export function buildM6QualificationTaskXml(input = {}) {
   const launcherPath = absolutePath(input.launcherPath, "M6_QUALIFICATION_TASK_XML_INVALID", "launcherPath");
   const bindingPath = absolutePath(input.bindingPath, "M6_QUALIFICATION_TASK_XML_INVALID", "bindingPath");
   const argumentsText = qualificationTaskArguments({ ...input, runtimeRoot, launcherPath, bindingPath });
-  return `<?xml version="1.0" encoding="UTF-8"?>
+  // NOTE: The XML declaration must claim UTF-16.  This Task Scheduler build
+  // rejects a UTF-8 declaration at deserialization time ("unable to switch
+  // encoding", (1,40)) even when the bytes are actually UTF-8 without a BOM;
+  // schtasks re-encodes the document before handing it to the scheduler COM
+  // API.  Every task successfully registered on this machine uses UTF-16.
+  return `<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
     <Author>xw-platform M6 qualification</Author>
@@ -617,7 +622,9 @@ export function planM6QualificationLauncher({
     releaseId: expectedReleaseId,
     sourceCommit: expectedSourceCommit,
   });
-  const taskBytes = Buffer.from(taskXml, "utf8");
+  // The declaration above claims UTF-16, so the staged bytes must actually be
+  // UTF-16 (LE with BOM) for schtasks /XML to accept them on this machine.
+  const taskBytes = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(taskXml, "utf16le")]);
   const taskXmlSha256 = sha256(taskBytes);
   const taskXmlPath = join(
     runtime,
