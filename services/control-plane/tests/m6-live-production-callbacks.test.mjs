@@ -68,6 +68,7 @@ function environment() {
     localeThemeHash: H("locale"),
     imeHash: H("ime"),
     accessibilityHash: H("access"),
+    accountBindingHash: H("account"),
     accountIsolationHash: H("account"),
     capturedAt: "2029-12-31T23:55:00.000Z",
     expiresAt: "2030-01-01T00:10:00.000Z",

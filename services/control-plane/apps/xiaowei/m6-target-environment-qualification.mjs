@@ -118,6 +118,7 @@ function hashSample(sample, accountIsolationBindingHash) {
     localeThemeHash: domain("locale-theme", sample.localeTheme),
     imeHash: domain("ime", sample.ime),
     accessibilityHash: domain("accessibility", sample.accessibility),
+    accountBindingHash: accountIsolationBindingHash,
     accountIsolationHash: domain(
       "account-isolation",
       canonical({ configuredBindingHash: accountIsolationBindingHash, deviceUserAndPackageScope: sample.accountIsolation }),

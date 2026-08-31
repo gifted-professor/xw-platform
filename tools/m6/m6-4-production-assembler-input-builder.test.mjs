@@ -140,6 +140,7 @@ function fixture() {
   }
 
   const accountIsolationBindingHash = H("account-isolation");
+  const accountIsolationHash = H("account-isolation-scope");
   const attestation = deriveTargetEnvironmentAttestation({
     appPackageHash: H("package"),
     appBuildHash: H("build"),
@@ -149,7 +150,8 @@ function fixture() {
     localeThemeHash: H("locale"),
     imeHash: H("ime"),
     accessibilityHash: H("accessibility"),
-    accountIsolationHash: accountIsolationBindingHash,
+    accountBindingHash: accountIsolationBindingHash,
+    accountIsolationHash,
     capturedAt: CAPTURED_AT,
     expiresAt: EXPIRES_AT,
   });
@@ -394,7 +396,7 @@ test("fresh builder derives one fixed, content-addressed assembler input without
     assert.equal(new Set(expectations.map((item) => item.authoredAt)).size, 1);
     assert.equal(new Set(expectations.map((item) => item.expiresAt)).size, 1);
     assert.equal(expectations[0].environmentAttestationHash, f.attestation.attestationHash);
-    assert.equal(expectations[0].accountIsolationHash, f.accountIsolationBindingHash);
+    assert.equal(expectations[0].accountIsolationHash, f.attestation.accountIsolationHash);
   } finally { f.cleanup(); }
 });
 

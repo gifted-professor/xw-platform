@@ -2,7 +2,7 @@
   "schemaId": "xhs.tcb.manifest.v1",
   "schemaVersion": 1,
   "manifestId": "xw.m6-grounded-run.tcb.v1",
-  "implementationClosureHash": "27feb848260b3d7b213b2b7e3427df15405e086bf921944118138e70ce8de790",
+  "implementationClosureHash": "aba807456b4e2859b32679b29062fa3d511fbc16f99123ef1712c2f5acc65a26",
   "contentHashProfile": "xhs.m6-grounded-run-capability-self-binding.v1",
   "paths": [
     "artifacts/m6-4/cohort-manifests/m6_4_action_smoke.json",
@@ -414,7 +414,7 @@
       },
       {
         "path": "packages/kernel/contracts/orchestration/m6/xw.m6-target-environment-attestation.v1.schema.json",
-        "sha256": "c477da04bba2f2fa19ec7ed35a952fb6f9b89153af82c99be3d4881682b008c1"
+        "sha256": "daeb410324b68c71a1bab7a486822685a91c9bc886cf455a97b52e763173d540"
       },
       {
         "path": "packages/kernel/contracts/runtime-profile.v1.json",
@@ -446,7 +446,7 @@
       },
       {
         "path": "packages/kernel/lib/m6-live-grounding.mjs",
-        "sha256": "80a0188cce6ecd26b4ddecb7b5dff6b6cbaf39cccd942587162c603ffaad0e5e"
+        "sha256": "0c54d31afa911aba6950be0da8e23ce47a600e7d7745bdbb76644634effe7e28"
       },
       {
         "path": "packages/kernel/lib/m6-screen-frame.mjs",
@@ -550,7 +550,7 @@
       },
       {
         "path": "services/control-plane/apps/xiaowei/m6-target-environment-qualification.mjs",
-        "sha256": "8caf567eebb62226bb72e5628b2c01e4fc81619e6fb2425b6b5cdbafcbdcbd88"
+        "sha256": "cc3c58bd194b131399e4dfc30a29505afb3b2920d1d03c24fd5f44eb60513c41"
       },
       {
         "path": "services/control-plane/apps/xiaowei/read-observation.mjs",
@@ -582,7 +582,7 @@
       },
       {
         "path": "services/control-plane/control-plane/lib/control-plane.mjs",
-        "sha256": "b6ab4068d39ecb92f0d38d893a8450cdb5a65cfbded6c3cb0541973a95fa0dcc"
+        "sha256": "f43dabbf740b6b1e6427867c6f44bf8c0a497377f21f0e64ba6cf36f686dc1ed"
       },
       {
         "path": "services/control-plane/control-plane/lib/delegation-grant-policy.mjs",

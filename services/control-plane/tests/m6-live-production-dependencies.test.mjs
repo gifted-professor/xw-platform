@@ -120,6 +120,7 @@ function buildFixture() {
     localeThemeHash: H("env-locale"),
     imeHash: H("env-ime"),
     accessibilityHash: H("env-accessibility"),
+    accountBindingHash: H("env-account"),
     accountIsolationHash: H("env-account"),
     capturedAt: "2029-12-31T23:30:00.000Z",
     expiresAt: "2030-01-01T01:00:00.000Z",

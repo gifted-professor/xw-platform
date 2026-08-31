@@ -57,6 +57,7 @@ function fixtureBindings() {
     localeThemeHash: H,
     imeHash: H,
     accessibilityHash: H,
+    accountBindingHash: H,
     accountIsolationHash: H,
     capturedAt: "2026-08-23T15:59:00.000Z",
     expiresAt: "2026-08-23T16:10:00.000Z",

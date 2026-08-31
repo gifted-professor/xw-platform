@@ -384,7 +384,8 @@ function verifyEnvironment({ release, attestationHash, qualificationSha256, acco
     qualificationResult.value, ENVIRONMENT_QUALIFICATION_KEYS, "environment qualification",
   );
   if (attestationResult.hash !== attestationHash || qualificationResult.hash !== qualificationSha256
-    || attestationResult.value.accountIsolationHash !== accountIsolationBindingHash
+    || attestationResult.value.accountBindingHash !== accountIsolationBindingHash
+    || !HASH.test(attestationResult.value.accountIsolationHash ?? "")
     || canonicalJson(qualification.qualifiedAttestationHashes) !== canonicalJson([attestationHash])
     || qualification.capturedAt !== attestationResult.value.capturedAt
     || qualification.expiresAt !== attestationResult.value.expiresAt

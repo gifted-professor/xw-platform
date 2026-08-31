@@ -258,7 +258,7 @@ function boundedM6EnvironmentQualification(value) {
     && Object.keys(record).sort().join("\0") === [...keys].sort().join("\0");
   const hash = (entry) => /^[0-9a-f]{64}$/u.test(entry || "");
   const attestationKeys = [
-    "accessibilityHash", "accountIsolationHash", "appBuildHash", "appPackageHash",
+    "accessibilityHash", "accountBindingHash", "accountIsolationHash", "appBuildHash", "appPackageHash",
     "attestationHash", "capturedAt", "displayHash", "expiresAt", "imeHash",
     "localeThemeHash", "osBuildHash", "schemaId", "signingHash",
   ];

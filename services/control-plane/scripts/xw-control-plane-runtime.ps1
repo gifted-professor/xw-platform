@@ -794,7 +794,7 @@ $artifactInventories = @($artifactCatalog.entries | ForEach-Object {
 })
 $targetEnvironmentKeys = @(
     "schemaId", "appPackageHash", "appBuildHash", "signingHash", "osBuildHash", "displayHash",
-    "localeThemeHash", "imeHash", "accessibilityHash", "accountIsolationHash", "capturedAt", "expiresAt", "attestationHash"
+    "localeThemeHash", "imeHash", "accessibilityHash", "accountBindingHash", "accountIsolationHash", "capturedAt", "expiresAt", "attestationHash"
 )
 $environmentQualificationKeys = @(
     "schemaId", "status", "gateFEligible", "alias", "effectBoundary", "commandRegistryHash",
@@ -806,7 +806,8 @@ $targetExpires = [DateTimeOffset]::Parse([string]$targetEnvironment.expiresAt)
 $targetHashFields = @(
     $targetEnvironment.appPackageHash, $targetEnvironment.appBuildHash, $targetEnvironment.signingHash,
     $targetEnvironment.osBuildHash, $targetEnvironment.displayHash, $targetEnvironment.localeThemeHash,
-    $targetEnvironment.imeHash, $targetEnvironment.accessibilityHash, $targetEnvironment.accountIsolationHash,
+    $targetEnvironment.imeHash, $targetEnvironment.accessibilityHash, $targetEnvironment.accountBindingHash,
+    $targetEnvironment.accountIsolationHash,
     $targetEnvironment.attestationHash
 )
 if (-not (Test-ExactProperties $targetEnvironment $targetEnvironmentKeys) `
@@ -862,6 +863,10 @@ Assert-RequiredEnvironment "DEEPSEEK_API_KEY" 8
 Assert-RequiredEnvironment "XW_M6_GATE_F_OPERATIONS_TOKEN" 32
 Assert-RequiredEnvironment "XW_M6_LIVE_ENTRY_TOKEN" 32
 Assert-RequiredEnvironment "XW_M6_ACCOUNT_ISOLATION_BINDING_HASH" 64 -Hash
+$accountBindingHash = [Environment]::GetEnvironmentVariable("XW_M6_ACCOUNT_ISOLATION_BINDING_HASH", "Process")
+if (-not [string]::Equals($accountBindingHash, [string]$targetEnvironment.accountBindingHash, [StringComparison]::Ordinal)) {
+    Fail-Closed "M6_C1_ACCOUNT_ISOLATION_BINDING_INVALID"
+}
 $gateOperationsToken = [Environment]::GetEnvironmentVariable("XW_M6_GATE_F_OPERATIONS_TOKEN", "Process")
 $liveEntryToken = [Environment]::GetEnvironmentVariable("XW_M6_LIVE_ENTRY_TOKEN", "Process")
 if ([string]::Equals($gateOperationsToken, $liveEntryToken, [StringComparison]::Ordinal)) {

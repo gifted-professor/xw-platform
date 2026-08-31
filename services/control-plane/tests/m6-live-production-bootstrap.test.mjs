@@ -169,6 +169,7 @@ test("bootstrap adopts the production callback factory and reaches a zero-resour
   const environmentAttestation = deriveTargetEnvironmentAttestation({
     appPackageHash: H("1"), appBuildHash: H("2"), signingHash: H("3"), osBuildHash: H("4"),
     displayHash: H("5"), localeThemeHash: H("6"), imeHash: H("7"), accessibilityHash: H("8"),
+    accountBindingHash: H("9"),
     accountIsolationHash: H("9"), capturedAt: "2030-01-01T00:00:00.000Z", expiresAt: "2030-01-01T00:50:00.000Z",
   });
   const environmentQualification = Object.freeze({
