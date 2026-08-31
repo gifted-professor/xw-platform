@@ -50,9 +50,11 @@ import {
   TRUSTED_NODE_EXECUTABLE,
 } from "./gate-f-launcher-identity.mjs";
 import {
+  buildGateFAuxiliaryTaskXml,
   createNativeGateFCutoverAdapter,
   GATE_F_CUTOVER_OPERATOR_RELEASE_PATH,
   inspectTrustedNode,
+  parseFormalTaskDefinition,
   parseLegacyTaskDefinition,
   prepareGateFCutoverTargetFromFixedCandidate,
   replaceCurrentJunction,
@@ -3509,13 +3511,30 @@ async function captureM6QualificationFinalRelayPrestate({
       tasks.push(Object.freeze({ name: taskName, exists: false, state: "ABSENT" }));
       continue;
     }
-    if (taskName !== FINAL_TASK_NAMES[0]) {
-      fail(code, "initial qualification relay requires all three auxiliary FINAL tasks absent");
-    }
     let definition;
-    try { definition = parseLegacyTaskDefinition(inspection.xml); }
-    catch { fail(code, `${taskName} stopped XML is invalid`); }
-    if (definition.principal !== "SYSTEM") fail(code, `${taskName} is not SYSTEM-owned`);
+    if (taskName === FINAL_TASK_NAMES[0]) {
+      try { definition = parseLegacyTaskDefinition(inspection.xml); }
+      catch { fail(code, `${taskName} stopped XML is invalid`); }
+      if (definition.principal !== "SYSTEM") fail(code, `${taskName} is not SYSTEM-owned`);
+    } else {
+      let expected;
+      try {
+        definition = parseFormalTaskDefinition(inspection.xml);
+        expected = parseFormalTaskDefinition(buildGateFAuxiliaryTaskXml({ runtimeRoot, taskName }));
+      } catch {
+        fail(code, `${taskName} stopped XML is not one exact FINAL auxiliary task`);
+      }
+      const commandMatches = definition.action.command === expected.action.command
+        || definition.action.command === expected.action.command.replace(
+          /^%SystemRoot%/iu,
+          process.env.SystemRoot || process.env.WINDIR || "C:\\Windows",
+        );
+      if (definition.principal !== "SYSTEM" || definition.enabled !== true || !commandMatches
+        || definition.action.arguments !== expected.action.arguments
+        || !samePath(definition.action.workingDirectory, expected.action.workingDirectory)) {
+        fail(code, `${taskName} stopped XML is not one exact FINAL auxiliary task`);
+      }
+    }
     const artifact = publishRelayArtifact({
       runtimeRoot,
       filename: `${taskName.toLowerCase().replaceAll(/[^a-z0-9]+/gu, "-")}.xml`,
@@ -3524,7 +3543,7 @@ async function captureM6QualificationFinalRelayPrestate({
     });
     tasks.push(Object.freeze({ name: taskName, exists: true, state: inspection.state, xml: artifact }));
   }
-  if (!tasks[0].exists || tasks[0].xml.sha256 !== windowPrestate.task.xml.sha256) {
+  if (tasks[0].exists && tasks[0].xml.sha256 !== windowPrestate.task.xml.sha256) {
     fail(code, "relay task prestate does not reproduce the sealed legacy main task");
   }
   const prestate = Object.freeze({
@@ -3640,9 +3659,12 @@ async function assertFinalRelayQuiescentPreconditions({
     fail("M6_QUALIFICATION_FINAL_RELAY_CURRENT_INVALID", "current is not the qualified target release");
   }
   const task = await adapter.inspectTask();
-  if (!exactObject(task, ["exists", "state", "xml"]) || task.exists !== true
-    || !["READY", "DISABLED"].includes(task.state)
-    || sha256(Buffer.from(task.xml || "", "utf8")) !== prestate.task.xml.sha256) {
+  const taskAbsent = exactObject(task, ["exists", "state", "xml"])
+    && task.exists === false && task.state === "ABSENT" && task.xml === null;
+  const taskStoppedExact = exactObject(task, ["exists", "state", "xml"])
+    && task.exists === true && ["READY", "DISABLED"].includes(task.state)
+    && sha256(Buffer.from(task.xml || "", "utf8")) === prestate.task.xml.sha256;
+  if (!taskAbsent && !taskStoppedExact) {
     fail("M6_QUALIFICATION_FINAL_RELAY_TASK_INVALID", "sealed legacy task is not exact and stopped");
   }
   const qualificationTask = await adapter.inspectQualificationTask();

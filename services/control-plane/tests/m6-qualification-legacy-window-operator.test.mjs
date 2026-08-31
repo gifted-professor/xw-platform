@@ -29,7 +29,10 @@ import {
   validateM6QualificationLegacyPrestate,
 } from "../ops/m6-qualification-legacy-window-operator.mjs";
 import { canonicalJson as domainCanonicalJson } from "../control-plane/lib/canonical.mjs";
-import { GATE_F_CUTOVER_OPERATOR_RELEASE_PATH } from "../ops/gate-f-cutover-operator.mjs";
+import {
+  buildGateFAuxiliaryTaskXml,
+  GATE_F_CUTOVER_OPERATOR_RELEASE_PATH,
+} from "../ops/gate-f-cutover-operator.mjs";
 import { TRUSTED_NODE_EXECUTABLE } from "../ops/gate-f-launcher-identity.mjs";
 
 const LEGACY_ID = "xw-legacy-window-fixture";
@@ -264,6 +267,8 @@ function fixture(t) {
 function createAdapter(fixtureValue, {
   detachedAfterStart = false,
   failFirstTargetSwitch = false,
+  preexistingAuxTasks = false,
+  driftedAuxTask = null,
 } = {}) {
   const calls = [];
   let active = true;
@@ -276,6 +281,18 @@ function createAdapter(fixtureValue, {
   let ownerArchiveCount = 0;
   const startedParents = new Map();
   const startedNodePids = new Map();
+  const fixedTasks = new Map([
+    ["XW Platform Control Plane", task],
+    ...["XW Platform Orchestrator", "XW Platform FastOperator 03", "XW Platform FastOperator 04"]
+      .map((name) => [name, preexistingAuxTasks ? {
+        exists: true,
+        state: "READY",
+        xml: driftedAuxTask === name
+          ? buildGateFAuxiliaryTaskXml({ runtimeRoot: fixtureValue.runtimeRoot, taskName: name })
+            .replace("-NoProfile", "-NoLogo")
+          : buildGateFAuxiliaryTaskXml({ runtimeRoot: fixtureValue.runtimeRoot, taskName: name }),
+      } : { exists: false, state: "ABSENT", xml: null }]),
+  ]);
   return {
     calls,
     commandLine: `node server.mjs --token ${COMMAND_LINE_SECRET}`,
@@ -290,6 +307,10 @@ function createAdapter(fixtureValue, {
     setResidualPorts(ports) {
       residualPorts = new Set(ports);
       active = residualPorts.size > 0;
+    },
+    removeMainTask() {
+      task = { exists: false, state: "ABSENT", xml: null };
+      fixedTasks.set("XW Platform Control Plane", task);
     },
     inspectTask() {
       calls.push(["inspect-task", task.state]);
@@ -311,9 +332,8 @@ function createAdapter(fixtureValue, {
     },
     inspectFixedTask(name) {
       calls.push(["inspect-fixed-task", name]);
-      return name === "XW Platform Control Plane"
-        ? structuredClone(task)
-        : { exists: false, state: "ABSENT", xml: null };
+      if (name === "XW Platform Control Plane") return structuredClone(task);
+      return structuredClone(fixedTasks.get(name));
     },
     inspectQualificationTask() {
       calls.push(["inspect-qualification-task"]);
@@ -456,6 +476,10 @@ function createAdapter(fixtureValue, {
     cleanupFinalTasks() {
       calls.push(["cleanup-final-tasks"]);
       task = { exists: false, state: "ABSENT", xml: null };
+      fixedTasks.set("XW Platform Control Plane", task);
+      for (const name of [
+        "XW Platform Orchestrator", "XW Platform FastOperator 03", "XW Platform FastOperator 04",
+      ]) fixedTasks.set(name, { exists: false, state: "ABSENT", xml: null });
       residualPorts = new Set();
       active = false;
     },
@@ -464,6 +488,7 @@ function createAdapter(fixtureValue, {
     },
     registerFixedTaskXml(name, path) {
       calls.push(["register-fixed-task", name, path]);
+      fixedTasks.set(name, { exists: true, state: "READY", xml: readFileSync(path, "utf8") });
     },
   };
 }
@@ -1309,7 +1334,7 @@ function relayFixtureState(value) {
 
 test("relay-final preserves qualified schema-21 DB and activates the exact Gate-F tuple", async (t) => {
   const value = fixture(t);
-  const adapter = createAdapter(value);
+  const adapter = createAdapter(value, { preexistingAuxTasks: true });
   await executeM6QualificationLegacyQuiesce({
     ...value.options,
     adapter,
@@ -1392,6 +1417,49 @@ test("relay-final preserves qualified schema-21 DB and activates the exact Gate-
     "XW Platform FastOperator 03",
     "XW Platform FastOperator 04",
   ]);
+});
+
+test("relay-final rejects a stopped auxiliary task whose exact FINAL action drifted", async (t) => {
+  const value = fixture(t);
+  const adapter = createAdapter(value, {
+    preexistingAuxTasks: true,
+    driftedAuxTask: "XW Platform FastOperator 03",
+  });
+  await executeM6QualificationLegacyQuiesce({
+    ...value.options,
+    adapter,
+    databaseSnapshotter: async (path) => Buffer.from(`consistent-backup:${path}`, "utf8"),
+    timeoutMs: 50,
+    pollMs: 0,
+    delayFn: async () => {},
+  });
+  adapter.removeMainTask();
+  const state = relayFixtureState(value);
+  const cutoverCalls = [];
+  await assert.rejects(executeM6QualificationFinalRelay({
+    ...value.options,
+    assemblerReceiptHash: "a".repeat(64),
+    adapter,
+    cutoverAdapter: {
+      writeRuntimeBinding: async () => cutoverCalls.push("write"),
+      switchCurrent: async () => cutoverCalls.push("current"),
+      registerTask: async () => cutoverCalls.push("register"),
+      start: async () => cutoverCalls.push("start"),
+    },
+    qualificationInspector: () => state.qualification,
+    candidateStager: async () => state.staged,
+    targetPreparer: async () => state.prepared,
+    tupleVerifier: async () => ({
+      ok: true,
+      active: false,
+      releaseId: TARGET_ID,
+      sourceCommit: TARGET_COMMIT,
+    }),
+    timeoutMs: 50,
+    pollMs: 0,
+    delayFn: async () => {},
+  }), /M6_QUALIFICATION_FINAL_RELAY_PRESTATE_INVALID/u);
+  assert.deepEqual(cutoverCalls, []);
 });
 
 test("relay-final rolls back when health is live but task-owned ancestry proof is absent", async (t) => {
