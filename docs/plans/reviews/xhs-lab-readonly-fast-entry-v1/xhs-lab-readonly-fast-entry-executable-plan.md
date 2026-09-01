@@ -59,3 +59,10 @@ exit：全部绿；raw dump/UI XML 任何 gateway 持有文件零命中。
 
 - 输出仅 `LAB_READ_ONLY_SLOT_REACHED`（真机段）或 OFFLINE_PASS（离线段）。
 - 不声明 production alias/device identity、Gate、release、acceptance。
+
+## 执行结果（2026-09-01）
+
+- **离线段：OFFLINE_PASS**。probe 全绿：lab 15/15（含 Medium shell 集成启停）+ `fast-operator-auth`/serve-dispatch 4/4 + fusion verify PASS（allowlist 增补 3 个 lab 文件、relay 删除清零 extra）+ CP check-js（含 lab/）317 文件 + secret-scan PASS。
+- 落地 commit：`d661c3e`（lab gateway/client/tests/胡姬花 pack/清理）+ `cb1adda`（relay 删除）。
+- 已知非本计划范围的预存失败：CP 全量 suite 中 65 个与本入口无关的预存失败（evidence-store/ACL/verifyConstraint 等，HEAD 上即失败，未改动其代码）。
+- **真机段：未执行（WP5 硬停）**。无任何流量发往 17895/17897，未占用/未杀 17920/17930。live smoke 待操作者逐段授权。
