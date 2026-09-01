@@ -431,7 +431,10 @@
         "tests/xhs-v3-ecorpus-bootstrap-wiring.test.mjs",
         "tests/xhs-v3-fixed-operator-auth.test.mjs",
         "tests/xhs-v3-production-operator.test.mjs",
-        "tests/xhs-v3-task-router.test.mjs"
+        "tests/xhs-v3-task-router.test.mjs",
+        "lab/lab-readonly-gateway.mjs",
+        "lab/lab-readonly-client.mjs",
+        "tests/lab-readonly-gateway.test.mjs"
       ]
     }
   }

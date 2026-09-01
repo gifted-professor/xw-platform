@@ -31,3 +31,6 @@ Thumbs.db
 *.swo
 .idea/
 .vscode/
+
+# XHS lab-only read-only entry local data (client token, receipts) — never commit
+.xw-lab/
