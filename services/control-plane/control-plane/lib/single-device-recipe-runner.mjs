@@ -12,6 +12,7 @@
  * DeviceRun/Mission binding is deferred to PR2.
  */
 import { randomUUID } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
 
 import {
   bindRecipeInput,
@@ -181,6 +182,7 @@ export class SingleDeviceRecipeRunner {
    *   resolveRecipe?: (recipeId: string, revision?: number|null) => object|null,
    *   callCapability?: Function|null,
    *   observeForAssert?: Function|null,
+   *   readDumpXml?: (opts: { path: string, runId: string, storage?: object }) => string,
    *   fixedAlias?: string,
    *   clock?: () => number,
    *   sleepFn?: (ms: number) => Promise<void>,
@@ -203,6 +205,7 @@ export class SingleDeviceRecipeRunner {
     this.resolveRecipe = typeof deps.resolveRecipe === "function" ? deps.resolveRecipe : null;
     this.callCapability = typeof deps.callCapability === "function" ? deps.callCapability : null;
     this.observeForAssert = typeof deps.observeForAssert === "function" ? deps.observeForAssert : null;
+    this.readDumpXml = typeof deps.readDumpXml === "function" ? deps.readDumpXml : null;
     this.fixedAlias = resolveFixedRpaAlias(process.env, deps.fixedAlias ?? null);
     this.clock = typeof deps.clock === "function" ? deps.clock : () => Date.now();
     this.sleepFn = typeof deps.sleepFn === "function" ? deps.sleepFn : (ms) => new Promise((r) => setTimeout(r, ms));
@@ -449,6 +452,7 @@ export class SingleDeviceRecipeRunner {
         ? async (opts) => this.callCapability({ ...opts, run })
         : null,
       sleepFn: this.sleepFn,
+      ...(typeof this.readDumpXml === "function" ? { readDumpXml: this.readDumpXml } : {}),
     });
 
     const sessionHandle = {
@@ -647,13 +651,28 @@ function summarizeActResult(actResult) {
     jobId: job?.jobId ?? actResult.result?.jobId ?? null,
     status: job?.status ?? actResult.result?.status ?? null,
     primitive: actResult.params?.primitive ?? null,
+    // Composite handlers (tapFeedCard) surface their sense-dump + selection so
+    // receipts stay the single evidence pointer for downstream extractors.
+    ...(actResult.selection != null ? { selection: actResult.selection } : {}),
+    ...(actResult.dumpJobId != null ? { dumpJobId: actResult.dumpJobId } : {}),
   };
 }
 
 function observationFromPrimitiveResults(focusOut, dumpOut) {
   const focusPayload = unwrapOutput(focusOut);
   const dumpPayload = unwrapOutput(dumpOut);
-  const dumpXml = extractDumpXml(dumpPayload);
+  let dumpXml = extractDumpXml(dumpPayload);
+  // Live dump jobs write the artifact to disk ({bytes, ok, path}) without
+  // inlining the XML. Content assertions (textExists / resourceIdExists) are
+  // meaningless without it — read the bound run artifact as a fallback.
+  if (!dumpXml && typeof dumpPayload?.path === "string" && dumpPayload.path && existsSync(dumpPayload.path)) {
+    try {
+      const xml = readFileSync(dumpPayload.path, "utf8");
+      if (xml.includes("<hierarchy")) dumpXml = xml;
+    } catch {
+      /* unreadable artifact → keep empty dumpXml */
+    }
+  }
   return {
     package: focusPayload?.package ?? focusPayload?.focus?.package ?? null,
     activity: focusPayload?.activity ?? focusPayload?.focus?.activity ?? null,

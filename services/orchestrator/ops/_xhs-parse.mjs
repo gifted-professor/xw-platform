@@ -192,6 +192,7 @@ function allNodes(xml) {
       h: B - T,
       text: decodeEntities((tag.match(/text="([^"]*)"/) || [])[1] || ""),
       desc: decodeEntities((tag.match(/content-desc="([^"]*)"/) || [])[1] || ""),
+      rid: decodeEntities((tag.match(/resource-id="([^"]*)"/) || [])[1] || ""),
       clickable: /clickable="true"/.test(tag),
       enabled: !/enabled="false"/.test(tag),
       focused: /focused="true"/.test(tag),
@@ -200,6 +201,7 @@ function allNodes(xml) {
   }
   return out;
 }
+export { allNodes };
 
 /**
  * Search result page parser (GlobalSearchActivity).

@@ -9,6 +9,9 @@
  */
 import { randomUUID } from "node:crypto";
 
+import { selectFeedCard } from "./xhs-feed-card-select.mjs";
+import { readBoundUtf8Artifact } from "../../../orchestrator/scripts/lib/xhs-routine-artifact.mjs";
+
 const EXPLORER_CAPABILITY_ID = "xiaowei.explorer.primitive";
 
 function handlerError(code, message, details = {}) {
@@ -115,6 +118,7 @@ export function mapRecipeKindToPrimitiveParams(kind, args = {}) {
  *   callCapability?: (opts: object) => Promise<object>|object,
  *   sleepFn?: (ms: number) => Promise<void>,
  *   newIdempotencyKey?: () => string,
+ *   readDumpXml?: (opts: { path: string, runId: string, storage?: object }) => string,
  * }} deps
  */
 export function createRecipePrimitiveHandlers(deps = {}) {
@@ -123,6 +127,7 @@ export function createRecipePrimitiveHandlers(deps = {}) {
     callCapability = null,
     sleepFn = sleep,
     newIdempotencyKey = () => `recipe-${randomUUID()}`,
+    readDumpXml = readBoundUtf8Artifact,
   } = deps;
 
   if (typeof executePrimitive !== "function") {
@@ -151,6 +156,65 @@ export function createRecipePrimitiveHandlers(deps = {}) {
     swipe: (ctx) => runPrimitive("swipe", ctx),
     input: (ctx) => runPrimitive("input", ctx),
     tapSelector: (ctx) => runPrimitive("tapSelector", ctx),
+
+    /**
+     * tapFeedCard — composite: sense-dump → select a feed card → tap its center.
+     * Coordinates are resolved at execution time (never sealed into the recipe
+     * spec), so one spec serves multiple devices/resolutions. Selection info
+     * flows to the receipt via summarizeActResult (selection + dumpJobId).
+     */
+    async tapFeedCard({ session, step, call }) {
+      const args = call?.args || step?.params || {};
+
+      // 1) Sense: fresh dump of the current screen (read-only).
+      const dumpOut = await runPrimitive("dump", {
+        session,
+        step,
+        call: { op: "dump", args: {} },
+      });
+      const dumpJob = dumpOut?.result ?? dumpOut ?? {};
+      const dumpJobId = dumpJob?.jobId ?? null;
+      const output = dumpJob?.result?.output ?? dumpJob?.output ?? dumpJob?.result ?? {};
+      let xml = typeof output.xml === "string" && output.xml.length > 0 ? output.xml : "";
+      if (!xml && typeof output.path === "string" && output.path) {
+        xml = readDumpXml({
+          path: output.path,
+          runId: dumpJob?.runId ?? dumpJob?.result?.runId ?? null,
+          storage: dumpJob?.storage ?? dumpJob?.result?.storage ?? null,
+        });
+      }
+      if (!xml) {
+        throw handlerError(
+          "TAP_FEED_CARD_DUMP_EMPTY",
+          "tapFeedCard sense dump produced no readable XML",
+          { dumpJobId, path: output.path ?? null },
+        );
+      }
+
+      // 2) Select (pure; throws typed TAP_FEED_CARD_* errors).
+      let selection;
+      try {
+        selection = selectFeedCard(xml, {
+          pickIndex: args.pickIndex,
+          preferKind: args.preferKind,
+          fallbackToAny: args.fallbackToAny,
+          yMinFrac: args.yMinFrac,
+          yMaxFrac: args.yMaxFrac,
+        });
+      } catch (e) {
+        e.details = { ...(e.details || {}), dumpJobId };
+        throw e;
+      }
+
+      // 3) Tap the card center via the plain tap primitive.
+      const tapOut = await runPrimitive("tapSelector", {
+        session,
+        step,
+        call: { op: "tapSelector", args: { x: selection.x, y: selection.y } },
+      });
+      const tapJob = tapOut?.result ?? tapOut ?? {};
+      return { ok: true, kind: "tapFeedCard", params: args, result: tapJob, selection, dumpJobId };
+    },
 
     async wait({ call, step }) {
       const ms = Number(call?.args?.ms ?? step?.params?.ms ?? 0);

@@ -26,6 +26,7 @@ export const RECIPE_PRIMITIVE_KINDS = Object.freeze([
   "focus",
   "screenshot",
   "tapSelector",
+  "tapFeedCard",
   "swipe",
   "input",
   "back",
@@ -181,6 +182,31 @@ function validateParamsForKind(kind, params, stepId) {
         out.x = coord.x;
         out.y = coord.y;
         out.deviceBound = coord.deviceBound;
+      }
+      return out;
+    }
+    case "tapFeedCard": {
+      const out = {};
+      if (p.pickIndex != null) {
+        if (!Number.isInteger(p.pickIndex) || p.pickIndex < 0 || p.pickIndex > 20) {
+          throw err(`step ${stepId}: tapFeedCard.pickIndex must be an integer 0..20`);
+        }
+        out.pickIndex = p.pickIndex;
+      }
+      if (p.preferKind != null) {
+        if (!["image", "video", "any"].includes(p.preferKind)) {
+          throw err(`step ${stepId}: tapFeedCard.preferKind must be image|video|any`);
+        }
+        out.preferKind = p.preferKind;
+      }
+      if (p.fallbackToAny != null) out.fallbackToAny = Boolean(p.fallbackToAny);
+      for (const key of ["yMinFrac", "yMaxFrac"]) {
+        if (p[key] != null) {
+          if (!isFiniteNumber(p[key]) || p[key] < 0 || p[key] > 1) {
+            throw err(`step ${stepId}: tapFeedCard.${key} must be a number 0..1`);
+          }
+          out[key] = p[key];
+        }
       }
       return out;
     }

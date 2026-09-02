@@ -46,6 +46,7 @@ export const RECIPE_PRIMITIVE_KINDS = Object.freeze([
   "focus",
   "screenshot",
   "tapSelector",
+  "tapFeedCard",
   "swipe",
   "input",
   "back",
@@ -171,6 +172,28 @@ export function validateRecipeSteps(steps) {
         const hasCoords = params.x != null && params.y != null;
         if (!hasSelector && !hasCoords) {
           throw err(`step ${id}: tapSelector requires selector or x/y fallback`);
+        }
+        break;
+      }
+      case "tapFeedCard": {
+        // Composite dump-driven tap: no sealed coordinates by design.
+        if (
+          params.pickIndex != null &&
+          (!Number.isInteger(params.pickIndex) || params.pickIndex < 0 || params.pickIndex > 20)
+        ) {
+          throw err(`step ${id}: tapFeedCard.pickIndex must be an integer 0..20`);
+        }
+        if (
+          params.preferKind != null &&
+          !["image", "video", "any"].includes(params.preferKind)
+        ) {
+          throw err(`step ${id}: tapFeedCard.preferKind must be image|video|any`);
+        }
+        for (const key of ["yMinFrac", "yMaxFrac"]) {
+          const v = params[key];
+          if (v != null && (typeof v !== "number" || !Number.isFinite(v) || v < 0 || v > 1)) {
+            throw err(`step ${id}: tapFeedCard.${key} must be a number 0..1`);
+          }
         }
         break;
       }

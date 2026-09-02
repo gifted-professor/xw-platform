@@ -19,6 +19,7 @@ const ALL_KINDS = [
   "focus",
   "screenshot",
   "tapSelector",
+  "tapFeedCard",
   "swipe",
   "input",
   "back",
