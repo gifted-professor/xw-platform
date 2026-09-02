@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "xw.xhs.e-corpus-pass.v1",
+  "title": "XHS V3 E-Corpus PASS artifact",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaId",
+    "schemaVersion",
+    "status",
+    "issuedAtMs",
+    "expiresAtMs",
+    "owner",
+    "binding",
+    "artifactHash",
+    "seal"
+  ],
+  "properties": {
+    "schemaId": { "const": "xw.xhs.e-corpus-pass.v1" },
+    "schemaVersion": { "const": 1 },
+    "status": { "const": "PASS" },
+    "issuedAtMs": { "type": "integer", "minimum": 0 },
+    "expiresAtMs": { "type": "integer", "minimum": 1 },
+    "owner": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["taskName", "taskBindingHash", "launcherHash", "callerPathHash"],
+      "properties": {
+        "taskName": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._-]{0,127}$" },
+        "taskBindingHash": { "$ref": "#/$defs/hex64" },
+        "launcherHash": { "$ref": "#/$defs/hex64" },
+        "callerPathHash": { "$ref": "#/$defs/hex64" }
+      }
+    },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "releaseId",
+        "sourceCommit",
+        "providerBundleDigest",
+        "corpusManifestHash",
+        "privateIndexDigest",
+        "evaluatorSourceHash",
+        "testReportHash",
+        "digestKeyId",
+        "gateEpoch"
+      ],
+      "properties": {
+        "releaseId": { "type": "string", "pattern": "^[A-Za-z0-9._-]{1,128}$" },
+        "sourceCommit": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+        "providerBundleDigest": { "$ref": "#/$defs/hex64" },
+        "corpusManifestHash": { "$ref": "#/$defs/hex64" },
+        "privateIndexDigest": { "$ref": "#/$defs/hex64" },
+        "evaluatorSourceHash": { "$ref": "#/$defs/hex64" },
+        "testReportHash": { "$ref": "#/$defs/hex64" },
+        "digestKeyId": { "type": "string", "pattern": "^[A-Za-z0-9-]{1,64}$" },
+        "gateEpoch": { "$ref": "#/$defs/hex64" }
+      }
+    },
+    "artifactHash": { "$ref": "#/$defs/hex64" },
+    "seal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "digestKeyId", "digest"],
+      "properties": {
+        "algorithm": { "const": "HMAC-SHA-256" },
+        "digestKeyId": { "type": "string", "pattern": "^[A-Za-z0-9-]{1,64}$" },
+        "digest": { "$ref": "#/$defs/hex64" }
+      }
+    }
+  },
+  "$defs": {
+    "hex64": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}

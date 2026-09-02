@@ -7,10 +7,18 @@
   "scripts": {
     "check": "node scripts/check-js.mjs && node scripts/secret-scan.mjs",
     "control-plane": "node control-plane/server.mjs serve",
+    "xhs-v3:operator-fixed": "node ops/xhs-v3-production-operator.mjs",
+    "m6-4:qualification-tcb-provision-fixed": "node ops/m6-qualification-tcb-provision-fixed.mjs",
     "devicectl": "node control-plane/devicectl.mjs",
     "evidence:index": "node control-plane/index-legacy-evidence.mjs",
     "test": "node --test tests/*.test.mjs",
-    "test:control": "node --test tests/control-plane-*.test.mjs tests/capability-registry.test.mjs"
+    "test:control": "node --test tests/control-plane-*.test.mjs tests/capability-registry.test.mjs",
+    "test:xhs-lab": "node --test --test-force-exit tests/lab-readonly-gateway.test.mjs",
+    "xhs:lab:start": "node lab/lab-readonly-client.mjs start",
+    "xhs:lab:stop": "node lab/lab-readonly-client.mjs stop",
+    "xhs:lab:status": "node lab/lab-readonly-client.mjs status",
+    "xhs:lab:focus": "node lab/lab-readonly-client.mjs focus",
+    "xhs:lab:dump": "node lab/lab-readonly-client.mjs dump"
   },
   "engines": {
     "node": "24.11.1"

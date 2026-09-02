@@ -15,7 +15,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
 
@@ -27,7 +27,10 @@ import {
   m6C1RuntimeOwnerLockPath,
 } from "../../services/control-plane/control-plane/lib/m6-c1-runtime-owner-lock.mjs";
 import { bootstrapM6Qualification } from "../../services/control-plane/control-plane/lib/m6-qualification-bootstrap.mjs";
-import { StateStore } from "../../services/control-plane/control-plane/lib/state-store.mjs";
+import {
+  CURRENT_CONTROL_SCHEMA_VERSION,
+  StateStore,
+} from "../../services/control-plane/control-plane/lib/state-store.mjs";
 import {
   RECOVERABLE_PUBLICATION_CUTS,
 } from "./lib/recoverable-create-only-publication.mjs";
@@ -36,7 +39,9 @@ import {
   buildM64QualificationBootstrapSigningDraft,
   M64_QUALIFICATION_INVENTORY_SENTINEL_HASH,
   operateM64QualificationBootstrap,
+  operateM64QualificationBootstrapRotation,
   planM64QualificationBootstrap,
+  planM64QualificationBootstrapRotation,
 } from "./m6-4-qualification-bootstrap-operator.mjs";
 
 const NOW = Date.parse("2030-01-01T00:00:05.000Z");
@@ -430,7 +435,7 @@ test("execute holds the shared guard, writes exact nine-key binding, then conten
     assert.equal(guard.acquisitions, 1);
     assert.equal(guard.releases, 1);
     assert.equal(guard.held, false);
-    assert.equal(dbVersion(f.dbPath), 20);
+    assert.equal(dbVersion(f.dbPath), CURRENT_CONTROL_SCHEMA_VERSION);
     assert.equal(existsSync(first.snapshotPath), true);
     assert.equal(first.snapshotPath.startsWith(f.snapshotRoot), true);
     assert.equal(existsSync(join(f.runtimeRoot, "qualification-bootstrap", "final-inventory-unavailable.json")), false);
@@ -478,7 +483,7 @@ test("crash after bootstrap or binding recovers idempotently without resnapshott
       }),
       { code: "TEST_CRASH" },
     );
-    assert.equal(dbVersion(afterBootstrap.dbPath), 20);
+    assert.equal(dbVersion(afterBootstrap.dbPath), CURRENT_CONTROL_SCHEMA_VERSION);
     assert.equal(snapshotCallsA, 1);
     assert.equal(existsSync(join(afterBootstrap.runtimeRoot, "config", "m6-c1-qualification-bootstrap.v1.json")), false);
     const recovered = await operateM64QualificationBootstrap(afterBootstrap.input, {
@@ -728,6 +733,317 @@ test("binding published ahead of the v18 DB fence is rejected even when its byte
       { code: "M64_QUALIFICATION_OPERATOR_BINDING_AHEAD" },
     );
     assert.equal(dbVersion(f.dbPath), 18);
+  } finally {
+    f.cleanup();
+  }
+});
+
+function rotationStoppedGuardTracker() {
+  const tracker = { acquisitions: 0, releases: 0, retains: 0, held: false };
+  tracker.acquire = async ({ ownerKind }) => {
+    assert.equal(ownerKind, "QUALIFICATION_ROTATION");
+    tracker.acquisitions += 1;
+    tracker.held = true;
+    return Object.freeze({
+      assertOwned() {
+        assert.equal(tracker.held, true);
+        return true;
+      },
+      async release() {
+        assert.equal(tracker.held, true);
+        tracker.held = false;
+        tracker.releases += 1;
+      },
+      async retainStaleLock() {
+        assert.equal(tracker.held, true);
+        tracker.held = false;
+        tracker.retains += 1;
+      },
+    });
+  };
+  return tracker;
+}
+
+function readFence(path) {
+  const db = new DatabaseSync(`${pathToFileURL(path).href}?mode=ro&immutable=1`, { readOnly: true });
+  try {
+    const row = db.prepare("SELECT * FROM m6_gate_fence WHERE marker='M6'").get();
+    return {
+      gateId: row.gate_id,
+      epochHash: row.epoch_hash,
+      generation: Number(row.generation),
+      mode: row.mode,
+      allowlist: JSON.parse(row.allowlist_json),
+      expiresAt: row.expires_at,
+      releaseId: row.release_id,
+      sourceCommit: row.source_commit,
+      locksHash: row.locks_hash,
+    };
+  } finally {
+    db.close();
+  }
+}
+
+async function rotationFixture({ rotateNow = Date.parse("2030-01-03T00:00:05.000Z") } = {}) {
+  const f = fixture();
+  const bootstrapGuard = stoppedGuardTracker();
+  await operateM64QualificationBootstrap(f.input, {
+    execute: true,
+    dependencies: {
+      ...releaseDependencies(),
+      acquireStoppedRuntimeGuard: bootstrapGuard.acquire,
+    },
+  });
+  const previousBindingPath = join(f.runtimeRoot, "config", "m6-c1-qualification-bootstrap.v1.json");
+  const previousBindingSha256 = sha256(readFileSync(previousBindingPath));
+  const nextRelease = `${RELEASE}-next`;
+  const nextSource = "b".repeat(40);
+  const nextGate = `${GATE}-next`;
+  const nextReleaseRoot = join(f.root, "release-next");
+  const iso = (offset) => new Date(rotateNow + offset).toISOString();
+  const draft = buildM64QualificationBootstrapSigningDraft({
+    releaseId: nextRelease,
+    sourceCommit: nextSource,
+    gateId: nextGate,
+    locksRecord: {
+      schemaId: "xw.m6-locks.v1",
+      releaseId: nextRelease,
+      sourceCommit: nextSource,
+      lockHashes: { ...LOCKS, runtimeProfile: "5".repeat(64) },
+    },
+    actor: ACTOR,
+    rootIssuedAt: iso(-4_000),
+    closeoutCommittedAt: iso(-3_000),
+    closedIssuedAt: iso(-2_000),
+    promotedAt: iso(-1_000),
+    expiresAt: iso(86_400_000),
+    issuerAllowlistSha256: sha256(readFileSync(f.issuerAllowlistPath)),
+  });
+  const pkg = assembleM64QualificationBootstrapPackage({
+    draft,
+    rootProof: epochProof(draft.rootEpoch.epochHash, f.privateKey),
+    closedProof: epochProof(draft.closedEpoch.epochHash, f.privateKey),
+    issuerAllowlistPath: f.issuerAllowlistPath,
+    runtimeRoot: f.runtimeRoot,
+    nowMs: rotateNow,
+  });
+  const bootstrapPackagePath = writeJson(
+    join(f.root, "rotation-handoff", `${pkg.packageHash}.json`),
+    pkg,
+  );
+  writeJson(join(nextReleaseRoot, "release-manifest.v1.json"), {
+    schemaId: "xw.runtime.release-manifest.v1",
+    releaseId: nextRelease,
+    sourceCommit: nextSource,
+  });
+  writeJson(join(nextReleaseRoot, "services", "control-plane", "apps", "xiaowei", "capabilities.json"), {
+    capabilities: [{
+      id: "xiaowei.m6.grounded_run",
+      implementation: {
+        adapter: "xiaowei",
+        action: "m6_grounded_run",
+        tcbManifestRef: "xw.m6-grounded-run.tcb.v1",
+        implementationClosureHash: "4".repeat(64),
+      },
+    }],
+  });
+  const input = {
+    bootstrapPackagePath,
+    issuerAllowlistPath: f.issuerAllowlistPath,
+    releaseRoot: nextReleaseRoot,
+    runtimeRoot: f.runtimeRoot,
+    snapshotRoot: f.snapshotRoot,
+  };
+  const stopProof = ({ includePorts = true } = {}) => Object.freeze({
+    tasks: Object.freeze([
+      "XW Platform Control Plane", "XW Platform Orchestrator",
+      "XW Platform FastOperator 03", "XW Platform FastOperator 04",
+    ].map((name) => Object.freeze({ name, state: "Ready" }))),
+    exclusivePorts: Object.freeze(includePorts ? [17920, 17930] : []),
+  });
+  const bindingTcbSeals = [];
+  const sealQualificationBinding = ({ runtimeRoot }) => {
+    assert.equal(resolve(runtimeRoot), resolve(f.runtimeRoot));
+    const path = previousBindingPath;
+    const receipt = Object.freeze({
+      path,
+      sha256: sha256(readFileSync(path)),
+      protectedDacl: true,
+    });
+    bindingTcbSeals.push(receipt.sha256);
+    return receipt;
+  };
+  return {
+    ...f,
+    rotateNow,
+    nextRelease,
+    nextSource,
+    nextGate,
+    nextReleaseRoot,
+    nextDraft: draft,
+    nextPackage: pkg,
+    rotationInput: input,
+    previousBindingPath,
+    previousBindingSha256,
+    bindingTcbSeals,
+    rotationDependencies: {
+      ...releaseDependencies(),
+      now: () => rotateNow,
+      inspectRuntimeStopped: stopProof,
+      sealQualificationBinding,
+    },
+  };
+}
+
+test("expired qualification rotation preflight is read-only and execute preserves the old audit chain", async () => {
+  const f = await rotationFixture();
+  const guard = rotationStoppedGuardTracker();
+  try {
+    const before = treeSnapshot(f.root);
+    const preflight = planM64QualificationBootstrapRotation(
+      f.rotationInput,
+      f.rotationDependencies,
+    );
+    assert.equal(preflight.writesPerformed, 0);
+    assert.equal(preflight.previousFence.generation, 0);
+    assert.equal(preflight.previousFence.mode, "CLOSED");
+    assert.deepEqual(preflight.previousFence.allowlist, ["01"]);
+    assert.equal(preflight.resourceCounts.actionCount, 0);
+    assert.equal(treeSnapshot(f.root), before);
+
+    const result = await operateM64QualificationBootstrapRotation(f.rotationInput, {
+      execute: true,
+      dependencies: {
+        ...f.rotationDependencies,
+        acquireStoppedRuntimeGuard: guard.acquire,
+      },
+    });
+    assert.equal(result.status, "ROTATED");
+    assert.equal(guard.acquisitions, 1);
+    assert.equal(guard.releases, 1);
+    assert.equal(guard.retains, 0);
+    const fence = readFence(f.dbPath);
+    assert.equal(fence.gateId, f.nextGate);
+    assert.equal(fence.generation, 0);
+    assert.equal(fence.mode, "CLOSED");
+    assert.equal(sha256(readFileSync(f.previousBindingPath)), preflight.nextBindingSha256);
+    assert.deepEqual(f.bindingTcbSeals, [preflight.nextBindingSha256]);
+    assert.equal(existsSync(preflight.previous.paths.gateRoot), true);
+    assert.equal(existsSync(preflight.previous.receiptPath), true);
+    assert.equal(
+      sha256(readFileSync(join(result.archiveRoot, "previous-binding.v1.json"))),
+      f.previousBindingSha256,
+    );
+    assert.equal(existsSync(result.receiptPath), true);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("qualification rotation rejects running tasks, unexpired roots, WAL, and durable M6 residue before mutation", async () => {
+  const running = await rotationFixture();
+  try {
+    const before = treeSnapshot(running.root);
+    assert.throws(
+      () => planM64QualificationBootstrapRotation(running.rotationInput, {
+        ...running.rotationDependencies,
+        inspectRuntimeStopped() {
+          const error = new Error("formal task is still running");
+          error.code = "M64_QUALIFICATION_ROTATION_STOP_UNPROVEN";
+          throw error;
+        },
+      }),
+      { code: "M64_QUALIFICATION_ROTATION_STOP_UNPROVEN" },
+    );
+    assert.equal(treeSnapshot(running.root), before);
+  } finally {
+    running.cleanup();
+  }
+
+  const unexpired = await rotationFixture({ rotateNow: Date.parse("2030-01-01T12:00:00.000Z") });
+  try {
+    assert.throws(
+      () => planM64QualificationBootstrapRotation(
+        unexpired.rotationInput,
+        unexpired.rotationDependencies,
+      ),
+      { code: "M64_QUALIFICATION_ROTATION_FENCE_INELIGIBLE" },
+    );
+    assert.equal(sha256(readFileSync(unexpired.previousBindingPath)), unexpired.previousBindingSha256);
+  } finally {
+    unexpired.cleanup();
+  }
+
+  const wal = await rotationFixture();
+  try {
+    writeFileSync(`${wal.dbPath}-wal`, "not-a-checkpointed-boundary", "utf8");
+    assert.throws(
+      () => planM64QualificationBootstrapRotation(wal.rotationInput, wal.rotationDependencies),
+      { code: "M64_QUALIFICATION_OPERATOR_DB_WAL_PRESENT" },
+    );
+  } finally {
+    wal.cleanup();
+  }
+
+  const residue = await rotationFixture();
+  try {
+    const db = new DatabaseSync(residue.dbPath);
+    try {
+      db.prepare(`INSERT INTO m6_emergency_close_consumptions (
+        nonce, authorization_hash, reason_code, consumed_at
+      ) VALUES (?,?,?,?)`).run("residue", "6".repeat(64), "TEST", residue.rotateNow - 1);
+    } finally {
+      db.close();
+    }
+    assert.throws(
+      () => planM64QualificationBootstrapRotation(residue.rotationInput, residue.rotationDependencies),
+      { code: "M64_QUALIFICATION_OPERATOR_RESOURCES_NOT_ZERO" },
+    );
+  } finally {
+    residue.cleanup();
+  }
+});
+
+test("qualification rotation restores the exact old DB and binding after a post-CAS fault", async () => {
+  const f = await rotationFixture();
+  const guard = rotationStoppedGuardTracker();
+  try {
+    const oldFence = readFence(f.dbPath);
+    const oldDbSha256 = sha256(readFileSync(f.dbPath));
+    const preflight = planM64QualificationBootstrapRotation(
+      f.rotationInput,
+      f.rotationDependencies,
+    );
+    await assert.rejects(
+      operateM64QualificationBootstrapRotation(f.rotationInput, {
+        execute: true,
+        dependencies: {
+          ...f.rotationDependencies,
+          acquireStoppedRuntimeGuard: guard.acquire,
+        },
+        faultAfter(point) {
+          if (point === "binding") {
+            const error = new Error("injected post-binding fault");
+            error.code = "TEST_ROTATION_POST_BINDING_FAULT";
+            throw error;
+          }
+        },
+      }),
+      (error) => {
+        assert.equal(error.code, "TEST_ROTATION_POST_BINDING_FAULT");
+        assert.equal(error.rotationRollback?.bindingSha256, f.previousBindingSha256);
+        return true;
+      },
+    );
+    assert.equal(guard.releases, 1);
+    assert.equal(guard.retains, 0);
+    assert.equal(sha256(readFileSync(f.previousBindingPath)), f.previousBindingSha256);
+    assert.deepEqual(f.bindingTcbSeals, [
+      preflight.nextBindingSha256,
+      f.previousBindingSha256,
+    ]);
+    assert.equal(sha256(readFileSync(f.dbPath)), oldDbSha256);
+    assert.deepEqual(readFence(f.dbPath), oldFence);
   } finally {
     f.cleanup();
   }

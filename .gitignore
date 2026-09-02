@@ -24,6 +24,9 @@ runtime/
 .env.*
 !.env.example
 
+# Operator-private device identities — never commit
+secrets/
+
 # OS / 编辑器
 .DS_Store
 Thumbs.db
@@ -31,3 +34,6 @@ Thumbs.db
 *.swo
 .idea/
 .vscode/
+
+# XHS lab-only read-only entry local data (client token, receipts) — never commit
+.xw-lab/

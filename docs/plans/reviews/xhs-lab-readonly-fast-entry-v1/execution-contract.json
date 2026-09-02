@@ -1,0 +1,161 @@
+{
+  "schema": "multi-model-execution-contract.v1",
+  "planSha256": "5658803bbeed303c9f4c5422582214dfebd6e5c60e45fff52c11f1ea64310d6e",
+  "authorizationMode": "fix-once",
+  "budgets": {
+    "externalReviewWaves": 1,
+    "reviewerDrivenFixBatches": 1,
+    "localRepairTails": 0,
+    "targetedVerifications": 1
+  },
+  "execution": {
+    "runtime": "claude-cli",
+    "primaryModel": "glm-5.3",
+    "maxModelSwitches": 0,
+    "rehydrateOnContextChange": true
+  },
+  "items": [
+    {
+      "id": "XHS-LAB-AUTH-01",
+      "severity": "P1",
+      "invariant": "Only the lab gateway can hold an operator token, and only constant focus or dump bodies can cross the gateway-to-FastOperator trust boundary.",
+      "riskClasses": [
+        "trust-boundary",
+        "single-use-authorization"
+      ],
+      "requiredArtifacts": [
+        "services/control-plane/lab/lab-readonly-gateway.mjs",
+        "services/control-plane/lab/lab-readonly-client.mjs",
+        "services/control-plane/tests/lab-readonly-gateway.test.mjs"
+      ],
+      "forbiddenDependencies": [
+        "caller-supplied FastOperator action body, URL, port, deviceId, runtimeId, leaseId, or operator token",
+        "operator token in an API response, receipt, log, error, command line, or tracked file",
+        "tap, scroll, open, launch, back, input, social, settings, payment, raw shell, ADB, or 22222 forwarding"
+      ],
+      "probes": [
+        {
+          "id": "auth-adversarial",
+          "kind": "adversarial",
+          "procedure": "Send extra keys, alternate action names, URL/port/body injection, missing or forged client tokens, browser Origin headers, and malformed labels to the lab API while a fake FastOperator counts calls.",
+          "preFixExpected": "The lab entry does not exist or cannot prove these payloads stop before forwarding.",
+          "postFixExpected": "Every adversarial request is rejected and the fake FastOperator call count remains zero.",
+          "pathExercise": "Assert each payload reached the gateway parser/authorization branch and assert the forwarding spy remained at zero."
+        },
+        {
+          "id": "auth-forgery",
+          "kind": "forgery",
+          "procedure": "Forge client tokens, operator tokens, lease IDs, slot IDs, and runtime callback bodies against the compatibility authorization endpoint.",
+          "preFixExpected": "No bounded lab authorization implementation exists.",
+          "postFixExpected": "All forged combinations fail before authorization and no operator work is released.",
+          "pathExercise": "Assert the compatibility endpoint parsed every forged request and recorded an authorization rejection without exposing either real token."
+        },
+        {
+          "id": "auth-replay",
+          "kind": "replay",
+          "procedure": "Replay a previously successful operator authorization and replay the same client request after release.",
+          "preFixExpected": "No single-use lab authorization state exists.",
+          "postFixExpected": "The operator token authorizes exactly once and both replays fail with forwarding count unchanged.",
+          "pathExercise": "Assert one initial authorization succeeded, the lease state advanced, and both replay branches were exercised."
+        }
+      ]
+    },
+    {
+      "id": "XHS-LAB-BIND-01",
+      "severity": "P1",
+      "invariant": "Lab results identify only a fixed listener slot; runtime binding is an ephemeral consistency check and is never represented as trusted device identity.",
+      "riskClasses": [
+        "trust-boundary"
+      ],
+      "requiredArtifacts": [
+        "slot-only agent entry and receipt schema",
+        "runtime HMAC consistency tests"
+      ],
+      "forbiddenDependencies": [
+        "production alias or device identity claims",
+        "raw runtimeId in logs, responses, receipts, or files",
+        "runtime identity persisted across gateway restarts"
+      ],
+      "probes": [
+        {
+          "id": "bind-adversarial",
+          "kind": "adversarial",
+          "procedure": "Authorize a slot once, then submit callbacks with a different runtimeId, a different slot, and a restart simulation while inspecting all public responses and receipts.",
+          "preFixExpected": "The plan's original TOFU design could be mistaken for alias identity.",
+          "postFixExpected": "Runtime drift fails within one process, restart clears only the ephemeral consistency binding, and outputs state slot-only semantics without raw identifiers.",
+          "pathExercise": "Assert first-bind, drift-rejection, restart-reset, and public-schema serialization branches all executed."
+        }
+      ]
+    },
+    {
+      "id": "XHS-LAB-LEASE-01",
+      "severity": "P1",
+      "invariant": "A slot cannot become reusable or report lease zero until its underlying FastOperator request actually settles.",
+      "riskClasses": [
+        "single-use-authorization",
+        "trust-boundary"
+      ],
+      "requiredArtifacts": [
+        "explicit lease state machine",
+        "timeout and uncertain-settlement tests"
+      ],
+      "forbiddenDependencies": [
+        "lease release in a client-deadline finally block",
+        "automatic retry after timeout",
+        "active lease zero while an outbound request is pending or uncertain"
+      ],
+      "probes": [
+        {
+          "id": "lease-adversarial",
+          "kind": "adversarial",
+          "procedure": "Hold the fake FastOperator request open beyond the client deadline, then attempt another request for the same slot and inspect lease/status endpoints.",
+          "preFixExpected": "The original plan would release in finally and permit overlap.",
+          "postFixExpected": "The slot remains IN_FLIGHT or IN_FLIGHT_UNCERTAIN, active lease is nonzero, and the second request is rejected.",
+          "pathExercise": "Assert the client deadline fired, the outbound promise remained unsettled, the lease endpoint exposed the nonterminal state, and the second request hit the concurrency guard."
+        },
+        {
+          "id": "lease-forgery",
+          "kind": "forgery",
+          "procedure": "Attempt to force RELEASED using a forged lease ID/token and a forged FastOperator response.",
+          "preFixExpected": "No bounded state machine exists.",
+          "postFixExpected": "Forged transitions are rejected and the original lease state is unchanged.",
+          "pathExercise": "Assert forged transition inputs reached the state guard and no terminal transition occurred."
+        },
+        {
+          "id": "lease-replay",
+          "kind": "replay",
+          "procedure": "Replay authorization and completion signals after a genuine settled request.",
+          "preFixExpected": "No replay contract exists.",
+          "postFixExpected": "Terminal leases cannot be authorized or completed again and no second FastOperator call occurs.",
+          "pathExercise": "Assert the genuine request settled once and both replay paths were rejected."
+        }
+      ]
+    },
+    {
+      "id": "XHS-LAB-DUMP-01",
+      "severity": "P1",
+      "invariant": "The lab contract accurately discloses the existing dump fallback's possible device-side diagnostic file and never persists the returned raw dump in gateway-owned storage.",
+      "riskClasses": [],
+      "requiredArtifacts": [
+        "lab agent-entry disclosure",
+        "quick-start disclosure",
+        "gateway no-response-persistence test"
+      ],
+      "forbiddenDependencies": [
+        "zero-device-persistence claim",
+        "gateway log or receipt containing UI XML or FastOperator response bodies",
+        "production acceptance claim for a lab dump"
+      ],
+      "probes": [
+        {
+          "id": "dump-regression",
+          "kind": "regression",
+          "procedure": "Return a sentinel UI XML payload from a fake FastOperator, complete a dump request, and scan gateway files, receipts, logs, agent entry, and client output policy.",
+          "preFixExpected": "Plan V1 made a false zero-persistence claim.",
+          "postFixExpected": "Agent entry discloses the device-side fallback, no gateway-owned file contains the sentinel XML, and the receipt remains metadata-only.",
+          "pathExercise": "Assert the sentinel response traversed the dump response path and all persistence sinks were inspected."
+        }
+      ]
+    }
+  ]
+}

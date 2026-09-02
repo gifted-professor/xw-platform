@@ -9,6 +9,20 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
+// F1 canonical hash migration (plan V2 §7): the canonical 64-hex descriptor
+// hash + canonicalize/canonicalJson live in the single shared module imported
+// by both this Catalog and the CP Runner (recipe-interpreter.mjs). Re-exported
+// here so existing callers (recipe-spec.mjs, tests) are unchanged.
+import {
+  canonicalize,
+  canonicalJson,
+  canonicalDescriptorHash,
+  isCanonicalV2,
+  DESCRIPTOR_HASH_SCHEME_V2,
+} from "../../../control-plane/control-plane/lib/recipe-descriptor.mjs";
+
+export { canonicalize, canonicalJson, isCanonicalV2, DESCRIPTOR_HASH_SCHEME_V2 };
+
 /** Fixed Windows path consumed by control-plane generated-overlay loader. */
 export const DEFAULT_OVERLAY_PATH =
   "C:\\Users\\Public\\xhs-agent-control\\generated-overlay\\recipe-catalog.json";
@@ -32,10 +46,12 @@ export const RECIPE_PRIMITIVE_KINDS = Object.freeze([
   "focus",
   "screenshot",
   "tapSelector",
+  "tapFeedCard",
   "swipe",
   "input",
   "back",
   "launch",
+  "wait",
 ]);
 
 const PRIMITIVE_SET = new Set(RECIPE_PRIMITIVE_KINDS);
@@ -81,25 +97,13 @@ const DEFAULT_LIST_STATUSES = Object.freeze([
   "degraded",
 ]);
 
-export function canonicalize(value) {
-  if (Array.isArray(value)) return value.map(canonicalize);
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.keys(value)
-        .sort()
-        .map((k) => [k, canonicalize(value[k])]),
-    );
-  }
-  return value;
-}
-
-export function canonicalJson(value) {
-  return JSON.stringify(canonicalize(value));
-}
-
+/**
+ * Canonical 64-hex descriptor hash. Delegates to the shared
+ * `canonicalDescriptorHash` (value-preserving: identical bytes to the previous
+ * inline implementation). Legacy @1 hashes are unchanged.
+ */
 export function descriptorHashOf(spec) {
-  const { descriptorHash: _omit, ...rest } = spec && typeof spec === "object" ? spec : {};
-  return createHash("sha256").update(canonicalJson(rest)).digest("hex");
+  return canonicalDescriptorHash(spec);
 }
 
 function nowIso() {
@@ -171,6 +175,28 @@ export function validateRecipeSteps(steps) {
         }
         break;
       }
+      case "tapFeedCard": {
+        // Composite dump-driven tap: no sealed coordinates by design.
+        if (
+          params.pickIndex != null &&
+          (!Number.isInteger(params.pickIndex) || params.pickIndex < 0 || params.pickIndex > 20)
+        ) {
+          throw err(`step ${id}: tapFeedCard.pickIndex must be an integer 0..20`);
+        }
+        if (
+          params.preferKind != null &&
+          !["image", "video", "any"].includes(params.preferKind)
+        ) {
+          throw err(`step ${id}: tapFeedCard.preferKind must be image|video|any`);
+        }
+        for (const key of ["yMinFrac", "yMaxFrac"]) {
+          const v = params[key];
+          if (v != null && (typeof v !== "number" || !Number.isFinite(v) || v < 0 || v > 1)) {
+            throw err(`step ${id}: tapFeedCard.${key} must be a number 0..1`);
+          }
+        }
+        break;
+      }
       case "input": {
         if (typeof params.text !== "string") {
           throw err(`step ${id}: input requires params.text string`);
@@ -205,6 +231,7 @@ export function validateRecipeSteps(steps) {
       case "dump":
       case "screenshot":
       case "back":
+      case "wait":
         break;
       default:
         throw err(`step ${id}: unknown kind ${kind}`);
@@ -980,14 +1007,19 @@ export function buildOverlayDocument(db, { generatedAt = nowIso() } = {}) {
       : v.status === "canary_only"
         ? ["01"]
         : undefined;
+    // F1 (plan V2 §7): emit the FULL sealed spec per overlay entry so the
+    // canonical 64-hex descriptorHash is reproducible from the overlay alone
+    // (byte-identical to the Catalog spec). Legacy partial fields are preserved
+    // as a subset; descriptorHashScheme passes through so the Runner picks the
+    // canonical-v2 path for @2+ recipes.
     const entry = {
+      ...canonicalize(spec),
       recipeId: v.recipeId,
       revision: v.revision,
       status: v.status,
-      executor: spec.executor ?? null,
-      riskCeiling: String(spec.riskCeiling || "R1"),
       descriptorHash: v.descriptorHash,
     };
+    entry.riskCeiling = String(entry.riskCeiling || "R1");
     if (eligibleAliases) entry.eligibleAliases = eligibleAliases;
     recipes.push(entry);
   }

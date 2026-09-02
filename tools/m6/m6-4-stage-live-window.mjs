@@ -35,6 +35,9 @@ import {
 import { verifyReleaseManifest } from "../../packages/release/lib/release-manifest.mjs";
 import { canonicalJson } from "../../services/control-plane/control-plane/lib/canonical.mjs";
 import {
+  CURRENT_CONTROL_SCHEMA_VERSION,
+} from "../../services/control-plane/control-plane/lib/state-store.mjs";
+import {
   M6_GATE_F_ARTIFACT_CATALOG_PURPOSES,
   createM6GateFOperations,
   loadM6GateFArtifactCatalog,
@@ -237,7 +240,13 @@ export function openM64ReadOnlyGateState({ dbPath, nowMs = Date.now() } = {}) {
   try {
     db = new DatabaseSync(target, { readOnly: true });
     const version = Number(db.prepare("PRAGMA user_version").get().user_version);
-    if (version !== 20) stageError("M64_STAGE_DB_SCHEMA_INVALID", "stage verifier requires an already-migrated v20 database", { version });
+    if (version !== CURRENT_CONTROL_SCHEMA_VERSION) {
+      stageError(
+        "M64_STAGE_DB_SCHEMA_INVALID",
+        "stage verifier requires the exact current control-plane database schema",
+        { version, expectedVersion: CURRENT_CONTROL_SCHEMA_VERSION },
+      );
+    }
   } catch (cause) {
     try { db?.close(); } catch {}
     if (cause?.code?.startsWith?.("M64_STAGE_")) throw cause;
@@ -862,7 +871,7 @@ export async function stageM64LiveWindow({
         || typeof guard.retainStaleLock !== "function") {
         stageError("M64_STAGE_OWNER_GUARD_INVALID", "stage-window requires a held shared M6-C1 runtime owner guard");
       }
-      guard.assertOwned();
+      await guard.assertOwned();
     }
     if (execute) stateCleanupProven = false;
     state = openReadOnlyState({ dbPath, nowMs });
@@ -974,7 +983,7 @@ export async function stageM64LiveWindow({
       || sha256(readPlainBytes(final.binding.productionDependencyBindingPath, "production dependency binding final check")) !== final.binding.productionDependencyBindingHash) {
       stageError("M64_STAGE_CONCURRENT_INPUT_CHANGE", "sealed stage inputs changed before snapshot publication");
     }
-    guard.assertOwned();
+    await guard.assertOwned();
     const persisted = persistStage({
       runtime,
       binding: final.binding,

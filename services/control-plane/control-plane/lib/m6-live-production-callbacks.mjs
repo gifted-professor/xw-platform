@@ -31,6 +31,7 @@ import {
   validateM64IndependentEffectObservation,
 } from "../../../../packages/kernel/lib/m6-live-evidence.mjs";
 import {
+  M64_CANARY_SEARCH_QUERY,
   deriveM6LogicalActionIdentity,
   deriveM6TrustedApplicationRef,
   deriveM6TrustedTextRef,
@@ -63,7 +64,11 @@ import { createM6TypedTransport } from "./m6-typed-transport.mjs";
 const HASH = /^[0-9a-f]{64}$/u;
 const TERMINAL_JOBS = new Set(["succeeded", "failed", "ambiguous", "cancelled", "recovery_required"]);
 const ZERO_ACTION_PURPOSES = new Set(["M6_4_SHADOW", "M6_4_HOT_CLOSE"]);
-const HARD_FORBIDDEN_ACTION = /(payment|pay|delete|publish|public|social|comment|follow|message|account|security|settings|draft)/iu;
+// Settings *effects* remain forbidden by the effect boundary and semantic
+// redlines. The frozen smooth cohort contains navigation-only settings slots,
+// so rejecting the word "settings" here made the exact 30-run cohort
+// structurally impossible before the effect firewall was consulted.
+const HARD_FORBIDDEN_ACTION = /(payment|pay|delete|publish|public|social|comment|follow|message|account|security|draft)/iu;
 const MATCH_KEYS = Object.freeze([
   "schemaId", "matched", "selfDerived", "expectedStateHash", "beforeObservationHash",
   "afterObservationHash", "slotAuthorityHash", "independentAuthorHash", "matchHash",
@@ -418,7 +423,9 @@ function privateMaterialFor({ capture, provider, candidateBlockId, manifestStep,
         : manifestStep.actionFamily.startsWith("text-input:") ? "input"
           : manifestStep.actionFamily.startsWith("form-edit:") ? "form" : null;
       if (!role) fail("M6_TCB_PRIVATE_MATERIAL_INVALID", "text material is outside the frozen canary roles");
-      const text = `m6-canary-${scenarioKey}-${role}`;
+      const text = role === "query"
+        ? M64_CANARY_SEARCH_QUERY
+        : `m6-canary-${scenarioKey}-${role}`;
       const textRef = deriveM6TrustedTextRef(text);
       if (textRef !== manifestStep.trustedParams.textRef) fail("M6_TCB_PRIVATE_MATERIAL_BINDING_MISMATCH", "trusted text ref changed");
       return Object.freeze({ text, textRef, bounds: region, boundsRef: selected.boundsRef });
@@ -474,6 +481,7 @@ export function createM6LiveProductionCallbacks({
   environmentQualification,
   effectBoundary,
   independentOracle,
+  independentObservationSurface = null,
   targetSelector,
   currentStateGuard,
   createCurrentStateGuard = null,
@@ -495,6 +503,8 @@ export function createM6LiveProductionCallbacks({
     || !independentOracle || typeof independentOracle.loadExpectation !== "function"
     || typeof independentOracle.observe !== "function" || typeof independentOracle.compare !== "function"
     || typeof targetSelector !== "function"
+    || (independentObservationSurface !== null
+      && (!["register", "complete"].every((method) => typeof independentObservationSurface?.[method] === "function")))
     || (typeof currentStateGuard !== "function" && typeof createCurrentStateGuard !== "function")
     || typeof tcbFactory !== "function" || typeof authorityNodeId !== "string" || authorityNodeId === ""
     || typeof evidenceDirectoryRoot !== "string" || !isAbsolute(evidenceDirectoryRoot)) {
@@ -695,6 +705,7 @@ export function createM6LiveProductionCallbacks({
       completion: null,
       resetReceipt: null,
       closeReceipt: null,
+      fence: call.fence,
       closed: false,
     };
     runs.set(authority.runId, runState);
@@ -745,11 +756,7 @@ export function createM6LiveProductionCallbacks({
   }
 
   async function observeOracle(runState, phase, signal = null) {
-    const value = await runExternalSeam({
-      seam: `oracle-observe-${phase}`,
-      signal,
-      timeoutMs: oracleTimeoutMs,
-    }, (signal) => independentOracle.observe(Object.freeze({
+    const oracleAuthority = Object.freeze({
       phase,
       manifestHash: runState.authority.manifestHash,
       scenarioKey: runState.authority.scenarioKey,
@@ -761,7 +768,56 @@ export function createM6LiveProductionCallbacks({
       expectedArtifactHash: runState.expectation.expectedArtifactHash,
       independentAuthorHash: runState.expectation.independentAuthorHash,
       signal,
-    })));
+    });
+    let requestHash = null;
+    if (independentObservationSurface) {
+      const ticket = independentObservationSurface.register({
+        authority: runState.authority,
+        expectation: runState.expectation,
+        phase,
+        gateEpochHash: runState.authority.gateEpochHash,
+        resetObligations: runState.authority.familyRule.resetObligations,
+        capture: async () => {
+          state.assertM6GateFence(runState.fence);
+          const fresh = await capture(runState, { fence: runState.fence, signal }, { commitAsLatest: false });
+          state.assertM6GateFence(runState.fence);
+          if (!HASH.test(fresh.frame?.manifestSha256 || "")) {
+            fail("M64_DEVICE_READ_CAPTURE_EVIDENCE_INVALID", "independent device read requires one hashed capture frame manifest");
+          }
+          return {
+            gateEpochHash: runState.authority.gateEpochHash,
+            frameRef: fresh.frameRef,
+            evidenceSha256: fresh.frame.manifestSha256,
+            capturedAt: fresh.frame.capturedAt,
+          };
+        },
+      });
+      requestHash = ticket.request.requestHash;
+    }
+    let value;
+    try {
+      value = await runExternalSeam({
+        seam: `oracle-observe-${phase}`,
+        signal,
+        timeoutMs: oracleTimeoutMs,
+      }, async (activeSignal) => {
+        for (;;) {
+          try { return await independentOracle.observe(Object.freeze({ ...oracleAuthority, signal: activeSignal })); }
+          catch (error) {
+            if (!independentObservationSurface || ![
+              "M6_LIVE_DEPENDENCY_ARTIFACT_UNAVAILABLE", "M6_LIVE_ORACLE_OBSERVATION_UNAVAILABLE",
+            ].includes(error?.code)) throw error;
+            await new Promise((resolveWait, rejectWait) => {
+              const timer = setTimeout(resolveWait, 25);
+              timer.unref?.();
+              activeSignal.addEventListener("abort", () => { clearTimeout(timer); rejectWait(activeSignal.reason); }, { once: true });
+            });
+          }
+        }
+      });
+    } finally {
+      if (requestHash) independentObservationSurface.complete(requestHash);
+    }
     const checked = assertIndependentObservation(value, {
       authority: runState.authority,
       expectation: runState.expectation,
@@ -870,12 +926,13 @@ export function createM6LiveProductionCallbacks({
       }, (signal) => targetSelector(Object.freeze({
         scenarioKey: runState.authority.scenarioKey,
         slotAuthority: call.slotAuthority,
+        candidateBlockId: call.params.blockId ?? null,
         blockSet: provider.blockSet,
         dumpXml: captureValue.dumpXml,
         signal,
       })));
       if (!HASH.test(candidateBlockId || "") || !provider.blockSet.blocks.some((entry) => entry.blockId === candidateBlockId)
-        || (call.params.candidateBlockId !== undefined && call.params.candidateBlockId !== candidateBlockId)) {
+        || (call.params.blockId !== undefined && call.params.blockId !== candidateBlockId)) {
         runState.ground = null;
         return Object.freeze({
           externalEffect: false,

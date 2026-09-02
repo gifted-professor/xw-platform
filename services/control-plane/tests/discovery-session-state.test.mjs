@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { StateStore } from "../control-plane/lib/state-store.mjs";
+import { CURRENT_CONTROL_SCHEMA_VERSION, StateStore } from "../control-plane/lib/state-store.mjs";
 
 const AUTHORITY = "DESKTOP-3I1EVHE";
 
@@ -55,7 +55,7 @@ function openInput(fixture, overrides = {}) {
 test("v7 migrates additively to v8 discovery storage and open is one fenced allocation", () => {
   const f = setup();
   try {
-    assert.equal(f.state.db.prepare("PRAGMA user_version").get().user_version, 20);
+    assert.equal(f.state.db.prepare("PRAGMA user_version").get().user_version, CURRENT_CONTROL_SCHEMA_VERSION);
     assert.equal(f.state.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='standing_grant_canaries'").get().name, "standing_grant_canaries");
     assert.equal(f.state.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='discovery_runs'").get().name, "discovery_runs");
     const run = f.state.openDiscoveryRunStorage(openInput(f));

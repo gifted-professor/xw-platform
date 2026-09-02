@@ -38,7 +38,7 @@ const DEFAULT_CONTROL_PLANE_URL = "http://127.0.0.1:17920/";
 const TERMINAL_JOB_STATES = new Set(["succeeded", "failed", "ambiguous", "recovery_required", "cancelled"]);
 
 const ATTESTATION_KEYS = Object.freeze([
-  "accessibilityHash", "accountIsolationHash", "appBuildHash", "appPackageHash",
+  "accessibilityHash", "accountBindingHash", "accountIsolationHash", "appBuildHash", "appPackageHash",
   "attestationHash", "capturedAt", "displayHash", "expiresAt", "imeHash",
   "localeThemeHash", "osBuildHash", "schemaId", "signingHash",
 ]);

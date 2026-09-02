@@ -9,6 +9,11 @@ const HASH_FIELDS = [
   "redlinePolicyHash", "resetPolicyHash", "oracleHash", "verificationPolicyHash",
 ];
 
+// Public, owner-selected M6-4 canary query. Keeping the material beside the
+// trusted-ref derivation prevents the frozen manifest and the production TCB
+// from silently resolving the same ref to different text.
+export const M64_CANARY_SEARCH_QUERY = "韩系美女";
+
 function canonical(value) {
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
   if (value && typeof value === "object") {

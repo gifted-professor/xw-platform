@@ -6,7 +6,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { resolveM64CohortActionSlot } from "../../../packages/kernel/lib/m6-4-cohort.mjs";
-import { deriveTargetEnvironmentAttestation } from "../../../packages/kernel/lib/m6-live-grounding.mjs";
+import { deriveLiveVisualBlockSet, deriveTargetEnvironmentAttestation } from "../../../packages/kernel/lib/m6-live-grounding.mjs";
 import { createM6LivePipeBinding } from "../../../integrations/dsh-xw/src/live-pipe-client.mjs";
 import { CapabilityRegistry } from "../control-plane/lib/capability-registry.mjs";
 import { canonicalJson, sha256 } from "../control-plane/lib/canonical.mjs";
@@ -68,6 +68,7 @@ function environment() {
     localeThemeHash: H("locale"),
     imeHash: H("ime"),
     accessibilityHash: H("access"),
+    accountBindingHash: H("account"),
     accountIsolationHash: H("account"),
     capturedAt: "2029-12-31T23:55:00.000Z",
     expiresAt: "2030-01-01T00:10:00.000Z",
@@ -130,6 +131,8 @@ test("production callbacks own one formal composite capability job/session/lease
     const env = environment();
     const auditStore = inMemoryAudit();
     let hangOracle = false;
+    let pendingObservationWork = null;
+    const completedObservationWork = [];
     const independentOracle = {
       async loadExpectation(authority) {
         return deriveM64OracleExpectation({
@@ -151,6 +154,13 @@ test("production callbacks own one formal composite capability job/session/lease
         });
       },
       async observe(authority) {
+        assert.ok(pendingObservationWork, "oracle lookup must be preceded by one PENDING work request");
+        const committedCapture = lastCapturedFrame;
+        const receipt = await pendingObservationWork.capture();
+        lastCapturedFrame = committedCapture;
+        assert.equal(receipt.gateEpochHash, fence.epochHash);
+        assert.match(receipt.frameRef, /^[0-9a-f]{64}$/u);
+        assert.match(receipt.evidenceSha256, /^[0-9a-f]{64}$/u);
         if (hangOracle) return new Promise(() => {});
         const familyRule = effectBoundary.families.find((entry) => entry.primaryFamily === authority.primaryFamily);
         return deriveM64IndependentEffectObservation({
@@ -202,6 +212,9 @@ test("production callbacks own one formal composite capability job/session/lease
     };
     let captures = 0;
     let rawWrites = 0;
+    let selectorInput = null;
+    let lastCapturedFrame = null;
+    const dumpXml = "<hierarchy><node text=\"安全标签\" resource-id=\"com.xingin.xhs:id/tab\" class=\"android.view.View\" package=\"com.xingin.xhs\" clickable=\"true\" bounds=\"[10,100][900,500]\"/><node text=\"\" class=\"android.view.View\" package=\"com.xingin.xhs\" clickable=\"false\" bounds=\"[0,0][1080,2400]\"/></hierarchy>";
     let mono = 40_000;
     const callbacks = createM6LiveProductionCallbacks({
       state,
@@ -212,7 +225,22 @@ test("production callbacks own one formal composite capability job/session/lease
       environmentQualification: qualification(env),
       effectBoundary,
       independentOracle,
-      targetSelector: ({ blockSet }) => blockSet.blocks[0].blockId,
+      independentObservationSurface: {
+        register(input) {
+          assert.equal(pendingObservationWork, null, "only one oracle phase may be pending");
+          pendingObservationWork = input;
+          return { request: { requestHash: H(`observation-work:${completedObservationWork.length}`) } };
+        },
+        complete(requestHash) {
+          assert.ok(pendingObservationWork, "completion requires one pending oracle phase");
+          completedObservationWork.push(requestHash);
+          pendingObservationWork = null;
+        },
+      },
+      targetSelector: (input) => {
+        selectorInput = input;
+        return input.blockSet.blocks[0].blockId;
+      },
       currentStateGuard: ({ expectedState }) => ({ ...expectedState }),
       evidenceDirectoryRoot,
       auditStore,
@@ -221,21 +249,23 @@ test("production callbacks own one formal composite capability job/session/lease
       captureFrame: async ({ environmentAttestation: attestation, generation }) => {
         captures += 1;
         const frameId = H(`frame:${captures}`);
+        lastCapturedFrame = {
+          frameId,
+          manifestSha256: H(`frame-manifest:${captures}`),
+          width: 1080,
+          height: 2400,
+          focusHash: H("focus"),
+          stability: {
+            verdict: "stable",
+            pageFingerprint: H("stable-page"),
+            focusFingerprint: H("focus"),
+          },
+          environmentAttestationHash: attestation.attestationHash,
+        };
         return {
           frameRef: frameId,
-          frame: {
-            frameId,
-            width: 1080,
-            height: 2400,
-            focusHash: H("focus"),
-            stability: {
-              verdict: "stable",
-              pageFingerprint: H("stable-page"),
-              focusFingerprint: H("focus"),
-            },
-            environmentAttestationHash: attestation.attestationHash,
-          },
-          dumpXml: "<hierarchy><node text=\"安全标签\" resource-id=\"com.xingin.xhs:id/tab\" class=\"android.view.View\" package=\"com.xingin.xhs\" clickable=\"true\" bounds=\"[10,100][900,500]\"/><node text=\"\" class=\"android.view.View\" package=\"com.xingin.xhs\" clickable=\"false\" bounds=\"[0,0][1080,2400]\"/></hierarchy>",
+          frame: lastCapturedFrame,
+          dumpXml,
           observation: { observationId: `obs-${captures}`, evidenceRefs: [H(`evidence:${captures}`)] },
           observationRaw: { package: "com.xingin.xhs", rotation: 0 },
           generation,
@@ -339,8 +369,22 @@ test("production callbacks own one formal composite capability job/session/lease
     assert.equal(observed.actionCount, 0);
     assert.equal(state.listLeases().length, 1);
     assert.equal(state.listLeases()[0].expiresAt, "2030-01-01T00:04:59.000Z");
-    const grounded = await callbacks.ground({ ...baseCall, params: { frameRef: observed.frameRef, intentRef: scenario.actionPlan.slots[0].intentRef }, slotAuthority: scenario.actionPlan.slots[0] });
+    const candidateBlockId = deriveLiveVisualBlockSet({
+      frame: lastCapturedFrame,
+      dumpXml,
+      environmentAttestation: env,
+    }).blockSet.blocks[0].blockId;
+    const grounded = await callbacks.ground({
+      ...baseCall,
+      params: {
+        frameRef: observed.frameRef,
+        blockId: candidateBlockId,
+        intent: scenario.actionPlan.slots[0].intentRef,
+      },
+      slotAuthority: scenario.actionPlan.slots[0],
+    });
     assert.equal(grounded.disposition, "ALLOW_ONCE");
+    assert.equal(selectorInput.candidateBlockId, candidateBlockId);
     const actionSlotResolution = resolveM64CohortActionSlot({
       manifest,
       scenarioId: scenario.scenarioKey,
@@ -400,6 +444,8 @@ test("production callbacks own one formal composite capability job/session/lease
     assert.equal(ledger.status, "COMPLETED");
     assert.equal(state.sessionExists(ledger.sessionId), false);
     assert.equal(state.getM64LiveScenarioClaim(scenarioClaimHash).status, "FINALIZED");
+    assert.equal(pendingObservationWork, null);
+    assert.ok(completedObservationWork.length >= 3, "before/after/final oracle work must reach terminal cleanup");
   } finally {
     state.close();
   }

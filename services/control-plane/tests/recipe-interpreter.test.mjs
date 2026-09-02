@@ -19,10 +19,12 @@ const ALL_KINDS = [
   "focus",
   "screenshot",
   "tapSelector",
+  "tapFeedCard",
   "swipe",
   "input",
   "back",
   "launch",
+  "wait",
 ];
 
 test("whitelist matches Phase 5 plan primitives", () => {

@@ -191,6 +191,7 @@ test("formal M6 environment qualification job preserves only the sealed bundle a
     capturedAt,
     expiresAt,
     accessibilityHash: hash,
+    accountBindingHash: hash,
     accountIsolationHash: hash,
     appBuildHash: hash,
     appPackageHash: hash,

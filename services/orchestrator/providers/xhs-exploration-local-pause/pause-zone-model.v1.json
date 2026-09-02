@@ -1,0 +1,72 @@
+{
+  "schemaId": "xw.xhs.exploration-local-navigation-model.v1",
+  "schemaVersion": 1,
+  "frame": {
+    "minWidth": 64,
+    "minHeight": 96,
+    "maxWidth": 4096,
+    "maxHeight": 4096,
+    "maxPixels": 16777216
+  },
+  "analysis": {
+    "sampleStridePx": 4,
+    "gradientThreshold": 26,
+    "maxSafeEdgeDensity": 0.22,
+    "minControlEdgeDensity": 0.06,
+    "maxPerimeterEdgeDensity": 0.38,
+    "minimumUniquenessGap": 0.025,
+    "minimumSamples": 24,
+    "baseConfidence": 0.9,
+    "maxConfidence": 0.99
+  },
+  "routes": [
+    {
+      "page": "HOME_FEED",
+      "role": "OPEN_CONTENT_CARD",
+      "label": "打开内容卡片安全区",
+      "selection": "MIN_EDGE",
+      "searchRegion": { "x": 0.04, "y": 0.18, "w": 0.70, "h": 0.66 },
+      "candidate": { "width": 0.18, "height": 0.16, "columns": 4, "rows": 4 }
+    },
+    {
+      "page": "SEARCH_RESULTS",
+      "role": "OPEN_CONTENT_CARD",
+      "label": "打开内容卡片安全区",
+      "selection": "MIN_EDGE",
+      "searchRegion": { "x": 0.04, "y": 0.18, "w": 0.70, "h": 0.66 },
+      "candidate": { "width": 0.18, "height": 0.16, "columns": 4, "rows": 4 }
+    },
+    {
+      "page": "IMAGE_NOTE",
+      "role": "OPEN_COMMENT_PANEL",
+      "label": "打开评论面板导航区",
+      "selection": "MAX_EDGE",
+      "searchRegion": { "x": 0.42, "y": 0.82, "w": 0.24, "h": 0.14 },
+      "candidate": { "width": 0.08, "height": 0.06, "columns": 3, "rows": 3 }
+    },
+    {
+      "page": "VIDEO_NOTE",
+      "role": "OPEN_COMMENT_PANEL",
+      "label": "打开评论面板导航区",
+      "selection": "MAX_EDGE",
+      "searchRegion": { "x": 0.76, "y": 0.34, "w": 0.20, "h": 0.46 },
+      "candidate": { "width": 0.08, "height": 0.06, "columns": 3, "rows": 4 }
+    },
+    {
+      "page": "VIDEO_NOTE",
+      "role": "PAUSE_VIDEO_SAFE_ZONE",
+      "label": "暂停视频安全区",
+      "selection": "MIN_EDGE",
+      "searchRegion": { "x": 0.08, "y": 0.18, "w": 0.62, "h": 0.58 },
+      "candidate": { "width": 0.16, "height": 0.12, "columns": 4, "rows": 4 }
+    },
+    {
+      "page": "COMMENT_PANEL",
+      "role": "BACK",
+      "label": "返回导航区",
+      "selection": "MAX_EDGE",
+      "searchRegion": { "x": 0.01, "y": 0.03, "w": 0.22, "h": 0.18 },
+      "candidate": { "width": 0.08, "height": 0.06, "columns": 3, "rows": 3 }
+    }
+  ]
+}

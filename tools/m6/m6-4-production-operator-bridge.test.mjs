@@ -346,8 +346,15 @@ test("normal-close resolver publishes a bounded two-party request and accepts on
         assert.deepEqual(request.attemptEvidenceHashes, attemptEvidence.map((entry) => entry.attemptHash));
         assert.equal(request.currentGateEpochHash, window.authorization.gateEpochHash);
         assert.equal(request.activationParentEpochHash, window.activationPackage.epoch.parentEpochHash);
+        const requestBoundArtifact = descriptor(root, "signed-close-response-request-bound", {
+          ...responseBundle,
+          aggregateSeal: {
+            ...responseBundle.aggregateSeal,
+            sealPayload: { ...responseBundle.aggregateSeal.sealPayload, normalCloseRequestHash: request.requestHash },
+          },
+        });
         writeFileSync(join(root, locator.responseDescriptorFileName), `${JSON.stringify({
-          ...responseArtifact,
+          ...requestBoundArtifact,
           requestHash: request.requestHash,
         }, null, 2)}\n`, "utf8");
       },
@@ -391,7 +398,13 @@ test("fresh same-purpose handoff requests retain distinct immutable locators", a
           },
           closeout: { ...bundle.closeout, committedAt: new Date(currentNow).toISOString() },
         };
-        const responseArtifact = descriptor(root, `signed-close-${currentNow}`, response);
+        const responseArtifact = descriptor(root, `signed-close-${currentNow}`, {
+          ...response,
+          aggregateSeal: {
+            ...response.aggregateSeal,
+            sealPayload: { ...response.aggregateSeal.sealPayload, normalCloseRequestHash: pending.requestHash },
+          },
+        });
         writeFileSync(join(root, pending.responseDescriptorFileName), `${JSON.stringify({
           ...responseArtifact,
           requestHash: pending.requestHash,

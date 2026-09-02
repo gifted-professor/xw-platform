@@ -1,0 +1,552 @@
+{
+  "schema": "multi-model-execution-contract.v1",
+  "planSha256": "305686655033f57c5e56683c502bbfc020f32c7070d69e74328f7a8ca33b5e70",
+  "authorizationMode": "fix-once",
+  "budgets": {
+    "externalReviewWaves": 1,
+    "reviewerDrivenFixBatches": 1,
+    "localRepairTails": 0,
+    "targetedVerifications": 1
+  },
+  "execution": {
+    "runtime": "opencode",
+    "primaryModel": "opencode-go/glm-5.3",
+    "maxModelSwitches": 1,
+    "rehydrateOnContextChange": true
+  },
+  "items": [
+    {
+      "id": "P1-EXPLORATION-HARD-ZERO",
+      "severity": "P1",
+      "invariant": "Every xhs_goal_explore_v1 session remains effectClass none with no social authority, reservation, bridge, transport, or generic interactive bypass, independently of nonpayment_v1 and global policy mode.",
+      "riskClasses": ["trust-boundary", "independent-oracle"],
+      "requiredArtifacts": [
+        "services/control-plane/control-plane/lib/xhs-exploration-authority.mjs",
+        "services/control-plane/tests/xhs-exploration-hard-zero.test.mjs",
+        "services/orchestrator/tests/xhs-goal-explore-hard-zero.test.mjs"
+      ],
+      "forbiddenDependencies": [
+        "nonpayment_v1 as the sole zero-effect enforcement",
+        "client-supplied effectClass, policy result, or transport count",
+        "legacy social authority, ECP bridge, or generic Explorer raw primitives"
+      ],
+      "probes": [
+        {
+          "id": "P1-EXPLORATION-HARD-ZERO-adversarial",
+          "kind": "adversarial",
+          "procedure": "Run the dedicated hard-zero tests with policyMode.active=true and attempt createJob for raw tap/swipe/input plus every social effect from an xhs_goal_explore_v1 session.",
+          "preFixExpected": "At least one generic or softened-policy path can reach job creation or lacks a dedicated rejection.",
+          "postFixExpected": "Every attempted bypass is rejected before createJob and the CP effect ledger remains exactly zero.",
+          "pathExercise": "Assert the exploration session-profile guard was entered for each primitive/effect and assert zero createJob and transport calls with nonzero attempted-bypass counters."
+        },
+        {
+          "id": "P1-EXPLORATION-HARD-ZERO-oracle",
+          "kind": "independent-oracle",
+          "procedure": "Compare the final aggregate against CP-owned authority, reservation, job, and transport ledgers rather than child receipts.",
+          "preFixExpected": "A forged zero-effect child summary can satisfy closeout without CP ledger reconciliation.",
+          "postFixExpected": "Closeout passes only when every independent CP ledger delta is zero.",
+          "pathExercise": "Inject a child receipt claiming zero while a fixture CP ledger contains one effect and assert that the independent ledger reader is invoked and blocks."
+        },
+        {
+          "id": "P1-EXPLORATION-HARD-ZERO-mutation",
+          "kind": "mutation",
+          "procedure": "Mutate the sealed mission externalEffects, effectClass, and session profile one field at a time before authority creation.",
+          "preFixExpected": "A mutated field is accepted or rejected only after session/device I/O.",
+          "postFixExpected": "Each mutation rejects before authority/session/job/device I/O.",
+          "pathExercise": "Assert every mutated fixture reached mission validation and that session acquisition and adapter call counters stayed zero."
+        }
+      ]
+    },
+    {
+      "id": "P1-NAVIGATION-PERMIT",
+      "severity": "P1",
+      "invariant": "Each physical navigation action is authorized by one CP-issued, single-use permit bound to current CP-owned evidence and the exact resolved physical payload, then atomically consumed before createJob.",
+      "riskClasses": ["trust-boundary", "single-use-authorization"],
+      "requiredArtifacts": [
+        "services/control-plane/control-plane/lib/xhs-exploration-authority.mjs",
+        "services/control-plane/control-plane/lib/xhs-exploration-permit.mjs",
+        "services/control-plane/tests/xhs-exploration-permit.test.mjs"
+      ],
+      "forbiddenDependencies": [
+        "caller-supplied coordinate, selector path, evidence hash, or provider path as authority",
+        "permit consumption after createJob",
+        "reusable, role-agnostic, or session-agnostic permit tokens"
+      ],
+      "probes": [
+        {
+          "id": "P1-NAVIGATION-PERMIT-adversarial",
+          "kind": "adversarial",
+          "procedure": "Attempt bound navigation with a changed page, overlay, focus, target, lane role, session, mission, release, and exact physical payload after permit issuance.",
+          "preFixExpected": "At least one stale or caller-controlled binding can be transported.",
+          "postFixExpected": "Every mismatch fails before createJob after a fresh CP-owned observation.",
+          "pathExercise": "Assert consume-time reobservation and each tuple comparison ran, and assert the adapter/createJob counters remained zero."
+        },
+        {
+          "id": "P1-NAVIGATION-PERMIT-forgery",
+          "kind": "forgery",
+          "procedure": "Submit fabricated permits and validly shaped permits with altered MAC, permit ID, evidence reference, payload, or expiry.",
+          "preFixExpected": "A syntactically valid caller token can reach the navigation adapter.",
+          "postFixExpected": "Only CP-indexed permits with intact server binding are accepted; all forgeries fail before adapter use.",
+          "pathExercise": "Assert every forged token reached CP permit lookup/verification and produced zero physical-action calls."
+        },
+        {
+          "id": "P1-NAVIGATION-PERMIT-replay",
+          "kind": "replay",
+          "procedure": "Consume one valid permit concurrently twice and replay it after success, cancellation, and TTL expiry.",
+          "preFixExpected": "A duplicate consume can authorize more than one job or has no durable terminal state.",
+          "postFixExpected": "Exactly one atomic consume can precede exactly one createJob; every replay is rejected.",
+          "pathExercise": "Assert two consume requests raced on the same permit row, one durable consume committed, and createJob count equals one."
+        }
+      ]
+    },
+    {
+      "id": "P1-MISSION-SEAL-ATOMIC-BUDGET",
+      "severity": "P1",
+      "invariant": "The canonical exploration mission, private goal/query binding, exact [03,04] roles, stop rules, deadlines, and all global budgets are sealed reproducibly and reserved atomically before corresponding I/O.",
+      "riskClasses": ["trust-boundary", "single-use-authorization", "reproducible-artifact"],
+      "requiredArtifacts": [
+        "services/orchestrator/scripts/lib/xhs-exploration-mission.mjs",
+        "services/orchestrator/scripts/lib/xhs-routine-plan.mjs",
+        "services/orchestrator/tests/xhs-exploration-mission.test.mjs",
+        "services/control-plane/tests/xhs-exploration-budget.test.mjs"
+      ],
+      "forbiddenDependencies": [
+        "unsealed goal text, caller-selected lane role, or mutable runtime budget",
+        "check-then-act budget accounting",
+        "session, lease, job, or device I/O before private payload digest validation"
+      ],
+      "probes": [
+        {
+          "id": "P1-MISSION-SEAL-ATOMIC-BUDGET-adversarial",
+          "kind": "adversarial",
+          "procedure": "Mutate each sealed mission field and private goal/query payload, then race budget reservations across both lanes at every hard cap.",
+          "preFixExpected": "A mutation is accepted late or concurrent reservations exceed a cap.",
+          "postFixExpected": "All mutations fail before I/O and committed reservations never exceed any mission/global cap.",
+          "pathExercise": "Assert canonical mission validation, private digest validation, and the shared CP transaction all executed with losing reservations recorded."
+        },
+        {
+          "id": "P1-MISSION-SEAL-ATOMIC-BUDGET-forgery",
+          "kind": "forgery",
+          "procedure": "Fabricate a reservation handle or alter its mission, lane, action class, sequence, or amount.",
+          "preFixExpected": "Caller-shaped reservation evidence can be presented as authority.",
+          "postFixExpected": "Only a matching CP-owned reservation row authorizes the bound action.",
+          "pathExercise": "Assert forged handles reached CP lookup and no adapter call occurred."
+        },
+        {
+          "id": "P1-MISSION-SEAL-ATOMIC-BUDGET-replay",
+          "kind": "replay",
+          "procedure": "Consume the same budget reservation concurrently and replay it after terminal outcome.",
+          "preFixExpected": "One reservation can account for multiple primitives.",
+          "postFixExpected": "Exactly one consumption succeeds and all replays fail without additional I/O.",
+          "pathExercise": "Assert a shared reservation ID was processed twice, one terminal transition committed, and the primitive counter increased once."
+        },
+        {
+          "id": "P1-MISSION-SEAL-ATOMIC-BUDGET-reproduction",
+          "kind": "reproduction",
+          "procedure": "Compile the same canonical input twice in clean processes and compare plan bytes/hash; also compile a legacy V2 plan without mission.",
+          "preFixExpected": "Mission output is nondeterministic or changes legacy V2 plan bytes.",
+          "postFixExpected": "V3 mission bytes and hash are identical and the legacy V2 golden hash is unchanged.",
+          "pathExercise": "Assert both clean-process outputs were consumed byte-for-byte and the exact legacy golden hash was checked."
+        }
+      ]
+    },
+    {
+      "id": "P1-NOVELTY-IDENTITY",
+      "severity": "P1",
+      "invariant": "Novelty credit is based on independently observed stable content identity, with deterministic fallback aliases reconciled atomically to at most one canonical credit across both lanes.",
+      "riskClasses": ["independent-oracle", "reproducible-artifact"],
+      "requiredArtifacts": [
+        "services/orchestrator/scripts/lib/xhs-explore-surface.mjs",
+        "services/control-plane/control-plane/lib/xhs-exploration-novelty-ledger.mjs",
+        "services/control-plane/tests/xhs-exploration-novelty-ledger.test.mjs"
+      ],
+      "forbiddenDependencies": [
+        "screen coordinates, list slots, or child-provided novelty booleans as identity",
+        "non-transactional fallback-to-stable reconciliation",
+        "unknown or conflicting identity counted as novel"
+      ],
+      "probes": [
+        {
+          "id": "P1-NOVELTY-IDENTITY-oracle",
+          "kind": "independent-oracle",
+          "procedure": "Feed independently authored DUMP fixtures where two fallback records later reveal the same stable note ID and where an identity remains unknown.",
+          "preFixExpected": "Both aliases can receive novelty credit or unknown identity is counted.",
+          "postFixExpected": "The earliest durable claim is canonical, the other is duplicate, and unknown receives zero credit.",
+          "pathExercise": "Assert fixture stable IDs were parsed independently, the reconciliation transaction ran, and the final ledger contains one confirmed credit."
+        },
+        {
+          "id": "P1-NOVELTY-IDENTITY-mutation",
+          "kind": "mutation",
+          "procedure": "Corrupt stable ID evidence, fallback title/author/media fields, and canonical alias mappings one at a time.",
+          "preFixExpected": "Corrupt identity metadata can preserve a success/novel verdict.",
+          "postFixExpected": "Corruption yields unknown, conflict, or duplicate and blocks novelty credit.",
+          "pathExercise": "Assert every corrupted record reached identity validation and no optional guard skipped the canonical-credit assertion."
+        },
+        {
+          "id": "P1-NOVELTY-IDENTITY-reproduction",
+          "kind": "reproduction",
+          "procedure": "Replay the same interleaved two-lane claim set in multiple arrival orders and reproduce the canonical ledger and receipt bytes.",
+          "preFixExpected": "Arrival timing changes the canonical result or receipt.",
+          "postFixExpected": "Claim sequence then lexicographic tie-break yields identical canonical records and hashes.",
+          "pathExercise": "Assert all permutations committed through BEGIN IMMEDIATE and compare full normalized ledger/receipt bytes and hashes."
+        }
+      ]
+    },
+    {
+      "id": "P1-SURFACE-DUMP-VISION",
+      "severity": "P1",
+      "invariant": "Only closed DUMP verdicts or bounded local production-vision decisions may produce navigation candidates; vision is asynchronous, fresh, role-bounded, and never itself action authority.",
+      "riskClasses": ["trust-boundary", "independent-oracle", "single-use-authorization"],
+      "requiredArtifacts": [
+        "services/orchestrator/scripts/lib/xhs-explore-surface.mjs",
+        "services/orchestrator/scripts/lib/xhs-routine-vision-navigator.mjs",
+        "services/orchestrator/ops/_xhs-routine-vision-factory.mjs",
+        "services/orchestrator/tests/xhs-explore-surface.test.mjs",
+        "services/orchestrator/tests/xhs-routine-vision-navigator.test.mjs"
+      ],
+      "forbiddenDependencies": [
+        "sparse XML treated as positive authority",
+        "blocking execFileSync provider invocation",
+        "remote vision egress, model-supplied coordinates, or provider output used directly as a tap",
+        "visual permit on device 04 or more than one global live-canary visual tap"
+      ],
+      "probes": [
+        {
+          "id": "P1-SURFACE-DUMP-VISION-adversarial",
+          "kind": "adversarial",
+          "procedure": "Exercise sparse/malformed/overlayed DUMPs, provider disagreement, wrong page/role/device, stale frame over 10000 ms, analysis over 8000 ms, and permit older than 5000 ms.",
+          "preFixExpected": "A risky verdict is open-ended, a blocking provider stalls both lanes, or stale/wrong-role output can authorize action.",
+          "postFixExpected": "DUMP emits one closed verdict; timeouts/cancellation isolate the provider; all stale, disagreeing, device-04, or wrong-role candidates yield no permit/tap.",
+          "pathExercise": "Assert parser verdict branch, isolated worker deadline, lane heartbeat, candidate validation, and zero-tap counters all executed for each case."
+        },
+        {
+          "id": "P1-SURFACE-DUMP-VISION-oracle",
+          "kind": "independent-oracle",
+          "procedure": "Compare parser/provider decisions with separately authored landmark, protected-zone, page-role, and frame-age fixtures.",
+          "preFixExpected": "Expected safety state is derived from the system decision itself.",
+          "postFixExpected": "Independent fixture truth determines COMPLETE_SAFE_UNIQUE, AMBIGUOUS_SAFE, ABSENT_OR_INVALID, or FORBIDDEN_OR_RISKY and the expected no-tap result.",
+          "pathExercise": "Assert both the independent fixture record and runtime decision were consumed and every closed verdict occurred at least once."
+        },
+        {
+          "id": "P1-SURFACE-DUMP-VISION-mutation",
+          "kind": "mutation",
+          "procedure": "Mutate provider executable/script/model/config bytes, declared hashes, frame evidence, protected masks, and verdict reasons.",
+          "preFixExpected": "Declared identity or altered evidence can pass without recomputation.",
+          "postFixExpected": "Startup or decision validation fails closed on every mismatch.",
+          "pathExercise": "Assert actual files were re-hashed, mutated evidence entered validation, and no permit was issued."
+        },
+        {
+          "id": "P1-SURFACE-DUMP-VISION-forgery",
+          "kind": "forgery",
+          "procedure": "Forge a provider candidate, frame reference, role, or visual decision receipt and request a CP permit.",
+          "preFixExpected": "Caller/provider-shaped output can be treated as action authority.",
+          "postFixExpected": "Only CP-indexed evidence can seed a permit, and the CP resolves the exact payload independently.",
+          "pathExercise": "Assert forged evidence reached CP lookup and issued-permit and physical-tap counts stayed zero."
+        },
+        {
+          "id": "P1-SURFACE-DUMP-VISION-replay",
+          "kind": "replay",
+          "procedure": "Replay an accepted visual decision and its permit after frame change, permit consumption, and TTL expiry.",
+          "preFixExpected": "One decision can authorize repeated or stale taps.",
+          "postFixExpected": "Fresh reobservation plus single-use consumption rejects every replay.",
+          "pathExercise": "Assert a formerly valid decision was replayed, consume-time observation ran, and physical tap count did not increase."
+        }
+      ]
+    },
+    {
+      "id": "P1-PARALLEL-JOURNAL-CLEANUP",
+      "severity": "P1",
+      "invariant": "Exact device pair [03,04] is acquired before V3 I/O, fixed to feed/search roles, run all-settled, and closed only from CP-owned committed lane journals plus independently verified cleanup.",
+      "riskClasses": ["trust-boundary", "reproducible-artifact"],
+      "requiredArtifacts": [
+        "services/orchestrator/scripts/lib/xhs-goal-explore-machine.mjs",
+        "services/orchestrator/ops/xw-xhs-goal-explore.mjs",
+        "services/control-plane/control-plane/lib/xhs-exploration-lane-journal.mjs",
+        "services/orchestrator/tests/xhs-goal-explore-parallel.test.mjs"
+      ],
+      "forbiddenDependencies": [
+        "single-device fallback, lane-role swap, or work stealing",
+        "Promise.all fail-fast cleanup",
+        "child-supplied success summary or uncommitted journal accepted by parent"
+      ],
+      "probes": [
+        {
+          "id": "P1-PARALLEL-JOURNAL-CLEANUP-adversarial",
+          "kind": "adversarial",
+          "procedure": "Inject acquire failure, lane timeout, child crash before/after I/O, forged child success, missing COMMITTED marker, restore failure, release failure, and stale lease.",
+          "preFixExpected": "A lane can start early, sibling cleanup can be skipped, or partial/forged evidence can close successfully.",
+          "postFixExpected": "No V3 I/O occurs before the pair barrier; both lanes settle and cleanup; missing/partial/conflicting evidence is BLOCKED; success requires two committed receipts and zero leases.",
+          "pathExercise": "Assert STARTED precedes first I/O in each durable journal, both all-settled branches execute, and independent listLeases is called after release attempts."
+        },
+        {
+          "id": "P1-PARALLEL-JOURNAL-CLEANUP-reproduction",
+          "kind": "reproduction",
+          "procedure": "Rebuild the parent receipt twice from the same two committed CP lane journals and their referenced evidence.",
+          "preFixExpected": "Parent output depends on child completion order or transient summaries.",
+          "postFixExpected": "Fixed role ordering and canonical journal dereference reproduce identical parent bytes/hash.",
+          "pathExercise": "Assert both CP journals and commit markers were read, reorder child completion, and compare exact parent bytes and SHA-256."
+        }
+      ]
+    },
+    {
+      "id": "P1-EVIDENCE-PRIVACY-DIGEST",
+      "severity": "P1",
+      "invariant": "Raw goal/query/XML/PNG/text evidence stays in ACL-controlled private storage while public evidence is reproducible from references and HMAC-SHA-256 digests using a validated SYSTEM-only key ring with explicit rotation semantics.",
+      "riskClasses": ["trust-boundary", "independent-oracle", "reproducible-artifact"],
+      "requiredArtifacts": [
+        "services/control-plane/control-plane/lib/xhs-evidence-digest-keyring.mjs",
+        "services/orchestrator/scripts/lib/xhs-exploration-evidence.mjs",
+        "services/orchestrator/tests/xhs-exploration-evidence.test.mjs",
+        "services/orchestrator/tests/xhs-exploration-public-privacy.test.mjs"
+      ],
+      "forbiddenDependencies": [
+        "plain SHA-256 of guessable private text",
+        "key derived from release hash or exposed to client/compiler/reviewer output",
+        "raw text, OCR, coordinates, serials, tokens, private absolute paths, or textPreview in public artifacts"
+      ],
+      "probes": [
+        {
+          "id": "P1-EVIDENCE-PRIVACY-DIGEST-adversarial",
+          "kind": "adversarial",
+          "procedure": "Start with missing, weak, wrong-ACL, drifted, and retired-active keys; scan all public stdout, traces, receipts, aggregates, and Git artifacts using seeded private canaries.",
+          "preFixExpected": "Startup accepts an invalid key ring or at least one private canary/field reaches public output.",
+          "postFixExpected": "Startup fails closed for key-ring faults and the public scan finds no seeded raw values or forbidden fields.",
+          "pathExercise": "Assert ACL/key manifest checks ran and each seeded canary was present in private input but absent from every enumerated public sink."
+        },
+        {
+          "id": "P1-EVIDENCE-PRIVACY-DIGEST-oracle",
+          "kind": "independent-oracle",
+          "procedure": "Independently compute HMAC-SHA-256 with a fixture 256-bit key and compare public digest/key ID and retained-key verification across rotation.",
+          "preFixExpected": "Digest identity is self-declared or historical verification breaks on rotation.",
+          "postFixExpected": "Independent HMAC values match, new receipts use the new key ID, and historical receipts verify with retained read-only keys without rehashing.",
+          "pathExercise": "Assert independent crypto output and both old/new key-ring entries were consumed by verification."
+        },
+        {
+          "id": "P1-EVIDENCE-PRIVACY-DIGEST-mutation",
+          "kind": "mutation",
+          "procedure": "Mutate private evidence bytes, digestKeyId, receipt digest, release/provider/mission/lane binding, and referenced evidence hash.",
+          "preFixExpected": "A mutated reference can retain a valid aggregate.",
+          "postFixExpected": "Every mutation invalidates verification or aggregate reproduction.",
+          "pathExercise": "Assert each mutated record was dereferenced and checked rather than skipped behind optional fields."
+        },
+        {
+          "id": "P1-EVIDENCE-PRIVACY-DIGEST-reproduction",
+          "kind": "reproduction",
+          "procedure": "Rebuild the public aggregate byte-for-byte from sealed private receipt digests and referenced release/provider/mission/lane hashes before and after raw retention purge.",
+          "preFixExpected": "Reproduction requires raw text or yields different bytes after purge.",
+          "postFixExpected": "Both runs produce the identical canonical aggregate and SHA-256 without raw content.",
+          "pathExercise": "Assert all referenced receipts were loaded by hash, raw files were absent in the second run, and exact aggregate bytes were compared."
+        }
+      ]
+    },
+    {
+      "id": "P1-DEPLOYMENT-GATEF-ROLLBACK",
+      "severity": "P1",
+      "invariant": "The deployed CP, Registry, serve-03/04, package, formal binding, SYSTEM task, and tracked content-addressed launcher share one verified release identity and can perform audited rollback and re-forward under task ownership.",
+      "riskClasses": ["trust-boundary", "reproducible-artifact"],
+      "requiredArtifacts": [
+        "services/control-plane/ops/launch-control-plane.simple.ps1",
+        "services/control-plane/ops/xw-control-plane-gate-f.ps1",
+        "services/control-plane/tests/gate-f-launcher-identity.test.mjs",
+        "runtime Gate F rollback/re-forward acceptance receipt"
+      ],
+      "forbiddenDependencies": [
+        "mutable untracked launcher outside the package manifest",
+        "listener inherited from an interactive/background task rather than the SYSTEM task",
+        "formal binding pinned to a different release or simulated rollback without listener replacement"
+      ],
+      "probes": [
+        {
+          "id": "P1-DEPLOYMENT-GATEF-ROLLBACK-adversarial",
+          "kind": "adversarial",
+          "procedure": "Mutate launcher bytes, task action, formal binding, release manifest, and listener owner independently; then query Gate F and attempt task-owned restart.",
+          "preFixExpected": "Identity drift is unobserved, Gate F remains unavailable, or a non-task-owned listener is accepted.",
+          "postFixExpected": "Every drift blocks; the tracked launcher hash is in the release tuple; task-owned restart returns one coherent release and zero leases.",
+          "pathExercise": "Assert scheduled-task action, process owner/parent, listener, formal binding, package manifest, and all service health identities were independently inspected."
+        },
+        {
+          "id": "P1-DEPLOYMENT-GATEF-ROLLBACK-reproduction",
+          "kind": "reproduction",
+          "procedure": "Perform an audited actual rollback to the prior verified package and re-forward to the candidate, capturing health, owner, task, binding, launcher, and lease evidence at each stage.",
+          "preFixExpected": "The rollback tuple is incomplete or does not actually replace the running listener.",
+          "postFixExpected": "Both transitions replace the listener through the SYSTEM task, match their exact content-addressed tuples, and end on the candidate with zero leases.",
+          "pathExercise": "Assert distinct process/listener identities for rollback and re-forward and reproduce the final receipt from both transition evidence sets."
+        }
+      ]
+    },
+    {
+      "id": "P1-RPA-CATALOG-COMPOSITION",
+      "severity": "P1",
+      "invariant": "xw.xhs.rpa-program.v1 is a pure sealed composition over exact eligible recipe/template revisions and the existing M5 scheduler; hard-zero and placement constraints propagate transitively and no third scheduler or procedure code is introduced.",
+      "riskClasses": ["trust-boundary", "independent-oracle"],
+      "requiredArtifacts": [
+        "packages/kernel/contracts/orchestration/xhs-rpa-program.v1.schema.json",
+        "services/orchestrator/scripts/lib/xhs-rpa-program.mjs",
+        "services/orchestrator/scripts/lib/xhs-rpa-m5-adapter.mjs",
+        "services/orchestrator/tests/xhs-rpa-program.test.mjs",
+        "runtime RPA eligibility inventory receipt"
+      ],
+      "forbiddenDependencies": [
+        "new scheduler, inline procedure code, shell command, raw device primitive, or mutable recipe alias",
+        "file presence, candidate/canary status, or historical claim used as daily/recurring eligibility",
+        "social, nurture, publish, device-04 interaction, or non-none effect in this plan"
+      ],
+      "probes": [
+        {
+          "id": "P1-RPA-CATALOG-COMPOSITION-adversarial",
+          "kind": "adversarial",
+          "procedure": "Compile programs containing inline code, raw actions, mutable aliases, wrong device placement, social/publish nodes, non-none effects, unverified revisions, and canary-only recipes requested as recurring.",
+          "preFixExpected": "At least one ineligible node can reach an execution plan or the adapter bypasses M5.",
+          "postFixExpected": "Every invalid composition rejects before tick reservation, lease, or device I/O; valid plans contain only frozen M5 nodes.",
+          "pathExercise": "Assert schema/compiler/catalog/placement/effect gates each handled a failing fixture and M5 submission/device counters stayed zero."
+        },
+        {
+          "id": "P1-RPA-CATALOG-COMPOSITION-oracle",
+          "kind": "independent-oracle",
+          "procedure": "Resolve feed/scout/search/browse eligibility from an independently captured runtime inventory of active revision, canonical hash, promotion state, live receipt, effect class, and placement.",
+          "preFixExpected": "Checked-in catalog presence or a stale claim can mark search@2/browse/feed/scout eligible.",
+          "postFixExpected": "Only exact evidence-complete entries are eligible; canary_only is limited to manual canary and recurring remains ineligible.",
+          "pathExercise": "Assert every eligibility field was read from the captured inventory and changing any one field flips the expected result."
+        },
+        {
+          "id": "P1-RPA-CATALOG-COMPOSITION-mutation",
+          "kind": "mutation",
+          "procedure": "Mutate program hash, recipe revision/hash, template plan hash, account/release binding, effectClass, placement, and child budget after sealing.",
+          "preFixExpected": "A mutated sealed program can still plan or dispatch.",
+          "postFixExpected": "Every mutation rejects before tick reservation and M5 submission.",
+          "pathExercise": "Assert each mutated field reached canonical revalidation and no optional-field path skipped the failure."
+        }
+      ]
+    },
+    {
+      "id": "P1-RPA-PACING-TRIGGER",
+      "severity": "P1",
+      "invariant": "A wake is idempotent and non-authoritative; only CP can atomically reserve a due, enabled sealed program generation under global pacing, no-catch-up, timezone, and concurrency limits, while recurring remains disabled in V3.",
+      "riskClasses": ["trust-boundary", "single-use-authorization", "reproducible-artifact"],
+      "requiredArtifacts": [
+        "services/control-plane/control-plane/lib/xhs-rpa-ledger.mjs",
+        "services/orchestrator/scripts/lib/xhs-rpa-runtime.mjs",
+        "services/orchestrator/ops/xw-rpa.mjs",
+        "services/orchestrator/tests/xhs-rpa-trigger-pacing.test.mjs"
+      ],
+      "forbiddenDependencies": [
+        "wake-supplied goal, recipe, command, path, endpoint, device, budget, or generation",
+        "client clock or check-then-act pacing authority",
+        "catch-up burst, recurring enablement, or enabled Windows wake task in this plan"
+      ],
+      "probes": [
+        {
+          "id": "P1-RPA-PACING-TRIGGER-adversarial",
+          "kind": "adversarial",
+          "procedure": "Invoke duplicate/manual/stale-generation wakes, clock rollback/forward, DST/timezone boundaries, missed intervals, concurrent ticks, and caller arguments while recurring is disabled.",
+          "preFixExpected": "A wake can select work, reserve twice, catch up, or dispatch while disabled.",
+          "postFixExpected": "Wake only requests evaluation; disabled/stale/duplicate/misfire cases dispatch nothing; one CP transaction enforces concurrency and spacing.",
+          "pathExercise": "Assert every wake reached CP due evaluation, losing reservations were durably classified, and M5/device counters stayed zero when forbidden."
+        },
+        {
+          "id": "P1-RPA-PACING-TRIGGER-forgery",
+          "kind": "forgery",
+          "procedure": "Forge program IDs, enable generations, due times, pacing receipts, and wake provenance.",
+          "preFixExpected": "Caller-shaped trigger data can choose or widen a program.",
+          "postFixExpected": "CP resolves the enabled generation and frozen program internally; forged values cannot reserve or submit.",
+          "pathExercise": "Assert forged values reached authoritative lookup and produced zero tick reservations and M5 submissions."
+        },
+        {
+          "id": "P1-RPA-PACING-TRIGGER-replay",
+          "kind": "replay",
+          "procedure": "Replay the same wake and tick reservation concurrently and after terminal commit, disable, and kill-generation change.",
+          "preFixExpected": "One due event can create multiple runs.",
+          "postFixExpected": "At most one tick reservation and run exist for the program generation/fire time; all replays are no-op or rejected.",
+          "pathExercise": "Assert racing requests share one idempotency key and the durable ledger plus M5 submission count both equal one at most."
+        },
+        {
+          "id": "P1-RPA-PACING-TRIGGER-reproduction",
+          "kind": "reproduction",
+          "procedure": "Evaluate a fixed sequence of Asia/Shanghai and UTC fire times twice from a clean ledger using the sealed defaults and caps.",
+          "preFixExpected": "Due decisions depend on process locale, wall-clock order, or unsealed defaults.",
+          "postFixExpected": "Both evaluations produce identical due/no-op classifications, normalized UTC times, tick IDs, and hashes.",
+          "pathExercise": "Assert the exact sealed program, timezone conversion, pacing rows, and resulting canonical receipt bytes were consumed and compared."
+        }
+      ]
+    },
+    {
+      "id": "P1-RPA-JOURNAL-KILL-CLEANUP",
+      "severity": "P1",
+      "invariant": "Every RPA tick has a durable CP-owned journal from TICK_RESERVED through child receipt validation, cleanup, and terminal commit; kill generation prevents new dispatch and cancels business work without bypassing cleanup.",
+      "riskClasses": ["trust-boundary", "reproducible-artifact"],
+      "requiredArtifacts": [
+        "services/control-plane/control-plane/lib/xhs-rpa-ledger.mjs",
+        "services/orchestrator/scripts/lib/xhs-rpa-runtime.mjs",
+        "services/orchestrator/tests/xhs-rpa-journal-kill.test.mjs",
+        "RPA manual-once aggregate and zero-lease receipt"
+      ],
+      "forbiddenDependencies": [
+        "in-memory-only tick state or child-supplied terminal success",
+        "kill path that skips restore, release, or independent lease verification",
+        "success with missing child, validator, cleanup, or commit evidence"
+      ],
+      "probes": [
+        {
+          "id": "P1-RPA-JOURNAL-KILL-CLEANUP-adversarial",
+          "kind": "adversarial",
+          "procedure": "Crash after each journal transition, omit/forge child receipts, fail validation, raise kill generation before and during work, fail restore/release, and leave a stale lease.",
+          "preFixExpected": "A partial tick can be lost or marked successful, or kill can abandon cleanup.",
+          "postFixExpected": "Recovery derives state from the CP journal; missing evidence is BLOCKED; kill stops new business work but cleanup completes and independent leases reach zero.",
+          "pathExercise": "Assert each transition persisted before the next side effect, recovery read it after restart, and listLeases ran after all release attempts."
+        },
+        {
+          "id": "P1-RPA-JOURNAL-KILL-CLEANUP-reproduction",
+          "kind": "reproduction",
+          "procedure": "Rebuild a terminal manual-once aggregate from the committed tick journal, frozen M5 plan, child receipts, validator result, cleanup evidence, and kill generation.",
+          "preFixExpected": "Aggregate depends on transient runner state or cannot be rebuilt after restart.",
+          "postFixExpected": "A clean process reproduces identical aggregate bytes/hash and RPA_FOUNDATION_VERIFIED=true with RPA_RECURRING_ENABLED=false.",
+          "pathExercise": "Assert every journal event and referenced artifact was dereferenced by hash and compare the full canonical aggregate."
+        }
+      ]
+    },
+    {
+      "id": "P1-CLOSEOUT-REPRODUCIBLE-VERDICT",
+      "severity": "P1",
+      "invariant": "Final V3 and RPA outcomes are computed from independent authoritative ledgers and dereferenceable committed receipts, reproduce byte-for-byte, preserve immutable V2.1 history, and never infer success from file presence or a child summary.",
+      "riskClasses": ["independent-oracle", "reproducible-artifact"],
+      "requiredArtifacts": [
+        "services/orchestrator/ops/xw-xhs-routine-accept.mjs",
+        "services/orchestrator/ops/xw-xhs-routine-closeout.mjs",
+        "services/orchestrator/tests/xw-xhs-routine-accept.test.mjs",
+        "services/orchestrator/tests/xhs-v3-rpa-closeout.test.mjs",
+        "multi-model-execution-completion.v1 artifact matching this contract"
+      ],
+      "forbiddenDependencies": [
+        "child-provided success, current file existence, or unverified deployment identity as acceptance",
+        "rewriting historical S2/S3 TRANSPORTED_AMBIGUOUS evidence or S1_S4_LIVE_VERIFIED",
+        "RPA foundation verification interpreted as recurring enablement"
+      ],
+      "probes": [
+        {
+          "id": "P1-CLOSEOUT-REPRODUCIBLE-VERDICT-oracle",
+          "kind": "independent-oracle",
+          "procedure": "Compute acceptance from CP permit/budget/effect/transport/journal/tick ledgers, deployment/provider identity, private receipt references, and post-cleanup listLeases while feeding contradictory child summaries.",
+          "preFixExpected": "A contradictory child summary or file-presence signal can produce PASS.",
+          "postFixExpected": "Authoritative evidence wins; contradiction, missing commit, identity drift, effect delta, or lease yields BLOCKED/FAIL.",
+          "pathExercise": "Assert every independent source was queried and each contradiction fixture changed the verdict through its intended assertion."
+        },
+        {
+          "id": "P1-CLOSEOUT-REPRODUCIBLE-VERDICT-mutation",
+          "kind": "mutation",
+          "procedure": "Mutate one referenced receipt hash, release/provider/digest-key/mission/lane/program/tick binding, effect delta, lease count, historical verdict, and recurring flag at a time.",
+          "preFixExpected": "At least one altered dependency leaves the final success unchanged.",
+          "postFixExpected": "Every authoritative mutation blocks reproduction or changes the verdict to BLOCKED/FAIL; historical records remain immutable.",
+          "pathExercise": "Assert all mutated fields were consumed by closeout and no optional guard skipped the failing assertion."
+        },
+        {
+          "id": "P1-CLOSEOUT-REPRODUCIBLE-VERDICT-reproduction",
+          "kind": "reproduction",
+          "procedure": "In a clean process regenerate the complete V3/RPA aggregate and multi-model-execution-completion.v1 coverage from the frozen Plan V2 hash and all referenced evidence.",
+          "preFixExpected": "The aggregate or completion ledger is incomplete, order-dependent, or has a different plan hash.",
+          "postFixExpected": "Aggregate bytes/hash reproduce exactly; completion covers every contract item/probe with pathExercised=true and evidence hashes; plan SHA matches this contract.",
+          "pathExercise": "Validate contract plus completion with validate_execution_contract.py and compare exact regenerated aggregate/completion hashes and item/probe ID sets."
+        }
+      ]
+    }
+  ]
+}

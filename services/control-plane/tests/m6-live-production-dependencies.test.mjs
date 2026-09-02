@@ -120,6 +120,7 @@ function buildFixture() {
     localeThemeHash: H("env-locale"),
     imeHash: H("env-ime"),
     accessibilityHash: H("env-accessibility"),
+    accountBindingHash: H("env-account"),
     accountIsolationHash: H("env-account"),
     capturedAt: "2029-12-31T23:30:00.000Z",
     expiresAt: "2030-01-01T01:00:00.000Z",
@@ -430,6 +431,11 @@ test("production dependency loader assembles sealed environment/oracle/selector/
   const dependencies = fixture.load();
   assert.equal(dependencies.environmentAttestation.attestationHash, fixture.environmentAttestation.attestationHash);
   assert.equal(dependencies.effectBoundary.boundaryHash, fixture.boundary.boundaryHash);
+  assert.equal(dependencies.independentObservationAuthority.keyId, "observer-1");
+  assert.match(dependencies.independentObservationAuthority.observerHash, /^[0-9a-f]{64}$/u);
+  assert.equal(dependencies.independentObservationAuthority.publicKey.asymmetricKeyType, "ed25519");
+  assert.equal(dependencies.independentObservationAuthority.maxAgeMs, 5_000);
+  assert.equal(typeof dependencies.independentObservationAuthority.observationRoot, "string");
   const expected = await dependencies.independentOracle.loadExpectation(fixture.authority);
   assert.equal(expected.expectedArtifactHash, fixture.expectation.expectedArtifactHash);
 
@@ -591,11 +597,26 @@ test("independent oracle fails closed for unavailable, stale, circular, or SUT-d
 test("semantic selector and fresh-state guard reject ambiguity, stale capture, and model-shaped capture sources", async () => {
   const fixture = buildFixture();
   const dependencies = fixture.load();
+  const ambiguousBlockSet = fixture.blockSet({ duplicateMatch: true });
   await assert.rejects(dependencies.targetSelector({
     scenarioKey: fixture.authority.scenarioKey,
     slotAuthority: fixture.slotAuthority,
-    blockSet: fixture.blockSet({ duplicateMatch: true }),
+    blockSet: ambiguousBlockSet,
   }), (error) => error?.code === "M6_LIVE_TARGET_SELECTOR_AMBIGUOUS");
+
+  assert.equal(await dependencies.targetSelector({
+    scenarioKey: fixture.authority.scenarioKey,
+    slotAuthority: fixture.slotAuthority,
+    candidateBlockId: H("other-block"),
+    blockSet: ambiguousBlockSet,
+  }), H("other-block"));
+
+  await assert.rejects(dependencies.targetSelector({
+    scenarioKey: fixture.authority.scenarioKey,
+    slotAuthority: fixture.slotAuthority,
+    candidateBlockId: H("other-block"),
+    blockSet: fixture.blockSet(),
+  }), (error) => error?.code === "M6_LIVE_TARGET_SELECTOR_POLICY_MISMATCH");
 
   fixture.setFreshCaptureOverride({
     sourceClass: "MODEL_OUTPUT",

@@ -8,7 +8,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { StateStore } from "../control-plane/lib/state-store.mjs";
+import { CURRENT_CONTROL_SCHEMA_VERSION, StateStore } from "../control-plane/lib/state-store.mjs";
 import {
   assertProductionBypassClosed,
   isWritePurpose,
@@ -38,7 +38,7 @@ async function withStore(fn) {
 
 test("user_version is 20 with transport and grounded-action authorization state", async () => {
   await withStore((store) => {
-    assert.equal(store.db.prepare("PRAGMA user_version").get().user_version, 20);
+    assert.equal(store.db.prepare("PRAGMA user_version").get().user_version, CURRENT_CONTROL_SCHEMA_VERSION);
     const cols = store.db.prepare("PRAGMA table_info(transport_action_authorizations)").all();
     assert.ok(cols.some((c) => c.name === "nonce_hash"));
     assert.ok(cols.some((c) => c.name === "consumed_at"));

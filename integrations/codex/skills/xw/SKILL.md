@@ -60,6 +60,26 @@ description: >-
   检查通过后直接执行，不再重复问一次。
 - 支付、真实外发、删除、账号安全和其他不可逆动作始终单独等人确认。
 
+## `/xw` 04 快车道 — 自主选路（RECIPE / DUMP / VISION / STOP）
+
+当目标是 alias `04` 的普通 R0/可逆小红书任务（搜索、浏览、dump、截图、输入、滑动、返回、启动 App）时，
+Claude **不逐步问人选路**，自行按下列顺序选择并执行；完整状态机、失败计数、视觉单击与沉淀规则见
+[references/adaptive-04.md](references/adaptive-04.md)。
+
+```text
+exact 04 Recipe + 画像/页面断言匹配  -> RECIPE
+否则 fresh dump 唯一目标            -> DUMP
+dump 空/稀疏/歧义 -> fresh screenshot -> VISION
+任一路径撞红线或同一目标累计两次失败 -> STOP
+```
+
+- 只碰 alias `04`；01–03 仍只读，不自动切换。
+- 碰机只走正式 Explorer session/lease（`xw-explore-session acquire` → `--session-file`）；禁止裸 ADB / 直连 22222。
+- 每次 run 仍走强制 closeout 生命周期；关键 decision step 带 `adaptiveDecision`（route / reasonCode / profile / targetFailureCount / assertion）。
+- VISION 单击用 `ops/xw-adaptive-visual-tap.mjs`：先 `--probe` 验证本 runtime 能读 PNG 出结构化块（不能则 `STOP/VISION_RUNTIME_UNAVAILABLE`），再在同 session、同新鲜截图上校验块（越界/低置信/同名歧义/系统区/红线 label 全拒）并执行一次 tap，只回 blockId/jobId/evidence ref，不回可复用坐标。
+- 同一 `goalSignature + observed profile` 成功两次后自动生成 `candidate` Recipe（离线校验后进服务端 04-only extras；客户端 inline Recipe 禁 live）。正式 Catalog 晋级仍走原 `evaluatePromotion()` 阈值，不混为一谈。
+- 支付/转账/充值、删除/注销/改密、系统权限、验证码/风控/登录墙立即 `STOP`；这些永远不进快车道，仍单独等人确认。
+
 ## Task closeout 生命周期（强制）
 
 每次由 `/xw start|task|balance|messages|session|locator|run|explore|repair|recover` 启动的业务任务必须绑定唯一 `runId`，结束时落盘；
@@ -197,21 +217,40 @@ node C:\Users\Public\xw-fusion\xw-platform\services\orchestrator\ops\xw-balance.
 6. 只有独立 canary、closeout、lease/job 清零和审核均通过后，才能新建 `implemented` revision；
    不得原地改 draft 或用历史实证替代本轮独立验收。
 
-## `/xw messages` — 小红书消息页未读只读
+## `/xw xhs` — 小红书多入口统一调度（04-only）
 
-`/xw messages` 打开小红书底栏「消息」并汇总未读信号。这是 Explorer session 编排快捷入口，**不是**正式 capability / recipe，也不授权进会话或回复。
+`/xw xhs <action>` 是小红书业务动作的唯一入口面。用户只描述业务动作，不选 Recipe/dump/截图/视觉/capability；dispatcher 按自适应决策阶梯自动选路。三个调用面（`/xw xhs`、`/xw task "…"` 经 xhs-compose、RPA `--json`）收敛到同一个 plan、同一个 planHash 和同一份 effect budget，不复制业务脚本。
 
 ```text
-node C:\Users\Public\xw-fusion\xw-platform\services\orchestrator\ops\xw-xhs-messages.mjs [--aliases 01,02,03,04] [--actor <id>] [--home]
+node C:\Users\Public\xw-fusion\xw-platform\services\orchestrator\ops\xw-xhs.mjs <action> [params] --plan|--json|--execute
+node C:\Users\Public\xw-fusion\xw-platform\services\orchestrator\ops\xw-xhs.mjs catalog
 ```
 
-1. 用户写 `/xw messages` 即开工确认（只读/可逆）；内部 `xw-closeout begin --mode explorer`，逐台
-   acquire → launch XHS → dump 找「消息」tab → tap → dump/截图汇总未读 → release → 统一 close。
-2. 默认 aliases=`01,02,03,04`；碰机 actor：`--actor` → `XHS_ACTOR` → `claude-pilot-20260809`。
-3. 只报告未读角标/「N条未读」等 dump 信号；**禁止**打开私信会话、发送、删除。
-4. `--home`：检查后 `launch-app com.xingin.xhs` 回到首页；默认停在消息页。
-5. 摘要落 `outbox/work/<runId>/messages-summary.json`；不进公共 knowledge。
-6. 尚未注册为 `implemented` recipe / formal capability；可复用命令 ≠ 生产 capability 交付完成。
+动作目录（`xw-xhs.mjs catalog` 列全）：`search`、`browse`、`inbox`、`read`、`like`、`collect`、`follow`、`nurture`、`comment`、`reply`、`publish prepare`、`publish send`。
+
+1. **04-only，不可绕过**：每次 plan 强制 `placement=04`、`perDeviceConcurrency=1`；alias 01/02/03 在 plan 阶段直接 `XHS_ALIAS_NOT_04` 拒绝，零 job/lease/session/I/O；无 alias 也只解析到 04，04 busy 不 fallback 到 01–03。
+2. **快车道，不增日常审核**：用户提交命令即开工意图；`xhs.nonpayment-autonomy.v1` pilot 下 like/collect/follow/comment/reply 经 typed social capability 直接执行；唯一保留的人类 commit 是 `publish send`。
+3. **追溯而非审批**：一个 action = 一个 closeout run，记 actionRunId/planHash/参数摘要、recipe 或 capability 凭证、目标 fingerprint/operationKey、before/after、截图/dump/effect receipt hash、transport 次数与 ambiguous/no-retry 状态、最终 lease/job 清理状态。评论/私信正文只在受控证据中保存，普通日志只留 hash/长度/目标指纹。
+4. **效果预算是硬约束**：social action 走现有 Mission/EffectLedger 严格路径（`softScope=false, softBudget=false`），nonpayment 只取消人工确认，不放松用户声明的数量和目标；`operationKey=sha256(actionRunId+action+targetFingerprint+payloadHash)`，同 key 重放复用 receipt，ambiguous 同 mission/action/target 禁盲重试。
+5. **--execute 分 wave 开闸**：默认 `--plan` 只输出 plan 不碰设备；`--execute` 在对应 wave 的 live canary 晋级链通过前 fail-closed（返回 `action_gated:<wave>`）。当前 W0：所有动作 plan-only。
+6. 支付、删除/注销/改密、验证码、登录墙、风控页、目标不唯一 → 始终停止。本阶段只允许 04；01–03 不参与也不被 fallback。
+7. 计划与执行台账：`docs/plans/xhs-04-multi-entry-executable-plan.md` + `docs/plans/runs/xhs-04-multi-entry-ledger.md`。
+
+## `/xw messages` — `/xw xhs inbox` 兼容别名（04-only）
+
+`/xw messages` 是 `inbox` 动作的兼容别名，打开小红书底栏「消息」并汇总未读信号。经统一 dispatcher 调度，**04-only**，不是独立 capability / recipe，也不授权进会话或回复。
+
+```text
+node C:\Users\Public\xw-fusion\xw-platform\services\orchestrator\ops\xw-xhs.mjs messages --plan|--json|--execute
+# 等价于
+node C:\Users\Public\xw-fusion\xw-platform\services\orchestrator\ops\xw-xhs.mjs inbox --plan|--json|--execute
+```
+
+1. 用户写 `/xw messages` 即开工确认（只读/可逆）；内部 `xw-closeout begin --mode explorer`，acquire Explorer session → launch XHS → dump 找「消息」tab → tap → dump/截图汇总未读 → release → close。
+2. **04-only**：默认且唯一 alias=`04`；01–03 在 plan 阶段拒绝，不逐台多机编排。actor：`--actor` → `XHS_ACTOR` → `claude-pilot-20260809`。
+3. 只报告未读角标/「N条未读」等 dump 信号；**禁止**打开私信会话、发送、删除；会话不唯一不进入。
+4. 完成后默认回到首页（restoration）；摘要落 `outbox/work/<runId>/messages-summary.json`，不进公共 knowledge。
+5. `inbox` 的 live 执行在 W3 wave 晋级前 fail-closed；当前 plan-only。
 
 ## `/xw bench` — 只读链路计时实验
 

@@ -164,6 +164,7 @@ function m6RuntimeFixture(t) {
     localeThemeHash: "6".repeat(64),
     imeHash: "7".repeat(64),
     accessibilityHash: "8".repeat(64),
+    accountBindingHash: "e".repeat(64),
     accountIsolationHash: "9".repeat(64),
     capturedAt,
     expiresAt,

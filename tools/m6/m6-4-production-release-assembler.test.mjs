@@ -282,6 +282,7 @@ function fixture() {
     localeThemeHash: H("env-locale"),
     imeHash: H("env-ime"),
     accessibilityHash: H("env-accessibility"),
+    accountBindingHash: H("env-account"),
     accountIsolationHash: H("env-account"),
     capturedAt: CAPTURED_AT,
     expiresAt: EXPIRES_AT,

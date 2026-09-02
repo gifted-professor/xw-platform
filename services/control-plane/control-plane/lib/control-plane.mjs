@@ -3,7 +3,12 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { ControlPlaneError, asControlError } from "./errors.mjs";
-import { canonicalJson, fingerprint } from "./canonical.mjs";
+import { canonicalJson, fingerprint, sha256 } from "./canonical.mjs";
+import * as routineEffectBridgeModule from "../../apps/xhs/routine-effect-bridge.mjs";
+import * as routineEffectTransportModule from "../../apps/xhs/routine-effect-transport.mjs";
+import * as routineArtifactModule from "../../../orchestrator/scripts/lib/xhs-routine-artifact.mjs";
+import { createRoutineEffectBridge } from "../../apps/xhs/routine-effect-bridge.mjs";
+import { createRoutineDraftProvider } from "../../apps/xhs/routine-draft-provider.mjs";
 import { validateJsonSchema } from "./json-schema-validator.mjs";
 import { DiscoverySessionRuntime } from "./discovery-session.mjs";
 import { evaluateCapabilityPolicy, assertAuthorizationAllow } from "./policy.mjs";
@@ -44,6 +49,101 @@ import {
   requireActionRequest,
   requireActionResult,
 } from "./open-action-executor.mjs";
+import { SingleDeviceRecipeRunner, resolveFixedRpaAlias } from "./single-device-recipe-runner.mjs";
+import { filterOverlayRecipes, resolveOverlayMode } from "./generated-overlay.mjs";
+import {
+  createExplorationAuthorityPolicy,
+  EXPLORATION_BUDGET_KINDS,
+  EXPLORATION_PROFILE,
+} from "./xhs-exploration-authority.mjs";
+import {
+  createExplorationPermitPolicy,
+  EXPLORATION_VISUAL_NAVIGATION_ROLES,
+  normalizeExplorationVisionAnalysis,
+  normalizeExplorationVisionReservation,
+} from "./xhs-exploration-permit.mjs";
+
+// Visual navigation roles spend the visionPermits budget at permit issuance
+// (V3-I07); observation-only roles (BACK/RESTORE) do not.
+const EXPLORATION_VISUAL_ROLES = EXPLORATION_VISUAL_NAVIGATION_ROLES;
+const EXPLORATION_INTERNAL_BUDGET_KINDS = new Set(["visionAnalysis", "visionPermits"]);
+const EXPLORATION_BUDGET_LEDGER_VIEW_SCHEMA_ID = "xw.xhs.exploration-budget-ledger-view.v1";
+const EXPLORATION_PROOF_CAPS = Object.freeze([
+  "reservedPrimitives",
+  "novelOpens",
+  "resultScreensPerQuery",
+  "commentScreens",
+  "visionAnalysisAttempts",
+  "visionMaxIssuedPermits",
+  "visionMaxPhysicalTaps",
+]);
+
+function explorationOperationHash(value) {
+  return sha256(`xw.xhs.exploration-budget-operation.v1:${canonicalJson(value)}`);
+}
+
+function persistedExplorationReservationReceipt(state, reservation) {
+  const persisted = state.getExplorationReservation(reservation.reservationId);
+  if (!persisted) {
+    throw new ControlPlaneError(
+      "EXPLORATION_BUDGET_RECEIPT_MISSING",
+      "persisted exploration reservation disappeared before its receipt was returned",
+      { status: 500 },
+    );
+  }
+  return {
+    reservationId: reservation.reservationId,
+    kind: reservation.kind,
+    alias: reservation.alias,
+    amount: reservation.amount,
+    used: reservation.used,
+    cap: reservation.cap,
+    state: persisted.state,
+    operationHash: persisted.detail?.operationHash ?? null,
+  };
+}
+
+function explorationBudgetLedgerView(state, authority) {
+  const caps = Object.fromEntries(EXPLORATION_PROOF_CAPS.map((name) => [
+    name,
+    Number(authority.budgets?.[name] ?? 0),
+  ]));
+  const rows = state.db.prepare(`
+    SELECT reservation_id, alias, kind, amount, state, detail_json
+    FROM exploration_reservations
+    WHERE authority_id=?
+      AND kind IN ('primitives','novelOpens','resultScreens','commentScreens','visionAnalysis','visionPermits')
+    ORDER BY created_at, reservation_id
+  `).all(authority.authorityId).map((row) => {
+    let detail = null;
+    try { detail = row.detail_json ? JSON.parse(row.detail_json) : null; } catch {}
+    return {
+      reservationId: row.reservation_id,
+      kind: row.kind,
+      capName: EXPLORATION_BUDGET_KINDS[row.kind] ?? row.kind,
+      alias: row.alias ?? null,
+      amount: Number(row.amount),
+      state: row.state,
+      operationHash: detail?.operationHash ?? null,
+    };
+  });
+  const totals = Object.fromEntries(EXPLORATION_PROOF_CAPS.map((name) => [name, 0]));
+  for (const row of rows) {
+    if (Object.hasOwn(totals, row.capName)) totals[row.capName] += row.amount;
+  }
+  const body = {
+    schemaId: EXPLORATION_BUDGET_LEDGER_VIEW_SCHEMA_ID,
+    authorityId: authority.authorityId,
+    missionHash: authority.missionHash,
+    caps,
+    rows,
+    totals,
+  };
+  return {
+    ...body,
+    ledgerHash: sha256(`${EXPLORATION_BUDGET_LEDGER_VIEW_SCHEMA_ID}:${canonicalJson(body)}`),
+  };
+}
 
 function ledgerView(row) {
   if (!row) return null;
@@ -158,7 +258,7 @@ function boundedM6EnvironmentQualification(value) {
     && Object.keys(record).sort().join("\0") === [...keys].sort().join("\0");
   const hash = (entry) => /^[0-9a-f]{64}$/u.test(entry || "");
   const attestationKeys = [
-    "accessibilityHash", "accountIsolationHash", "appBuildHash", "appPackageHash",
+    "accessibilityHash", "accountBindingHash", "accountIsolationHash", "appBuildHash", "appPackageHash",
     "attestationHash", "capturedAt", "displayHash", "expiresAt", "imeHash",
     "localeThemeHash", "osBuildHash", "schemaId", "signingHash",
   ];
@@ -283,6 +383,7 @@ export class ControlPlane {
     policyMode = null,
     now = Date.now,
     observeProvider = null,
+    eCorpusInterlock = null,
   }) {
     this.state = state;
     this.capabilities = capabilities;
@@ -335,6 +436,31 @@ export class ControlPlane {
       // and sinks the provenance debt; legacy stays fail-closed.
       ...(this.runtimePolicyMode ? { policyMode: this.runtimePolicyMode } : {}),
       ...(this.debtOnLowDisk ? { debtSink: (entry) => this.evidenceDebt.push(entry) } : {}),
+    });
+    // PR1 Single-Device Recipe Runner: fixed alias 01, one lease, no DeviceRun yet.
+    // recipeOverlay is attached later by bootstrap (load-only); resolveRecipe reads it live.
+    this.recipeOverlay = null;
+    this.recipeCatalogExtras = [];
+    // Direct-routine plan V2 §8.1.5: the FIXED production CommentDraftProvider.
+    // Injected at construction (never selected by a CLI flag) — the bridge reads
+    // only { text, modelId, promptHash } from it.
+    this.routineDraftProvider = createRoutineDraftProvider();
+    // V3 exploration (plan §5.2): hard-zero authority + single-use permit
+    // policies. Fail-closed regardless of policyMode — the exploration profile
+    // never inherits nonpayment_v1 softness.
+    this.explorationAuthority = createExplorationAuthorityPolicy({
+      state,
+      ...(eCorpusInterlock ? { eCorpusInterlock } : {}),
+    });
+    this.explorationPermits = createExplorationPermitPolicy({ state, now: this.now ?? now });
+    this.rpaAlias = resolveFixedRpaAlias();
+    this.recipeRuns = new SingleDeviceRecipeRunner({
+      fixedAlias: this.rpaAlias,
+      createSession: (opts) => this.createSession(opts),
+      executeSessionAction: (sessionId, token, action) => this.executeSessionAction(sessionId, token, action),
+      heartbeatSession: (sessionId, token) => this.heartbeatSession(sessionId, token),
+      releaseSession: (sessionId, token) => this.releaseSession(sessionId, token),
+      resolveRecipe: (recipeId, revision) => this.resolveRecipeForRunner(recipeId, revision),
     });
     this.firewall = new EffectFirewall();
     this.discoveryProducer = typeof discoveryProducer === "function" ? discoveryProducer : null;
@@ -2402,6 +2528,544 @@ export class ControlPlane {
     return this.state.heartbeatSession(sessionId, token, this.leaseTtlMs);
   }
 
+  // --- Direct-routine plan V2 §8.1: CP-owned routine authority + effects -----
+  // The orchestrator holds only the formal Explorer session/token. Social
+  // effects commit through this typed CP surface: the CP re-validates the
+  // authority tuple, re-checks the SERVER-SEALED canary policy (a client
+  // --canary-authorized flag is only a request), and executes the effect with
+  // the bridge + session-bound transport BELOW — same session, same lease, no
+  // nested job, no raw caller coordinates, no StateStore access from the caller.
+
+  #routineEffectBridges = new Map();
+
+  #routineEffectCache(authorityId) {
+    let cached = this.#routineEffectBridges.get(authorityId);
+    if (!cached) {
+      cached = { targetBindings: new Map(), sequence: 0, bridge: null };
+      this.#routineEffectBridges.set(authorityId, cached);
+    }
+    return cached;
+  }
+
+  registerRoutineAuthority({
+    sessionId,
+    token,
+    executionRunId,
+    routineRunId,
+    planHash,
+    alias,
+    effectCaps = {},
+    canaryAuthorized = false,
+    accountFingerprint = null,
+  }) {
+    const session = this.state.validateSession(sessionId, token);
+    assertSessionKind(session, "capability");
+    // V3-I01: an exploration-profile session can never register a routine
+    // SOCIAL authority — no mixed profile, no ECP bridge, no effect transport.
+    if (session.profile === EXPLORATION_PROFILE) {
+      throw new ControlPlaneError("EXPLORATION_EFFECT_FORBIDDEN", "xhs_goal_explore_v1 sessions cannot register a routine social authority", { status: 403 });
+    }
+    const { authority } = this.state.registerRoutineAuthority({
+      executionRunId,
+      routineRunId,
+      planHash,
+      alias,
+      deviceId: session.deviceId,
+      sessionId: session.sessionId,
+      leaseId: session.leaseId,
+      actorId: session.actorId,
+      effectCaps,
+      canaryAuthorized,
+      accountFingerprint,
+    });
+    return authority;
+  }
+
+  // --- V3 exploration authority (plan §5.2) ----------------------------------
+
+  requireExplorationAuthority({ authorityId, sessionId, token }) {
+    const session = this.state.validateSession(sessionId, token);
+    assertSessionKind(session, "capability");
+    if (session.profile !== EXPLORATION_PROFILE) {
+      throw new ControlPlaneError("EXPLORATION_PROFILE_REQUIRED", "session does not carry the exploration profile", { status: 403 });
+    }
+    const authority = this.state.getExplorationAuthority(authorityId);
+    if (!authority) {
+      throw new ControlPlaneError("EXPLORATION_AUTHORITY_NOT_FOUND", `unknown exploration authority ${authorityId}`, { status: 404 });
+    }
+    const binding = authority.sessionBindings.find((b) => b.sessionId === session.sessionId);
+    if (!binding) {
+      throw new ControlPlaneError("EXPLORATION_SESSION_NOT_BOUND", "session is not bound to this exploration authority", { status: 403 });
+    }
+    if (binding.leaseId !== session.leaseId) {
+      throw new ControlPlaneError("EXPLORATION_LEASE_DRIFT", "session lease drifted from the authority binding", { status: 409 });
+    }
+    return { session, authority, binding };
+  }
+
+  registerExplorationAuthority({
+    sessions,
+    executionRunId,
+    routineRunId,
+    mission,
+    planHash,
+    releaseId = null,
+    sourceCommit = null,
+    accountFingerprint = null,
+  }) {
+    for (const s of sessions ?? []) {
+      const session = this.state.validateSession(s.sessionId, s.token);
+      assertSessionKind(session, "capability");
+      if (session.profile === EXPLORATION_PROFILE) {
+        throw new ControlPlaneError("EXPLORATION_SESSION_ALREADY_PROFILED", "session already carries an exploration profile", { status: 409 });
+      }
+    }
+    return this.explorationAuthority.registerAuthority({
+      sessions,
+      executionRunId,
+      routineRunId,
+      mission,
+      planHash,
+      releaseId,
+      sourceCommit,
+      accountFingerprint,
+    });
+  }
+
+  // Visual navigation roles spend the visionPermits budget at issuance
+  // (V3-I07); observation-only roles (BACK/RESTORE) do not. ONLY the
+  // vision-provider-derived role is visual: DUMP-resolved surface taps
+  // (OPEN_CONTENT_CARD / OPEN_COMMENT_PANEL) are DUMP-authorized navigation,
+  // gated by reservedPrimitives instead (P2 clarification, plan §5.5).
+  issueExplorationPermit({
+    sessionId,
+    token,
+    authorityId,
+    navigationRole,
+    page,
+    evidenceHash,
+    resolvedPayload,
+    ttlMs = null,
+    visualProof = null,
+  }) {
+    const { session, authority } = this.requireExplorationAuthority({ authorityId, sessionId, token });
+    if (EXPLORATION_VISUAL_ROLES.has(navigationRole)) {
+      // Re-read and verify the task-owned PASS before any budget reservation
+      // or permit insertion.  A stale/key-drifted artifact cannot spend even
+      // the first slot.
+      this.explorationAuthority.assertVisualUnlocked({ authority });
+    }
+    // Build first: every role/page/payload/evidence/TTL/lane check must pass
+    // before a visual issuance reservation is durably consumed.  The later
+    // reserve+insert pair is not yet one SQL transaction, but malformed and
+    // alias-04 requests now leave both ledgers untouched.
+    const permit = this.explorationPermits.buildPermit({
+      session,
+      authority,
+      navigationRole,
+      page,
+      evidenceHash,
+      resolvedPayload,
+      ttlMs,
+      visualProof,
+    });
+    if (EXPLORATION_VISUAL_ROLES.has(navigationRole)) {
+      const operationHash = explorationOperationHash({
+        authorityId: authority.authorityId,
+        missionHash: authority.missionHash,
+        alias: permit.alias,
+        kind: "visionPermits",
+        permitId: permit.permitId,
+        navigationRole,
+        page,
+      });
+      this.state.reserveExplorationBudget({
+        authorityId: authority.authorityId,
+        missionHash: authority.missionHash,
+        alias: null,
+        kind: "visionPermits",
+        amount: 1,
+        detail: { navigationRole, page, evidenceHash, operationHash },
+      });
+    }
+    return this.explorationPermits.insertPermit(permit);
+  }
+
+  async consumeExplorationPermit({ sessionId, token, authorityId, permitId, payload = null, freshObservation = null }) {
+    const { session, authority } = this.requireExplorationAuthority({ authorityId, sessionId, token });
+    const pendingPermit = this.state.getExplorationPermit(permitId);
+    if (pendingPermit && EXPLORATION_VISUAL_ROLES.has(pendingPermit.navigationRole)) {
+      // Fresh verification precedes the one-shot consume and #runSessionJob,
+      // so expiry/key/release drift cannot race into physical device I/O.
+      this.explorationAuthority.assertVisualUnlocked({ authority });
+    }
+    const { permit, payload: resolvedPayload } = this.explorationPermits.consumePermit({
+      session,
+      authority,
+      permitId,
+      requestedPayload: payload,
+      freshObservation,
+    });
+    // The one-shot permit consume is followed by the authority-global step
+    // reservation BEFORE createJob.  A final-slot race therefore consumes the
+    // losing permit conservatively but can never cross the physical-I/O
+    // boundary.  A crash after this point leaves the reservation spent and the
+    // permit unreplayable.
+    const operationHash = explorationOperationHash({
+      authorityId: authority.authorityId,
+      missionHash: authority.missionHash,
+      alias: permit.alias,
+      kind: "primitives",
+      permitId: permit.permitId,
+      navigationRole: permit.navigationRole,
+      page: permit.page,
+    });
+    const reserved = this.state.reserveExplorationBudget({
+      authorityId: authority.authorityId,
+      missionHash: authority.missionHash,
+      alias: permit.alias,
+      kind: "primitives",
+      amount: 1,
+      detail: {
+        permitId: permit.permitId,
+        navigationRole: permit.navigationRole,
+        page: permit.page,
+        operationHash,
+      },
+    });
+    const budgetReservation = persistedExplorationReservationReceipt(this.state, reserved);
+    // The job runs the same formal session pipeline only after the shared
+    // totalSteps reservation has durably succeeded.
+    const job = await this.#runSessionJob(session, {
+      idempotencyKey: `exploration:${permit.permitId}`,
+      capabilityId: "xiaowei.explorer.primitive",
+      params: resolvedPayload,
+      token,
+    });
+    return { permit, job, budgetReservation };
+  }
+
+  reserveExplorationBudget({ sessionId, token, authorityId, alias = null, kind, amount = 1, detail = null }) {
+    const { authority, binding } = this.requireExplorationAuthority({ authorityId, sessionId, token });
+    if (EXPLORATION_INTERNAL_BUDGET_KINDS.has(kind)) {
+      throw new ControlPlaneError(
+        "EXPLORATION_BUDGET_KIND_INTERNAL",
+        `budget ${kind} is reserved by a dedicated control-plane transition`,
+        { status: 403, details: { kind } },
+      );
+    }
+    const reservation = this.state.reserveExplorationBudget({
+      authorityId: authority.authorityId,
+      missionHash: authority.missionHash,
+      alias: alias ?? binding.alias,
+      kind,
+      amount,
+      detail,
+    });
+    return persistedExplorationReservationReceipt(this.state, reservation);
+  }
+
+  reserveExplorationVisionAnalysis({ sessionId, token, authorityId, detail = null }) {
+    const { authority, binding } = this.requireExplorationAuthority({ authorityId, sessionId, token });
+    if (binding.alias !== "03" || binding.laneRole !== "feed_lane") {
+      throw new ControlPlaneError(
+        "EXPLORATION_VISUAL_ALIAS_INELIGIBLE",
+        "vision analysis for the initial canary is restricted to alias 03/feed_lane",
+        { status: 403, details: { alias: binding.alias, laneRole: binding.laneRole } },
+      );
+    }
+    const normalizedDetail = normalizeExplorationVisionReservation({
+      authority,
+      sessionId,
+      detail,
+      nowMs: this.now(),
+    });
+    const operationHash = explorationOperationHash({
+      authorityId: authority.authorityId,
+      missionHash: authority.missionHash,
+      alias: "03",
+      kind: "visionAnalysis",
+      frameId: normalizedDetail.frameId,
+      evidenceHash: normalizedDetail.evidenceHash,
+    });
+    const reservation = this.state.reserveExplorationBudget({
+      authorityId: authority.authorityId,
+      missionHash: authority.missionHash,
+      alias: "03",
+      kind: "visionAnalysis",
+      amount: 1,
+      detail: { ...normalizedDetail, operationHash },
+    });
+    return persistedExplorationReservationReceipt(this.state, reservation);
+  }
+
+  settleExplorationVisionAnalysis({ sessionId, token, authorityId, reservationId, outcome, result = null }) {
+    const { authority, binding } = this.requireExplorationAuthority({ authorityId, sessionId, token });
+    if (binding.alias !== "03" || binding.laneRole !== "feed_lane") {
+      throw new ControlPlaneError(
+        "EXPLORATION_VISUAL_ALIAS_INELIGIBLE",
+        "vision analysis settlement is restricted to alias 03/feed_lane",
+        { status: 403, details: { alias: binding.alias, laneRole: binding.laneRole } },
+      );
+    }
+    const reservation = this.state.getExplorationReservation(reservationId);
+    if (!reservation || reservation.authorityId !== authority.authorityId
+      || reservation.missionHash !== authority.missionHash
+      || reservation.kind !== "visionAnalysis" || reservation.alias !== "03") {
+      throw new ControlPlaneError(
+        "EXPLORATION_VISION_ANALYSIS_INVALID",
+        "vision analysis settlement does not match the active authority",
+        { status: 409 },
+      );
+    }
+    let normalizedResult = null;
+    if (outcome === "consumed") {
+      normalizedResult = normalizeExplorationVisionAnalysis({
+        authority,
+        reservation: { ...reservation, sessionId },
+        result,
+        nowMs: this.now(),
+      });
+    }
+    return this.state.settleExplorationVisionAnalysis({
+      reservationId,
+      authorityId: authority.authorityId,
+      missionHash: authority.missionHash,
+      outcome,
+      analysis: normalizedResult,
+    });
+  }
+
+  settleExplorationReservation({ sessionId, token, authorityId, reservationId, outcome }) {
+    this.requireExplorationAuthority({ authorityId, sessionId, token });
+    const reservation = this.state.getExplorationReservation(reservationId);
+    if (reservation?.kind === "visionAnalysis") {
+      throw new ControlPlaneError(
+        "EXPLORATION_VISION_ANALYSIS_SETTLE_REQUIRED",
+        "vision analysis must use its dedicated CP-normalized settlement transition",
+        { status: 403 },
+      );
+    }
+    return this.state.settleExplorationReservation({ reservationId, outcome });
+  }
+
+  claimExplorationTarget({ sessionId, token, authorityId, keyKind, keyValue, alias = null }) {
+    const { authority, binding } = this.requireExplorationAuthority({ authorityId, sessionId, token });
+    const result = this.state.claimExplorationTarget({
+      authorityId: authority.authorityId,
+      missionHash: authority.missionHash,
+      keyKind,
+      keyValue,
+      alias: alias ?? binding.alias,
+    });
+    return { ...result, alias: alias ?? binding.alias };
+  }
+
+  confirmExplorationTarget({ sessionId, token, authorityId, targetId, stableKeyValue = null }) {
+    const { authority } = this.requireExplorationAuthority({ authorityId, sessionId, token });
+    return this.state.confirmExplorationTarget({
+      authorityId: authority.authorityId,
+      missionHash: authority.missionHash,
+      targetId,
+      stableKeyValue,
+    });
+  }
+
+  markExplorationTargetUnknown({ sessionId, token, authorityId, targetId }) {
+    const { authority } = this.requireExplorationAuthority({ authorityId, sessionId, token });
+    return this.state.markExplorationTargetUnknown({
+      authorityId: authority.authorityId,
+      missionHash: authority.missionHash,
+      targetId,
+    });
+  }
+
+  appendExplorationJournal({ sessionId, token, authorityId, alias = null, type, payload = {} }) {
+    const { authority, binding } = this.requireExplorationAuthority({ authorityId, sessionId, token });
+    const laneAlias = alias ?? binding.alias;
+    const journal = this.state.readExplorationLaneJournal(authority.authorityId, laneAlias);
+    const seq = (journal.length > 0 ? journal[journal.length - 1].seq : 0) + 1;
+    const prevHash = journal.length > 0 ? journal[journal.length - 1].recordHash : "genesis";
+    const recordHash = sha256(`${prevHash} ${seq} ${type} ${canonicalJson(payload)}`);
+    const record = this.state.appendExplorationJournal({
+      authorityId: authority.authorityId,
+      alias: laneAlias,
+      seq,
+      type,
+      recordHash,
+      payload,
+    });
+    return record?.recordHash ?? recordHash;
+  }
+
+  commitExplorationLane({ sessionId, token, authorityId }) {
+    const { binding } = this.requireExplorationAuthority({ authorityId, sessionId, token });
+    const journal = this.state.readExplorationLaneJournal(authorityId, binding.alias);
+    if (journal.some((r) => r.type === "COMMITTED")) {
+      throw new ControlPlaneError("EXPLORATION_LANE_ALREADY_COMMITTED", "lane journal already carries a COMMITTED marker", { status: 409 });
+    }
+    const receiptHash = sha256(canonicalJson(journal.map((r) => r.recordHash)));
+    this.appendExplorationJournal({ sessionId, token, authorityId, alias: binding.alias, type: "COMMITTED", payload: { receiptHash } });
+    return { alias: binding.alias, receiptHash, journalLength: journal.length + 1 };
+  }
+
+  getExplorationAuthorityView({ sessionId, token, authorityId }) {
+    const { authority } = this.requireExplorationAuthority({ authorityId, sessionId, token });
+    const lanes = {};
+    let allSettled = true;
+    for (const b of authority.sessionBindings) {
+      const journal = this.state.readExplorationLaneJournal(authorityId, b.alias);
+      const committed = journal.some((r) => r.type === "COMMITTED");
+      if (!committed) allSettled = false;
+      lanes[b.alias] = { laneRole: b.laneRole, journalLength: journal.length, committed };
+    }
+    return {
+      authority,
+      lanes,
+      allSettled,
+      budgetLedger: explorationBudgetLedgerView(this.state, authority),
+      visionCounters: this.state.getExplorationVisionCounters(authorityId),
+    };
+  }
+
+  closeExplorationAuthority({ sessionId, token, authorityId, reason = "closed" }) {
+    const { authority, binding } = this.requireExplorationAuthority({ authorityId, sessionId, token });
+    const lanes = authority.sessionBindings
+      .map((b) => this.state.readExplorationLaneJournal(authorityId, b.alias))
+      .map((journal) => journal.some((r) => r.type === "COMMITTED"));
+    if (lanes.length > 0 && !lanes.every(Boolean)) {
+      throw new ControlPlaneError("EXPLORATION_LANES_UNSETTLED", "every lane journal must carry a COMMITTED marker before close", { status: 409 });
+    }
+    return this.state.closeExplorationAuthority(authorityId, { reason });
+  }
+
+  #routineEffectBridge(authority, token) {
+    const cached = this.#routineEffectCache(authority.authorityId);
+    if (cached.bridge) return cached.bridge;
+    const { createRoutineEffectTransport } = routineEffectTransportModule;
+    const transport = createRoutineEffectTransport({
+      // typed CP-internal execution on the OWNING session: same lease, no
+      // nested-job surface, and the caller never supplies coordinates
+      executeAction: async (params) => {
+        const job = await this.executeSessionAction(authority.sessionId, token, {
+          capabilityId: this.#routineExplorerCapabilityId(),
+          idempotencyKey: `routine-effect:${authority.routineRunId}:${++cached.sequence}:${params.primitive}`,
+          params,
+        });
+        return this.#routinePrimitiveOutput(job, params);
+      },
+      // CP-owned append-only binding ledger: the machine's claimed target
+      // fingerprint is bound to the open detail's stable evidence exactly once
+      bindTarget: (claimedFingerprint, detailFingerprint) => {
+        const key = `${authority.routineRunId} ${claimedFingerprint}`;
+        const existing = cached.targetBindings.get(key);
+        if (existing && existing !== detailFingerprint) {
+          throw new ControlPlaneError("TARGET_BINDING_MISMATCH", "the claimed target is now bound to different detail evidence", {
+            status: 409, details: { claimedFingerprint },
+          });
+        }
+        cached.targetBindings.set(key, detailFingerprint);
+      },
+      // the fixed production draft provider (text-only seam, §8.1.5)
+      draftTextOf: async (draftId) => this.state.getCommentDraft(draftId),
+      now: () => Date.now(),
+    });
+    const bridge = createRoutineEffectBridge({
+      state: this.state,
+      owner: {
+        sessionId: authority.sessionId,
+        leaseRef: authority.leaseId,
+        leaseAuthorization: sha256(String(token || "")),
+        routineRunId: authority.routineRunId,
+        planHash: authority.planHash,
+        // V2.1: full account binding — the authoritative accountFingerprint is
+        // sealed at authority registration and flows into every effect/draft row
+        accountFingerprint: authority.accountFingerprint ?? null,
+      },
+      transport,
+      llm: this.routineDraftProvider ?? null,
+    });
+    cached.bridge = bridge;
+    return bridge;
+  }
+
+  #routineExplorerCapabilityId() {
+    return "xiaowei.explorer.primitive";
+  }
+
+  #routinePrimitiveOutput(job, params) {
+    const output = job?.result?.output ?? job?.output ?? job?.result ?? {};
+    if (params?.primitive === "dump_ui" && !output.xml && output.path) {
+      // the CP owns its evidence store; read the artifact straight from the
+      // bound run directory (same binding rule the runner applies)
+      const runDirectory = job?.storage?.runDirectory ?? job?.result?.storage?.runDirectory;
+      if (!runDirectory) throw new ControlPlaneError("ROUTINE_OBSERVATION_INVALID", "dump artifact has no bound run directory", { status: 409 });
+      const { readBoundUtf8Artifact } = routineArtifactModule;
+      return { ...output, xml: readBoundUtf8Artifact({ path: output.path, runId: job.runId, storage: job.storage ?? job.result?.storage }) };
+    }
+    return output;
+  }
+
+  async commitRoutineAuthorityEffect({ authorityId, token, intent }) {
+    const authority = this.state.getRoutineAuthority(String(authorityId || ""));
+    if (!authority || authority.status !== "active") {
+      throw new ControlPlaneError("ROUTINE_AUTHORITY_INACTIVE", "routine authority is missing or inactive", { status: 404 });
+    }
+    const session = this.state.validateSession(authority.sessionId, token);
+    assertSessionKind(session, "capability");
+    if (session.leaseId !== authority.leaseId) {
+      throw new ControlPlaneError("SESSION_MISMATCH", "routine authority does not match the presenting session lease", { status: 403 });
+    }
+    // server-sealed canary policy: the transport only opens for a policy the
+    // CP granted at registration — the client flag alone can never open it
+    if (authority.canaryPolicy?.granted !== true) {
+      throw new ControlPlaneError("ROUTINE_TRANSPORT_SEALED", "no server-sealed canary policy granted transport for this authority", { status: 403 });
+    }
+    this.#routineEffectCache(authority.authorityId);
+    const bridge = this.#routineEffectBridge(authority, token);
+    const intentInput = intent && typeof intent === "object" ? intent : {};
+    return bridge.commitRoutineEffect({
+      sessionId: authority.sessionId,
+      leaseRef: session.leaseId,
+      leaseAuthorization: sha256(String(token || "")),
+      routineRunId: authority.routineRunId,
+      planHash: authority.planHash,
+      targetFingerprint: intentInput.targetFingerprint ?? null,
+      observationHash: intentInput.observationHash ?? null,
+      payloadHash: intentInput.payloadHash ?? null,
+    }, intentInput);
+  }
+
+  async reconcileRoutineAuthorityComments({ authorityId, token, targetFingerprint = null }) {
+    const authority = this.state.getRoutineAuthority(String(authorityId || ""));
+    if (!authority || authority.status !== "active") {
+      throw new ControlPlaneError("ROUTINE_AUTHORITY_INACTIVE", "routine authority is missing or inactive", { status: 404 });
+    }
+    const session = this.state.validateSession(authority.sessionId, token);
+    assertSessionKind(session, "capability");
+    const bridge = this.#routineEffectBridge(authority, token);
+    return bridge.reconcileComment({
+      sessionId: authority.sessionId,
+      leaseRef: session.leaseId,
+      leaseAuthorization: sha256(String(token || "")),
+      routineRunId: authority.routineRunId,
+      planHash: authority.planHash,
+      targetFingerprint,
+      observationHash: null,
+    });
+  }
+
+  closeRoutineAuthorityViaRpc(authorityId, token, reason = "closed") {
+    const authority = this.state.getRoutineAuthority(String(authorityId || ""));
+    if (!authority) {
+      throw new ControlPlaneError("ROUTINE_AUTHORITY_NOT_FOUND", `unknown routine authority ${authorityId}`, { status: 404 });
+    }
+    // only the OWNING session's token may close its authority
+    this.state.validateSession(authority.sessionId, token);
+    this.#routineEffectBridges.delete(authority.authorityId);
+    return this.state.closeRoutineAuthority(authority.authorityId, { reason });
+  }
+
   releaseSession(sessionId, token) {
     const session = this.state.validateSession(sessionId, token);
     assertSessionKind(session, "capability");
@@ -2412,6 +3076,15 @@ export class ControlPlane {
         { status: 423, details: { sessionId } },
       );
     }
+    // §8.1: releasing the owning session closes the run's routine authority —
+    // the sealed canary policy dies with the session, never outlives it
+    const active = this.state.listActiveRoutineAuthorities?.() ?? null;
+    for (const authority of (Array.isArray(active) ? active : [])) {
+      if (authority.sessionId === sessionId) {
+        this.state.closeRoutineAuthority(authority.authorityId, { reason: "session-released" });
+        this.#routineEffectBridges.delete(authority.authorityId);
+      }
+    }
     return this.state.releaseSession(sessionId, token);
   }
 
@@ -2419,10 +3092,25 @@ export class ControlPlane {
     idempotencyKey,
     capabilityId,
     params = {},
-  }) {
+  } = {}) {
     const session = this.state.validateSession(sessionId, token);
     assertSessionKind(session, "capability");
-    if (this.state.getDiscoveryRunForSession(sessionId)) {
+    // V3-I02: exploration-profile sessions reject every interactive primitive
+    // and every non-Explorer capability on the GENERIC path — even with the
+    // caller's real session token and even when policyMode.active=true.
+    // Navigation happens only through consumeExplorationPermit.
+    if (session.profile === EXPLORATION_PROFILE) {
+      this.explorationAuthority.assertGenericSessionAction(session, { capabilityId, params });
+    }
+    return this.#runSessionJob(session, { idempotencyKey, capabilityId, params, token });
+  }
+
+  async #runSessionJob(session, { idempotencyKey, capabilityId, params = {}, token = null }) {
+    // #runJob heartbeats with the RAW lease token; the caller must have
+    // validated a raw token and pass it through verbatim — fail closed.
+    if (!token) throw new ControlPlaneError("SESSION_TOKEN_REQUIRED", "session job execution requires the raw session token", { status: 403 });
+    const leaseToken = token;
+    if (this.state.getDiscoveryRunForSession(session.sessionId)) {
       throw new ControlPlaneError("DISCOVERY_SESSION_EXCLUSIVE", "Discovery-owned sessions only accept the fenced Discovery primitive path", { status: 403 });
     }
     if (session.scopeCapabilityId && session.scopeCapabilityId !== capabilityId) {
@@ -2460,7 +3148,7 @@ export class ControlPlane {
       throw new ControlPlaneError(
         "DEVICE_BUSY",
         "device already has an action in progress",
-        { status: 423, details: { sessionId } },
+        { status: 423, details: { sessionId: session.sessionId } },
       );
     }
     this.evidence.assertCapacity(this.capacityBypassOpts(policy.externalEffect, sessionPolicyMode));
@@ -2473,13 +3161,13 @@ export class ControlPlane {
       capability,
       params,
       canary: session.canary,
-      sessionId,
+      sessionId: session.sessionId,
       status: "queued",
       approvalRequired: false,
       externalEffect: policy.externalEffect,
     });
     if (created.reused) {
-      if (created.job.sessionId !== sessionId) {
+      if (created.job.sessionId !== session.sessionId) {
         throw new ControlPlaneError(
           "IDEMPOTENCY_CONFLICT",
           "idempotency key belongs to a different session",
@@ -2494,7 +3182,7 @@ export class ControlPlane {
     const device = this.state.requireDevice(session.deviceId);
     this.evidence.initializeRun({ job: created.job, device, ...this.capacityOpts(policy.externalEffect, sessionPolicyMode) });
     const promise = this.#runJob(created.job, {
-      lease: { leaseId: session.leaseId, token },
+      lease: { leaseId: session.leaseId, token: leaseToken },
       releaseLease: false,
     }).finally(() => {
       if (this.activeJobs.get(session.deviceId) === promise) {
@@ -2935,5 +3623,89 @@ export class ControlPlane {
         } catch {}
       }
     }
+  }
+
+  /**
+   * Resolve a sealed recipe for the Single-Device Runner from overlay + extras.
+   * Overlay is attach-only at bootstrap; this is the first execute path that consumes it.
+   */
+  resolveRecipeForRunner(recipeId, revision = null) {
+    const id = String(recipeId || "").trim();
+    if (!id) return null;
+    const extras = Array.isArray(this.recipeCatalogExtras) ? this.recipeCatalogExtras : [];
+    const mode = this.recipeOverlay?.mode || resolveOverlayMode();
+    const overlayList = this.recipeOverlay?.ok && Array.isArray(this.recipeOverlay.recipes)
+      ? filterOverlayRecipes(this.recipeOverlay.recipes, {
+          mode,
+          alias: this.rpaAlias || resolveFixedRpaAlias(),
+          canaryAlias: this.rpaAlias || resolveFixedRpaAlias(),
+        })
+      : [];
+    const pool = [...extras, ...overlayList];
+    const matches = pool.filter((r) => r && r.recipeId === id);
+    if (matches.length === 0) return null;
+    if (revision != null) {
+      return matches.find((r) => r.revision === revision) || null;
+    }
+    return matches.reduce((best, r) => (!best || r.revision > best.revision ? r : best), null);
+  }
+
+  planRecipeRun(input = {}) {
+    try {
+      return this.recipeRuns.plan(input);
+    } catch (e) {
+      if (e instanceof ControlPlaneError) throw e;
+      throw new ControlPlaneError(
+        e?.code || "RECIPE_PLAN_FAILED",
+        e instanceof Error ? e.message : String(e),
+        { status: e?.status || 400, details: e?.details || {} },
+      );
+    }
+  }
+
+  async startRecipeRun(input = {}) {
+    const body = input && typeof input === "object" ? input : {};
+    try {
+      return await this.recipeRuns.start({
+        recipe: body.recipe ?? null,
+        recipeId: body.recipeId ?? null,
+        revision: body.revision ?? null,
+        params: body.params ?? {},
+        actorId: body.actorId,
+        dryRun: Boolean(body.dryRun),
+        live: body.live != null ? Boolean(body.live) : !body.dryRun,
+        canaryMode: Boolean(body.canaryMode),
+      });
+    } catch (e) {
+      if (e instanceof ControlPlaneError) throw e;
+      throw new ControlPlaneError(
+        e?.code || "RECIPE_RUN_FAILED",
+        e instanceof Error ? e.message : String(e),
+        { status: e?.status || 400, details: e?.details || {} },
+      );
+    }
+  }
+
+  getRecipeRun(recipeRunId) {
+    const run = this.recipeRuns.getRun(recipeRunId);
+    if (!run) {
+      throw new ControlPlaneError("RECIPE_RUN_NOT_FOUND", `recipe run ${recipeRunId} not found`, { status: 404 });
+    }
+    return run;
+  }
+
+  async cancelRecipeRun(recipeRunId) {
+    try {
+      return await this.recipeRuns.cancel(recipeRunId);
+    } catch (e) {
+      if (e?.code === "RECIPE_RUN_NOT_FOUND") {
+        throw new ControlPlaneError(e.code, e.message, { status: 404 });
+      }
+      throw e;
+    }
+  }
+
+  listRecipeRuns() {
+    return this.recipeRuns.listRuns();
   }
 }

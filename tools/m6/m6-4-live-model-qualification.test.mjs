@@ -39,6 +39,7 @@ function writeFixtures(root) {
     localeThemeHash: H,
     imeHash: H,
     accessibilityHash: H,
+    accountBindingHash: H,
     accountIsolationHash: H,
     capturedAt: new Date(now - 1_000).toISOString(),
     expiresAt: new Date(now + 60_000).toISOString(),

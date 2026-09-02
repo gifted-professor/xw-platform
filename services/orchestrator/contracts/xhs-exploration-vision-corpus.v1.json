@@ -1,0 +1,179 @@
+{
+  "schemaId": "xw.xhs.exploration-vision-corpus.v1",
+  "schemaVersion": 1,
+  "requiredRoutes": ["HOME_FEED", "SEARCH_RESULTS", "IMAGE_NOTE", "VIDEO_NOTE", "COMMENT_PANEL"],
+  "minimumDistinctFramesPerRoute": 3,
+  "provenance": {
+    "usageClass": "calibration-only",
+    "gateECountingEligible": false,
+    "captureBoundary": "pre-P5"
+  },
+  "coverage": {
+    "complete": false,
+    "distinctFramesByRoute": {
+      "HOME_FEED": 4,
+      "SEARCH_RESULTS": 3,
+      "IMAGE_NOTE": 0,
+      "VIDEO_NOTE": 0,
+      "COMMENT_PANEL": 0
+    },
+    "verifiedRoutes": ["HOME_FEED", "SEARCH_RESULTS"],
+    "missingRoutes": ["IMAGE_NOTE", "VIDEO_NOTE", "COMMENT_PANEL"]
+  },
+  "rows": [
+    {
+      "id": "row-001",
+      "sourceRef": "src:1a0e9e0f87c6230752015cf210b4f70027d1e75d109694486f7f7260d38f2049",
+      "frame": {
+        "sha256": "0342215bfb114de822c771c26257e51c29462a98583b1cf42eacb0c5206464a6",
+        "width": 1080, "height": 2400, "alias": "01",
+        "receiptHash": "c1b184f8ac7de65655faa93f62954c94ad96ec736bad82cdee6f6dce80e8e3b8"
+      },
+      "pageClass": "HOME_FEED",
+      "dumpVerdict": "AMBIGUOUS_SAFE",
+      "positiveRoles": ["OPEN_CONTENT_CARD"],
+      "geometry": {
+        "positiveRegions": [{ "role": "OPEN_CONTENT_CARD", "bounds": [32, 220, 860, 2040] }],
+        "protectedRegions": [
+          { "kind": "STATUS_BAR", "bounds": [0, 0, 1080, 80] },
+          { "kind": "TOP_CHROME", "bounds": [0, 80, 1080, 200] },
+          { "kind": "SOCIAL_ACTIONS", "bounds": [880, 200, 1080, 2160] },
+          { "kind": "BOTTOM_NAV", "bounds": [0, 2160, 1080, 2400] }
+        ]
+      },
+      "annotationHash": "35a564bb4ffd959ca118099bcd8d4357e8e631564d64a6bad9a45e2c565038a3"
+    },
+    {
+      "id": "row-002",
+      "sourceRef": "src:81272251e2b8505601dd7a3a24ce7852c1bf21340458e75598bc6abc15beb475",
+      "frame": {
+        "sha256": "69844cee3457491465483e103c51e04be21d4750ce85da4c11f4932d9296b06d",
+        "width": 1080, "height": 2400, "alias": "02",
+        "receiptHash": "56b0e7ad3238ce5ebfbb08c544864285e501556b8f6da51508f1354f75417851"
+      },
+      "pageClass": "HOME_FEED",
+      "dumpVerdict": "AMBIGUOUS_SAFE",
+      "positiveRoles": ["OPEN_CONTENT_CARD"],
+      "geometry": {
+        "positiveRegions": [{ "role": "OPEN_CONTENT_CARD", "bounds": [32, 220, 860, 2040] }],
+        "protectedRegions": [
+          { "kind": "STATUS_BAR", "bounds": [0, 0, 1080, 80] },
+          { "kind": "TOP_CHROME", "bounds": [0, 80, 1080, 200] },
+          { "kind": "SOCIAL_ACTIONS", "bounds": [880, 200, 1080, 2160] },
+          { "kind": "BOTTOM_NAV", "bounds": [0, 2160, 1080, 2400] }
+        ]
+      },
+      "annotationHash": "351b129c252d2c6d1485b38461a9711a051e78be2afbc51b802c807bfc13e33a"
+    },
+    {
+      "id": "row-003",
+      "sourceRef": "src:c88639fa4e2e003228cbb996719bc17cbe01a4286fe73cad51699f40c27acfb2",
+      "frame": {
+        "sha256": "264d7f1c1860f424c87b2e96f2d36388323f0fe0a2098b4b6c1ee7897e8ee0bf",
+        "width": 1080, "height": 2400, "alias": "03",
+        "receiptHash": "bf353410233e195a3583bb9d438fb3bacacd1dfbf0e60a1e00c4b130e09571ea"
+      },
+      "pageClass": "HOME_FEED",
+      "dumpVerdict": "AMBIGUOUS_SAFE",
+      "positiveRoles": ["OPEN_CONTENT_CARD"],
+      "geometry": {
+        "positiveRegions": [{ "role": "OPEN_CONTENT_CARD", "bounds": [32, 220, 860, 2040] }],
+        "protectedRegions": [
+          { "kind": "STATUS_BAR", "bounds": [0, 0, 1080, 80] },
+          { "kind": "TOP_CHROME", "bounds": [0, 80, 1080, 200] },
+          { "kind": "SOCIAL_ACTIONS", "bounds": [880, 200, 1080, 2160] },
+          { "kind": "BOTTOM_NAV", "bounds": [0, 2160, 1080, 2400] }
+        ]
+      },
+      "annotationHash": "109d66ff64b34ee57987de0102e4a936a41c69720be7af59070c28fa5e47198e"
+    },
+    {
+      "id": "row-004",
+      "sourceRef": "src:d629d28bb4f799b5559d6c0ae68840c891920c2093da26228eda7ffc84903b1f",
+      "frame": {
+        "sha256": "b8be4093facb7105e196dfc5ceb3017d50a4bc25250e3c858da81fb8efcbcdb6",
+        "width": 1080, "height": 2400, "alias": "04",
+        "receiptHash": "caba009f6a7dc0ce6f9b6d82cb91190762c9469ee88035139f8910e826b4c61d"
+      },
+      "pageClass": "HOME_FEED",
+      "dumpVerdict": "AMBIGUOUS_SAFE",
+      "positiveRoles": ["OPEN_CONTENT_CARD"],
+      "geometry": {
+        "positiveRegions": [{ "role": "OPEN_CONTENT_CARD", "bounds": [32, 220, 860, 2040] }],
+        "protectedRegions": [
+          { "kind": "STATUS_BAR", "bounds": [0, 0, 1080, 80] },
+          { "kind": "TOP_CHROME", "bounds": [0, 80, 1080, 200] },
+          { "kind": "SOCIAL_ACTIONS", "bounds": [880, 200, 1080, 2160] },
+          { "kind": "BOTTOM_NAV", "bounds": [0, 2160, 1080, 2400] }
+        ]
+      },
+      "annotationHash": "aa543d8f7b506807678920958d0a57fd0a8d75c06df499faa4849df4828b2143"
+    },
+    {
+      "id": "row-005",
+      "sourceRef": "src:b030f3cd2bca460036c65b5ca58e0ae3f5d0390a0316a30fea346199db79e706",
+      "frame": {
+        "sha256": "cf99db21a1871d1847988eb2455765dff02794cf5d25054953a6f4ab8f861312",
+        "width": 1080, "height": 2400, "alias": "04",
+        "receiptHash": "184cc0f46bb499756a6129c0c19e8475a521259da372623b3c47a015bb8a782e"
+      },
+      "pageClass": "SEARCH_RESULTS",
+      "dumpVerdict": "AMBIGUOUS_SAFE",
+      "positiveRoles": ["OPEN_CONTENT_CARD"],
+      "geometry": {
+        "positiveRegions": [{ "role": "OPEN_CONTENT_CARD", "bounds": [24, 360, 860, 2120] }],
+        "protectedRegions": [
+          { "kind": "STATUS_BAR", "bounds": [0, 0, 1080, 80] },
+          { "kind": "TOP_CHROME", "bounds": [0, 80, 1080, 340] },
+          { "kind": "SOCIAL_ACTIONS", "bounds": [880, 340, 1080, 2140] },
+          { "kind": "BOTTOM_NAV", "bounds": [0, 2140, 1080, 2400] }
+        ]
+      },
+      "annotationHash": "237b4cd216da4afabd534478356f7f0aa653103c5f229b9654fb7d3e84fc1ee1"
+    },
+    {
+      "id": "row-006",
+      "sourceRef": "src:ac59ce74bbfdae1d3dda989c3191704e217970a8ebb6b833ca95a60c96d47afa",
+      "frame": {
+        "sha256": "90d346b17d8661f46b73aee1a9e00ed38011d7240fc90f4cb441ee84201bc251",
+        "width": 1080, "height": 2400, "alias": "04",
+        "receiptHash": "184cc0f46bb499756a6129c0c19e8475a521259da372623b3c47a015bb8a782e"
+      },
+      "pageClass": "SEARCH_RESULTS",
+      "dumpVerdict": "AMBIGUOUS_SAFE",
+      "positiveRoles": ["OPEN_CONTENT_CARD"],
+      "geometry": {
+        "positiveRegions": [{ "role": "OPEN_CONTENT_CARD", "bounds": [24, 360, 860, 2120] }],
+        "protectedRegions": [
+          { "kind": "STATUS_BAR", "bounds": [0, 0, 1080, 80] },
+          { "kind": "TOP_CHROME", "bounds": [0, 80, 1080, 340] },
+          { "kind": "SOCIAL_ACTIONS", "bounds": [880, 340, 1080, 2140] },
+          { "kind": "BOTTOM_NAV", "bounds": [0, 2140, 1080, 2400] }
+        ]
+      },
+      "annotationHash": "e7706a9d885ebce36857bf0999d41258894c2c05b2823cbd9a31af29352c8fe4"
+    },
+    {
+      "id": "row-007",
+      "sourceRef": "src:7d5bb9c858fae961977c12ca6998023ebad3b55ba7680b27182deb09252b52ac",
+      "frame": {
+        "sha256": "2f7608e316f78cb0ff27883fa800aa23b2a2f25e40a84cc8271ffcf599bd2509",
+        "width": 1080, "height": 2400, "alias": "04",
+        "receiptHash": "184cc0f46bb499756a6129c0c19e8475a521259da372623b3c47a015bb8a782e"
+      },
+      "pageClass": "SEARCH_RESULTS",
+      "dumpVerdict": "AMBIGUOUS_SAFE",
+      "positiveRoles": ["OPEN_CONTENT_CARD"],
+      "geometry": {
+        "positiveRegions": [{ "role": "OPEN_CONTENT_CARD", "bounds": [24, 360, 860, 2120] }],
+        "protectedRegions": [
+          { "kind": "STATUS_BAR", "bounds": [0, 0, 1080, 80] },
+          { "kind": "TOP_CHROME", "bounds": [0, 80, 1080, 340] },
+          { "kind": "SOCIAL_ACTIONS", "bounds": [880, 340, 1080, 2140] },
+          { "kind": "BOTTOM_NAV", "bounds": [0, 2140, 1080, 2400] }
+        ]
+      },
+      "annotationHash": "2b41f4e7dfb4533c0476a7778796236db83523f92d727347f530b5a6d1504609"
+    }
+  ]
+}

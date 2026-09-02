@@ -9,6 +9,18 @@ import {
 } from "../../../../packages/kernel/lib/m6-4-live-window-authorization.mjs";
 import { canonicalJson, fingerprint, newId, sha256 } from "./canonical.mjs";
 import { ControlPlaneError } from "./errors.mjs";
+
+// V3 exploration: reservation kind → mission cap name (§3.3). Untyped kinds
+// address the cap table directly.
+const EXPLORATION_KIND_TO_CAP = Object.freeze({
+  primitives: "reservedPrimitives",
+  novelOpens: "novelOpens",
+  queries: "sealedQueries",
+  resultScreens: "resultScreensPerQuery",
+  commentScreens: "commentScreens",
+  visionAnalysis: "visionAnalysisAttempts",
+  visionPermits: "visionMaxIssuedPermits",
+});
 import {
   deriveM6GateFSafetyClosePackageHash,
   deriveM6GateFSafetyCloseProofHash,
@@ -25,7 +37,7 @@ import {
   consumeTransportActionAuthorization as consumeTransportAuthKernel,
 } from "./transport-action-authorization.mjs";
 
-export const CURRENT_CONTROL_SCHEMA_VERSION = 20;
+export const CURRENT_CONTROL_SCHEMA_VERSION = 21;
 
 const ACTIVE_JOB_STATES = new Set(["running", "verifying", "restoring"]);
 const TERMINAL_JOB_STATES = new Set(["succeeded", "failed", "ambiguous", "recovery_required", "cancelled"]);
@@ -362,6 +374,14 @@ export class StateStore {
     // revocation without treating the emergency proof as interchangeable.
     this.#ensureV19LiveWindowAuthorizationSchema();
     this.#ensureColumn("m6_gate_safety_close_arms", "terminal_proof_hash", "TEXT");
+  }
+
+  #migrateV20ToV21() {
+    // V3 exploration (plan §5.2): sessions may carry an exploration profile.
+    // The exploration_* tables are created unconditionally in the bootstrap
+    // block above (CREATE IF NOT EXISTS on every open), so nothing else to
+    // migrate here.
+    this.#ensureColumn("sessions", "profile", "TEXT");
   }
 
   #recoverInFlightActions() {
@@ -794,8 +814,213 @@ export class StateStore {
         created_at TEXT NOT NULL
       );
     `);
+    // Direct-routine plan V2 §7: server-hard routine effect ledger. mode=hard —
+    // the budget here is enforced in the same SQLite transaction as the slot
+    // reservation and has NO soft path: nonpayment-autonomy policyMode can never
+    // soften it into a budget debt. Dynamic targets are bound to the CP-owned
+    // observation hash; the caller may not self-report a fingerprint.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS routine_effects (
+        effect_id TEXT PRIMARY KEY,
+        routine_run_id TEXT NOT NULL,
+        plan_hash TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL UNIQUE,
+        action TEXT NOT NULL,
+        target_hash TEXT NOT NULL,
+        observation_hash TEXT,
+        payload_hash TEXT,
+        intent_json TEXT NOT NULL,
+        status TEXT NOT NULL,
+        reservation_consumed INTEGER NOT NULL DEFAULT 0,
+        retry_blocked INTEGER NOT NULL DEFAULT 0,
+        evidence_refs_json TEXT NOT NULL DEFAULT '[]',
+        account_fingerprint TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        finished_at INTEGER
+      );
+      CREATE INDEX IF NOT EXISTS routine_effects_budget_idx
+        ON routine_effects(routine_run_id, action, target_hash, created_at);
+      CREATE TABLE IF NOT EXISTS routine_run_closures (
+        routine_run_id TEXT NOT NULL,
+        action TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (routine_run_id, action)
+      );
+      CREATE TABLE IF NOT EXISTS note_context_receipts (
+        receipt_id TEXT PRIMARY KEY,
+        receipt_hash TEXT NOT NULL,
+        routine_run_id TEXT NOT NULL,
+        plan_hash TEXT NOT NULL,
+        target_fingerprint TEXT NOT NULL,
+        detail_state_version TEXT NOT NULL,
+        account_fingerprint TEXT,
+        page_fingerprint TEXT,
+        title_excerpt TEXT,
+        body_excerpt TEXT,
+        comment_digest_json TEXT NOT NULL DEFAULT '[]',
+        evidence_hashes_json TEXT NOT NULL DEFAULT '[]',
+        observed_at INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        UNIQUE (receipt_hash, routine_run_id, target_fingerprint)
+      );
+      CREATE TABLE IF NOT EXISTS comment_drafts (
+        draft_id TEXT PRIMARY KEY,
+        draft_hash TEXT NOT NULL UNIQUE,
+        receipt_hash TEXT NOT NULL,
+        routine_run_id TEXT NOT NULL,
+        plan_hash TEXT NOT NULL,
+        target_fingerprint TEXT NOT NULL,
+        detail_state_version TEXT NOT NULL,
+        text TEXT NOT NULL,
+        text_hash TEXT NOT NULL,
+        source_observation_hash TEXT NOT NULL,
+        evidence_refs_json TEXT NOT NULL DEFAULT '[]',
+        model_id TEXT,
+        prompt_hash TEXT,
+        risk_flags_json TEXT NOT NULL DEFAULT '[]',
+        validation_json TEXT,
+        status TEXT NOT NULL DEFAULT 'sealed',
+        account_fingerprint TEXT,
+        expires_at INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS comment_reconciles (
+        reconcile_id TEXT PRIMARY KEY,
+        effect_id TEXT NOT NULL,
+        routine_run_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        evidence_hash TEXT,
+        created_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS routine_authorities (
+        authority_id TEXT PRIMARY KEY,
+        execution_run_id TEXT NOT NULL,
+        routine_run_id TEXT NOT NULL UNIQUE,
+        plan_hash TEXT NOT NULL,
+        alias TEXT NOT NULL,
+        device_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        lease_id TEXT NOT NULL,
+        actor_id TEXT NOT NULL,
+        effect_caps_json TEXT NOT NULL,
+        canary_authorized INTEGER NOT NULL DEFAULT 0,
+        canary_policy_json TEXT,
+        status TEXT NOT NULL DEFAULT 'active',
+        account_fingerprint TEXT,
+        created_at INTEGER NOT NULL,
+        closed_at INTEGER,
+        closed_reason TEXT
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS routine_authorities_session_active
+        ON routine_authorities(session_id) WHERE status='active';
+      CREATE TABLE IF NOT EXISTS exploration_authorities (
+        authority_id TEXT PRIMARY KEY,
+        execution_run_id TEXT NOT NULL,
+        routine_run_id TEXT NOT NULL UNIQUE,
+        mission_hash TEXT NOT NULL,
+        plan_hash TEXT NOT NULL,
+        template_id TEXT NOT NULL,
+        release_id TEXT,
+        account_fingerprint TEXT,
+        actor_id TEXT NOT NULL,
+        lanes_json TEXT NOT NULL,
+        budgets_json TEXT NOT NULL,
+        vision_json TEXT,
+        profile TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'active',
+        created_at INTEGER NOT NULL,
+        closed_at INTEGER,
+        closed_reason TEXT
+      );
+      CREATE TABLE IF NOT EXISTS exploration_session_bindings (
+        authority_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        lease_id TEXT NOT NULL,
+        alias TEXT NOT NULL,
+        lane_role TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (authority_id, session_id)
+      );
+      CREATE TABLE IF NOT EXISTS exploration_permits (
+        permit_id TEXT PRIMARY KEY,
+        authority_id TEXT NOT NULL,
+        mission_hash TEXT NOT NULL,
+        alias TEXT NOT NULL,
+        lane_role TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        navigation_role TEXT NOT NULL,
+        action_class TEXT NOT NULL,
+        page TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        payload_hash TEXT NOT NULL,
+        evidence_hash TEXT NOT NULL,
+        source TEXT NOT NULL DEFAULT 'DUMP',
+        analysis_ref TEXT,
+        provider_identity_json TEXT,
+        visual_proof_hash TEXT,
+        issued_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        consumed_at INTEGER,
+        consumed_job TEXT
+      );
+      CREATE TABLE IF NOT EXISTS exploration_reservations (
+        reservation_id TEXT PRIMARY KEY,
+        authority_id TEXT NOT NULL,
+        mission_hash TEXT NOT NULL,
+        alias TEXT,
+        kind TEXT NOT NULL,
+        amount INTEGER NOT NULL,
+        state TEXT NOT NULL DEFAULT 'reserved',
+        detail_json TEXT,
+        created_at INTEGER NOT NULL,
+        settled_at INTEGER
+      );
+      CREATE TABLE IF NOT EXISTS exploration_targets (
+        authority_id TEXT NOT NULL,
+        mission_hash TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        claim_seq INTEGER NOT NULL,
+        key_kind TEXT NOT NULL,
+        key_value TEXT NOT NULL,
+        state TEXT NOT NULL,
+        novelty INTEGER NOT NULL DEFAULT 0,
+        opened_by_alias TEXT,
+        opened_at INTEGER,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (authority_id, target_id)
+      );
+      CREATE TABLE IF NOT EXISTS exploration_lane_journals (
+        authority_id TEXT NOT NULL,
+        alias TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        type TEXT NOT NULL,
+        record_hash TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (authority_id, alias, seq)
+      );
+    `);
+    this.#ensureColumn("sessions", "profile", "TEXT");
+    this.#ensureColumn("exploration_authorities", "vision_json", "TEXT");
+    this.#ensureColumn("exploration_permits", "source", "TEXT NOT NULL DEFAULT 'DUMP'");
+    this.#ensureColumn("exploration_permits", "analysis_ref", "TEXT");
+    this.#ensureColumn("exploration_permits", "provider_identity_json", "TEXT");
+    this.#ensureColumn("exploration_permits", "visual_proof_hash", "TEXT");
+    this.db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS exploration_permits_analysis_ref_unique
+      ON exploration_permits(analysis_ref) WHERE analysis_ref IS NOT NULL`);
     this.#ensureColumn("jobs", "operation_key", "TEXT");
     this.#ensureColumn("jobs", "authorization_snapshot_json", "TEXT");
+    // V2.1 P1-COMMENT-RECONCILE-LIFECYCLE: full account binding on the effect
+    // ledger — the authoritative accountFingerprint comes from the registered
+    // routine_authorities tuple (which already carries the column). Nullable,
+    // no index, no backfill: pre-existing rows read back as null (append-only,
+    // history is never rewritten).
+    this.#ensureColumn("routine_effects", "account_fingerprint", "TEXT");
+    this.#ensureColumn("comment_drafts", "account_fingerprint", "TEXT");
     // Foundation PR3: one-time transport action authorizations (INV-02).
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS transport_action_authorizations (
@@ -828,6 +1053,7 @@ export class StateStore {
         if (current < 18) this.#migrateV17ToV18();
         if (current < 19) this.#migrateV18ToV19();
         if (current < 20) this.#migrateV19ToV20();
+        if (current < 21) this.#migrateV20ToV21();
         this.#setUserVersion(CURRENT_CONTROL_SCHEMA_VERSION);
       });
     }
@@ -2140,6 +2366,11 @@ export class StateStore {
   }
 
   validateSession(sessionId, token) {
+    if (!sessionId) {
+      // fail typed before the SQL bind: an undefined session id would otherwise
+      // surface as the CONTROL_INTERNAL_ERROR catch-all instead of 404
+      throw new ControlPlaneError("SESSION_NOT_FOUND", "active session not found", { status: 404 });
+    }
     this.cleanupExpiredLeases();
     const row = this.db.prepare("SELECT * FROM sessions WHERE session_id=?").get(sessionId);
     if (!row) throw new ControlPlaneError("SESSION_NOT_FOUND", "active session not found", { status: 404 });
@@ -2155,6 +2386,7 @@ export class StateStore {
       canary: Boolean(row.canary),
       sessionKind: row.session_kind || "capability",
       scopeCapabilityId: row.scope_capability_id,
+      profile: row.profile ?? null,
       routeDecision: parseJson(row.placement_decision_json),
       createdAt: iso(row.created_at),
       expiresAt: iso(row.expires_at),
@@ -2947,6 +3179,365 @@ export class StateStore {
         this.now(),
       );
       return this.getM6GateFence();
+    });
+  }
+
+  // A qualification-only generation is intentionally not part of the live
+  // Gate-F promotion sequence: its OBSERVE_ONLY root was never activated and
+  // its only durable authority is a generation-0 CLOSED fence.  A later
+  // release may replace that fence only after it has expired and while the
+  // complete resource/M6-residue audit is zero.  The old and new identities
+  // are chained into the generic append-only event ledger in the same SQLite
+  // transaction as the CAS update, so rotation cannot silently erase the
+  // previous qualification root.
+  rotateM6QualificationBootstrapFence({
+    expectedFence,
+    nextEpoch,
+    locksHash,
+    packageHash,
+  } = {}) {
+    const fenceIdentity = (value) => ({
+      gateId: value?.gateId,
+      epochHash: value?.epochHash,
+      generation: value?.generation,
+      mode: value?.mode,
+      purpose: value?.purpose,
+      allowlist: value?.allowlist,
+      expiresAt: value?.expiresAt,
+      releaseId: value?.releaseId,
+      sourceCommit: value?.sourceCommit,
+      locksHash: value?.locksHash,
+    });
+    const { epochHash: _ignoredEpochHash, ...epochPayload } = nextEpoch || {};
+    const derivedEpochHash = sha256(`xw.m6-live-gate.v1:${canonicalJson(epochPayload)}`);
+    if (!expectedFence || !nextEpoch
+      || nextEpoch.schemaId !== "xw.m6-live-gate.v1"
+      || nextEpoch.mode !== "CLOSED" || nextEpoch.status !== "closed"
+      || !nextEpoch.closeoutRef || !nextEpoch.aggregateSealRef
+      || nextEpoch.epochHash !== derivedEpochHash
+      || canonicalJson(nextEpoch.allowlist) !== canonicalJson(["01"])
+      || !/^[A-Za-z0-9._-]{1,128}$/.test(nextEpoch.gateId || "")
+      || !/^[A-Za-z0-9._-]{1,128}$/.test(nextEpoch.releaseId || "")
+      || !/^[0-9a-f]{40}$/.test(nextEpoch.sourceCommit || "")
+      || !/^[0-9a-f]{64}$/.test(locksHash || "")
+      || !/^[0-9a-f]{64}$/.test(packageHash || "")) {
+      throw new ControlPlaneError(
+        "M6_QUALIFICATION_ROTATION_INPUT_INVALID",
+        "qualification rotation requires one verified alias-01 CLOSED successor",
+        { status: 409 },
+      );
+    }
+    return this.transaction(() => {
+      const current = this.getM6GateFence();
+      const expected = fenceIdentity(expectedFence);
+      const actual = fenceIdentity(current);
+      const now = Number(this.now());
+      if (!current || canonicalJson(actual) !== canonicalJson(expected)) {
+        throw new ControlPlaneError(
+          "M6_QUALIFICATION_ROTATION_CAS_MISMATCH",
+          "qualification rotation fence compare-and-swap precondition failed",
+          { status: 409 },
+        );
+      }
+      if (current.generation !== 0 || current.mode !== "CLOSED" || current.purpose !== null
+        || canonicalJson(current.allowlist) !== canonicalJson(["01"])
+        || !Number.isFinite(Date.parse(current.expiresAt))
+        || Date.parse(current.expiresAt) > now
+        || current.gateId === nextEpoch.gateId
+        || !Number.isFinite(Date.parse(nextEpoch.expiresAt))
+        || Date.parse(nextEpoch.expiresAt) <= now) {
+        throw new ControlPlaneError(
+          "M6_QUALIFICATION_ROTATION_FENCE_INELIGIBLE",
+          "only an expired generation-0 alias-01 CLOSED fence may rotate to a distinct unexpired gate",
+          { status: 409 },
+        );
+      }
+      const baseResources = this.getM6GateFResourceCounts();
+      const resources = Object.freeze({
+        ...baseResources,
+        pendingApprovals:
+          Number(this.db.prepare(
+            "SELECT COUNT(*) AS count FROM protected_commits WHERE status='waiting_authorization'",
+          ).get().count)
+          + Number(this.db.prepare(
+            "SELECT COUNT(*) AS count FROM device_runs WHERE phase='waiting_authorization'",
+          ).get().count)
+          + Number(this.db.prepare(
+            "SELECT COUNT(*) AS count FROM mission_effects WHERE status IN ('pending_authorization','waiting_authorization')",
+          ).get().count),
+      });
+      const durableResidue = Object.freeze({
+        groundedActions: Number(this.db.prepare(
+          "SELECT COUNT(*) AS count FROM device_session_actions WHERE execution_mode='m6-grounded-live-v2'",
+        ).get().count),
+        emergencyCloseConsumptions: Number(this.db.prepare("SELECT COUNT(*) AS count FROM m6_emergency_close_consumptions").get().count),
+        groundingPermits: Number(this.db.prepare("SELECT COUNT(*) AS count FROM m6_grounding_permits").get().count),
+        actionClaims: Number(this.db.prepare("SELECT COUNT(*) AS count FROM m6_action_claims").get().count),
+        groundedActionDetails: Number(this.db.prepare("SELECT COUNT(*) AS count FROM m6_grounded_action_details").get().count),
+        liveWindowAuthorizations: Number(this.db.prepare("SELECT COUNT(*) AS count FROM m6_live_window_authorization_consumptions").get().count),
+        liveScenarioClaims: Number(this.db.prepare("SELECT COUNT(*) AS count FROM m6_live_scenario_claims").get().count),
+        safetyCloseArms: Number(this.db.prepare("SELECT COUNT(*) AS count FROM m6_gate_safety_close_arms").get().count),
+      });
+      if (Object.values(resources).some((count) => !Number.isSafeInteger(count) || count !== 0)
+        || Object.values(durableResidue).some((count) => !Number.isSafeInteger(count) || count !== 0)) {
+        throw new ControlPlaneError(
+          "M6_QUALIFICATION_ROTATION_RESOURCES_NOT_ZERO",
+          "qualification rotation requires one atomic zero-resource and zero-M6-residue snapshot",
+          { status: 409, details: { resources, durableResidue } },
+        );
+      }
+      const nextIdentity = {
+        gateId: nextEpoch.gateId,
+        epochHash: nextEpoch.epochHash,
+        generation: 0,
+        mode: "CLOSED",
+        purpose: null,
+        allowlist: nextEpoch.allowlist,
+        expiresAt: nextEpoch.expiresAt,
+        releaseId: nextEpoch.releaseId,
+        sourceCommit: nextEpoch.sourceCommit,
+        locksHash,
+      };
+      const previousFenceHash = sha256(
+        `xw.m6-c1-qualification-fence.v1:${canonicalJson(actual)}`,
+      );
+      const nextFenceHash = sha256(
+        `xw.m6-c1-qualification-fence.v1:${canonicalJson(nextIdentity)}`,
+      );
+      const auditBody = {
+        schemaId: "xw.m6-c1-qualification-bootstrap-rotation-audit.v1",
+        packageHash,
+        previousFence: actual,
+        previousFenceHash,
+        nextFence: nextIdentity,
+        nextFenceHash,
+        rotatedAt: new Date(now).toISOString(),
+      };
+      const audit = {
+        ...auditBody,
+        rotationHash: sha256(
+          `xw.m6-c1-qualification-bootstrap-rotation-audit.v1:${canonicalJson(auditBody)}`,
+        ),
+      };
+      const updated = this.db.prepare(`
+        UPDATE m6_gate_fence SET
+          gate_id=?, epoch_hash=?, generation=0, mode='CLOSED', purpose=NULL,
+          allowlist_json=?, expires_at=?, release_id=?, source_commit=?, locks_hash=?, updated_at=?
+        WHERE marker='M6' AND gate_id=? AND epoch_hash=? AND generation=0 AND mode='CLOSED'
+          AND expires_at=? AND release_id=? AND source_commit=? AND locks_hash=?
+      `).run(
+        nextIdentity.gateId,
+        nextIdentity.epochHash,
+        canonicalJson(nextIdentity.allowlist),
+        nextIdentity.expiresAt,
+        nextIdentity.releaseId,
+        nextIdentity.sourceCommit,
+        nextIdentity.locksHash,
+        now,
+        actual.gateId,
+        actual.epochHash,
+        actual.expiresAt,
+        actual.releaseId,
+        actual.sourceCommit,
+        actual.locksHash,
+      );
+      if (updated.changes !== 1) {
+        throw new ControlPlaneError(
+          "M6_QUALIFICATION_ROTATION_CAS_MISMATCH",
+          "qualification rotation fence changed during the atomic update",
+          { status: 409 },
+        );
+      }
+      const eventId = this.#insertEvent({
+        jobId: null,
+        runId: null,
+        type: "m6.qualification_bootstrap.rotated",
+        payload: audit,
+        createdAt: now,
+      });
+      return Object.freeze({
+        fence: this.getM6GateFence(),
+        eventId,
+        audit: Object.freeze(audit),
+        resourceCounts: Object.freeze({ ...resources }),
+      });
+    });
+  }
+
+  // A formal release cutover may replace one still-unexpired generation-0
+  // CLOSED fence with another release's externally signed generation-0 CLOSED
+  // fence.  This is deliberately narrower than ordinary Gate promotion: both
+  // sides must be the inert alias-01 bootstrap shape and the complete live and
+  // durable M6 residue audit must be zero in the same SQLite transaction as the
+  // CAS update.  The caller is expected to operate on a stopped, private copy
+  // of control.db and to publish that copy by content address before install.
+  handoffM6ClosedFenceForCutover({
+    expectedFence,
+    nextEpoch,
+    locksHash,
+    packageHash,
+  } = {}) {
+    const fenceIdentity = (value) => ({
+      gateId: value?.gateId,
+      epochHash: value?.epochHash,
+      generation: value?.generation,
+      mode: value?.mode,
+      purpose: value?.purpose,
+      allowlist: value?.allowlist,
+      expiresAt: value?.expiresAt,
+      releaseId: value?.releaseId,
+      sourceCommit: value?.sourceCommit,
+      locksHash: value?.locksHash,
+    });
+    const { epochHash: _ignoredEpochHash, ...epochPayload } = nextEpoch || {};
+    const derivedEpochHash = sha256(`xw.m6-live-gate.v1:${canonicalJson(epochPayload)}`);
+    if (!expectedFence || !nextEpoch
+      || nextEpoch.schemaId !== "xw.m6-live-gate.v1"
+      || nextEpoch.mode !== "CLOSED" || nextEpoch.status !== "closed"
+      || !nextEpoch.closeoutRef || !nextEpoch.aggregateSealRef
+      || nextEpoch.epochHash !== derivedEpochHash
+      || canonicalJson(nextEpoch.allowlist) !== canonicalJson(["01"])
+      || !/^[A-Za-z0-9._-]{1,128}$/.test(nextEpoch.gateId || "")
+      || !/^[A-Za-z0-9._-]{1,128}$/.test(nextEpoch.releaseId || "")
+      || !/^[0-9a-f]{40}$/.test(nextEpoch.sourceCommit || "")
+      || !/^[0-9a-f]{64}$/.test(locksHash || "")
+      || !/^[0-9a-f]{64}$/.test(packageHash || "")) {
+      throw new ControlPlaneError(
+        "M6_CUTOVER_HANDOFF_INPUT_INVALID",
+        "cross-release handoff requires one verified alias-01 CLOSED target",
+        { status: 409 },
+      );
+    }
+    return this.transaction(() => {
+      const current = this.getM6GateFence();
+      const expected = fenceIdentity(expectedFence);
+      const actual = fenceIdentity(current);
+      const now = Number(this.now());
+      if (!current || canonicalJson(actual) !== canonicalJson(expected)) {
+        throw new ControlPlaneError(
+          "M6_CUTOVER_HANDOFF_CAS_MISMATCH",
+          "cross-release handoff fence compare-and-swap precondition failed",
+          { status: 409 },
+        );
+      }
+      if (current.generation !== 0 || current.mode !== "CLOSED" || current.purpose !== null
+        || canonicalJson(current.allowlist) !== canonicalJson(["01"])
+        || current.gateId === nextEpoch.gateId
+        || current.releaseId === nextEpoch.releaseId
+        || !Number.isFinite(Date.parse(current.expiresAt))
+        || Date.parse(current.expiresAt) <= now
+        || !Number.isFinite(Date.parse(nextEpoch.expiresAt))
+        || Date.parse(nextEpoch.expiresAt) <= now) {
+        throw new ControlPlaneError(
+          "M6_CUTOVER_HANDOFF_FENCE_INELIGIBLE",
+          "only a distinct release's unexpired generation-0 alias-01 CLOSED fence may be installed",
+          { status: 409 },
+        );
+      }
+      const baseResources = this.getM6GateFResourceCounts();
+      const resources = Object.freeze({
+        ...baseResources,
+        pendingApprovals:
+          Number(this.db.prepare(
+            "SELECT COUNT(*) AS count FROM protected_commits WHERE status='waiting_authorization'",
+          ).get().count)
+          + Number(this.db.prepare(
+            "SELECT COUNT(*) AS count FROM device_runs WHERE phase='waiting_authorization'",
+          ).get().count)
+          + Number(this.db.prepare(
+            "SELECT COUNT(*) AS count FROM mission_effects WHERE status IN ('pending_authorization','waiting_authorization')",
+          ).get().count),
+      });
+      const durableResidue = Object.freeze({
+        groundedActions: Number(this.db.prepare(
+          "SELECT COUNT(*) AS count FROM device_session_actions WHERE execution_mode='m6-grounded-live-v2'",
+        ).get().count),
+        emergencyCloseConsumptions: Number(this.db.prepare("SELECT COUNT(*) AS count FROM m6_emergency_close_consumptions").get().count),
+        groundingPermits: Number(this.db.prepare("SELECT COUNT(*) AS count FROM m6_grounding_permits").get().count),
+        actionClaims: Number(this.db.prepare("SELECT COUNT(*) AS count FROM m6_action_claims").get().count),
+        groundedActionDetails: Number(this.db.prepare("SELECT COUNT(*) AS count FROM m6_grounded_action_details").get().count),
+        liveWindowAuthorizations: Number(this.db.prepare("SELECT COUNT(*) AS count FROM m6_live_window_authorization_consumptions").get().count),
+        liveScenarioClaims: Number(this.db.prepare("SELECT COUNT(*) AS count FROM m6_live_scenario_claims").get().count),
+        safetyCloseArms: Number(this.db.prepare("SELECT COUNT(*) AS count FROM m6_gate_safety_close_arms").get().count),
+      });
+      if (Object.values(resources).some((count) => !Number.isSafeInteger(count) || count !== 0)
+        || Object.values(durableResidue).some((count) => !Number.isSafeInteger(count) || count !== 0)) {
+        throw new ControlPlaneError(
+          "M6_CUTOVER_HANDOFF_RESOURCES_NOT_ZERO",
+          "cross-release handoff requires one atomic zero-resource and zero-M6-residue snapshot",
+          { status: 409, details: { resources, durableResidue } },
+        );
+      }
+      const nextIdentity = {
+        gateId: nextEpoch.gateId,
+        epochHash: nextEpoch.epochHash,
+        generation: 0,
+        mode: "CLOSED",
+        purpose: null,
+        allowlist: nextEpoch.allowlist,
+        expiresAt: nextEpoch.expiresAt,
+        releaseId: nextEpoch.releaseId,
+        sourceCommit: nextEpoch.sourceCommit,
+        locksHash,
+      };
+      const auditBody = {
+        schemaId: "xw.m6-gate-f-cross-release-handoff-audit.v1",
+        packageHash,
+        previousFence: actual,
+        nextFence: nextIdentity,
+        handedOffAt: new Date(now).toISOString(),
+      };
+      const audit = {
+        ...auditBody,
+        handoffHash: sha256(
+          `xw.m6-gate-f-cross-release-handoff-audit.v1:${canonicalJson(auditBody)}`,
+        ),
+      };
+      const updated = this.db.prepare(`
+        UPDATE m6_gate_fence SET
+          gate_id=?, epoch_hash=?, generation=0, mode='CLOSED', purpose=NULL,
+          allowlist_json=?, expires_at=?, release_id=?, source_commit=?, locks_hash=?, updated_at=?
+        WHERE marker='M6' AND gate_id=? AND epoch_hash=? AND generation=0 AND mode='CLOSED'
+          AND purpose IS NULL AND allowlist_json=? AND expires_at=?
+          AND release_id=? AND source_commit=? AND locks_hash=?
+      `).run(
+        nextIdentity.gateId,
+        nextIdentity.epochHash,
+        canonicalJson(nextIdentity.allowlist),
+        nextIdentity.expiresAt,
+        nextIdentity.releaseId,
+        nextIdentity.sourceCommit,
+        nextIdentity.locksHash,
+        now,
+        actual.gateId,
+        actual.epochHash,
+        canonicalJson(actual.allowlist),
+        actual.expiresAt,
+        actual.releaseId,
+        actual.sourceCommit,
+        actual.locksHash,
+      );
+      if (updated.changes !== 1) {
+        throw new ControlPlaneError(
+          "M6_CUTOVER_HANDOFF_CAS_MISMATCH",
+          "cross-release handoff fence changed during the atomic update",
+          { status: 409 },
+        );
+      }
+      const eventId = this.#insertEvent({
+        jobId: null,
+        runId: null,
+        type: "m6.gate_f.cross_release_handoff",
+        payload: audit,
+        createdAt: now,
+      });
+      return Object.freeze({
+        fence: this.getM6GateFence(),
+        eventId,
+        audit: Object.freeze(audit),
+        resourceCounts: Object.freeze({ ...resources }),
+        durableResidue: Object.freeze({ ...durableResidue }),
+      });
     });
   }
 
@@ -4383,6 +4974,875 @@ export class StateStore {
       "SELECT * FROM mission_effects WHERE mission_id=? ORDER BY created_at, effect_id",
     ).all(missionId).map((row) => this.#publicMissionEffect(row));
   }
+
+  // --- Direct-routine plan V2 §7: server-hard routine effect ledger ----------
+  //
+  // Enforced in the same SQLite transaction as the slot reservation. There is
+  // deliberately NO softScope/softBudget/debtSink parameter on this path: the
+  // nonpayment-autonomy policyMode must never be able to soften a routine
+  // budget into a debt (§7.3). The absolute per-action caps (like<=1,
+  // comment<=2) are re-validated here so even a mis-wired bridge caller cannot
+  // raise them.
+
+  static ROUTINE_BUDGET_ABSOLUTE_CAPS = Object.freeze({ like: 1, comment: 2 });
+
+  #publicRoutineEffect(row) {
+    if (!row) return null;
+    return {
+      effectId: row.effect_id,
+      routineRunId: row.routine_run_id,
+      planHash: row.plan_hash,
+      idempotencyKey: row.idempotency_key,
+      action: row.action,
+      targetFingerprint: row.target_hash,
+      observationHash: row.observation_hash,
+      payloadHash: row.payload_hash,
+      intent: parseJson(row.intent_json, {}),
+      status: row.status,
+      reservationConsumed: Boolean(row.reservation_consumed),
+      retryBlocked: Boolean(row.retry_blocked),
+      evidenceRefs: parseJson(row.evidence_refs_json, []),
+      accountFingerprint: row.account_fingerprint ?? null,
+      createdAt: iso(row.created_at),
+      updatedAt: iso(row.updated_at),
+      finishedAt: row.finished_at ? iso(row.finished_at) : null,
+    };
+  }
+
+  beginRoutineEffect({ routineRunId, planHash, action, targetFingerprint, observationHash = null, payloadHash = null, intent = {}, idempotencyKey, budget, accountFingerprint = null }) {
+    if (!routineRunId || !planHash || !action || !targetFingerprint || !idempotencyKey) {
+      throw new TypeError("routineRunId, planHash, action, targetFingerprint, idempotencyKey are required");
+    }
+    if (!budget || budget.mode !== "hard") {
+      throw new ControlPlaneError("ROUTINE_BUDGET_MODE_HARD_REQUIRED", "routine effect budget must be mode=hard (soft budgets have no path here)", { status: 400 });
+    }
+    const cap = budget.actions?.[action];
+    if (!cap || !Number.isInteger(cap.max) || cap.max < 0 || !Number.isInteger(cap.perTarget) || cap.perTarget < 0) {
+      throw new ControlPlaneError("ROUTINE_BUDGET_ACTION_UNKNOWN", `no hard budget configured for routine action ${action}`, { status: 400 });
+    }
+    const absolute = StateStore.ROUTINE_BUDGET_ABSOLUTE_CAPS[action];
+    if (absolute === undefined) {
+      throw new ControlPlaneError("ROUTINE_BUDGET_ACTION_UNKNOWN", `routine action ${action} has no schema cap`, { status: 400 });
+    }
+    if (cap.max > absolute) {
+      throw new ControlPlaneError("ROUTINE_BUDGET_CAP_EXCEEDED", `routine budget max for ${action} exceeds the schema cap ${absolute}`, { status: 400 });
+    }
+    const now = this.now();
+    return this.transaction(() => {
+      const existing = this.db.prepare("SELECT * FROM routine_effects WHERE idempotency_key=?").get(idempotencyKey);
+      if (existing) return { effect: this.#publicRoutineEffect(existing), reused: true };
+      const closed = this.db.prepare("SELECT reason FROM routine_run_closures WHERE routine_run_id=? AND action=?").get(routineRunId, action);
+      if (closed) {
+        throw new ControlPlaneError("ROUTINE_ACTION_CLOSED", `action ${action} is closed for this routine run (${closed.reason})`, { status: 409 });
+      }
+      const blockedRetry = this.db.prepare(`
+        SELECT effect_id FROM routine_effects
+        WHERE routine_run_id=? AND action=? AND target_hash=? AND retry_blocked=1
+        LIMIT 1
+      `).get(routineRunId, action, targetFingerprint);
+      if (blockedRetry) {
+        throw new ControlPlaneError("AMBIGUOUS_NO_RETRY", "an ambiguous routine effect for this target cannot be retried", {
+          status: 409, details: { effectId: blockedRetry.effect_id },
+        });
+      }
+      // a slot stays consumed once transported: reserved/verified/ambiguous all
+      // count against max; only a pre-transport stop (not_sent/cancelled) releases
+      const live = this.db.prepare(`
+        SELECT target_hash FROM routine_effects
+        WHERE routine_run_id=? AND action=? AND status NOT IN ('not_sent','cancelled')
+      `).all(routineRunId, action);
+      if (live.length >= cap.max) {
+        throw new ControlPlaneError("ROUTINE_BUDGET_EXCEEDED", `routine hard budget for ${action} (max ${cap.max}) is exhausted`, { status: 409 });
+      }
+      if (live.filter((row) => row.target_hash === targetFingerprint).length >= cap.perTarget) {
+        throw new ControlPlaneError("ROUTINE_BUDGET_PER_TARGET_EXCEEDED", `routine hard per-target budget for ${action} is exhausted`, { status: 409 });
+      }
+      const effectId = newId("routine-effect");
+      this.db.prepare(`
+        INSERT INTO routine_effects (
+          effect_id, routine_run_id, plan_hash, idempotency_key, action, target_hash,
+          observation_hash, payload_hash, intent_json, status, account_fingerprint, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'reserved', ?, ?, ?)
+      `).run(
+        effectId, routineRunId, planHash, idempotencyKey, action, targetFingerprint,
+        observationHash, payloadHash, canonicalJson(redactEffectIntent(intent)), accountFingerprint ?? null, now, now,
+      );
+      return { effect: this.#publicRoutineEffect(this.db.prepare("SELECT * FROM routine_effects WHERE effect_id=?").get(effectId)), reused: false };
+    });
+  }
+
+  recordRoutineEffectOutcome(effectId, { status, evidenceRefs = [] } = {}) {
+    if (!["verified", "ambiguous", "not_sent", "cancelled"].includes(status)) {
+      throw new TypeError("unsupported routine effect outcome");
+    }
+    const now = this.now();
+    return this.transaction(() => {
+      const row = this.db.prepare("SELECT * FROM routine_effects WHERE effect_id=?").get(effectId);
+      if (!row) throw new ControlPlaneError("ROUTINE_EFFECT_NOT_FOUND", `unknown routine effect ${effectId}`, { status: 404 });
+      // ambiguous consumes its slot (§7.6) — only a pre-transport stop releases it
+      const consumed = status !== "not_sent" && status !== "cancelled";
+      const retryBlocked = status === "ambiguous";
+      this.db.prepare(`
+        UPDATE routine_effects SET
+          status=?, reservation_consumed=?, retry_blocked=?, evidence_refs_json=?,
+          updated_at=?, finished_at=?
+        WHERE effect_id=?
+      `).run(status, consumed ? 1 : 0, retryBlocked ? 1 : 0, canonicalJson(evidenceRefs), now, now, effectId);
+      return this.#publicRoutineEffect(this.db.prepare("SELECT * FROM routine_effects WHERE effect_id=?").get(effectId));
+    });
+  }
+
+  closeRoutineRunAction({ routineRunId, action, reason }) {
+    if (!routineRunId || !action || !reason) {
+      throw new TypeError("routineRunId, action, reason are required");
+    }
+    this.db.prepare(`
+      INSERT INTO routine_run_closures (routine_run_id, action, reason, created_at)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(routine_run_id, action) DO NOTHING
+    `).run(routineRunId, action, reason, this.now());
+  }
+
+  isRoutineRunActionClosed(routineRunId, action) {
+    return Boolean(this.db.prepare("SELECT 1 FROM routine_run_closures WHERE routine_run_id=? AND action=?").get(routineRunId, action));
+  }
+
+  listRoutineEffects(routineRunId) {
+    return this.db.prepare(
+      "SELECT * FROM routine_effects WHERE routine_run_id=? ORDER BY created_at, effect_id",
+    ).all(routineRunId).map((row) => this.#publicRoutineEffect(row));
+  }
+
+  // --- Direct-routine plan V2 §8: grounded comment chain storage -------------
+  // Receipts/drafts/reconciles are durable and server-sealed: bound_send only
+  // ever accepts a draftId that the SERVER stored, never caller-supplied text.
+
+  recordNoteContextReceipt({ receiptHash, routineRunId, planHash, targetFingerprint, detailStateVersion, accountFingerprint = null, pageFingerprint = null, titleExcerpt = null, bodyExcerpt = null, commentDigest = [], evidenceHashes = [], observedAt }) {
+    const receiptId = newId("ncr");
+    const now = this.now();
+    // content-addressed per (run, target): re-observing identical note state
+    // within the same run+target is idempotent (bound_send re-check
+    // re-observes); the same content bound to another target is its own receipt
+    this.db.prepare(`
+      INSERT OR IGNORE INTO note_context_receipts (
+        receipt_id, receipt_hash, routine_run_id, plan_hash, target_fingerprint,
+        detail_state_version, account_fingerprint, page_fingerprint,
+        title_excerpt, body_excerpt, comment_digest_json, evidence_hashes_json,
+        observed_at, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      receiptId, receiptHash, routineRunId, planHash, targetFingerprint,
+      detailStateVersion, accountFingerprint, pageFingerprint,
+      titleExcerpt, bodyExcerpt, canonicalJson(commentDigest), canonicalJson(evidenceHashes),
+      observedAt, now,
+    );
+    const row = this.db.prepare("SELECT * FROM note_context_receipts WHERE receipt_hash=? AND routine_run_id=? AND target_fingerprint=?").get(receiptHash, routineRunId, targetFingerprint);
+    if (!row) return null;
+    return {
+      receiptId: row.receipt_id,
+      receiptHash: row.receipt_hash,
+      routineRunId: row.routine_run_id,
+      planHash: row.plan_hash,
+      targetFingerprint: row.target_fingerprint,
+      detailStateVersion: row.detail_state_version,
+      accountFingerprint: row.account_fingerprint,
+      pageFingerprint: row.page_fingerprint,
+      titleExcerpt: row.title_excerpt,
+      bodyExcerpt: row.body_excerpt,
+      commentDigest: parseJson(row.comment_digest_json, []),
+      evidenceHashes: parseJson(row.evidence_hashes_json, []),
+      observedAt: row.observed_at,
+    };
+  }
+
+  getNoteContextReceipt(receiptHash) {
+    const row = this.db.prepare("SELECT * FROM note_context_receipts WHERE receipt_hash=?").get(receiptHash);
+    if (!row) return null;
+    return {
+      receiptId: row.receipt_id,
+      receiptHash: row.receipt_hash,
+      routineRunId: row.routine_run_id,
+      planHash: row.plan_hash,
+      targetFingerprint: row.target_fingerprint,
+      detailStateVersion: row.detail_state_version,
+      accountFingerprint: row.account_fingerprint,
+      pageFingerprint: row.page_fingerprint,
+      titleExcerpt: row.title_excerpt,
+      bodyExcerpt: row.body_excerpt,
+      commentDigest: parseJson(row.comment_digest_json, []),
+      evidenceHashes: parseJson(row.evidence_hashes_json, []),
+      observedAt: row.observed_at,
+    };
+  }
+
+  recordCommentDraft(draft) {
+    const now = this.now();
+    this.db.prepare(`
+      INSERT INTO comment_drafts (
+        draft_id, draft_hash, receipt_hash, routine_run_id, plan_hash, target_fingerprint,
+        detail_state_version, text, text_hash, source_observation_hash, evidence_refs_json,
+        model_id, prompt_hash, risk_flags_json, validation_json, status, account_fingerprint, expires_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'sealed', ?, ?, ?, ?)
+    `).run(
+      draft.draftId, draft.draftHash, draft.receiptHash, draft.routineRunId, draft.planHash,
+      draft.targetFingerprint, draft.detailStateVersion, draft.text, draft.textHash,
+      draft.sourceObservationHash, canonicalJson(draft.evidenceRefs ?? []), draft.modelId ?? null,
+      draft.promptHash ?? null, canonicalJson(draft.riskFlags ?? []), canonicalJson(draft.validation ?? {}),
+      draft.accountFingerprint ?? null, draft.expiresAt, now, now,
+    );
+    return this.getCommentDraft(draft.draftId);
+  }
+
+  getCommentDraft(draftId) {
+    const row = this.db.prepare("SELECT * FROM comment_drafts WHERE draft_id=?").get(draftId);
+    if (!row) return null;
+    return {
+      draftId: row.draft_id,
+      draftHash: row.draft_hash,
+      receiptHash: row.receipt_hash,
+      routineRunId: row.routine_run_id,
+      planHash: row.plan_hash,
+      targetFingerprint: row.target_fingerprint,
+      detailStateVersion: row.detail_state_version,
+      text: row.text,
+      textHash: row.text_hash,
+      sourceObservationHash: row.source_observation_hash,
+      evidenceRefs: parseJson(row.evidence_refs_json, []),
+      modelId: row.model_id,
+      promptHash: row.prompt_hash,
+      riskFlags: parseJson(row.risk_flags_json, []),
+      validation: parseJson(row.validation_json, {}),
+      status: row.status,
+      accountFingerprint: row.account_fingerprint ?? null,
+      expiresAt: row.expires_at,
+    };
+  }
+
+  setCommentDraftStatus(draftId, status) {
+    if (!["sealed", "consumed", "invalidated"].includes(status)) {
+      throw new TypeError("unsupported comment draft status");
+    }
+    this.db.prepare("UPDATE comment_drafts SET status=?, updated_at=? WHERE draft_id=?")
+      .run(status, this.now(), draftId);
+    return this.getCommentDraft(draftId);
+  }
+
+  recordCommentReconcile({ effectId, routineRunId, status, evidenceHash = null }) {
+    if (!["verified_late", "unresolved_final"].includes(status)) {
+      throw new TypeError("unsupported comment reconcile status");
+    }
+    // append-only: a new row per reconcile — the original ambiguous effect row
+    // is never rewritten and the slot is never restored
+    const reconcileId = newId("reconcile");
+    this.db.prepare(`
+      INSERT INTO comment_reconciles (reconcile_id, effect_id, routine_run_id, status, evidence_hash, created_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(reconcileId, effectId, routineRunId, status, evidenceHash, this.now());
+    return { reconcileId, effectId, routineRunId, status, evidenceHash };
+  }
+
+  listCommentReconciles(effectId) {
+    return this.db.prepare("SELECT * FROM comment_reconciles WHERE effect_id=? ORDER BY created_at").all(effectId);
+  }
+
+  // --- Direct-routine plan V2 §8.1: CP-owned routine authority ---------------
+  // Every social routine run registers ONE immutable authority tuple before any
+  // device work. The server seals the canary policy: a client --canary-authorized
+  // flag is only a request — the transport only opens for an authority whose
+  // server-sealed policy granted it, and the absolute caps (alias 03, like<=1,
+  // comment<=2) are re-validated here so even a mis-wired bridge caller cannot
+  // raise them.
+
+  static ROUTINE_AUTHORITY_ALIAS = "03";
+
+  #publicRoutineAuthority(row) {
+    if (!row) return null;
+    return {
+      authorityId: row.authority_id,
+      executionRunId: row.execution_run_id,
+      routineRunId: row.routine_run_id,
+      planHash: row.plan_hash,
+      alias: row.alias,
+      deviceId: row.device_id,
+      sessionId: row.session_id,
+      leaseId: row.lease_id,
+      actorId: row.actor_id,
+      effectCaps: parseJson(row.effect_caps_json, {}),
+      canaryAuthorized: Boolean(row.canary_authorized),
+      canaryPolicy: parseJson(row.canary_policy_json, null),
+      status: row.status,
+      accountFingerprint: row.account_fingerprint ?? null,
+      createdAt: iso(row.created_at),
+      closedAt: row.closed_at ? iso(row.closed_at) : null,
+      closedReason: row.closed_reason ?? null,
+    };
+  }
+
+  registerRoutineAuthority({ executionRunId, routineRunId, planHash, alias, deviceId, sessionId, leaseId, actorId, effectCaps = {}, canaryAuthorized = false, accountFingerprint = null }) {
+    if (!executionRunId || !routineRunId || !planHash || !deviceId || !sessionId || !leaseId || !actorId) {
+      throw new ControlPlaneError("ROUTINE_AUTHORITY_INVALID", "authority tuple fields are required", { status: 400 });
+    }
+    if (alias !== StateStore.ROUTINE_AUTHORITY_ALIAS) {
+      throw new ControlPlaneError("ROUTINE_AUTHORITY_ALIAS_FORBIDDEN", `routine social authority is 03-only (got ${alias})`, { status: 403 });
+    }
+    if (canaryAuthorized !== true && canaryAuthorized !== false) {
+      throw new ControlPlaneError("ROUTINE_AUTHORITY_INVALID", "canaryAuthorized must be a boolean request", { status: 400 });
+    }
+    // absolute caps re-validated server-side (§8.1.2): the client cannot raise them
+    const absolute = StateStore.ROUTINE_BUDGET_ABSOLUTE_CAPS;
+    const sealedCaps = {};
+    for (const action of Object.keys(absolute)) {
+      const requested = Number(effectCaps?.[action] ?? absolute[action]);
+      if (!Number.isInteger(requested) || requested < 0 || requested > absolute[action]) {
+        throw new ControlPlaneError("ROUTINE_AUTHORITY_CAP_EXCEEDED", `requested cap for ${action} exceeds the absolute routine cap ${absolute[action]}`, { status: 400 });
+      }
+      sealedCaps[action] = requested;
+    }
+    const now = this.now();
+    return this.transaction(() => {
+      // one immutable authority per routineRunId — a re-registration is a replay
+      const existing = this.db.prepare("SELECT * FROM routine_authorities WHERE routine_run_id=?").get(routineRunId);
+      if (existing) return { authority: this.#publicRoutineAuthority(existing), reused: true };
+      // at most one active routine authority per session (§8.1.1)
+      const active = this.db.prepare(
+        "SELECT authority_id FROM routine_authorities WHERE session_id=? AND status='active'",
+      ).get(sessionId);
+      if (active) {
+        throw new ControlPlaneError("ROUTINE_AUTHORITY_SESSION_ACTIVE", "this session already holds an active routine authority", {
+          status: 409, details: { authorityId: active.authority_id },
+        });
+      }
+      const authorityId = newId("routine-auth");
+      // server-sealed canary policy: the client flag is only a request; the
+      // grant lives here and the typed effect RPC re-checks it before transport
+      const canaryPolicy = canaryAuthorized
+        ? {
+            granted: true,
+            sealedAt: iso(now),
+            transport: { like: sealedCaps.like, comment: sealedCaps.comment },
+            visualTap: 0, // vision navigation is authorized by the vision permit chain, never by this policy
+            planHash,
+            alias,
+          }
+        : { granted: false, sealedAt: iso(now), transport: { like: 0, comment: 0 }, visualTap: 0, planHash, alias };
+      const canaryPolicyJson = canonicalJson({ ...canaryPolicy, policyHash: sha256(canonicalJson(canaryPolicy)) });
+      this.db.prepare(`
+        INSERT INTO routine_authorities (
+          authority_id, execution_run_id, routine_run_id, plan_hash, alias, device_id,
+          session_id, lease_id, actor_id, effect_caps_json, canary_authorized,
+          canary_policy_json, status, account_fingerprint, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
+      `).run(
+        authorityId, executionRunId, routineRunId, planHash, alias, deviceId,
+        sessionId, leaseId, actorId, canonicalJson(sealedCaps), canaryAuthorized ? 1 : 0,
+        canaryPolicyJson, accountFingerprint, now,
+      );
+      return { authority: this.#publicRoutineAuthority(this.db.prepare("SELECT * FROM routine_authorities WHERE authority_id=?").get(authorityId)), reused: false };
+    });
+  }
+
+  getRoutineAuthority(authorityId) {
+    return this.#publicRoutineAuthority(
+      this.db.prepare("SELECT * FROM routine_authorities WHERE authority_id=?").get(String(authorityId || "")),
+    );
+  }
+
+  closeRoutineAuthority(authorityId, { reason = "released" } = {}) {
+    const now = this.now();
+    return this.transaction(() => {
+      const row = this.db.prepare("SELECT * FROM routine_authorities WHERE authority_id=?").get(String(authorityId || ""));
+      if (!row) throw new ControlPlaneError("ROUTINE_AUTHORITY_NOT_FOUND", `unknown routine authority ${authorityId}`, { status: 404 });
+      if (row.status === "active") {
+        this.db.prepare("UPDATE routine_authorities SET status='closed', closed_at=?, closed_reason=? WHERE authority_id=?")
+          .run(now, String(reason), authorityId);
+      }
+      return this.#publicRoutineAuthority(this.db.prepare("SELECT * FROM routine_authorities WHERE authority_id=?").get(authorityId));
+    });
+  }
+
+  listActiveRoutineAuthorities() {
+    return this.db.prepare("SELECT * FROM routine_authorities WHERE status='active' ORDER BY created_at")
+      .all().map((row) => this.#publicRoutineAuthority(row));
+  }
+
+  // --- V3 exploration authority (plan §5.2): hard-zero storage primitives ----
+  // Policy lives in lib/xhs-exploration-authority.mjs + xhs-exploration-permit.mjs;
+  // these are the narrow SQL primitives they compose under BEGIN IMMEDIATE.
+
+  markSessionsExplorationProfile(sessionIds, profile = "xhs_goal_explore_v1") {
+    const ids = [...new Set(sessionIds.map(String))];
+    if (ids.length === 0) throw new ControlPlaneError("EXPLORATION_SESSIONS_REQUIRED", "at least one session is required");
+    return this.transaction(() => {
+      for (const sessionId of ids) {
+        const row = this.db.prepare("SELECT session_id FROM sessions WHERE session_id=?").get(sessionId);
+        if (!row) throw new ControlPlaneError("SESSION_NOT_FOUND", `session ${sessionId} not found`, { status: 404 });
+        const existing = this.db.prepare("SELECT profile FROM sessions WHERE session_id=?").get(sessionId);
+        if (existing.profile && existing.profile !== profile) {
+          throw new ControlPlaneError("SESSION_PROFILE_CONFLICT", "session already carries a different profile", { status: 409 });
+        }
+        this.db.prepare("UPDATE sessions SET profile=? WHERE session_id=?").run(profile, sessionId);
+      }
+      return ids.length;
+    });
+  }
+
+  insertExplorationAuthority(row) {
+    return this.transaction(() => {
+      // one immutable authority per routineRunId — a re-registration is a replay
+      const existing = this.db.prepare("SELECT authority_id FROM exploration_authorities WHERE routine_run_id=?").get(row.routineRunId);
+      if (existing) return this.getExplorationAuthority(existing.authority_id);
+      this.db.prepare(`
+        INSERT INTO exploration_authorities (
+          authority_id, execution_run_id, routine_run_id, mission_hash, plan_hash,
+          template_id, release_id, account_fingerprint, actor_id, lanes_json,
+          budgets_json, vision_json, profile, status, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)
+      `).run(
+        row.authorityId, row.executionRunId, row.routineRunId, row.missionHash, row.planHash,
+        row.templateId, row.releaseId, row.accountFingerprint, row.actorId,
+        canonicalJson(row.lanes), canonicalJson(row.budgets),
+        row.vision ? canonicalJson(row.vision) : null,
+        row.profile, row.createdAt,
+      );
+      for (const lane of row.laneBindings) {
+        this.db.prepare(`
+          INSERT INTO exploration_session_bindings (
+            authority_id, session_id, lease_id, alias, lane_role, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?)
+        `).run(row.authorityId, lane.sessionId, lane.leaseId, lane.alias, lane.laneRole, row.createdAt);
+      }
+      return this.getExplorationAuthority(row.authorityId);
+    });
+  }
+
+  getExplorationAuthority(authorityId) {
+    const row = this.db.prepare("SELECT * FROM exploration_authorities WHERE authority_id=?").get(String(authorityId || ""));
+    if (!row) return null;
+    const bindings = this.db.prepare(
+      "SELECT * FROM exploration_session_bindings WHERE authority_id=? ORDER BY alias",
+    ).all(authorityId);
+    return {
+      authorityId: row.authority_id,
+      executionRunId: row.execution_run_id,
+      routineRunId: row.routine_run_id,
+      missionHash: row.mission_hash,
+      planHash: row.plan_hash,
+      templateId: row.template_id,
+      releaseId: row.release_id ?? null,
+      accountFingerprint: row.account_fingerprint ?? null,
+      actorId: row.actor_id,
+      lanes: parseJson(row.lanes_json, []),
+      budgets: parseJson(row.budgets_json, {}),
+      vision: parseJson(row.vision_json, { mode: "off", remoteEgress: false, provider: null }),
+      profile: row.profile,
+      status: row.status,
+      sessionBindings: bindings.map((b) => ({
+        sessionId: b.session_id, leaseId: b.lease_id, alias: b.alias, laneRole: b.lane_role,
+      })),
+      createdAt: iso(row.created_at),
+      closedAt: row.closed_at ? iso(row.closed_at) : null,
+      closedReason: row.closed_reason ?? null,
+    };
+  }
+
+  closeExplorationAuthority(authorityId, { reason = "released" } = {}) {
+    const now = this.now();
+    return this.transaction(() => {
+      const row = this.db.prepare("SELECT * FROM exploration_authorities WHERE authority_id=?").get(String(authorityId || ""));
+      if (!row) throw new ControlPlaneError("EXPLORATION_AUTHORITY_NOT_FOUND", `unknown exploration authority ${authorityId}`, { status: 404 });
+      if (row.status === "active") {
+        this.db.prepare("UPDATE exploration_authorities SET status='closed', closed_at=?, closed_reason=? WHERE authority_id=?")
+          .run(now, String(reason), authorityId);
+      }
+      return this.getExplorationAuthority(authorityId);
+    });
+  }
+
+  getExplorationBindingBySession(sessionId) {
+    const row = this.db.prepare(
+      "SELECT b.*, a.status AS authority_status, a.profile AS authority_profile FROM exploration_session_bindings b JOIN exploration_authorities a ON a.authority_id=b.authority_id WHERE b.session_id=?",
+    ).get(String(sessionId || ""));
+    if (!row) return null;
+    return {
+      authorityId: row.authority_id,
+      sessionId: row.session_id,
+      leaseId: row.lease_id,
+      alias: row.alias,
+      laneRole: row.lane_role,
+      authorityStatus: row.authority_status,
+      profile: row.authority_profile,
+    };
+  }
+
+  reserveExplorationBudget({ authorityId, missionHash, alias, kind, amount, detail = null }) {
+    if (!Number.isInteger(amount) || amount <= 0) {
+      throw new ControlPlaneError(
+        "EXPLORATION_BUDGET_AMOUNT_INVALID",
+        "exploration reservation amount must be a positive integer",
+        { status: 400, details: { amount } },
+      );
+    }
+    const now = this.now();
+    return this.transaction(() => {
+      // ATOMIC cap check + reserve in one BEGIN IMMEDIATE: two lanes racing
+      // for the final slot can yield at most one reservation (V3-I06).
+      const auth = this.db.prepare("SELECT * FROM exploration_authorities WHERE authority_id=?").get(authorityId);
+      if (!auth || auth.status !== "active") {
+        throw new ControlPlaneError("EXPLORATION_AUTHORITY_INACTIVE", "exploration authority is missing or inactive", { status: 404 });
+      }
+      if (auth.mission_hash !== missionHash) {
+        throw new ControlPlaneError("EXPLORATION_PARTITION_MISMATCH", "reservation mission does not match the authority partition", { status: 409 });
+      }
+      // reservation kinds address cap names via the V3 mapping (e.g.
+      // visionPermits → visionMaxIssuedPermits); untyped kinds are rejected
+      const capName = EXPLORATION_KIND_TO_CAP[kind] ?? kind;
+      const caps = parseJson(auth.budgets_json, {});
+      // shared budget ledger (V3-I06): reservations are capped across BOTH
+      // lanes in total; alias is attribution on the row, not a partition
+      // CONSERVATIVE (V3-I06): every reservation row counts — reserved,
+      // consumed, AND failed — so a crashed navigation never frees its slot
+      const used = this.db.prepare(
+        "SELECT COALESCE(SUM(amount),0) AS n FROM exploration_reservations WHERE authority_id=? AND kind=?",
+      ).get(authorityId, kind).n;
+      if (used + Number(amount) > Number(caps[capName] ?? 0)) {
+        throw new ControlPlaneError("EXPLORATION_BUDGET_EXCEEDED", `budget ${kind} exhausted (${used}/${caps[capName]})`, { status: 409 });
+      }
+      const reservationId = newId("expl-res");
+      this.db.prepare(`
+        INSERT INTO exploration_reservations (
+          reservation_id, authority_id, mission_hash, alias, kind, amount, state, detail_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, 'reserved', ?, ?)
+      `).run(reservationId, authorityId, missionHash, alias ?? null, kind, Number(amount),
+        detail ? canonicalJson(detail) : null, now);
+      return { reservationId, kind: capName, alias: alias ?? null, amount: Number(amount), used: used + Number(amount), cap: Number(caps[capName] ?? 0) };
+    });
+  }
+
+  settleExplorationReservation({ reservationId, outcome }) {
+    const now = this.now();
+    return this.transaction(() => {
+      const row = this.db.prepare("SELECT * FROM exploration_reservations WHERE reservation_id=?").get(String(reservationId || ""));
+      if (!row) throw new ControlPlaneError("EXPLORATION_RESERVATION_NOT_FOUND", `unknown reservation ${reservationId}`, { status: 404 });
+      // started/timed-out/crashed conservatively consumes; replay after a
+      // terminal settle never transitions state again (V3-I06)
+      if (row.state !== "reserved") {
+        return { reservationId, state: row.state, replayed: true };
+      }
+      if (!["consumed", "failed"].includes(outcome)) {
+        throw new ControlPlaneError("EXPLORATION_SETTLE_INVALID", "outcome must be consumed|failed", { status: 400 });
+      }
+      this.db.prepare("UPDATE exploration_reservations SET state=?, settled_at=? WHERE reservation_id=?").run(outcome, now, reservationId);
+      return { reservationId, state: outcome, replayed: false };
+    });
+  }
+
+  settleExplorationVisionAnalysis({ reservationId, authorityId, missionHash, outcome, analysis = null }) {
+    const now = this.now();
+    return this.transaction(() => {
+      const row = this.db.prepare("SELECT * FROM exploration_reservations WHERE reservation_id=?")
+        .get(String(reservationId || ""));
+      if (!row) {
+        throw new ControlPlaneError("EXPLORATION_RESERVATION_NOT_FOUND", `unknown reservation ${reservationId}`, { status: 404 });
+      }
+      if (row.authority_id !== authorityId || row.mission_hash !== missionHash
+        || row.alias !== "03" || row.kind !== "visionAnalysis" || row.amount !== 1) {
+        throw new ControlPlaneError(
+          "EXPLORATION_VISION_ANALYSIS_INVALID",
+          "vision analysis reservation does not match the active authority partition",
+          { status: 409 },
+        );
+      }
+      if (!['consumed', 'failed'].includes(outcome)) {
+        throw new ControlPlaneError("EXPLORATION_SETTLE_INVALID", "outcome must be consumed|failed", { status: 400 });
+      }
+      if (row.state !== "reserved") {
+        return { reservationId, state: row.state, replayed: true };
+      }
+      const detail = parseJson(row.detail_json, {});
+      let analysisHash = null;
+      if (outcome === "consumed") {
+        if (!analysis || typeof analysis !== "object" || Array.isArray(analysis)) {
+          throw new ControlPlaneError(
+            "EXPLORATION_VISION_ANALYSIS_RESULT_REQUIRED",
+            "a consumed vision analysis requires a CP-normalized result",
+            { status: 400 },
+          );
+        }
+        analysisHash = sha256(canonicalJson(analysis));
+        detail.analysis = analysis;
+        detail.analysisHash = analysisHash;
+      }
+      this.db.prepare(
+        "UPDATE exploration_reservations SET state=?, detail_json=?, settled_at=? WHERE reservation_id=?",
+      ).run(outcome, canonicalJson(detail), now, reservationId);
+      return { reservationId, state: outcome, replayed: false, analysisHash };
+    });
+  }
+
+  getExplorationReservation(reservationId) {
+    const row = this.db.prepare(
+      "SELECT * FROM exploration_reservations WHERE reservation_id=?",
+    ).get(String(reservationId || ""));
+    if (!row) return null;
+    return {
+      reservationId: row.reservation_id,
+      authorityId: row.authority_id,
+      missionHash: row.mission_hash,
+      alias: row.alias ?? null,
+      kind: row.kind,
+      amount: row.amount,
+      state: row.state,
+      detail: parseJson(row.detail_json, null),
+      createdAtMs: row.created_at,
+      settledAtMs: row.settled_at ?? null,
+    };
+  }
+
+  claimExplorationTarget({ authorityId, missionHash, keyKind, keyValue, alias = null }) {
+    if (keyKind !== "stable" && keyKind !== "fallback") {
+      throw new ControlPlaneError("EXPLORATION_TARGET_KEY_INVALID", "key kind must be stable|fallback", { status: 400 });
+    }
+    const now = this.now();
+    return this.transaction(() => {
+      // partition guard: cross-mission mutation is rejected (probe C)
+      const auth = this.db.prepare("SELECT * FROM exploration_authorities WHERE authority_id=?").get(authorityId);
+      if (!auth || auth.mission_hash !== missionHash) {
+        throw new ControlPlaneError("EXPLORATION_PARTITION_MISMATCH", "claim mission does not match the authority partition", { status: 409 });
+      }
+      // stable reconciliation (V3-I05): a stable key unifies every pending/
+      // confirmed fallback alias proving the same stable id; earliest durable
+      // claim wins canonical later when a fallback row resolves
+      if (keyKind === "stable") {
+        const canonical = this.db.prepare(
+          "SELECT * FROM exploration_targets WHERE authority_id=? AND key_kind='stable' AND key_value=?",
+        ).get(authorityId, keyValue);
+        if (canonical) {
+          this.db.prepare("UPDATE exploration_targets SET updated_at=? WHERE authority_id=? AND target_id=?")
+            .run(now, authorityId, canonical.target_id);
+          // a re-claim of an already-known stable id never re-credits novelty
+          return { targetId: canonical.target_id, state: canonical.state, novel: false, claimSeq: canonical.claim_seq };
+        }
+        // a stable claim arriving with no prior record is canonical for this
+        // stable id: one novelty credit; later fallback aliases that prove the
+        // same id reconcile to duplicate via confirmExplorationTarget
+        const seq = (this.db.prepare("SELECT COALESCE(MAX(claim_seq),0) AS n FROM exploration_targets WHERE authority_id=?").get(authorityId).n) + 1;
+        const targetId = `stable:${keyValue.slice(0, 32)}`;
+        this.db.prepare(`
+          INSERT INTO exploration_targets (
+            authority_id, mission_hash, target_id, claim_seq, key_kind, key_value,
+            state, novelty, opened_by_alias, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, 'stable', ?, 'confirmed', 1, ?, ?, ?)
+        `).run(authorityId, missionHash, targetId, seq, keyValue, alias, now, now);
+        return { targetId, state: "confirmed", novel: true, claimSeq: seq };
+      }
+      // fallback claim: identity not yet stable-resolved
+      const existing = this.db.prepare(
+        "SELECT * FROM exploration_targets WHERE authority_id=? AND key_kind='fallback' AND key_value=?",
+      ).get(authorityId, keyValue);
+      if (existing) {
+        return { targetId: existing.target_id, state: existing.state, novel: false, claimSeq: existing.claim_seq };
+      }
+      const seq = (this.db.prepare("SELECT COALESCE(MAX(claim_seq),0) AS n FROM exploration_targets WHERE authority_id=?").get(authorityId).n) + 1;
+      const targetId = `fb:${keyValue.slice(0, 20)}:${seq}`;
+      this.db.prepare(`
+        INSERT INTO exploration_targets (
+          authority_id, mission_hash, target_id, claim_seq, key_kind, key_value,
+          state, novelty, opened_by_alias, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, 'fallback', ?, 'pending', 0, ?, ?, ?)
+      `).run(authorityId, missionHash, targetId, seq, keyValue, alias, now, now);
+      return { targetId, state: "pending", novel: false, claimSeq: seq };
+    });
+  }
+
+  confirmExplorationTarget({ authorityId, missionHash, targetId, stableKeyValue = null, alias = null }) {
+    // BEGIN IMMEDIATE post-open identity application + fallback→stable
+    // reconciliation in the SAME transaction (V3-I05)
+    const now = this.now();
+    return this.transaction(() => {
+      const auth = this.db.prepare("SELECT * FROM exploration_authorities WHERE authority_id=?").get(authorityId);
+      if (!auth || auth.mission_hash !== missionHash) {
+        throw new ControlPlaneError("EXPLORATION_PARTITION_MISMATCH", "confirm mission does not match the authority partition", { status: 409 });
+      }
+      const target = this.db.prepare("SELECT * FROM exploration_targets WHERE authority_id=? AND target_id=?").get(authorityId, String(targetId || ""));
+      if (!target) throw new ControlPlaneError("EXPLORATION_TARGET_NOT_FOUND", `unknown target ${targetId}`, { status: 404 });
+      if (target.state === "unknown") {
+        return { targetId: target.target_id, state: "unknown", novel: false };
+      }
+      // rekey to the canonical stable record when the stable id is now proven
+      if (stableKeyValue) {
+        const stable = this.db.prepare(
+          "SELECT * FROM exploration_targets WHERE authority_id=? AND key_kind='stable' AND key_value=?",
+        ).get(authorityId, stableKeyValue);
+        if (stable && stable.target_id !== target.target_id) {
+          // canonical is the earliest durable claim; this later fallback row
+          // becomes duplicate and gets ZERO novelty credit
+          this.db.prepare(
+            "UPDATE exploration_targets SET state=?, novelty=?, updated_at=? WHERE authority_id=? AND target_id=?",
+          ).run("duplicate", 0, now, authorityId, target.target_id);
+          return { targetId: stable.target_id, state: "duplicate", novel: false };
+        }
+        this.db.prepare(
+          "UPDATE exploration_targets SET key_kind=?, key_value=? WHERE authority_id=? AND target_id=?",
+        ).run("stable", stableKeyValue, authorityId, target.target_id);
+      }
+      const already = target.novelty === 1 || target.state === "confirmed" || target.state === "duplicate";
+      this.db.prepare(
+        "UPDATE exploration_targets SET state=?, novelty=?, opened_by_alias=COALESCE(opened_by_alias,?), opened_at=?, updated_at=? WHERE authority_id=? AND target_id=?",
+      ).run(already ? "duplicate" : "confirmed", already ? target.novelty : 1, alias, now, now, authorityId, target.target_id);
+      const updated = this.db.prepare("SELECT * FROM exploration_targets WHERE authority_id=? AND target_id=?").get(authorityId, target.target_id);
+      // novel loses its meaning once the credit was taken (even by an earlier
+      // claim of the same row): only a 0→1 transition reports novel=true
+      return { targetId: updated.target_id, state: updated.state, novel: updated.novelty === 1 && updated.state === "confirmed" && target.novelty === 0 && target.state !== "confirmed" };
+    });
+  }
+
+  markExplorationTargetUnknown({ authorityId, missionHash, targetId }) {
+    const now = this.now();
+    return this.transaction(() => {
+      const auth = this.db.prepare("SELECT * FROM exploration_authorities WHERE authority_id=?").get(authorityId);
+      if (!auth || auth.mission_hash !== missionHash) {
+        throw new ControlPlaneError("EXPLORATION_PARTITION_MISMATCH", "unknown-mark mission does not match the authority partition", { status: 409 });
+      }
+      this.db.prepare(
+        "UPDATE exploration_targets SET state='unknown', novelty=0, updated_at=? WHERE authority_id=? AND target_id=?",
+      ).run(now, authorityId, String(targetId || ""));
+      return { targetId, state: "unknown", novel: false };
+    });
+  }
+
+  insertExplorationPermit(permit) {
+    return this.transaction(() => {
+      // permit-budget counting happens inside the same transaction as the
+      // insert — issuance consumes the global visual budget even if the permit
+      // later expires unused (V3-I07)
+      this.db.prepare(`
+        INSERT INTO exploration_permits (
+          permit_id, authority_id, mission_hash, alias, lane_role, session_id,
+          navigation_role, action_class, page, payload_json, payload_hash,
+          evidence_hash, source, analysis_ref, provider_identity_json,
+          visual_proof_hash, issued_at, expires_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        permit.permitId, permit.authorityId, permit.missionHash, permit.alias,
+        permit.laneRole, permit.sessionId, permit.navigationRole, permit.actionClass,
+        permit.page, canonicalJson(permit.payload), permit.payloadHash,
+        permit.evidenceHash, permit.source ?? "DUMP", permit.analysisRef ?? null,
+        permit.providerIdentity ? canonicalJson(permit.providerIdentity) : null,
+        permit.visualProofHash ?? null, permit.issuedAt, permit.expiresAt,
+      );
+      return permit;
+    });
+  }
+
+  getExplorationPermit(permitId) {
+    const row = this.db.prepare("SELECT * FROM exploration_permits WHERE permit_id=?").get(String(permitId || ""));
+    if (!row) return null;
+    return {
+      permitId: row.permit_id,
+      authorityId: row.authority_id,
+      missionHash: row.mission_hash,
+      alias: row.alias,
+      laneRole: row.lane_role,
+      sessionId: row.session_id,
+      navigationRole: row.navigation_role,
+      actionClass: row.action_class,
+      page: row.page,
+      payload: parseJson(row.payload_json),
+      payloadHash: row.payload_hash,
+      evidenceHash: row.evidence_hash,
+      source: row.source ?? "DUMP",
+      analysisRef: row.analysis_ref ?? null,
+      providerIdentity: parseJson(row.provider_identity_json, null),
+      visualProofHash: row.visual_proof_hash ?? null,
+      issuedAt: iso(row.issued_at),
+      expiresAtMs: row.expires_at,
+      issuedAtMs: row.issued_at,
+      consumedAt: row.consumed_at ? iso(row.consumed_at) : null,
+      consumedJob: row.consumed_job ?? null,
+    };
+  }
+
+  consumeExplorationPermitRow({ permitId, now, jobId }) {
+    // ATOMIC one-shot: exactly one consume can precede exactly one createJob
+    // (V3-I02). Racing duplicate consumes hit the WHERE guard.
+    const result = this.db.prepare(
+      "UPDATE exploration_permits SET consumed_at=?, consumed_job=? WHERE permit_id=? AND consumed_at IS NULL",
+    ).run(now, jobId ?? null, String(permitId || ""));
+    return result.changes === 1;
+  }
+
+  countExplorationPermits({ authorityId, alias = null }) {
+    if (alias) {
+      return this.db.prepare("SELECT COUNT(*) AS n FROM exploration_permits WHERE authority_id=? AND alias=?").get(authorityId, alias).n;
+    }
+    return this.db.prepare("SELECT COUNT(*) AS n FROM exploration_permits WHERE authority_id=?").get(authorityId).n;
+  }
+
+  getExplorationVisionCounters(authorityId) {
+    const id = String(authorityId || "");
+    const analysisAttempts = this.db.prepare(`
+      SELECT COALESCE(SUM(amount),0) AS n
+      FROM exploration_reservations
+      WHERE authority_id=? AND kind='visionAnalysis'
+    `).get(id).n;
+    const permitsIssued = this.db.prepare(`
+      SELECT COUNT(*) AS n
+      FROM exploration_permits
+      WHERE authority_id=? AND navigation_role='PAUSE_VIDEO_SAFE_ZONE'
+    `).get(id).n;
+    const permitsConsumed = this.db.prepare(`
+      SELECT COUNT(*) AS n
+      FROM exploration_permits
+      WHERE authority_id=? AND navigation_role='PAUSE_VIDEO_SAFE_ZONE'
+        AND consumed_at IS NOT NULL
+    `).get(id).n;
+    // No dedicated adapter-dispatch column exists in the P1 schema.  A formal
+    // job row keyed by the consumed visual permit is the narrowest durable,
+    // conservative evidence available: count it as a possible physical tap
+    // even if the job later fails/enters recovery.  This never understates the
+    // safety cap, and remains distinct from permit consumption that failed
+    // before createJob.
+    const physicalTaps = this.db.prepare(`
+      SELECT COUNT(*) AS n
+      FROM exploration_permits p
+      WHERE p.authority_id=?
+        AND p.navigation_role='PAUSE_VIDEO_SAFE_ZONE'
+        AND EXISTS (
+          SELECT 1 FROM jobs j
+          WHERE j.idempotency_key=('exploration:' || p.permit_id)
+        )
+    `).get(id).n;
+    return {
+      analysisAttempts: Number(analysisAttempts) || 0,
+      permitsIssued: Number(permitsIssued) || 0,
+      permitsConsumed: Number(permitsConsumed) || 0,
+      physicalTaps: Number(physicalTaps) || 0,
+    };
+  }
+
+  appendExplorationJournal({ authorityId, alias, seq, type, recordHash, payload }) {
+    return this.transaction(() => {
+      this.db.prepare(`
+        INSERT INTO exploration_lane_journals (authority_id, alias, seq, type, record_hash, payload_json, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(authorityId, alias, seq, type, recordHash, canonicalJson(payload), this.now());
+      return { seq, type, recordHash };
+    });
+  }
+
+  readExplorationLaneJournal(authorityId, alias) {
+    return this.db.prepare(
+      "SELECT * FROM exploration_lane_journals WHERE authority_id=? AND alias=? ORDER BY seq",
+    ).all(String(authorityId || ""), String(alias || "")).map((row) => ({
+      seq: row.seq,
+      type: row.type,
+      recordHash: row.record_hash,
+      payload: parseJson(row.payload_json, {}),
+      createdAt: iso(row.created_at),
+    }));
+  }
+
+  // --- Mission effects (ECP) -------------------------------------------------
 
   // REX Phase 5 §8.4 (P5b): softBudget (set by the ledger under nonpayment_v1) turns an
   // exhausted count/frequency budget into a durable budget_debt instead of throwing — a

@@ -128,7 +128,7 @@ export function renderM64LiveWorkerPrompt(directive) {
       ]
       : [
         "Call worker_start once with workerRunRef.",
-        "For each steps entry, in ascending sequenceIndex: call phone_observe(runRef, stepRef); call phone_ground with the returned frameRef and the step intentRef (do not invent candidateBlockId).",
+        "For each steps entry, in ascending sequenceIndex: call phone_observe(runRef, stepRef); call phone_ground with the returned frameRef, one exact blockRef returned by that observation as blockId, and the step intentRef as intent. Never invent blockId.",
         "Only when phone_ground returns ALLOW_ONCE, call phone_act with exactly its decisionRef and operationKey. Then call phone_verify with the returned actionReceiptRef and the step expectationRef.",
         "After each verified action call checkpoint_save with stateRefs containing exactly the actionReceiptRef and verificationRef returned by the tools.",
         "If grounding is REPLAN or HARD_STOP, or an action is not VERIFIED, call wait_human with only returned opaque evidence refs, then call worker_complete with FAILED or AMBIGUOUS and stop.",

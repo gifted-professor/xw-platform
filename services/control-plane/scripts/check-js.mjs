@@ -4,7 +4,7 @@ import { join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
-const roots = ["scripts", "control-plane", "apps", "tests"];
+const roots = ["scripts", "control-plane", "apps", "ops", "tests", "lab"];
 const files = [];
 
 function walk(path) {

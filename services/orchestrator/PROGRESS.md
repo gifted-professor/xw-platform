@@ -1,3 +1,91 @@
+## 2026-08-30 离线收口复核 + 未提交 M6-4 工作落盘（5233654），fusion authority 恢复 PASS
+
+继承上个会话中断现场后完成：
+
+- 把遗留未提交的 11+2 文件（legacy launcher TCB provisioner、quiesce v2 契约、owner-lock/formal-builder
+  扩展、allowlist/package.json 接线）以 `5233654 fix(m6-4): legacy launcher TCB provision + quiesce v2` 落盘。
+- 修复 fusion authority gate `cp-no-registry-db` 两个 blocker（database-tcb provisioner 的 segments 常量与
+  window-operator PS `Has-Exact-Node-Command` 处的 registry 数据库文件名字面量，改为运行时拼装——沿用同文件
+  既有惯例）。`npm run test:fusion` 20/20 PASS。
+- 复测：P4 vision 63/63、driver/machine/runtime/coordinator 39/39（coordinator 曾在多文件并发下出现 P3-G
+  hang 断言 flake，串行复跑全绿，计时敏感）、CP authority/permit/hard-zero/novelty 29/29、
+  `test:xhs-v3-rpa` 41/41、`test:xhs-v3-p5` 244/245。
+- 已知环境相关失败（stash 验证在 HEAD 原样存在，与本次无关）：`windows-xhs-blind-review-acl.test.mjs`
+  "real Windows protect…" 业务文件 owner 断言 `…_INVALID_OWNER`，需提权/正式 SYSTEM operator 会话复跑。
+- 未部署、未触碰设备、未 merge/push。下一步仍是 addendum 序：A/B qualification → P5 Gate F → R0-R2 live。
+
+## 2026-08-30 XHS V3 P4A 候选收口，等待最终 TCB freeze/full gate
+
+本条 supersede 下方同日早期的“operator/evaluator/provider package 尚在实现”状态。P4A 源码候选现已
+覆盖 production provider 的可复现闭包与固定 digest、tracked capture/seal/evaluate operator、
+oracle-separated evaluator、Gate-E 防伪/防重放 interlock、R0-R4 task-owned runner、P7/RPA disabled-by-default
+框架，以及 P5 的 formal builder、qualification A/B、Gate-F A→B→A→B 和 content-addressed
+`FINAL -ValidateOnly` 固定入口。正式 provider config/private material 仍按计划在 P5 才 provision；当前
+不存在不代表 provider 实现缺失。
+
+冻结前实测：provider **12/12**、routine **461/461**、pack **144/144**、RPA **41/41**、P5 source gate
+**178 pass / 1 个明确 `SKIP_PENDING_P5_SYSTEM` / 0 fail**、Gate-F/launcher 独立复核 **55/55**、formal
+builder **6/6**、旧 corpus provenance 定向 **36/36**、schema-21 live-window staging **34/34**。盲审链已
+覆盖 source/provider/private/release ACL、固定 S4U broker、fresh task execution/ACK、crash adoption 与
+全量撤权；唯一尚未执行的是 P5 部署后由正式 SYSTEM operator 生成的真实 S4U runtime receipt，不能在
+当前非 SYSTEM、无 production roots 的会话中伪造 PASS。
+
+旧 tracked HOME_FEED/SEARCH_RESULTS 7 行现在由机器强制标为 `calibration-only`、
+`gateECountingEligible=false`、`captureBoundary=pre-P5`。它们只用于离线 oracle，不计 Gate E；五路每路
+至少 3 个 counting frames 必须在最终 release 下由 R1/R2 exact `[03,04]` 重新采集并独立盲标。
+
+最终 source gate 已关闭：grounded TCB `91b8bea5f809beb07dbf1a42709f32578f00770a0749d047ea740f7563307b49`
+（222 paths）复现；M6 offline core **394 pass/1 platform skip**、qualification **8/8**、fresh builder
+**5/5**、handoff **24/24**、ACL **13 pass/1 POSIX skip**；fusion gate 的 orchestrator **1051/1051**，
+control-plane 仅命中既有 baseline 的 27 项 allowlist、unexpected failure=0；`npm run check`、secret scan、
+`git diff --check` 均通过。因此字面状态为 **`P4A_READY_FOR_FORMAL_DEPLOY`**。
+
+当前仍未进行 A/B qualification、正式部署/Gate F、R0-R4、Gate E、P6 或 RPA manual-once；未触碰设备，
+未 merge/push。下一步为 A0/A1 clean commits、formal A/B qualification 与 P5 Gate F。
+
+## 2026-08-30 XHS V3 split-gate 单轮审查完成，按 Addendum V2 执行
+
+父计划 P4/P5/P6 的真实 corpus 顺序闭环已通过唯一一轮 CRITICAL 双 reviewer 审查，并一次性合并为
+`docs/plans/xhs-routine-v3-execution-addendum-v1.md` V2（SHA-256
+`468a16bba73ff535a84b06b0656fc7e8b60335981be6c9d40ed75d474a75d135`）。V2 不降低最终 Gate E：它把
+P4A 明确定义为零 job/session/lease/device-I/O 的离线源码 gate；P5 部署时把视觉 permit 预算机械锁为
+0；R1/R2 只以正式 DUMP permit 到达五类页面并做 capture/shadow；只有 task-owned、绑定
+release/provider/corpus/evaluator/key 的 `xw.xhs.e-corpus-pass.v1` 才能解锁 R3。
+
+本轮审查接受并关闭了四组 P1：五路页面可达性、P4A→P5→R2 的单一 provider-bundle digest、
+`evaluationRole` 与 live permit 权限分离、E-Corpus 防伪/防重放 interlock；同时纳入 CP capture HMAC、
+盲标 ACL/封印、alias/session 多样性及 pre-P5 calibration rows 不计最终 Gate。当前仍处 P4A 实施，
+provider/corpus 与 P5 launcher 工具均只改共享 worktree；尚未部署、未触碰设备、未 merge/push。
+
+## 2026-08-30 XHS V3 P4 production vision 源码与审查修复完成，Gate E 仍 HOLD
+
+P4 的离线源码链已完成：本地 provider 四哈希钉扎、异步可取消进程与 8s/10s/5s 时限、独立
+vision-analysis 预算/结算、CP 持久化分析与单次 visual permit、真实语料 oracle/突变测试及
+runtime/factory 接线。唯一 CRITICAL review wave 指出的 caller 自报 geometry/provider/frame 越权与
+live confidence 漂移已修复：visual proof 收窄为非权威引用，分析必须由 CP 归一化、持久化并绑定哈希，
+通用 reservation settle 不得结算 vision analysis，最低置信度统一为 0.9。当前
+`test:xhs-routine` **341/341**、`test:fusion` **20/20**；这是 offline implementation/review PASS，
+不等于 P4 Gate PASS。未部署、未触碰设备、未 merge/push。
+
+**Gate E = BLOCKED_UNVERIFIABLE**：正式 runtime provider config
+`C:\Users\Public\xw-runtime\state\orchestrator\xhs-exploration-vision-provider.v1.json` 不存在，本机也未
+找到协议兼容的 production `analyze.py`/完整 model bundle；既有 PaddleOCR resolver 是
+`offline_only` 且协议不兼容，不得拿来做形式 pin。真实 corpus 覆盖为
+`HOME_FEED=4 / SEARCH_RESULTS=3 / IMAGE_NOTE=0 / VIDEO_NOTE=0 / COMMENT_PANEL=0`，而计划要求五条
+route 各至少 3 个 distinct frames。私有证据只发现 IMAGE_NOTE/VIDEO_NOTE 各 1 个待复核候选，受 ACL
+限制无法验证哈希、标注封印和 route 绑定，COMMENT_PANEL 仍为 0；即使前两张复核通过也还缺 2/2/3。
+因此 production corpus oracle、真实 shadow/canary 与 provider starvation 证据尚不能关闭。
+
+**执行顺序补遗**：实现时确认原文存在闭环——缺失 detail/comment corpus 要来自 P6 R1/R2，但 P6
+只能在 P5 后，而未拆分的 P4 Gate 又位于 P5 前。新增
+`docs/plans/xhs-routine-v3-execution-addendum-v1.md`，只拆阶段边界、不降低最终标准：P4A 先完成
+provider/operator/oracle 的离线 readiness；P5 才可正式部署并关闭 Gate F；随后 R1 DUMP-only 与 R2
+shadow（tap=0）采集真实 corpus，E-Corpus 完整通过前禁止 R3。当前 P4A 仍未通过，因为 tracked
+capture operator、无 expected-data 泄漏的 production evaluator 和真实 provider package 尚在实现。
+
+Deferred P2 hardening：provider 子进程环境从继承完整 `process.env` 收紧为 allowlist；把
+visual-permit budget reserve 与 permit insert 合并为单事务，消除崩溃时的 availability gap。
+
 ## 2026-08-13 `xhs-compose` canary 统一日志层（源码收编，未部署）
 
 新增通用 `xhs.run-event.v1` / `xhs.run-summary.v1` / `xhs.run-metrics.v1` 与只读报告入口 `ops/xw-xhs-compose-report.mjs`。每个 canary attempt 和整个 closeout run 固定生成 `report/{run-report.md,timeline.jsonl,metrics.json,summary.json}`；历史回填只新增 `report/`，不覆盖旧 summary、STOP 或命令证据。目标 run `run_2a539677-a466-4729-b699-fda001e0de5d` 已完成两级回填与校验：attempt1=`partial`、attempt2=`controlled_stop`、attempt3/4=`passed`，run=`completed`；attempt4 自动复算 268 files / 2,859,369 bytes / 194 command records，`search_notes` 5 次平均 60.304s、最大 69.089s。

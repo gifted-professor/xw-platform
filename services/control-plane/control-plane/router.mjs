@@ -1,7 +1,7 @@
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { ControlPlaneError } from "./lib/errors.mjs";
+import { ControlPlaneError, structuredErrorLog } from "./lib/errors.mjs";
 import { canonicalJson, sha256 } from "./lib/canonical.mjs";
 import { RUNTIME_POLICY_VERSION } from "./lib/nonpayment-autonomy-policy.mjs";
 import { LIVE_PROGRESS_CACHE_MS, readLiveProgressTail } from "../scripts/lib/stall-progress.mjs";
@@ -27,7 +27,9 @@ function releaseIdentity() {
   if (cachedIdentity === undefined) {
     try {
       cachedIdentity = loadReleaseIdentity({ startDir: dirname(fileURLToPath(import.meta.url)) });
-    } catch {
+    } catch (error) {
+      // memoized: this swallow logs exactly once per process, then degrades
+      structuredErrorLog({ event: "cp.release.identity.unavailable", error });
       cachedIdentity = { sourceRepo: null, sourceCommit: null, releaseId: null, runtimeProfile: null };
     }
   }
@@ -164,7 +166,7 @@ function publicGrantView(grant) {
 }
 
 export class ControlRouter {
-  constructor({ control, state, capabilities, evidence, delegationGrants = null, canaryEvidenceAuthorizer = null, nodeId = "DESKTOP-3I1EVHE", m6 = null, m6GateFOperations = null, m6LiveEntry = null, m6RuntimeMode = "STANDARD", m6StartupRecovery = null }) {
+  constructor({ control, state, capabilities, evidence, delegationGrants = null, canaryEvidenceAuthorizer = null, nodeId = "DESKTOP-3I1EVHE", m6 = null, m6DeviceReadSnapshot = null, m6GateFOperations = null, m6LiveEntry = null, m6RuntimeMode = "STANDARD", m6StartupRecovery = null, xhsV3TaskBootstrap = null, xhsRpaTaskBootstrap = null, xhsV3FixedOperatorAuthorization = null }) {
     this.control = control;
     this.state = state;
     this.capabilities = capabilities;
@@ -173,10 +175,14 @@ export class ControlRouter {
     this.canaryEvidenceAuthorizer = canaryEvidenceAuthorizer;
     this.nodeId = nodeId;
     this.m6 = m6;
+    this.m6DeviceReadSnapshot = m6DeviceReadSnapshot;
     this.m6GateFOperations = m6GateFOperations;
     this.m6LiveEntry = m6LiveEntry;
     this.m6RuntimeMode = m6RuntimeMode;
     this.m6StartupRecovery = m6StartupRecovery;
+    this.xhsV3TaskBootstrap = xhsV3TaskBootstrap;
+    this.xhsRpaTaskBootstrap = xhsRpaTaskBootstrap;
+    this.xhsV3FixedOperatorAuthorization = xhsV3FixedOperatorAuthorization;
     this.liveProgressCache = new Map();
   }
 
@@ -351,7 +357,8 @@ export class ControlRouter {
       const liveProgress = readLiveProgressTail(this.evidence.runDirectory(job.runId), { nowMs });
       this.liveProgressCache.set(job.runId, { at: nowMs, value: liveProgress });
       return { ...job, liveProgress };
-    } catch {
+    } catch (error) {
+      this.#logSwallow("cp.live.progress.unavailable", error, { runId: job?.runId ?? null });
       return { ...job, liveProgress: null };
     }
   }
@@ -362,10 +369,25 @@ export class ControlRouter {
       if (typeof this.control?.transportStatus === "function") {
         snapshot = this.control.transportStatus() || snapshot;
       }
-    } catch {
+    } catch (error) {
+      this.#logSwallow("cp.transport.status.unavailable", error, { runId: job?.runId ?? null });
       snapshot = { status: "unknown", ageMs: null };
     }
     return job ? { ...job, transportLock: publicTransportLock(snapshot) } : job;
+  }
+
+  // P2-OBSERVABILITY: secondary swallow points log their first failure per
+  // (event, runId) and then throttle for 30s so a hot read path cannot flood
+  // stdout while a CP subsystem is down.
+  #swallowLogAt = new Map();
+  static SWALLOW_LOG_INTERVAL_MS = 30_000;
+  #logSwallow(event, error, extra = {}) {
+    const key = `${event}:${extra.runId ?? "-"}`;
+    const now = Date.now();
+    const last = this.#swallowLogAt.get(key) ?? 0;
+    if (now - last < ControlRouter.SWALLOW_LOG_INTERVAL_MS) return;
+    this.#swallowLogAt.set(key, now);
+    structuredErrorLog({ event, error, extra });
   }
 
   async handle({ method, path, query = new URLSearchParams(), body, headers = {} }) {
@@ -403,6 +425,9 @@ export class ControlRouter {
           // and resource counts only. It never exposes the internal token,
           // provider credential, child command, paths, or raw device identity.
           ...(this.m6LiveEntry ? { m6LiveEntry: this.m6LiveEntry.health() } : {}),
+          ...(this.xhsV3TaskBootstrap
+            ? { xhsV3TaskBootstrap: this.xhsV3TaskBootstrap.health() }
+            : {}),
           ...(this.m6StartupRecovery ? { m6StartupRecovery: this.m6StartupRecovery } : {}),
         },
       };
@@ -448,6 +473,102 @@ export class ControlRouter {
       }
       if (method === "POST" && path === "/control/v1/internal/m6/gate-f/recover-armed-active") {
         return { status: 200, body: this.m6GateFOperations.recoverArmedActive(body) };
+      }
+      throw new ControlPlaneError("ROUTE_NOT_FOUND", `${method} ${path} not found`, { status: 404 });
+    }
+
+    // XHS V3 formal task surface. It runs inside this already-owned listener;
+    // there is no shell-spawn or startup-time business execution. Gate-F's
+    // operations credential is header-only. The bootstrap then exact-validates
+    // the body before loading an invocation/corpus or creating a live resource.
+    if (path.startsWith("/control/v1/internal/xhs/exploration/")) {
+      if (!this.m6GateFOperations?.assertAuthorized || !this.xhsV3TaskBootstrap
+        || !this.xhsV3FixedOperatorAuthorization?.assertAuthorized) {
+        throw new ControlPlaneError(
+          "XHS_V3_TASK_BOOTSTRAP_UNAVAILABLE",
+          "formal XHS V3 task bootstrap is not installed in this listener",
+          { status: 503 },
+        );
+      }
+      this.m6GateFOperations.assertAuthorized(headers);
+      this.xhsV3FixedOperatorAuthorization.assertAuthorized({ method, path, body, headers });
+      if (method === "POST" && path === "/control/v1/internal/xhs/exploration/prepare-invocation") {
+        return {
+          status: 201,
+          body: { invocation: await this.xhsV3TaskBootstrap.prepareInvocation(requireBody(body)) },
+        };
+      }
+      if (method === "POST" && path === "/control/v1/internal/xhs/exploration/run") {
+        return { status: 200, body: { run: await this.xhsV3TaskBootstrap.runTask(requireBody(body)) } };
+      }
+      if (method === "POST" && path === "/control/v1/internal/xhs/exploration/prepare-corpus-review") {
+        return {
+          status: 201,
+          body: { review: await this.xhsV3TaskBootstrap.prepareCorpusReview(requireBody(body)) },
+        };
+      }
+      if (method === "POST" && path === "/control/v1/internal/xhs/exploration/submit-corpus-review") {
+        return {
+          status: 201,
+          body: { review: await this.xhsV3TaskBootstrap.submitCorpusReview(requireBody(body)) },
+        };
+      }
+      if (method === "POST" && path === "/control/v1/internal/xhs/exploration/assemble-corpus-set") {
+        return {
+          status: 201,
+          body: { corpus: await this.xhsV3TaskBootstrap.assembleCorpusSet(requireBody(body)) },
+        };
+      }
+      if (method === "POST" && path === "/control/v1/internal/xhs/exploration/evaluate-corpus-set") {
+        return {
+          status: 201,
+          body: { evaluator: await this.xhsV3TaskBootstrap.evaluateCorpus(requireBody(body)) },
+        };
+      }
+      if (method === "POST" && path === "/control/v1/internal/xhs/exploration/closeout-p6") {
+        return {
+          status: 201,
+          body: { closeout: await this.xhsV3TaskBootstrap.closeoutP6(requireBody(body)) },
+        };
+      }
+      if (method === "POST" && path === "/control/v1/internal/xhs/exploration/seal-e-corpus") {
+        return {
+          status: 200,
+          body: { eCorpus: await this.xhsV3TaskBootstrap.sealECorpus(requireBody(body)) },
+        };
+      }
+      throw new ControlPlaneError("ROUTE_NOT_FOUND", `${method} ${path} not found`, { status: 404 });
+    }
+
+    // P7 is listener-owned and manual-once only.  The operations token is
+    // header-only; bodies contain just fixed program/generation/idempotency
+    // references and are exact-validated by the task bootstrap before its
+    // ledger, scheduler, lease oracle, or R4 aggregate is reached.
+    if (path.startsWith("/control/v1/internal/xhs/rpa/")) {
+      if (!this.m6GateFOperations?.assertAuthorized || !this.xhsRpaTaskBootstrap
+        || !this.xhsV3FixedOperatorAuthorization?.assertAuthorized) {
+        throw new ControlPlaneError(
+          "XHS_RPA_TASK_BOOTSTRAP_UNAVAILABLE",
+          "formal XHS RPA task bootstrap is not installed in this listener",
+          { status: 503 },
+        );
+      }
+      this.m6GateFOperations.assertAuthorized(headers);
+      this.xhsV3FixedOperatorAuthorization.assertAuthorized({ method, path, body, headers });
+      if (method === "GET" && path === "/control/v1/internal/xhs/rpa/health") {
+        return { status: 200, body: { rpa: this.xhsRpaTaskBootstrap.health() } };
+      }
+      if (method === "POST" && path === "/control/v1/internal/xhs/rpa/plan") {
+        return { status: 200, body: { plan: await this.xhsRpaTaskBootstrap.plan(requireBody(body)) } };
+      }
+      if (method === "POST" && path === "/control/v1/internal/xhs/rpa/status") {
+        return { status: 200, body: { rpa: await this.xhsRpaTaskBootstrap.status(requireBody(body)) } };
+      }
+      if (method === "POST" && path === "/control/v1/internal/xhs/rpa/disable") {
+        return { status: 200, body: { rpa: await this.xhsRpaTaskBootstrap.disable(requireBody(body)) } };
+      }
+      if (method === "POST" && path === "/control/v1/internal/xhs/rpa/manual-once") {
+        return { status: 200, body: { rpa: await this.xhsRpaTaskBootstrap.manualOnce(requireBody(body)) } };
       }
       throw new ControlPlaneError("ROUTE_NOT_FOUND", `${method} ${path} not found`, { status: 404 });
     }
@@ -665,6 +786,252 @@ export class ControlRouter {
       };
     }
 
+    // --- Direct-routine plan V2 §8.1: CP-owned routine authority + effects ----
+    if (method === "POST" && path === "/control/v1/routine-authority") {
+      const input = requireBody(body);
+      const authority = this.control.registerRoutineAuthority({
+        sessionId: input.sessionId,
+        token: tokenOf(input, headers),
+        executionRunId: input.executionRunId,
+        routineRunId: input.routineRunId,
+        planHash: input.planHash,
+        alias: input.alias,
+        effectCaps: input.effectCaps ?? {},
+        canaryAuthorized: input.canaryAuthorized === true,
+        accountFingerprint: input.accountFingerprint ?? null,
+      });
+      return { status: 201, body: { authority } };
+    }
+    match = path.match(/^\/control\/v1\/routine-authority\/([^/]+)\/effects$/);
+    if (method === "POST" && match) {
+      const input = requireBody(body);
+      return {
+        status: 200,
+        body: {
+          effect: await this.control.commitRoutineAuthorityEffect({
+            authorityId: decodeURIComponent(match[1]),
+            token: tokenOf(input, headers),
+            intent: input.intent ?? null,
+          }),
+        },
+      };
+    }
+    match = path.match(/^\/control\/v1\/routine-authority\/([^/]+)\/reconcile$/);
+    if (method === "POST" && match) {
+      const input = requireBody(body);
+      return {
+        status: 200,
+        body: {
+          reconciles: await this.control.reconcileRoutineAuthorityComments({
+            authorityId: decodeURIComponent(match[1]),
+            token: tokenOf(input, headers),
+            targetFingerprint: input.targetFingerprint ?? null,
+          }),
+        },
+      };
+    }
+    match = path.match(/^\/control\/v1\/routine-authority\/([^/]+)$/);
+    if (method === "POST" && match) {
+      // explicit close (the owning session's release also closes implicitly)
+      const input = requireBody(body);
+      return {
+        status: 200,
+        body: {
+          authority: this.control.closeRoutineAuthorityViaRpc(decodeURIComponent(match[1]), tokenOf(input, headers), input.reason ?? "closed"),
+        },
+      };
+    }
+
+    // --- V3 free exploration (plan §5.2): hard-zero authority + single-use
+    // permits + shared budgets/targets/lane journals. Sessions already carry
+    // the exploration profile; see xhs-exploration-authority.mjs.
+    if (method === "POST" && path === "/control/v1/exploration-authority") {
+      const input = requireBody(body);
+      const authority = this.control.registerExplorationAuthority({
+        sessions: input.sessions ?? [],
+        executionRunId: input.executionRunId,
+        routineRunId: input.routineRunId,
+        mission: input.mission ?? null,
+        planHash: input.planHash,
+        releaseId: input.releaseId ?? null,
+        sourceCommit: input.sourceCommit ?? null,
+        accountFingerprint: input.accountFingerprint ?? null,
+      });
+      return { status: 201, body: { authority } };
+    }
+    match = path.match(/^\/control\/v1\/exploration-authority\/([^/]+)$/);
+    if (method === "POST" && match) {
+      const input = requireBody(body);
+      const authorityId = decodeURIComponent(match[1]);
+      if (input.action === "close") {
+        return {
+          status: 200,
+          body: { authority: this.control.closeExplorationAuthority({
+            sessionId: input.sessionId,
+            token: tokenOf(input, headers),
+            authorityId,
+            reason: input.reason ?? "closed",
+          }) },
+        };
+      }
+      return {
+        status: 200,
+        body: this.control.getExplorationAuthorityView({
+          sessionId: input.sessionId,
+          token: tokenOf(input, headers),
+          authorityId,
+        }),
+      };
+    }
+    match = path.match(/^\/control\/v1\/exploration-authority\/([^/]+)\/vision-analysis$/);
+    if (method === "POST" && match) {
+      const input = requireBody(body);
+      const authorityId = decodeURIComponent(match[1]);
+      if (input.action === "settle") {
+        return {
+          status: 200,
+          body: { reservation: this.control.settleExplorationVisionAnalysis({
+            sessionId: input.sessionId,
+            token: tokenOf(input, headers),
+            authorityId,
+            reservationId: input.reservationId,
+            outcome: input.outcome,
+            result: input.result ?? null,
+          }) },
+        };
+      }
+      if (["alias", "amount", "kind"].some((key) => Object.hasOwn(input, key))) {
+        throw new ControlPlaneError(
+          "EXPLORATION_VISION_ANALYSIS_INPUT_FORBIDDEN",
+          "vision analysis reservation fixes alias=03, kind=visionAnalysis, amount=1 inside the control plane",
+          { status: 400 },
+        );
+      }
+      return {
+        status: 201,
+        body: { reservation: this.control.reserveExplorationVisionAnalysis({
+          sessionId: input.sessionId,
+          token: tokenOf(input, headers),
+          authorityId,
+          detail: input.detail ?? null,
+        }) },
+      };
+    }
+    match = path.match(/^\/control\/v1\/exploration-authority\/([^/]+)\/permits$/);
+    if (method === "POST" && match) {
+      const input = requireBody(body);
+      return {
+        status: 201,
+        body: { permit: this.control.issueExplorationPermit({
+          sessionId: input.sessionId,
+          token: tokenOf(input, headers),
+          authorityId: decodeURIComponent(match[1]),
+          navigationRole: input.navigationRole,
+          page: input.page,
+          evidenceHash: input.evidenceHash,
+          resolvedPayload: input.resolvedPayload ?? null,
+          ttlMs: input.ttlMs,
+          visualProof: input.visualProof ?? null,
+        }) },
+      };
+    }
+    match = path.match(/^\/control\/v1\/exploration-authority\/([^/]+)\/permits\/([^/]+)\/consume$/);
+    if (method === "POST" && match) {
+      const input = requireBody(body);
+      const { permit, job, budgetReservation } = await this.control.consumeExplorationPermit({
+        sessionId: input.sessionId,
+        token: tokenOf(input, headers),
+        authorityId: decodeURIComponent(match[1]),
+        permitId: decodeURIComponent(match[2]),
+        payload: input.payload ?? null,
+        freshObservation: input.freshObservation ?? null,
+      });
+      return { status: 200, body: { permit, job: publicJob(job), budgetReservation } };
+    }
+    match = path.match(/^\/control\/v1\/exploration-authority\/([^/]+)\/budget$/);
+    if (method === "POST" && match) {
+      const input = requireBody(body);
+      const authorityId = decodeURIComponent(match[1]);
+      const token = tokenOf(input, headers);
+      const sessionId = input.sessionId;
+      if (input.action === "settle") {
+        return {
+          status: 200,
+          body: { reservation: this.control.settleExplorationReservation({
+            sessionId, token, authorityId,
+            reservationId: input.reservationId,
+            outcome: input.outcome,
+          }) },
+        };
+      }
+      return {
+        status: 201,
+        body: { reservation: this.control.reserveExplorationBudget({
+          sessionId, token, authorityId,
+          alias: input.alias ?? null,
+          kind: input.kind,
+          amount: input.amount ?? 1,
+          detail: input.detail ?? null,
+        }) },
+      };
+    }
+    match = path.match(/^\/control\/v1\/exploration-authority\/([^/]+)\/targets\/claim$/);
+    if (method === "POST" && match) {
+      const input = requireBody(body);
+      const authorityId = decodeURIComponent(match[1]);
+      const token = tokenOf(input, headers);
+      const sessionId = input.sessionId;
+      if (input.action === "confirm") {
+        return {
+          status: 200,
+          body: { target: this.control.confirmExplorationTarget({
+            sessionId, token, authorityId,
+            targetId: input.targetId,
+            stableKeyValue: input.stableKeyValue ?? null,
+          }) },
+        };
+      }
+      if (input.action === "unknown") {
+        return {
+          status: 200,
+          body: { target: this.control.markExplorationTargetUnknown({
+            sessionId, token, authorityId, targetId: input.targetId,
+          }) },
+        };
+      }
+      return {
+        status: 201,
+        body: { target: this.control.claimExplorationTarget({
+          sessionId, token, authorityId,
+          keyKind: input.keyKind,
+          keyValue: input.keyValue,
+          alias: input.alias ?? null,
+        }) },
+      };
+    }
+    match = path.match(/^\/control\/v1\/exploration-authority\/([^/]+)\/journal$/);
+    if (method === "POST" && match) {
+      const input = requireBody(body);
+      const authorityId = decodeURIComponent(match[1]);
+      const token = tokenOf(input, headers);
+      const sessionId = input.sessionId;
+      if (input.action === "commit") {
+        return {
+          status: 200,
+          body: { lane: this.control.commitExplorationLane({ sessionId, token, authorityId }) },
+        };
+      }
+      return {
+        status: 201,
+        body: { recordHash: this.control.appendExplorationJournal({
+          sessionId, token, authorityId,
+          alias: input.alias ?? null,
+          type: input.type,
+          payload: input.payload ?? {},
+        }) },
+      };
+    }
+
     if (method === "POST" && path === "/control/v1/device-sessions") {
       const input = requireBody(body);
       const { faultAfter: _ignoredFaultAfter, ...safe } = input;
@@ -801,6 +1168,34 @@ export class ControlRouter {
       return { status: 200, body: { paymentCommit: result } };
     }
 
+    // PR1 Single-Device Recipe Runner — server-side recipe-runs (no Agent Gateway yet).
+    if (method === "POST" && path === "/control/v1/recipe-runs") {
+      const input = requireBody(body);
+      const run = await this.control.startRecipeRun(input);
+      return { status: 201, body: { recipeRun: run } };
+    }
+    if (method === "POST" && path === "/control/v1/recipe-runs/plan") {
+      const input = requireBody(body);
+      return { status: 200, body: { plan: this.control.planRecipeRun(input) } };
+    }
+    if (method === "GET" && path === "/control/v1/recipe-runs") {
+      return { status: 200, body: { recipeRuns: this.control.listRecipeRuns() } };
+    }
+    match = path.match(/^\/control\/v1\/recipe-runs\/([^/]+)\/cancel$/);
+    if (method === "POST" && match) {
+      return {
+        status: 200,
+        body: { recipeRun: await this.control.cancelRecipeRun(decodeURIComponent(match[1])) },
+      };
+    }
+    match = path.match(/^\/control\/v1\/recipe-runs\/([^/]+)$/);
+    if (method === "GET" && match) {
+      return {
+        status: 200,
+        body: { recipeRun: this.control.getRecipeRun(decodeURIComponent(match[1])) },
+      };
+    }
+
     // M6-2 W5 — the ONLY M6 public surface: closed observe capture. These four
     // routes accept no coordinates, shell text, URLs, device ids, session ids,
     // or tokens; the facade resolves the alias server-side and every other
@@ -817,6 +1212,9 @@ export class ControlRouter {
     }
     if (this.m6 && method === "POST" && path === "/control/v1/m6/frames/closeout") {
       return { status: 200, body: this.m6.closeout(this.closedM6Input(body)) };
+    }
+    if (this.m6DeviceReadSnapshot && method === "POST" && path === "/control/v1/m6/device-read-snapshot") {
+      return { status: 200, body: { snapshot: await this.m6DeviceReadSnapshot.consume(requireBody(body)) } };
     }
     if (path.startsWith("/control/v1/m6/")) {
       throw new ControlPlaneError(

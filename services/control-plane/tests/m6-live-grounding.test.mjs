@@ -14,6 +14,7 @@ function environment() {
   return deriveTargetEnvironmentAttestation({
     appPackageHash: H("package"), appBuildHash: H("build"), signingHash: H("signing"),
     osBuildHash: H("os"), displayHash: H("display"), localeThemeHash: H("locale-theme"),
+    accountBindingHash: H("account"),
     imeHash: H("ime"), accessibilityHash: H("accessibility"), accountIsolationHash: H("account"),
     capturedAt: "2030-01-01T00:00:00Z", expiresAt: "2030-01-01T01:00:00Z",
   });

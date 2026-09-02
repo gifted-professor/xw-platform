@@ -9,7 +9,7 @@ import { CapabilityRegistry } from "../control-plane/lib/capability-registry.mjs
 import { fingerprint } from "../control-plane/lib/canonical.mjs";
 import { AdapterRegistry, ControlPlane } from "../control-plane/lib/control-plane.mjs";
 import { EvidenceStore } from "../control-plane/lib/evidence-store.mjs";
-import { StateStore } from "../control-plane/lib/state-store.mjs";
+import { CURRENT_CONTROL_SCHEMA_VERSION, StateStore } from "../control-plane/lib/state-store.mjs";
 
 const tempBase = fileURLToPath(new URL("../control-plane/runtime", import.meta.url));
 mkdirSync(tempBase, { recursive: true });
@@ -496,7 +496,7 @@ test("v1 SQLite state migrates additively and preserves legacy idempotency", () 
 
   const state = new StateStore({ dbPath });
   try {
-    assert.equal(state.db.prepare("PRAGMA user_version").get().user_version, 20);
+    assert.equal(state.db.prepare("PRAGMA user_version").get().user_version, CURRENT_CONTROL_SCHEMA_VERSION);
     assert.ok(state.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='standing_grant_canaries'").get());
     assert.ok(state.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='discovery_runs'").get());
     assert.ok(state.db.prepare("PRAGMA table_info(jobs)").all().some((column) => column.name === "placement_decision_json"));

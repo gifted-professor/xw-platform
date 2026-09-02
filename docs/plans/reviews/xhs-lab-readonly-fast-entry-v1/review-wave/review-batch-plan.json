@@ -1,0 +1,446 @@
+{
+  "schema": "multi-model-review-batch.v2",
+  "dry_run": false,
+  "mode": "plan",
+  "snapshot_sha256": "d10059b5b6a3743cf857fe70b9b367669cde93a2a0a2c3b548c989dbc4eda600",
+  "review_wave": 1,
+  "max_calls_per_role": 2,
+  "intended_models": {
+    "coverage": "kimi-k3-256k",
+    "safety": "grok-4.6"
+  },
+  "selected_models": {
+    "coverage": null,
+    "safety": null
+  },
+  "selected_providers": {
+    "coverage": null,
+    "safety": null
+  },
+  "promoted_after_preflight": {
+    "coverage": false,
+    "safety": false
+  },
+  "fallback_models": {
+    "coverage": "glm-5.2",
+    "safety": "glm-5.2"
+  },
+  "provider_fallbacks": {
+    "coverage": null,
+    "safety": null
+  },
+  "available_fallback_providers": [
+    "ollama",
+    "opencode"
+  ],
+  "health_preflight": {
+    "mode": "auto",
+    "ttl_seconds": 600,
+    "max_new_probes": 6,
+    "new_probes_used": 6,
+    "artifact_free": true,
+    "events": [
+      {
+        "provider": "ollama",
+        "model": "glm-5.2",
+        "checked_at": 1788232405,
+        "ok": false,
+        "failure_kind": "authentication_error",
+        "http_status": 403,
+        "latency_ms": 2873,
+        "source": "probe"
+      },
+      {
+        "provider": "ollama",
+        "model": "deepseek-v4-pro:0813",
+        "checked_at": 1788232408,
+        "ok": false,
+        "failure_kind": "authentication_error",
+        "http_status": 403,
+        "latency_ms": 2107,
+        "source": "probe"
+      },
+      {
+        "provider": "ollama",
+        "model": "qwen3.5:397b",
+        "checked_at": 1788232410,
+        "ok": false,
+        "failure_kind": "authentication_error",
+        "http_status": 403,
+        "latency_ms": 1493,
+        "source": "probe"
+      },
+      {
+        "provider": "ollama",
+        "model": "mistral-large-3:675b",
+        "checked_at": 1788232411,
+        "ok": false,
+        "failure_kind": "authentication_error",
+        "http_status": 403,
+        "latency_ms": 2164,
+        "source": "probe"
+      },
+      {
+        "provider": "ollama",
+        "model": "deepseek-v4-flash:0731",
+        "checked_at": 1788232414,
+        "ok": false,
+        "failure_kind": "authentication_error",
+        "http_status": 403,
+        "latency_ms": 2086,
+        "source": "probe"
+      },
+      {
+        "provider": "ollama",
+        "model": "nemotron-3-ultra",
+        "checked_at": 1788232416,
+        "ok": false,
+        "failure_kind": "authentication_error",
+        "http_status": 403,
+        "latency_ms": 1215,
+        "source": "probe"
+      },
+      {
+        "provider": "opencode",
+        "model": "opencode-go/qwen3.8-max",
+        "ok": false,
+        "source": "budget",
+        "failure_kind": "health_probe_budget_exhausted"
+      },
+      {
+        "provider": "opencode",
+        "model": "opencode-go/glm-5.3",
+        "ok": false,
+        "source": "budget",
+        "failure_kind": "health_probe_budget_exhausted"
+      },
+      {
+        "provider": "opencode",
+        "model": "opencode-go/qwen3.7-max",
+        "ok": false,
+        "source": "budget",
+        "failure_kind": "health_probe_budget_exhausted"
+      },
+      {
+        "provider": "opencode",
+        "model": "opencode-go/muse-spark-1.2-contributor",
+        "ok": false,
+        "source": "budget",
+        "failure_kind": "health_probe_budget_exhausted"
+      },
+      {
+        "provider": "opencode",
+        "model": "opencode-go/glm-5.2",
+        "ok": false,
+        "source": "budget",
+        "failure_kind": "health_probe_budget_exhausted"
+      },
+      {
+        "provider": "opencode",
+        "model": "opencode-go/qwen3.7-plus",
+        "ok": false,
+        "source": "budget",
+        "failure_kind": "health_probe_budget_exhausted"
+      },
+      {
+        "provider": "opencode",
+        "model": "opencode-go/qwen3.6-plus",
+        "ok": false,
+        "source": "budget",
+        "failure_kind": "health_probe_budget_exhausted"
+      },
+      {
+        "provider": "opencode",
+        "model": "opencode-go/minimax-m2.7",
+        "ok": false,
+        "source": "budget",
+        "failure_kind": "health_probe_budget_exhausted"
+      },
+      {
+        "provider": "opencode",
+        "model": "opencode-go/mimo-v2.5",
+        "ok": false,
+        "source": "budget",
+        "failure_kind": "health_probe_budget_exhausted"
+      },
+      {
+        "provider": "opencode",
+        "model": "opencode-go/hy3",
+        "ok": false,
+        "source": "budget",
+        "failure_kind": "health_probe_budget_exhausted"
+      },
+      {
+        "provider": "opencode",
+        "model": "opencode-go/gpt-5.6-luna",
+        "ok": false,
+        "source": "budget",
+        "failure_kind": "health_probe_budget_exhausted"
+      },
+      {
+        "provider": "ollama",
+        "model": "kimi-k3",
+        "ok": false,
+        "source": "budget",
+        "failure_kind": "health_probe_budget_exhausted"
+      },
+      {
+        "provider": "opencode",
+        "model": "opencode-go/kimi-k3",
+        "ok": false,
+        "source": "budget",
+        "failure_kind": "health_probe_budget_exhausted"
+      },
+      {
+        "provider": "opencode",
+        "model": "opencode-go/kimi-k2.7-code",
+        "ok": false,
+        "source": "budget",
+        "failure_kind": "health_probe_budget_exhausted"
+      },
+      {
+        "provider": "opencode",
+        "model": "opencode-go/kimi-k2.6",
+        "ok": false,
+        "source": "budget",
+        "failure_kind": "health_probe_budget_exhausted"
+      },
+      {
+        "provider": "ollama",
+        "model": "deepseek-v4-pro:0813",
+        "checked_at": 1788232408,
+        "ok": false,
+        "failure_kind": "authentication_error",
+        "http_status": 403,
+        "latency_ms": 2107,
+        "source": "cache"
+      },
+      {
+        "provider": "ollama",
+        "model": "glm-5.2",
+        "checked_at": 1788232405,
+        "ok": false,
+        "failure_kind": "authentication_error",
+        "http_status": 403,
+        "latency_ms": 2873,
+        "source": "cache"
+      },
+      {
+        "provider": "ollama",
+        "model": "qwen3.5:397b",
+        "checked_at": 1788232410,
+        "ok": false,
+        "failure_kind": "authentication_error",
+        "http_status": 403,
+        "latency_ms": 1493,
+        "source": "cache"
+      },
+      {
+        "provider": "ollama",
+        "model": "mistral-large-3:675b",
+        "checked_at": 1788232411,
+        "ok": false,
+        "failure_kind": "authentication_error",
+        "http_status": 403,
+        "latency_ms": 2164,
+        "source": "cache"
+      },
+      {
+        "provider": "ollama",
+        "model": "deepseek-v4-flash:0731",
+        "checked_at": 1788232414,
+        "ok": false,
+        "failure_kind": "authentication_error",
+        "http_status": 403,
+        "latency_ms": 2086,
+        "source": "cache"
+      },
+      {
+        "provider": "ollama",
+        "model": "nemotron-3-ultra",
+        "checked_at": 1788232416,
+        "ok": false,
+        "failure_kind": "authentication_error",
+        "http_status": 403,
+        "latency_ms": 1215,
+        "source": "cache"
+      },
+      {
+        "provider": "opencode",
+        "model": "opencode-go/glm-5.3",
+        "ok": false,
+        "source": "budget",
+        "failure_kind": "health_probe_budget_exhausted"
+      },
+      {
+        "provider": "opencode",
+        "model": "opencode-go/qwen3.8-max",
+        "ok": false,
+        "source": "budget",
+        "failure_kind": "health_probe_budget_exhausted"
+      },
+      {
+        "provider": "opencode",
+        "model": "opencode-go/deepseek-v4-pro",
+        "ok": false,
+        "source": "budget",
+        "failure_kind": "health_probe_budget_exhausted"
+      },
+      {
+        "provider": "opencode",
+        "model": "opencode-go/minimax-m3",
+        "ok": false,
+        "source": "budget",
+        "failure_kind": "health_probe_budget_exhausted"
+      },
+      {
+        "provider": "opencode",
+        "model": "opencode-go/mimo-v2.5-pro",
+        "ok": false,
+        "source": "budget",
+        "failure_kind": "health_probe_budget_exhausted"
+      },
+      {
+        "provider": "opencode",
+        "model": "opencode-go/qwen3.7-max",
+        "ok": false,
+        "source": "budget",
+        "failure_kind": "health_probe_budget_exhausted"
+      },
+      {
+        "provider": "opencode",
+        "model": "opencode-go/qwen3.7-plus",
+        "ok": false,
+        "source": "budget",
+        "failure_kind": "health_probe_budget_exhausted"
+      },
+      {
+        "provider": "opencode",
+        "model": "opencode-go/glm-5.2",
+        "ok": false,
+        "source": "budget",
+        "failure_kind": "health_probe_budget_exhausted"
+      },
+      {
+        "provider": "opencode",
+        "model": "opencode-go/glm-5.1",
+        "ok": false,
+        "source": "budget",
+        "failure_kind": "health_probe_budget_exhausted"
+      },
+      {
+        "provider": "opencode",
+        "model": "opencode-go/deepseek-v4-flash",
+        "ok": false,
+        "source": "budget",
+        "failure_kind": "health_probe_budget_exhausted"
+      },
+      {
+        "provider": "opencode",
+        "model": "opencode-go/kimi-k3",
+        "ok": false,
+        "source": "budget",
+        "failure_kind": "health_probe_budget_exhausted"
+      },
+      {
+        "provider": "opencode",
+        "model": "opencode-go/kimi-k2.6",
+        "ok": false,
+        "source": "budget",
+        "failure_kind": "health_probe_budget_exhausted"
+      },
+      {
+        "provider": "opencode",
+        "model": "opencode-go/minimax-m2.7",
+        "ok": false,
+        "source": "budget",
+        "failure_kind": "health_probe_budget_exhausted"
+      },
+      {
+        "provider": "opencode",
+        "model": "opencode-go/muse-spark-1.2-contributor",
+        "ok": false,
+        "source": "budget",
+        "failure_kind": "health_probe_budget_exhausted"
+      },
+      {
+        "provider": "opencode",
+        "model": "opencode-go/mimo-v2.5",
+        "ok": false,
+        "source": "budget",
+        "failure_kind": "health_probe_budget_exhausted"
+      },
+      {
+        "provider": "opencode",
+        "model": "opencode-go/hy3",
+        "ok": false,
+        "source": "budget",
+        "failure_kind": "health_probe_budget_exhausted"
+      },
+      {
+        "provider": "opencode",
+        "model": "opencode-go/gpt-5.6-luna",
+        "ok": false,
+        "source": "budget",
+        "failure_kind": "health_probe_budget_exhausted"
+      },
+      {
+        "provider": "cpa",
+        "model": "kimi-k3-256k",
+        "ok": false,
+        "source": "budget",
+        "failure_kind": "health_probe_budget_exhausted"
+      },
+      {
+        "provider": "cpa",
+        "model": "grok-4.6",
+        "ok": false,
+        "source": "budget",
+        "failure_kind": "health_probe_budget_exhausted"
+      }
+    ]
+  },
+  "reports": [
+    {
+      "role": "coverage",
+      "primary_provider": "none",
+      "primary_model": "kimi-k3-256k",
+      "provider": "none",
+      "model": "kimi-k3-256k",
+      "ok": false,
+      "attempts": 0,
+      "providers_attempted": [],
+      "models_attempted": [],
+      "fallback_used": false,
+      "provider_fallback_used": false,
+      "recovered": false,
+      "report": null,
+      "failure_kind": "no_healthy_review_route",
+      "attempt_log": [],
+      "error": "no_healthy_review_route"
+    },
+    {
+      "role": "safety",
+      "primary_provider": "none",
+      "primary_model": "grok-4.6",
+      "provider": "none",
+      "model": "grok-4.6",
+      "ok": false,
+      "attempts": 0,
+      "providers_attempted": [],
+      "models_attempted": [],
+      "fallback_used": false,
+      "provider_fallback_used": false,
+      "recovered": false,
+      "report": null,
+      "failure_kind": "no_healthy_review_route",
+      "attempt_log": [],
+      "error": "no_healthy_review_route"
+    }
+  ],
+  "degraded": true,
+  "recovered": false,
+  "recovered_with_fallback": false,
+  "recovered_with_provider_fallback": false,
+  "gpt_fallback_required": true
+}

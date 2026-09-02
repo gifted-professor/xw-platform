@@ -112,6 +112,7 @@ export function deriveTargetEnvironmentAttestation(input) {
     localeThemeHash: input.localeThemeHash,
     imeHash: input.imeHash,
     accessibilityHash: input.accessibilityHash,
+    accountBindingHash: input.accountBindingHash,
     accountIsolationHash: input.accountIsolationHash,
     capturedAt: input.capturedAt,
     expiresAt: input.expiresAt,
