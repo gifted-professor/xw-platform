@@ -24,6 +24,10 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 export const SLOT_MAP = Object.freeze({
   "01": Object.freeze({ port: 17895, deviceId: "lab-slot-01" }),
   "02": Object.freeze({ port: 17897, deviceId: "lab-slot-02" }),
+  "04": Object.freeze({ port: 17896, deviceId: "lab-slot-04" }),
+  "05": Object.freeze({ port: 17899, deviceId: "lab-slot-05" }),
+  "06": Object.freeze({ port: 17900, deviceId: "lab-slot-06" }),
+  "07": Object.freeze({ port: 17901, deviceId: "lab-slot-07" }),
 });
 
 export const DEFAULT_CONTROL_PORT = 17920;
@@ -428,10 +432,7 @@ export class LabReadonlyGateway {
       labOnly: true,
       claimedStatus: "LAB_READ_ONLY_SLOT_REACHED",
       productionAcceptance: false,
-      slots: {
-        "01": { port: this.slotMap["01"].port },
-        "02": { port: this.slotMap["02"].port },
-      },
+      slots: Object.fromEntries(Object.entries(this.slotMap).map(([slot, { port }]) => [slot, { port }])),
       allowedActions: ["focus", "dump"],
       forbiddenActions: [
         "tap", "scroll", "open", "launch", "back", "input", "like", "collect",
@@ -465,7 +466,7 @@ export class LabReadonlyGateway {
       `- identitySemantics: ${entry.identitySemantics}`,
       `- runtimeBinding: ${entry.runtimeBinding}`,
       `- allowedActions: ${entry.allowedActions.join(", ")}`,
-      `- slots: 01 -> 127.0.0.1:${entry.slots["01"].port}, 02 -> 127.0.0.1:${entry.slots["02"].port}`,
+      `- slots: ${Object.entries(entry.slots).map(([slot, s]) => `${slot} -> 127.0.0.1:${s.port}`).join(", ")}`,
       `- forbiddenActions: ${entry.forbiddenActions.join(", ")}`,
       `- dumpByproduct: ${entry.dumpByproduct}`,
       `- persistence: ${entry.persistence}`,

@@ -80,9 +80,11 @@ function parseArgs(argv, spec) {
   return { positional, flags };
 }
 
+const KNOWN_SLOTS = Object.freeze(["01", "02", "04", "05", "06", "07"]);
+
 function requireSlot(value) {
-  if (value !== "01" && value !== "02") {
-    throw new ClientError("UNKNOWN_SLOT", "slot must be 01 or 02");
+  if (!KNOWN_SLOTS.includes(value)) {
+    throw new ClientError("UNKNOWN_SLOT", `slot must be one of ${KNOWN_SLOTS.join(", ")}`);
   }
   return value;
 }
@@ -263,7 +265,7 @@ async function main() {
     if (command === "status") return await cmdStatus();
     if (command === "focus") return await cmdOperate("focus", rest);
     if (command === "dump") return await cmdOperate("dump", rest);
-    throw new ClientError("UNKNOWN_COMMAND", "usage: lab-readonly-client.mjs start|stop|status|focus <01|02>|dump <01|02> [label]");
+    throw new ClientError("UNKNOWN_COMMAND", "usage: lab-readonly-client.mjs start|stop|status|focus <slot>|dump <slot> [label] — slots: 01,02,04,05,06,07");
   } catch (error) {
     emit({ ok: false, code: error?.code ?? "CLIENT_FAILED", message: error?.code ?? "CLIENT_FAILED" });
     process.exitCode = 1;

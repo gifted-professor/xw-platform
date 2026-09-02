@@ -41,8 +41,8 @@ export function resolveFixedRpaAlias(env = process.env, override = null) {
   const raw = override != null && String(override).trim() !== ""
     ? String(override).trim()
     : String(env.XHS_RPA_ALIAS || DEFAULT_RPA_ALIAS).trim();
-  if (!/^(0[1-4])$/.test(raw)) {
-    throw new TypeError(`XHS_RPA_ALIAS must be one of 01..04, got ${JSON.stringify(raw)}`);
+  if (!/^(0[1-7])$/.test(raw)) {
+    throw new TypeError(`XHS_RPA_ALIAS must be one of 01..07, got ${JSON.stringify(raw)}`);
   }
   return raw;
 }

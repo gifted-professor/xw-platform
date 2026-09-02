@@ -121,7 +121,7 @@ test("resolveFixedRpaAlias defaults to 04 and accepts override", () => {
   assert.equal(resolveFixedRpaAlias({}, null), "04");
   assert.equal(resolveFixedRpaAlias({ XHS_RPA_ALIAS: "04" }, null), "04");
   assert.equal(resolveFixedRpaAlias({}, "03"), "03");
-  assert.throws(() => resolveFixedRpaAlias({ XHS_RPA_ALIAS: "99" }, null), /01\.\.04/);
+  assert.throws(() => resolveFixedRpaAlias({ XHS_RPA_ALIAS: "99" }, null), /01\.\.07/);
 });
 
 test("resolveLiveRecipe gates status and alias", () => {
