@@ -12,16 +12,23 @@ import { fileURLToPath } from "node:url";
 
 import {
   allNodes,
+  commentFingerprint,
   extractNoteRecord,
   extractNoteRecordV2,
+  extractScrolledDetail,
   looksLikeNoteDetail,
+  mergeNoteRunFamily,
   parseCommentRows,
   parseCountText,
   parsePostTime,
+  recipeRunDumpJobs,
 } from "../scripts/lib/xhs-note-extract.mjs";
 import { spawnSync } from "node:child_process";
 
 const FIXTURE_LIVE = new URL("./fixtures/xhs-note-detail-live-04.xml", import.meta.url);
+const FIXTURE_TOP = new URL("./fixtures/xhs-note-detail-top-live-04.xml", import.meta.url);
+const FIXTURE_C1 = new URL("./fixtures/xhs-note-comments-c1-live-04.xml", import.meta.url);
+const FIXTURE_C2 = new URL("./fixtures/xhs-note-comments-c2-live-04.xml", import.meta.url);
 
 function node({ text = "", desc = "", rid = "", bounds, clickable = false }) {
   return `<node index="0" text="${text}" content-desc="${desc}" resource-id="${rid}" ` +
@@ -222,6 +229,122 @@ test("allNodes carries resource-id", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Scrolled comment-panel extraction (probe rr_4d3a2df2, live 04 dumps)
+// ---------------------------------------------------------------------------
+
+test("extractScrolledDetail parses live c1 dump: 7 rows, no head, total from bottom bar", () => {
+  const r = extractScrolledDetail(readFileSync(FIXTURE_C1, "utf8"));
+  assert.equal(r.isScrolledDetail, true);
+  assert.equal(r.commentTotal, 124);
+  assert.equal(r.comments.length, 7);
+  // first visible comment — user → body → time row with location+回复 → likes
+  const first = r.comments[0];
+  assert.equal(first.user, "合衬");
+  assert.equal(first.text, "求推荐");
+  assert.equal(first.timeText, "5天前 江苏 回复");
+  assert.equal(first.likes, 3);
+  // the "小红薯69CAEB62"/"咋入" pair is assigned by width, not by user-length
+  assert.equal(r.comments[3].user, "小红薯69CAEB62");
+  assert.equal(r.comments[3].text, "咋入");
+  // sticky author bar + 说点什么 + 展开 N 条回复 never become rows
+  assert.ok(r.comments.every((c) => c.user !== "喂你别哭了"));
+  assert.ok(r.comments.every((c) => !/^说点什么/.test(c.text || "")));
+});
+
+test("extractScrolledDetail parses live c2 dump: 6 rows, deeper comments", () => {
+  const r = extractScrolledDetail(readFileSync(FIXTURE_C2, "utf8"));
+  assert.equal(r.isScrolledDetail, true);
+  assert.equal(r.commentTotal, 124);
+  assert.equal(r.comments.length, 6);
+  assert.equal(r.comments[4].user, "乄困了就睡");
+  assert.equal(r.comments[5].user, "午夜伤心玫瑰");
+});
+
+test("extractScrolledDetail on the unscrolled top dump reports scrolled=false and defers to v2", () => {
+  const r = extractScrolledDetail(readFileSync(FIXTURE_TOP, "utf8"));
+  // head "共 N 条评论" still present → not scrolled; caller uses extractNoteRecordV2
+  assert.equal(r.isScrolledDetail, false);
+  assert.equal(r.comments.length, 0);
+});
+
+test("commentFingerprint is stable across dumps and sensitive to user/text", () => {
+  const a = { user: "合衬", text: "求推荐" };
+  const b = { user: "合衬", text: "求推荐", timeText: "5天前 江苏 回复", likes: 3 };
+  assert.equal(commentFingerprint(a), commentFingerprint(b));
+  assert.notEqual(commentFingerprint(a), commentFingerprint({ user: "社会你鸡哥", text: "求推荐" }));
+  assert.match(commentFingerprint(a), /^[0-9a-f]{12}$/);
+});
+
+test("mergeNoteRunFamily unions c1+c2 comments, dedupes to 9, keeps header fields", () => {
+  const headerRecord = extractNoteRecordV2(readFileSync(FIXTURE_TOP, "utf8"));
+  assert.equal(headerRecord.author, "喂你别哭了");
+  const c1 = extractScrolledDetail(readFileSync(FIXTURE_C1, "utf8"));
+  const c2 = extractScrolledDetail(readFileSync(FIXTURE_C2, "utf8"));
+  const merged = mergeNoteRunFamily({
+    headerRecord,
+    scrolled: [
+      { stepId: "dump_c1", record: c1 },
+      { stepId: "dump_c2", record: c2 },
+    ],
+  });
+  assert.equal(merged.headerDumpFound, true);
+  assert.equal(merged.title, headerRecord.title);
+  assert.equal(merged.author, "喂你别哭了");
+  assert.equal(merged.interactions.commentCount, 124);
+  // 7 + 6 rows, overlap of 4 → 9 unique comments
+  assert.equal(merged.comments.length, 9);
+  // dedup filled likes/time from whichever dump carried them
+  const heChen = merged.comments.find((c) => c.user === "合衬");
+  assert.equal(heChen.likes, 3);
+  assert.deepEqual(heChen.sources, ["dump_c1"]);
+  const overlap = merged.comments.find((c) => c.user === "社会你鸡哥");
+  assert.deepEqual(overlap.sources.sort(), ["dump_c1", "dump_c2"]);
+  const deep = merged.comments.find((c) => c.user === "午夜伤心玫瑰");
+  assert.deepEqual(deep.sources, ["dump_c2"]);
+  // 124 total vs 9 visible → honest truncation
+  assert.equal(merged.commentsTruncated, true);
+  // comments sorted by y (reading order across the two dumps)
+  for (let i = 1; i < merged.comments.length; i += 1) {
+    assert.ok(merged.comments[i - 1].y <= merged.comments[i].y);
+  }
+});
+
+test("mergeNoteRunFamily without a header dump still carries comments with null identity", () => {
+  const c1 = extractScrolledDetail(readFileSync(FIXTURE_C1, "utf8"));
+  const merged = mergeNoteRunFamily({ headerRecord: null, scrolled: [{ stepId: "dump_c1", record: c1 }] });
+  assert.equal(merged.headerDumpFound, false);
+  assert.equal(merged.noteFingerprint, null);
+  assert.equal(merged.comments.length, 7);
+  assert.equal(merged.commentsTruncated, true);
+});
+
+test("recipeRunDumpJobs maps VERIFIED dump steps to header vs scrolled jobIds", () => {
+  const receipt = {
+    recipeRunId: "rr_4d3a2df2c0ea48aa",
+    alias: "04",
+    stepResults: [
+      { stepId: "dump_top", status: "VERIFIED", result: { jobId: "job_ceb5b591" } },
+      { stepId: "screenshot_top", status: "VERIFIED", result: { jobId: "job_shot1" } },
+      { stepId: "dump_c1", status: "VERIFIED", result: { jobId: "job_c144e226" } },
+      { stepId: "dump_c2", status: "VERIFIED", result: { jobId: "job_d8964a46" } },
+      { stepId: "dump_c3", status: "FAILED", result: { jobId: "job_deadbeef" } },
+      { stepId: "return_feed", status: "VERIFIED", result: { jobId: "job_back" } },
+    ],
+  };
+  const jobs = recipeRunDumpJobs(receipt);
+  assert.equal(jobs.recipeRunId, "rr_4d3a2df2c0ea48aa");
+  assert.equal(jobs.alias, "04");
+  assert.deepEqual(jobs.headerJobIds, ["job_ceb5b591"]);
+  assert.deepEqual(jobs.scrolledJobIds, [
+    { stepId: "dump_c1", jobId: "job_c144e226" },
+    { stepId: "dump_c2", jobId: "job_d8964a46" },
+  ]);
+  // non-dump steps and non-VERIFIED steps are excluded
+  assert.ok(!jobs.headerJobIds.includes("job_shot1"));
+  assert.ok(!jobs.scrolledJobIds.some((s) => s.jobId === "job_deadbeef"));
+});
+
+// ---------------------------------------------------------------------------
 // CLI end-to-end over a synthetic per-alias run tree
 // ---------------------------------------------------------------------------
 
@@ -248,13 +371,14 @@ function buildFakeScanRoot(root) {
   }
 }
 
-function runCli(scanRoot, outRoot) {
+function runCli(scanRoot, outRoot, extraArgs = []) {
   const cli = new URL("../ops/xhs-notes-extract.mjs", import.meta.url);
   const repoRoot = new URL("../..", import.meta.url);
   return spawnSync(process.execPath, [
     join(fileURLToPath(cli).replace(/\\/g, "/")),
     "--scan-root", scanRoot,
     "--out", outRoot,
+    ...extraArgs,
   ], { cwd: fileURLToPath(repoRoot), encoding: "utf8" });
 }
 
@@ -288,6 +412,92 @@ test("CLI scans run dirs, dedupes by fingerprint, writes the four output files",
     assert.equal(summary.totals.detailDumps, 3);
     assert.equal(summary.totals.skippedNonDetail, 1);
     assert.equal(summary.totals.uniqueNotes, 2);
+    assert.equal(summary.totals.failed, 0);
+  } finally {
+    rmSync(scanRoot, { recursive: true, force: true });
+    rmSync(outRoot, { recursive: true, force: true });
+  }
+});
+// ---------------------------------------------------------------------------
+// CLI --receipts mode: one receipt (jobId family) → one merged note
+// ---------------------------------------------------------------------------
+
+function buildFakeReceiptTree(root) {
+  const top = readFileSync(FIXTURE_TOP, "utf8");
+  const c1 = readFileSync(FIXTURE_C1, "utf8");
+  const c2 = readFileSync(FIXTURE_C2, "utf8");
+  // per-alias run tree: each dump step gets its own run dir + manifest jobId
+  const dumpRuns = [
+    ["job_ceb5b591", "run_673e54f7", top],
+    ["job_c144e226", "run_6b026cf6", c1],
+    ["job_d8964a46", "run_192dfdaa", c2],
+  ];
+  for (const [jobId, runId, content] of dumpRuns) {
+    const dir = join(root, "04", "runs", runId);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "dump-ui.xml"), content, "utf8");
+    writeFileSync(join(dir, "manifest.json"), JSON.stringify({
+      runId, jobId, actorId: "agent:xhs-collect-loop",
+      createdAt: "2026-09-02T10:00:00.000Z",
+      routeDecision: { selectedDevice: { alias: "04" } },
+    }), "utf8");
+  }
+  // receipt persisted by the collection driver: stepResults carry the jobIds
+  const receiptsDir = join(root, "..", "receipts");
+  mkdirSync(receiptsDir, { recursive: true });
+  writeFileSync(join(receiptsDir, "04_rr_4d3a2df2.json"), JSON.stringify({
+    recipeRunId: "rr_4d3a2df2c0ea48aa",
+    alias: "04",
+    status: "SUCCEEDED",
+    stepResults: [
+      { stepId: "tap_feed_card", status: "VERIFIED", result: { jobId: "job_tap" } },
+      { stepId: "dump_top", status: "VERIFIED", result: { jobId: "job_ceb5b591" } },
+      { stepId: "dump_c1", status: "VERIFIED", result: { jobId: "job_c144e226" } },
+      { stepId: "dump_c2", status: "VERIFIED", result: { jobId: "job_d8964a46" } },
+      { stepId: "return_feed", status: "VERIFIED", result: { jobId: "job_back" } },
+    ],
+  }), "utf8");
+  return receiptsDir;
+}
+
+test("CLI --receipts mode merges a run family into one note with comments", () => {
+  const scanRoot = mkdtempSync(join(tmpdir(), "xhs-recv-scan-"));
+  const outRoot = mkdtempSync(join(tmpdir(), "xhs-recv-out-"));
+  try {
+    const receiptsDir = buildFakeReceiptTree(scanRoot);
+    const result = runCli(scanRoot, outRoot, ["--receipts", receiptsDir, "--aliases", "04"]);
+    assert.equal(result.status, 0, `CLI failed: ${result.stdout}\n${result.stderr}`);
+
+    const notes = readFileSync(join(outRoot, "notes.jsonl"), "utf8")
+      .split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    assert.equal(notes.length, 1);
+    const note = notes[0];
+    assert.equal(note.recipeRunId, "rr_4d3a2df2c0ea48aa");
+    assert.equal(note.author, "喂你别哭了");
+    assert.equal(note.comments.length, 9, "7+6 rows dedupe to 9 by fingerprint");
+    assert.equal(note.commentTotal, 124);
+    assert.equal(note.commentsTruncated, true);
+    assert.equal(note.headerDumpFound, true);
+    assert.ok(note.dumpFamily.scrolled.length === 2);
+
+    const comments = readFileSync(join(outRoot, "comments.jsonl"), "utf8")
+      .split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    assert.equal(comments.length, 9);
+    assert.ok(comments.every((c) => c.recipeRunId === "rr_4d3a2df2c0ea48aa"));
+    assert.ok(comments.some((c) => c.comment.user === "合衬" && c.comment.text === "求推荐"));
+
+    const runsIndex = readFileSync(join(outRoot, "runs-index.jsonl"), "utf8")
+      .split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    assert.equal(runsIndex.length, 1);
+    assert.equal(runsIndex[0].recipeRunId, "rr_4d3a2df2c0ea48aa");
+    assert.equal(runsIndex[0].comments, 9);
+
+    const summary = JSON.parse(readFileSync(join(outRoot, "summary.json"), "utf8"));
+    assert.equal(summary.mode, "receipts");
+    assert.equal(summary.totals.receipts, 1);
+    assert.equal(summary.totals.detailDumps, 1);
+    assert.equal(summary.totals.commentRows, 9);
+    assert.equal(summary.totals.truncatedNotes, 1);
     assert.equal(summary.totals.failed, 0);
   } finally {
     rmSync(scanRoot, { recursive: true, force: true });

@@ -36,15 +36,19 @@ const UI_LABEL =
   /^(关注|已关注|回关|相互关注|点赞|已点赞|收藏|已收藏|评论|分享|说点什么|说点什么\.\.\.|说点什么\.\.\.|评论框|发送|发布|下一步|返回|首页|消息|我|展开|收起|查看更多评论|作者|置顶|回复|赞|抢首评|首评)$/;
 
 /** Comment-row chrome: section head / input placeholder / dislike / bottom bar. */
-const COMMENT_CHROME_RE = /^(共\s*\d+\s*条评论|说点什么(\.\.\.)?|评论框|不喜欢|爱评论的人运气都不差|猜你想搜|展开\d+条回复?|查看更多评论|收起|(点赞|已点赞|收藏|已收藏|评论)\s*\d*|有话要说，快来评论|让大家听到你的声音|留下你的想法吧|你还没填写内容)$/;
+const COMMENT_CHROME_RE = /^(共\s*\d+\s*条评论|说点什么(\.\.\.)?|评论框|不喜欢|爱评论的人运气都不差|猜你想搜|展开\s*\d+\s*条回复?|查看更多评论|收起|(点赞|已点赞|收藏|已收藏|评论)\s*\d*|有话要说，快来评论|让大家听到你的声音|留下你的想法吧|你还没填写内容|查看.{0,8}折叠.*|被折叠评论.*|到底了|没有更多了)$/;
+/** Bottom-of-comment-list markers: after these appear, the main level is exhausted. */
+const COMMENT_BOTTOM_RE = /^(查看.{0,8}折叠|到底了|没有更多评论|暂无更多评论)/;
 
 /** Publish-meta shapes seen live on device 04/05 (2026-09-02). */
 const DATE_SPAN_RE = /\d+\s*(?:秒|分钟|小时|天|周|个月|年)前|编辑于.{0,12}|(?:昨天|前天|今天)\s*[^，。;；已]{0,10}|\d{4}[-/年]\d{1,2}[-/月]\d{1,2}[日号]?|\d{1,2}-\d{1,2}/;
 
-/** Comment time rows: relative ("2天前"), absolute ("09-02"), or 昨天/今天, optionally with 回复 tail. */
-const COMMENT_TIME_RE = /^(?:\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}-\d{1,2}|\d+\s*(?:秒|分钟|小时|天|周|个月|年)前|昨天|前天|今天|编辑于.{0,12})/;
+/** Comment time rows: relative ("2天前"), absolute ("09-02"), or 昨天/今天,
+ * optionally followed by a time-of-day ("下午2:41"), a place and/or a 回复 tail
+ * (live probe shape: "昨天 下午2:41 福建 回复"). */
+const COMMENT_TIME_RE = /^(?:\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}-\d{1,2}|\d+\s*(?:秒|分钟|小时|天|周|个月|年)前|昨天|前天|今天|编辑于.{0,12})(?:\s*(?:上午|下午|凌晨|中午|早上|晚上)?\d{1,2}:\d{2})?/;
 const COMMENT_TIME_FULL_RE = new RegExp(
-  COMMENT_TIME_RE.source.replace("$", "") + "[^,，。;；]{0,10}$"
+  COMMENT_TIME_RE.source + "[^,，。;；]{0,10}$"
 );
 
 /** Parse a bottom-bar count suffix: "点赞 1.2万" → 12000; "评论 3" → 3. */
@@ -181,7 +185,11 @@ export function parseCommentRows(nodes, { maxComments = 200 } = {}) {
       current = { user: content.slice(0, 40), text: null, timeText: null, likes: null, y: n.cy };
       continue;
     }
-    if (current.text == null && content.length >= current.user.length) {
+    // body assignment: a longer row OR a wide (indented) row — usernames can be
+    // longer than their body ("小红薯69CAEB62" → "咋入"), so width is the
+    // stronger live signal (live bodies are w≈0.75W, usernames w≤0.25W)
+    if (current.text == null
+        && (content.length >= current.user.length || n.w >= Math.round(0.6 * W))) {
       current.text = content.slice(0, 500);
       continue;
     }
@@ -192,6 +200,134 @@ export function parseCommentRows(nodes, { maxComments = 200 } = {}) {
   }
   if (current) items.push(current);
   return items;
+}
+
+/**
+ * Extract comment rows from a SCROLLED note-detail dump (comment area in
+ * view, "共 N 条评论" head usually scrolled out). Live shape (probe
+ * rr_4d3a2df2, device 04): a sticky author bar ("喂你别哭了" + "关注") stays
+ * at the very top; comment rows (user → body → time → narrow likes) fill the
+ * middle; the fixed bottom bar (点赞/收藏/评论 + 说点什么) closes the page.
+ *
+ * Returns { isScrolledDetail, commentTotal, comments } — comments[] drops
+ * user-only stubs (sticky-bar author, usernames whose body fell below the
+ * viewport) so every emitted row is a real comment.
+ */
+export function extractScrolledDetail(xml, { maxComments = 200 } = {}) {
+  const s = String(xml || "");
+  const bar = parseBottomBar(s);
+  if (!(bar.like || bar.collect || bar.comment)) {
+    return { isScrolledDetail: false, commentTotal: null, comments: [] };
+  }
+  const nodes = allNodes(s);
+  const contentOf = (n) => String(n.text || "").trim() || String(n.desc || "").trim();
+  const head = nodes.find((n) => /^共\s*\d+\s*条评论$/.test(contentOf(n)));
+  const barButtons = [bar.like, bar.collect, bar.comment].filter(Boolean);
+  const barTop = barButtons.length ? Math.min(...barButtons.map((b) => b.T)) : screenHeight(nodes);
+  // scrolled = detail page with the comment input placeholder visible but the
+  // section head gone (head present → unscrolled; caller can use extractNoteRecordV2)
+  const scrolled = !head && nodes.some((n) => /^说点什么/.test(contentOf(n)));
+  // top bound: below the sticky author/关注 bar when present, else page top
+  const H = screenHeight(nodes);
+  const sticky = nodes.find((n) => /^(关注|已关注|回关|相互关注)$/.test(contentOf(n)) && n.cy < 0.15 * H);
+  const topBound = head ? head.cy : sticky ? sticky.B : 0;
+  const comments = head
+    ? []
+    : parseCommentRows(
+        nodes.filter((n) => n.cy > topBound && n.cy < barTop),
+        { maxComments },
+      ).filter((c) => c.text != null && c.text.trim() !== "");
+  const commentTotal = parseCountText(bar.comment?.desc ?? "");
+  const reachedBottom = nodes.some((n) => COMMENT_BOTTOM_RE.test(contentOf(n)));
+  return { isScrolledDetail: scrolled, commentTotal, comments, reachedBottom };
+}
+
+/** Stable identity of one comment row (dedup key across scrolled dumps). */
+export function commentFingerprint(comment) {
+  return sha256Hex(`${String(comment?.user || "").trim()}|${String(comment?.text || "").trim()}`).slice(0, 12);
+}
+
+/**
+ * Dump steps of one recipe-run receipt, resolved to evidence jobIds.
+ * The live runner summarizes each step to {result.jobId} (no paths); the
+ * per-alias run directories carry the same jobId in manifest.json, which is
+ * the join key from receipt → run dir → dump-ui.xml.
+ * dump_top is the header capture; every other dump_* step is a scrolled
+ * comment capture.
+ *
+ * @param {object} receipt public recipe run (xw.single-device.recipe-run.v1)
+ * @returns {{ recipeRunId: string|null, alias: string|null, headerJobIds: string[], scrolledJobIds: {stepId:string, jobId:string}[] }}
+ */
+export function recipeRunDumpJobs(receipt) {
+  const stepResults = Array.isArray(receipt?.stepResults) ? receipt.stepResults : [];
+  const headerJobIds = [];
+  const scrolledJobIds = [];
+  for (const step of stepResults) {
+    const jobId = step?.result?.jobId;
+    if (!jobId || step.status !== "VERIFIED") continue;
+    if (step.stepId === "dump_top" || step.stepId === "dump_detail") {
+      headerJobIds.push(jobId);
+    } else if (/^dump_/.test(String(step.stepId || ""))) {
+      scrolledJobIds.push({ stepId: String(step.stepId), jobId });
+    }
+  }
+  return {
+    recipeRunId: receipt?.recipeRunId ?? null,
+    alias: receipt?.alias ?? null,
+    headerJobIds,
+    scrolledJobIds,
+  };
+}
+
+/**
+ * Merge one recipe run's dump family into a single note record: header fields
+ * from the unscrolled top dump (dump_top — title/author/body/postTime), and
+ * comment rows unioned across the scrolled dumps (dump_c1/dump_c2/...),
+ * deduped by commentFingerprint. The bottom bar (interactions) is present in
+ * every dump, so interactions come from the header record.
+ *
+ * @param {{ headerRecord: object|null, scrolled: Array<{stepId: string, record: object}>, comments?: Array<{comment: object, stepId: string}>, maxComments?: number }} input
+ */
+export function mergeNoteRunFamily({ headerRecord, scrolled = [], comments = [], maxComments = 200 }) {
+  const base = headerRecord ? { ...headerRecord } : null;
+  const seen = new Map();
+  const feed = (comment, stepId) => {
+    if (!comment || comment.text == null) return;
+    const fp = commentFingerprint(comment);
+    const existing = seen.get(fp);
+    if (existing) {
+      if (!existing.sources.includes(stepId)) existing.sources.push(stepId);
+      if (existing.likes == null && comment.likes != null) existing.likes = comment.likes;
+      if ((existing.timeText == null) && comment.timeText != null) existing.timeText = comment.timeText;
+      return;
+    }
+    seen.set(fp, { ...comment, sources: [stepId] });
+  };
+  for (const entry of scrolled) {
+    for (const comment of entry.record?.comments ?? []) feed(comment, entry.stepId);
+  }
+  for (const entry of comments) feed(entry.comment, entry.stepId);
+  const mergedComments = [...seen.values()].sort((a, b) => (a.y ?? 0) - (b.y ?? 0)).slice(0, Math.max(0, Number(maxComments) || 0));
+  if (!base) {
+    return {
+      schemaId: NOTE_RECORD_SCHEMA_ID_V2,
+      noteFingerprint: null,
+      title: null, author: null, body: null, postTime: null, date: null,
+      interactions: null,
+      comments: mergedComments,
+      commentTotal: null,
+      commentsTruncated: true,
+      headerDumpFound: false,
+    };
+  }
+  const commentTotal = base.commentTotal ?? null;
+  return {
+    ...base,
+    comments: mergedComments,
+    commentTotal,
+    commentsTruncated: commentTotal != null ? commentTotal > mergedComments.length : false,
+    headerDumpFound: true,
+  };
 }
 
 /**

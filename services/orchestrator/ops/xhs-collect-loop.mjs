@@ -13,6 +13,9 @@
  * Progress lines and the final summary JSON both go to stdout
  * (console.log only — the Windows bridge treats stderr as fatal).
  */
+import { mkdirSync, writeFileSync } from "node:fs";
+import { resolve } from "node:path";
+
 import { createCollectLoop, createHttpCollectCp } from "../scripts/lib/xhs-collect-loop.mjs";
 import { defaultRoutineRunStoreRoot } from "../scripts/lib/xhs-routine-run-store.mjs";
 
@@ -37,6 +40,7 @@ function usage() {
       [--aliases 04,05,06,07] [--ports 17921,17922,17923,17924]
       [--recipe xhs.note.read.fixed] [--revision 1] [--keyword <text>] [--pages N]
       [--params '<json>'] [--actor agent:xhs-collect-loop] [--trace-root <dir>]
+      [--receipts-dir <dir>]
 
 默认 aliases 04,05,06,07 对应 ports 17921-17924（每机一个 CP 进程）。
 --batches 必填。批间隔默认 5000ms。全程只读；风控信号全线急停。
@@ -102,6 +106,30 @@ async function main() {
     return;
   }
 
+  // receipts-dir: persist every recipe-run receipt (one JSON per device-run)
+  // so ops/xhs-notes-extract.mjs --receipts can join step jobIds → dump files.
+  const receiptsDir = args["receipts-dir"] ? resolve(String(args["receipts-dir"])) : null;
+  if (receiptsDir) {
+    mkdirSync(receiptsDir, { recursive: true });
+    for (const device of devices) {
+      const runRecipe = device.cp.runRecipe.bind(device.cp);
+      device.cp.runRecipe = async (runArgs) => {
+        const run = await runRecipe(runArgs);
+        const recipeRunId = run?.recipeRunId || `unknown_${Date.now()}`;
+        try {
+          writeFileSync(
+            `${receiptsDir}/${device.alias}_${recipeRunId}.json`,
+            JSON.stringify({ savedAt: new Date().toISOString(), ...run }, null, 2),
+            "utf8",
+          );
+        } catch (error) {
+          console.log(`[collect-loop] receipt save failed alias=${device.alias}: ${error?.message || error}`);
+        }
+        return run;
+      };
+    }
+  }
+
   const loop = createCollectLoop({
     devices,
     recipeId,
@@ -119,7 +147,7 @@ async function main() {
   });
 
   console.log(`[collect-loop] batches=${batches} intervalMs=${intervalMs} recipe=${recipeId}@${revision ?? "latest"} aliases=${aliases.join(",")}`);
-  console.log(`[collect-loop] traceRoot=${traceRoot}`);
+  console.log(`[collect-loop] traceRoot=${traceRoot}${receiptsDir ? ` receiptsDir=${receiptsDir}` : ""}`);
   const startedAt = Date.now();
   const summary = await loop.run();
   for (const line of progressLines(summary, startedAt)) {

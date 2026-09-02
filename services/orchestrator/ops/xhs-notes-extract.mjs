@@ -26,7 +26,10 @@ import { fileURLToPath } from "node:url";
 
 import {
   extractNoteRecordV2,
+  extractScrolledDetail,
   looksLikeNoteDetail,
+  mergeNoteRunFamily,
+  recipeRunDumpJobs,
 } from "../scripts/lib/xhs-note-extract.mjs";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
@@ -99,6 +102,157 @@ function appendJsonl(filePath, rows) {
   writeFileSync(filePath, rows.map((row) => JSON.stringify(row)).join("\n") + "\n", { flag: "a" });
 }
 
+/**
+ * jobId → {runId, dir} index over one alias's run tree. The recipe-run
+ * receipt only carries per-step jobIds (no paths); the per-alias run
+ * directories carry the same jobId in manifest.json.
+ */
+function buildJobIndex(aliasRoot) {
+  const index = new Map();
+  for (const { runId, dir } of listRunDirs(aliasRoot)) {
+    try {
+      const manifest = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8"));
+      if (manifest.jobId) index.set(manifest.jobId, { runId, dir });
+    } catch {
+      /* unreadable manifest → not indexable */
+    }
+  }
+  return index;
+}
+
+function dumpPathOf(dir) {
+  const path = join(dir, "dump-ui.xml");
+  return existsSync(path) ? path : null;
+}
+
+/** Read one XML through the extractor guards; returns {xml} or {error}. */
+function readDumpXmlSafe(path) {
+  try {
+    return { xml: readFileSync(path, "utf8") };
+  } catch (error) {
+    return { error: String(error?.code || error?.message || error).slice(0, 120) };
+  }
+}
+
+/**
+ * Receipt-driven extraction: one receipt = one comment-scrolling recipe run =
+ * one note (dump_top header + dump_c1/dump_c2... scrolled comment captures).
+ * Dedup + provenance mirror the scan mode.
+ */
+async function runReceiptsMode({ receiptsDir, scanRoot, aliases, outputs, totals, failedRuns, notes, maxComments = 50 }) {
+  const { notesPath, runsIndexPath, commentsPath } = outputs;
+  const batchRuns = [];
+  const batchComments = [];
+  const receiptFiles = existsSync(receiptsDir)
+    ? readdirSync(receiptsDir).filter((f) => f.endsWith(".json")).sort()
+    : [];
+  totals.receipts = receiptFiles.length;
+  const jobIndexes = new Map();
+
+  for (const file of receiptFiles) {
+    let receipt;
+    try {
+      receipt = JSON.parse(readFileSync(join(receiptsDir, file), "utf8"));
+    } catch (error) {
+      totals.failed += 1;
+      failedRuns.push({ receipt: file, error: String(error?.message || error).slice(0, 120) });
+      continue;
+    }
+    const { recipeRunId, alias, headerJobIds, scrolledJobIds } = recipeRunDumpJobs(receipt);
+    if (!alias || (headerJobIds.length === 0 && scrolledJobIds.length === 0)) {
+      totals.skippedNonDetail += 1;
+      continue;
+    }
+    if (!aliases.includes(alias)) continue;
+    if (!jobIndexes.has(alias)) jobIndexes.set(alias, buildJobIndex(join(scanRoot, alias)));
+    const jobIndex = jobIndexes.get(alias);
+    const runDirOf = (jobId) => jobIndex.get(jobId) ?? null;
+
+    let headerRecord = null;
+    const headerProvenance = [];
+    for (const jobId of headerJobIds) {
+      const found = runDirOf(jobId);
+      if (!found) continue;
+      const path = dumpPathOf(found.dir);
+      if (!path) continue;
+      const { xml, error } = readDumpXmlSafe(path);
+      if (error) {
+        totals.failed += 1;
+        failedRuns.push({ recipeRunId, jobId, error });
+        continue;
+      }
+      try {
+        headerRecord = extractNoteRecordV2(xml);
+        headerProvenance.push({ jobId, runId: found.runId });
+      } catch (error) {
+        totals.failed += 1;
+        failedRuns.push({ recipeRunId, jobId, error: String(error?.message || error).slice(0, 120) });
+      }
+    }
+
+    const scrolled = [];
+    const scrolledProvenance = [];
+    for (const { stepId, jobId } of scrolledJobIds) {
+      const found = runDirOf(jobId);
+      if (!found) continue;
+      const path = dumpPathOf(found.dir);
+      if (!path) continue;
+      const { xml, error } = readDumpXmlSafe(path);
+      if (error) {
+        totals.failed += 1;
+        failedRuns.push({ recipeRunId, jobId, error });
+        continue;
+      }
+      try {
+        scrolled.push({ stepId, record: extractScrolledDetail(xml) });
+        scrolledProvenance.push({ stepId, jobId, runId: found.runId, comments: scrolled.at(-1).record.comments.length });
+      } catch (error) {
+        totals.failed += 1;
+        failedRuns.push({ recipeRunId, jobId, error: String(error?.message || error).slice(0, 120) });
+      }
+    }
+
+    if (!headerRecord && scrolled.length === 0) {
+      totals.skippedNonDetail += 1;
+      continue;
+    }
+    totals.detailDumps += 1;
+    try {
+      const merged = mergeNoteRunFamily({ headerRecord, scrolled, maxComments });
+      merged.recipeRunId = recipeRunId;
+      merged.dumpFamily = { header: headerProvenance, scrolled: scrolledProvenance };
+      if (headerRecord) {
+        const provenance = { alias, runId: recipeRunId, jobIds: { header: headerProvenance.map((h) => h.runId), scrolled: scrolledProvenance.map((s) => s.runId) } };
+        const existing = notes.get(merged.noteFingerprint);
+        if (existing) existing.seenRuns.push(provenance);
+        else notes.set(merged.noteFingerprint, { ...merged, seenRuns: [provenance] });
+        batchRuns.push({
+          alias, recipeRunId, noteFingerprint: merged.noteFingerprint, ok: true,
+          title: merged.title, author: merged.author,
+          comments: merged.comments.length, commentTotal: merged.commentTotal,
+        });
+        for (const comment of merged.comments) {
+          batchComments.push({
+            noteFingerprint: merged.noteFingerprint, recipeRunId,
+            title: merged.title, author: merged.author, comment,
+          });
+        }
+        totals.commentRows += merged.comments.length;
+        if (merged.commentsTruncated) totals.truncatedNotes += 1;
+      } else {
+        batchRuns.push({ alias, recipeRunId, ok: false, error: "no header dump resolved" });
+      }
+    } catch (error) {
+      totals.failed += 1;
+      failedRuns.push({ recipeRunId, error: String(error?.code || error?.message || error).slice(0, 120) });
+    }
+  }
+
+  appendJsonl(runsIndexPath, batchRuns);
+  appendJsonl(commentsPath, batchComments);
+  return { batchRuns, batchComments };
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help || args.h) {
@@ -108,6 +262,8 @@ async function main() {
   const scanRoot = resolve(args["scan-root"] || "C:\\Users\\Public\\xw-lab-cp\\per-alias");
   const outRoot = resolve(args["out"] || "D:\\沉淀链路信息\\notes");
   const aliases = csv(args.aliases || "04,05,06,07");
+  const receiptsDir = args.receipts ? resolve(String(args.receipts)) : null;
+  const maxComments = args["max-comments"] == null ? 50 : Number(args["max-comments"]) || 0;
 
   mkdirSync(outRoot, { recursive: true });
   const notesPath = join(outRoot, "notes.jsonl");
@@ -126,8 +282,41 @@ async function main() {
     commentRows: 0, truncatedNotes: 0,
   };
   const failedRuns = [];
-  let processed = 0;
+  const outputs = { notesPath, runsIndexPath, commentsPath };
 
+  if (receiptsDir) {
+    await runReceiptsMode({ receiptsDir, scanRoot, aliases, outputs, totals, failedRuns, notes, maxComments });
+  } else {
+    await runScanMode({ scanRoot, aliases, outputs, totals, failedRuns, notes });
+  }
+
+  // notes.jsonl: one line per unique fingerprint
+  const noteRows = [...notes.values()];
+  appendJsonl(notesPath, noteRows);
+  totals.uniqueNotes = noteRows.length;
+
+  const summary = {
+    schemaId: "xhs.notes-extract.summary.v1",
+    generatedAt: new Date().toISOString(),
+    mode: receiptsDir ? "receipts" : "scan",
+    receiptsDir,
+    scanRoot,
+    outRoot,
+    aliases,
+    totals,
+    failedRuns: failedRuns.slice(0, 20),
+    outputs: { notesPath, runsIndexPath, commentsPath },
+  };
+  writeFileSync(join(outRoot, "summary.json"), JSON.stringify(summary, null, 2), "utf8");
+  console.log("=== NOTES-EXTRACT SUMMARY ===");
+  console.log(JSON.stringify(summary, null, 2));
+  process.exitCode = totals.failed > 0 ? 4 : 0;
+}
+
+/** Scan mode: per-dump extraction over every alias run tree (legacy + detail dumps). */
+async function runScanMode({ scanRoot, aliases, outputs, totals, failedRuns, notes }) {
+  const { runsIndexPath, commentsPath } = outputs;
+  let processed = 0;
   for (const alias of aliases) {
     const aliasRoot = join(scanRoot, alias);
     const runDirs = listRunDirs(aliasRoot);
@@ -186,26 +375,6 @@ async function main() {
     appendJsonl(commentsPath, batchComments);
     console.log(`[notes-extract] alias ${alias}: runs=${runDirs.length} details=${batchRuns.length}`);
   }
-
-  // notes.jsonl: one line per unique fingerprint
-  const noteRows = [...notes.values()];
-  appendJsonl(notesPath, noteRows);
-  totals.uniqueNotes = noteRows.length;
-
-  const summary = {
-    schemaId: "xhs.notes-extract.summary.v1",
-    generatedAt: new Date().toISOString(),
-    scanRoot,
-    outRoot,
-    aliases,
-    totals,
-    failedRuns: failedRuns.slice(0, 20),
-    outputs: { notesPath, runsIndexPath, commentsPath },
-  };
-  writeFileSync(join(outRoot, "summary.json"), JSON.stringify(summary, null, 2), "utf8");
-  console.log("=== NOTES-EXTRACT SUMMARY ===");
-  console.log(JSON.stringify(summary, null, 2));
-  process.exitCode = totals.failed > 0 ? 4 : 0;
 }
 
 main().catch((error) => {
