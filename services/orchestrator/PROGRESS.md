@@ -1,3 +1,27 @@
+## 2026-09-03 飞书→XHS 草稿链路坑点沉淀（知识库 13 条 + SKILL 登记 + 预检加固）
+
+「飞书发布表(tblA3sCeFgdJHStf)→04 号机存草稿」live 全通后的留痕沉淀（分支
+feat/xhs-feishu-sync-adapter，live 验证 commit 60eb388）：
+
+- **知识库**：orchestrator registry 17930 用计划任务 "XW Platform Orchestrator" 重启恢复
+  （release xw-xhs-v3-r03-db6538dd9a50），POST /api/knowledge 写入 13 条
+  pitfall/recipe（id 前缀 xhs-feishu-* / xhs-account-04-risk-control 等，均带
+  appliesTo/steps/verifyMode；04 风控条目 lifecycle=active_blocker）。
+- **SKILL 登记**：`skills/xhs/xhs-publish/SKILL.md` 补飞书链用法（ops/feishu-to-xhs-draft.mjs /
+  ops/feishu-to-xhs-publish.mjs）+ 坑点索引 + verified 2026-09-03 04 号机 PASS 条；权限层未动。
+- **task-template**：新增 `task-templates/task.xhs.feishu-draft@1.json`
+  （neverPublish=true、entryScripts 指向 draft CLI，task-template 测试 11/11 绿）。
+- **预检加固（fail-closed，不截断）**：新增 `scripts/lib/xhs-publish-preflight.mjs`
+  （title≤20 / 拼 tags 后正文≤300 / tags≤10×30 / 图 1–9 + PNG/JPEG magic-byte 检查）。
+  `ops/feishu-to-xhs-draft.mjs` 下载/push 之前跑预检；`ops/feishu-to-xhs-publish.mjs` 删除
+  title.slice(0,20) 静默截断改为跳过该行。测试 `tests/xhs-publish-preflight.test.mjs` 12/12 绿，
+  含对照 capabilities.json 的 drift guard。
+- **离线验证**：push-only dry-run 实测预检拦截（该记录 title 22>20 → titleInvalid，未碰设备）；
+  表里唯一记录标题超限，需在飞书表改短后才能走后续链。
+- **待人工**：① 04 号机账号（小红薯6A90EA25）风控「解除限制」需真人安全验证；② 是否在发布表
+  加「已存草稿」状态选项（当前语义回写「待发布」）。零 live 写操作，未 push、未 merge。
+
+
 ## 2026-08-30 离线收口复核 + 未提交 M6-4 工作落盘（5233654），fusion authority 恢复 PASS
 
 继承上个会话中断现场后完成：

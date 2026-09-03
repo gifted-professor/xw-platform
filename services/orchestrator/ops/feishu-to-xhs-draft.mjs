@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 import { callLarkCli, DEFAULT_FEISHU_CONFIG } from "../scripts/lib/xhs-feishu-sync.mjs";
 import { extractOrderedAttachments, downloadAttachmentsInOrder } from "../scripts/lib/feishu-attachment-loader.mjs";
 import { stageImagesToDeviceAlbum, getXhsAlbumPath } from "../scripts/lib/device-album-staging.mjs";
+import { validatePublishContent, assertDecodableImage } from "../scripts/lib/xhs-publish-preflight.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..");
@@ -67,12 +68,32 @@ const title = String(Array.isArray(record["笔记标题"]) ? record["笔记标�
 const body = String(record["正文描述"] || "").trim();
 const tags = Array.isArray(record["话题标签"]) ? record["话题标签"] : [];
 const attachments = extractOrderedAttachments({ fields: record }, "图片素材");
+const rawAttachmentCount = Array.isArray(record["图片素材"]) ? record["图片素材"].length : 0;
 console.log(`TITLE=${title}`);
 console.log(`BODY=${body.slice(0, 60)}`);
 console.log(`TAGS=${tags.join(",")}`);
 console.log(`IMAGES=${attachments.length}`);
 if (!attachments.length) {
   console.log("✗ 图片素材为空，先在飞书上传图片");
+  process.exit(4);
+}
+if (rawAttachmentCount > 9) {
+  console.log(`✗ 图片素材 ${rawAttachmentCount} 张 > 9 上限（fail-closed，不静默丢图）`);
+  process.exit(4);
+}
+
+// 内容预检：对齐 xhs.publish.edit_dry_run 硬限制，fail-closed 不截断（碰机之前拦下）
+const effectiveCaption = captionArg || body || title;
+try {
+  const { fullBodyText } = validatePublishContent({
+    title,
+    body: effectiveCaption,
+    tags,
+    imageCount: Math.min(selectN, attachments.length),
+  });
+  console.log(`PREFLIGHT=ok fullBodyLen=${fullBodyText.length}`);
+} catch (err) {
+  console.log(`✗ 预检失败: ${err.message}`);
   process.exit(4);
 }
 
@@ -91,6 +112,15 @@ for (const d of downloaded) {
 if (downloaded.some((d) => !existsSync(d.localPath))) {
   console.log("✗ 下载缺文件");
   process.exit(2);
+}
+// magic-byte 检查：坏文件（HTML 错误页/0 字节）不推机
+for (const d of downloaded) {
+  try {
+    assertDecodableImage(readFileSync(d.localPath), d.fileName);
+  } catch (err) {
+    console.log(`✗ ${err.message}`);
+    process.exit(2);
+  }
 }
 
 // 3. 倒序推送 + touch 保序（最后推封面 → mtime 最新 → 相册左上第一格）
@@ -130,7 +160,7 @@ if (pushOnly) {
 }
 
 // 4. 存草稿 UI 流（绝不点发布）
-const caption = captionArg || body || title;
+const caption = effectiveCaption;
 const child = spawn("node", [
   "ops/xhs-save-draft.mjs",
   "--alias", alias,

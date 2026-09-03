@@ -12,6 +12,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
+import { validatePublishContent } from "../scripts/lib/xhs-publish-preflight.mjs";
 import {
   FEISHU_BASE_TOKEN,
   FEISHU_TABLE_ID,
@@ -227,10 +228,16 @@ async function preflightAliases(aliases) {
 }
 
 async function submitJob(row, alias, actor) {
-  let title = String(row.title || "").trim();
-  if (title.length > 20) {
-    log(`  WARN alias=${alias} title ${title.length}>20, truncate to 20`);
-    title = title.slice(0, 20);
+  const title = String(row.title || "").trim();
+  // 内容预检 fail-closed：超限直接跳过该行（不 slice 截断——截断会静默改变发布内容）
+  // DISCARD 路径 params 为 {}，不需要内容门
+  if (!DISCARD) {
+    try {
+      validatePublishContent({ title, body: row.body, tags: row.tags, imageCount: 6 });
+    } catch (err) {
+      log(`  SKIP alias=${alias} 预检失败: ${err.message}`);
+      return null;
+    }
   }
   const params = {
     title,
@@ -341,8 +348,14 @@ async function main() {
   const jobs = [];
   for (const item of prepared) {
     const job = await submitJob(item.row, item.alias, pre.actor);
+    if (!job) continue; // 预检失败行已跳过（fail-closed，不截断不发布）
     log(`SUBMIT alias=${item.alias} jobId=${job.jobId}`);
     jobs.push({ alias: item.alias, jobId: job.jobId, sku: item.row.sku });
+  }
+  if (!jobs.length) {
+    log("XHS_FEISHU=error");
+    log("REASON=all rows failed preflight");
+    process.exit(4);
   }
 
   let ok = 0;
