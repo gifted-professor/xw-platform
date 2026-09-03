@@ -10,7 +10,8 @@ export const DEFAULT_FEISHU_CONFIG = {
   baseToken: 'JlQfboedWaeBnysOE3ncPtsunCh',
   notesTableId: 'tblKyZr6TEp0S1En',
   commentsTableId: 'tblB5BKhLCA5epYi',
-  identity: 'bot'
+  publishTableId: 'tblA3sCeFgdJHStf',
+  identity: 'user'
 };
 
 /**
