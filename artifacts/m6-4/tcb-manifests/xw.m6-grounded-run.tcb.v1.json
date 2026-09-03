@@ -2,7 +2,7 @@
   "schemaId": "xhs.tcb.manifest.v1",
   "schemaVersion": 1,
   "manifestId": "xw.m6-grounded-run.tcb.v1",
-  "implementationClosureHash": "aba807456b4e2859b32679b29062fa3d511fbc16f99123ef1712c2f5acc65a26",
+  "implementationClosureHash": "dc96c6f4b13970cad957e34815d983be78927295f6f33593ff528561d29c3e4d",
   "contentHashProfile": "xhs.m6-grounded-run-capability-self-binding.v1",
   "paths": [
     "artifacts/m6-4/cohort-manifests/m6_4_action_smoke.json",
@@ -156,6 +156,7 @@
     "services/control-plane/control-plane/lib/xhs-evidence-digest-keyring.mjs",
     "services/control-plane/control-plane/lib/xhs-exploration-authority.mjs",
     "services/control-plane/control-plane/lib/xhs-exploration-permit.mjs",
+    "services/control-plane/control-plane/lib/xhs-feed-card-select.mjs",
     "services/control-plane/control-plane/lib/xhs-rpa-ledger.mjs",
     "services/control-plane/control-plane/lib/xhs-rpa-m5-runtime.mjs",
     "services/control-plane/control-plane/lib/xhs-v3-fixed-operator-auth.mjs",
@@ -774,11 +775,11 @@
       },
       {
         "path": "services/control-plane/control-plane/lib/recipe-interpreter.mjs",
-        "sha256": "b8e99c58ab7d236a2dd6e3ea5f4098e8cf5cea21cfda66913b4bdc9cd5f91994"
+        "sha256": "e87d94bfd0954a6b3592be39e6fe86bf737bb6ccde1fc1cf3e9757373e39c4de"
       },
       {
         "path": "services/control-plane/control-plane/lib/recipe-primitive-handlers.mjs",
-        "sha256": "6bf060d8454e8472185ed107e197b0b0856688176473eefaf081ee5dcdf6b87a"
+        "sha256": "25dad25884dd518d11f158d41814f83f849ab94b67d8fd8784e21abd006fb732"
       },
       {
         "path": "services/control-plane/control-plane/lib/recovery-inspection.mjs",
@@ -794,7 +795,7 @@
       },
       {
         "path": "services/control-plane/control-plane/lib/single-device-recipe-runner.mjs",
-        "sha256": "0c728d509a8f62c769f35e0bc9cce07018381ec1e11ff4b6672061a0bd51ce54"
+        "sha256": "dd0f5f8d2cb3ec3176371779c0562007057be7624d8fb55201b179b20e1dac60"
       },
       {
         "path": "services/control-plane/control-plane/lib/state-store.mjs",
@@ -839,6 +840,10 @@
       {
         "path": "services/control-plane/control-plane/lib/xhs-exploration-permit.mjs",
         "sha256": "1b5c7e382695842aecd4ce1f6837b936e9b8641470fd707f50d8a14e667a2a6b"
+      },
+      {
+        "path": "services/control-plane/control-plane/lib/xhs-feed-card-select.mjs",
+        "sha256": "552219475df4356b45557fda36c4b45ab6f9911ea83c5d6b2630275d8221a5f4"
       },
       {
         "path": "services/control-plane/control-plane/lib/xhs-rpa-ledger.mjs",
@@ -946,7 +951,7 @@
       },
       {
         "path": "services/orchestrator/ops/_xhs-parse.mjs",
-        "sha256": "130c6efd0766483f958e81f59374946695d1b2490ac9d04da36f12759819b04b"
+        "sha256": "a2c46930652255e0dd49471ca77185650ed96ee6dddaa1471e04f3c1e6daa84c"
       },
       {
         "path": "services/orchestrator/ops/_xhs-routine-explorer-runtime.mjs",
