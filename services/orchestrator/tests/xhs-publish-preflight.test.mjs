@@ -9,6 +9,7 @@ import {
   normalizePublishTags,
   appendTagsToBody,
   validatePublishContent,
+  xhsTitleWeightedLength,
   assertDecodableImage
 } from '../scripts/lib/xhs-publish-preflight.mjs';
 
@@ -35,6 +36,13 @@ test('normalizePublishTags / appendTagsToBody match adapter semantics', () => {
   assert.equal(appendTagsToBody('正文', []), '正文');
 });
 
+test('xhsTitleWeightedLength: half-width 0.5, full-width/emoji 1', () => {
+  assert.equal(xhsTitleWeightedLength('abcd'), 2);
+  assert.equal(xhsTitleWeightedLength('中文'), 2);
+  assert.equal(xhsTitleWeightedLength('ab中'), 2);
+  assert.equal(xhsTitleWeightedLength(''), 0);
+});
+
 test('legal content passes and returns fullBodyText', () => {
   const { fullBodyText } = validatePublishContent({
     title: '二十字以内的合法标题', // 9 字
@@ -48,6 +56,49 @@ test('legal content passes and returns fullBodyText', () => {
 test('title 21 chars fails with titleInvalid (no truncation)', () => {
   assert.throws(
     () => validatePublishContent({ title: '一'.repeat(21), body: 'x', tags: [], imageCount: 1 }),
+    /titleInvalid/
+  );
+});
+
+test('xhs weighted counting: 40 ASCII chars (weighted 20) passes, 41 fails', () => {
+  assert.doesNotThrow(() =>
+    validatePublishContent({ title: 'a'.repeat(40), body: 'x', tags: [], imageCount: 1, titleCounting: 'xhs' })
+  );
+  assert.throws(
+    () => validatePublishContent({ title: 'a'.repeat(41), body: 'x', tags: [], imageCount: 1, titleCounting: 'xhs' }),
+    /titleInvalid/
+  );
+});
+
+test('xhs weighted counting: mixed 39 ASCII + 1 CJK = weighted 20.5 fails', () => {
+  assert.throws(
+    () => validatePublishContent({ title: 'a'.repeat(39) + '中', body: 'x', tags: [], imageCount: 1, titleCounting: 'xhs' }),
+    /titleInvalid/
+  );
+  assert.doesNotThrow(() =>
+    validatePublishContent({ title: 'a'.repeat(38) + '中', body: 'x', tags: [], imageCount: 1, titleCounting: 'xhs' })
+  );
+});
+
+test('raw mode still enforces 20 raw chars even for short ASCII (CP chain default)', () => {
+  assert.throws(
+    () => validatePublishContent({ title: 'a'.repeat(21), body: 'x', tags: [], imageCount: 1 }),
+    /titleInvalid/
+  );
+  // raw 是默认模式（CP 链）：22 字符 ASCII 虽加权 11 但 raw 超限仍拦
+  assert.throws(
+    () => validatePublishContent({ title: 'a'.repeat(22), body: 'x', tags: [], imageCount: 1 }),
+    /titleInvalid/
+  );
+});
+
+test('emoji counted as weight 1 (conservative, pending live verification)', () => {
+  // 10 emoji = 加权 10 → 过；21 emoji = 加权 21 → 拦
+  assert.doesNotThrow(() =>
+    validatePublishContent({ title: '😀'.repeat(10), body: 'x', tags: [], imageCount: 1, titleCounting: 'xhs' })
+  );
+  assert.throws(
+    () => validatePublishContent({ title: '😀'.repeat(21), body: 'x', tags: [], imageCount: 1, titleCounting: 'xhs' }),
     /titleInvalid/
   );
 });

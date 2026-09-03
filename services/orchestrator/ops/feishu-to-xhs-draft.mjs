@@ -82,7 +82,8 @@ if (rawAttachmentCount > 9) {
   process.exit(4);
 }
 
-// 内容预检：对齐 xhs.publish.edit_dry_run 硬限制，fail-closed 不截断（碰机之前拦下）
+// 内容预检：存草稿链对齐小红书 App 自身限制——标题加权计数（半角 2 字母=1 字）≤20，
+// fail-closed 不截断（碰机之前拦下）。CP 正式 job 链仍用 raw ≤20（见 feishu-to-xhs-publish.mjs）。
 const effectiveCaption = captionArg || body || title;
 try {
   const { fullBodyText } = validatePublishContent({
@@ -90,6 +91,7 @@ try {
     body: effectiveCaption,
     tags,
     imageCount: Math.min(selectN, attachments.length),
+    titleCounting: "xhs",
   });
   console.log(`PREFLIGHT=ok fullBodyLen=${fullBodyText.length}`);
 } catch (err) {

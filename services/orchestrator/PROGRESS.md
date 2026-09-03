@@ -21,6 +21,18 @@ feat/xhs-feishu-sync-adapter，live 验证 commit 60eb388）：
 - **待人工**：① 04 号机账号（小红薯6A90EA25）风控「解除限制」需真人安全验证；② 是否在发布表
   加「已存草稿」状态选项（当前语义回写「待发布」）。零 live 写操作，未 push、未 merge。
 
+### 2026-09-03 续：操作者拍板三项落地
+
+- **标题计数规则**（操作者确认：中英文都限 20 字，英文半角 2 字母=1 字，emoji 待实测）：
+  `xhs-publish-preflight.mjs` 新增 `xhsTitleWeightedLength` + `titleCounting` 模式——存草稿链
+  （feishu-to-xhs-draft.mjs）用加权 ≤20，CP 正式 job 链仍 raw ≤20（改 capabilities.json+adapter
+  需另行评审，未动）。预检测试 17/17 绿。
+- **发布状态扩选项**：lark-cli `+field-update`（full PUT）把发布表「发布状态」(fldlbfyEzE) 扩为
+  6 选项：未存草稿/待发布/发布中/已存草稿/已发布/发布失败；现存记录 recvu8izT9L7jm 回写
+  「已存草稿」。hue 合法值是 Gray 不是 Grey（800010701 实测）。
+- **设备健康度立项**：知识库新增 backlog 条目 `xhs-device-account-health-field`——每台设备×App
+  账号记健康度，未来设备总表落飞书侧（身份真相源）；表结构/更新责任待定，未建表未改代码。
+- 04 风控解除仍待人工；知识库 PATCH 两条 steps 同步（标题计数、状态枚举）。
 
 ## 2026-08-30 离线收口复核 + 未提交 M6-4 工作落盘（5233654），fusion authority 恢复 PASS
 

@@ -12,12 +12,25 @@
 
 export const PUBLISH_LIMITS = {
   titleMax: 20,
+  titleWeightedMax: 20,
   bodyMax: 300,
   tagsMax: 10,
   tagMax: 30,
   imageMin: 1,
   imageMax: 9,
 };
+
+/**
+ * XHS 语义的标题计数：半角（ASCII）字符 2 个 = 1 字，全角/中文/emoji = 1 字。
+ * emoji 的实际权重未实测，先按 1（保守），待真机验证后修正。
+ */
+export function xhsTitleWeightedLength(text) {
+  let weight = 0;
+  for (const ch of String(text ?? "")) {
+    weight += ch.charCodeAt(0) < 128 ? 0.5 : 1;
+  }
+  return weight;
+}
 
 export function normalizePublishTags(tags) {
   if (tags == null) return [];
@@ -36,16 +49,25 @@ export function appendTagsToBody(bodyText, tags) {
 
 /**
  * 校验发布文案与图片数。与 adapter validatePublishTextParams 同语义，但 fail-closed 抛错。
+ * @param {Object} options
+ * @param {'raw'|'xhs'} [options.titleCounting] - 标题计数模式：
+ *   'raw'（默认）= JS 字符数 ≤20，对齐 CP xhs.publish.edit_dry_run inputSchema（正式 job 链用）；
+ *   'xhs' = 加权计数（半角 2 字母=1 字）≤20，对齐小红书 App 自身限制（存草稿 UI 链用）。
  * @returns {{fullBodyText: string}} 通过时返回拼 tags 后的正文，供调用方留痕
  * @throws {Error} message 带 step 名（titleInvalid/bodyInvalid/tagsInvalid/imageCountInvalid/textInvalid）
  */
-export function validatePublishContent({ title, body, tags, imageCount } = {}) {
+export function validatePublishContent({ title, body, tags, imageCount, titleCounting = "raw" } = {}) {
   const titleText = String(title ?? "").trim();
   const bodyText = String(body ?? "").trim();
   const normalizedTags = normalizePublishTags(tags);
   const fullBodyText = appendTagsToBody(bodyText, normalizedTags);
 
-  if (titleText.length > PUBLISH_LIMITS.titleMax) {
+  if (titleCounting === "xhs") {
+    const weighted = xhsTitleWeightedLength(titleText);
+    if (weighted > PUBLISH_LIMITS.titleWeightedMax) {
+      throw new Error(`titleInvalid: title 加权长度 ${weighted} > ${PUBLISH_LIMITS.titleWeightedMax} 字（半角 2 字母=1 字；fail-closed，不自动截断）`);
+    }
+  } else if (titleText.length > PUBLISH_LIMITS.titleMax) {
     throw new Error(`titleInvalid: title ${titleText.length} > ${PUBLISH_LIMITS.titleMax} 字（fail-closed，不自动截断，请在飞书表改短）`);
   }
   if (fullBodyText.length > PUBLISH_LIMITS.bodyMax) {

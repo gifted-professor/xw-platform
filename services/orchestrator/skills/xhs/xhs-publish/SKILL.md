@@ -81,9 +81,9 @@ node ops/feishu-to-xhs-publish.mjs
 - **保序双机制**（`xhs-feishu-staging-dual-order`）：倒序 push + touch mtime 单调 + 500ms 间隔 + MEDIA_SCANNER + 01-/02- 前缀，封面才落左上第一格。
 - **Git Bash GBK 乱码**（`xhs-curl-gbk-mangling`）：curl -d 传中文→GBK 乱码→PARAMS_SCHEMA_INVALID；改 node 写 UTF-8 JSON + `--data-binary @file`。
 - **无 save_draft capability**（`xhs-no-save-draft-capability`）：存草稿=adb tap(≈920,142)→弹窗「确定」(≈717,1289)；草稿箱验证在「我」tab (999,2260)（(998,2350) 是手势条会打空）。
-- **文案硬限制**（`xhs-title-20-body-300-limits`）：title≤20、body≤300、tags≤10×30、图 1–9；adapter 对拼 tags 后正文再查 300；预检 fail-closed，禁止 slice 截断。
-- **飞书状态枚举**（`feishu-status-option-enum`）：只有 待发布/发布中/已发布/发布失败；存草稿回写「待发布」。
-- **⚠️ 04 号机风控**（`xhs-account-04-risk-control`）：账号弹过「异常行为风险」限制提示；只点取消，解除限制（真人安全验证）留给操作者。
+- **文案硬限制**（`xhs-title-20-body-300-limits`）：title≤20、body≤300、tags≤10×30、图 1–9；adapter 对拼 tags 后正文再查 300；预检 fail-closed，禁止 slice 截断。标题计数两套：存草稿链用 XHS 加权（半角 2 字母=1 字，emoji 暂按 1 待实测）；CP job 链仍 raw ≤20。
+- **飞书状态枚举**（`feishu-status-option-enum`）：2026-09-03 已扩为 6 选项：未存草稿/待发布/发布中/已存草稿/已发布/发布失败；存草稿回写「已存草稿」。
+- **⚠️ 04 号机风控**（`xhs-account-04-risk-control`）：账号弹过「异常行为风险」限制提示；只点取消，解除限制（真人安全验证）留给操作者。健康度字段立项见 `xhs-device-account-health-field`（设备总表，backlog）。
 - **MIUI 权限弹窗**（`miui-media-permission-pm-grant`）：根治=`adb shell pm grant` XHS 三媒体权限。
 - **quarantine 恢复**（`xhs-job-recover-before-resubmit`）：先 `POST /control/v1/jobs/:id/recover` + 换新 idempotencyKey 再重提。
 
