@@ -784,6 +784,51 @@
       "category": "runtime-root",
       "compatException": false,
       "note": "xhs routine 验收/视觉工厂/run-store 引用运行时根(§6/§8.2/§11)"
+    },
+    {
+      "literal": "C:\\Users\\Public\\xw-lab-cp\\per-alias",
+      "files": [
+        "services/orchestrator/ops/xhs-notes-extract.mjs"
+      ],
+      "category": "ops-default",
+      "compatException": false,
+      "note": "notes 提取 CLI 的默认 per-alias CP 扫描根(--scan-root 可覆盖)"
+    },
+    {
+      "literal": "D:\\沉淀链路信息\\notes",
+      "files": [
+        "services/orchestrator/ops/xhs-notes-extract.mjs"
+      ],
+      "category": "ops-default",
+      "compatException": false,
+      "note": "notes 提取 CLI 的默认输出根(--out 可覆盖)"
+    },
+    {
+      "literal": "D:\\沉淀链路信息\\notes --aliases 04",
+      "files": [
+        "services/orchestrator/ops/xhs-notes-extract.mjs"
+      ],
+      "category": "ops-default",
+      "compatException": false,
+      "note": "notes 提取 CLI 头注释里的用法示例(非运行值)"
+    },
+    {
+      "literal": "C:\\Program Files (x86",
+      "files": [
+        "services/orchestrator/scripts/lib/device-album-staging.mjs"
+      ],
+      "category": "ops-default",
+      "compatException": false,
+      "note": "DEFAULT_ADB_PATH 的 xiaowei adb 默认路径(ADB_PATH env 可覆盖)"
+    },
+    {
+      "literal": "C:/Users/windows 10/AppData/Local/Microsoft/WinGet/Packages/ByteDance.LarkCLI_Microsoft.Winget.Source_8wekyb3d8bbwe/lark-cli.exe",
+      "files": [
+        "services/orchestrator/scripts/lib/xhs-feishu-sync.mjs"
+      ],
+      "category": "ops-default",
+      "compatException": false,
+      "note": "LARK_CLI_PATH 的 WinGet 默认安装位(LARK_CLI_PATH env 可覆盖)"
     }
   ]
 }
