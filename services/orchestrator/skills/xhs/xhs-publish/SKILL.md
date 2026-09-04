@@ -16,6 +16,10 @@ verified:
     device: "04"
     result: PASS
     note: "飞书发布表→保序推相册→编辑页 1/2 顺序正确→存草稿，草稿箱·1 可见（feat/xhs-feishu-sync-adapter 60eb388）"
+  - date: 2026-09-04
+    device: "06"
+    result: PASS
+    note: "视频草稿回填链：397MB 视频 lark-cli→push→MediaStore→重开草稿→XwIME 填标题/正文→5 tag 全蓝（像素验证）。存草稿 tap 前设备掉线待补（知识库 xhs-video-draft-fill-chain）"
 depends:
   - device-tap
   - device-dump
@@ -83,6 +87,10 @@ node ops/feishu-to-xhs-publish.mjs
 - **无 save_draft capability**（`xhs-no-save-draft-capability`）：存草稿=adb tap(≈920,142)→弹窗「确定」(≈717,1289)；草稿箱验证在「我」tab (999,2260)（(998,2350) 是手势条会打空）。
 - **文案硬限制**（`xhs-title-20-body-300-limits`）：title≤20、body≤300、tags≤10×30、图 1–9；adapter 对拼 tags 后正文再查 300；预检 fail-closed，禁止 slice 截断。标题计数两套：存草稿链用 XHS 加权（半角 2 字母=1 字，emoji 暂按 1 待实测）；CP job 链仍 raw ≤20。
 - **飞书状态枚举**（`feishu-status-option-enum`）：2026-09-03 已扩为 6 选项：未存草稿/待发布/发布中/已存草稿/已发布/发布失败；存草稿回写「已存草稿」。
+- **视频草稿回填链**（`xhs-video-draft-fill-chain`，2026-09-04 06 号机）：大视频 lark-cli→adb push→touch mtime→MEDIA_SCANNER→md5；重开已有草稿走 我页草稿卡→相册页右上「草稿箱」按钮[920,140][1172,231]→DraftListPlatformActivity→点卡；adb 分口 04/05/06→5038、07→5037。
+- **XwIME 多行静默失败**（`xhs-xwime-multiline-input-silent-fail`）：网关 inputText content 含 `\n` 时 code 10000 但一个字不落；必须逐段 inputText + `KEYCODE_ENTER` 还原空行。
+- **中文输入通道**（`xiaowei-ws-gateway-serves-lab-fleet`）：xiaowei.exe WS 网关 22222 覆盖 lab 全队 04-07；selectIme 切 XwIME → tap 聚焦清场 → inputText{content} 验 code 10000。lab CP 公网边界无通用 input 能力（raw-primitive-policy 拦 input_text）。
+- **话题 tag 变蓝验证**（`xhs-topic-tag-blue-verify-pixelscan`）：正文末尾打 `#` → 输 tag 文本过滤建议 → 点建议行 → `#tag ` 链接落位；XML 不含颜色，用 PIL 像素扫描（b>r+30 且 g<b，按 x 聚类数=tag 数）判「变蓝」才算 tag 成立。链接删除：DEL 首键拆壳变纯文本；dump 有陈旧缓存，文本状态以截图为准。
 - **⚠️ 04 号机风控**（`xhs-account-04-risk-control`）：账号弹过「异常行为风险」限制提示；只点取消，解除限制（真人安全验证）留给操作者。健康度字段立项见 `xhs-device-account-health-field`（设备总表，backlog）。
 - **MIUI 权限弹窗**（`miui-media-permission-pm-grant`）：根治=`adb shell pm grant` XHS 三媒体权限。
 - **quarantine 恢复**（`xhs-job-recover-before-resubmit`）：先 `POST /control/v1/jobs/:id/recover` + 换新 idempotencyKey 再重提。
