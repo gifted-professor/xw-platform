@@ -1,0 +1,7 @@
+# Canonical JSON contracts and pinned provider files are compared byte-exactly
+# (canonicalJson + "\n" for manifests; sha256 for analyze.py / model blobs), so
+# they must check out with LF endings on every platform. Windows runners default
+# to core.autocrlf=true, which rewrites LF blobs to CRLF in the working tree and
+# breaks those byte-exact checks (EXPLORATION_VISION_BUNDLE_MANIFEST_NONCANONICAL).
+*.json text eol=lf
+*.py text eol=lf

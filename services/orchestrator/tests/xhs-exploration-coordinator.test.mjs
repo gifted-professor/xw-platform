@@ -500,7 +500,11 @@ test("P3-G lane hang: wall-clock guard fires, lane marked HANG, ABORTED appended
         resolve(undefined);
       }, { once: true });
     });
-    f.setStartLane(laneRunner({ control: f.control, log, overrides: { "04": never } }));
+    // BOTH lanes hang: a completing peer can beat the 80ms guard on fast
+    // runners and cancel the shared channel first, which resolves `never`
+    // and misclassifies 04 as FAILED (LANE_RECEIPT_MISSING). With no lane
+    // able to settle, the guard order is deterministic.
+    f.setStartLane(laneRunner({ control: f.control, log, overrides: { "03": never, "04": never } }));
     const aggregate = await f.coordinator.startExplorationRun({ mission: f.mission(), planHash: PLAN_HASH });
 
     assert.equal(aggregate.ok, false);
