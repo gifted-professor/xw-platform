@@ -18,7 +18,7 @@
 //   - the recovery append is ABORTED only, never SUCCESS.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
@@ -68,6 +68,9 @@ function compiledMission({ budgetOverrides = {} } = {}) {
 // --- real-CP fixture ---------------------------------------------------------
 
 function fixture({ laneTimeoutMs = 60_000, releaseTimeoutMs = 5_000 } = {}) {
+  // CI checkouts are fresh: the gitignored control-plane runtime dir does not
+  // exist yet, so seed it before mkdtemp.
+  mkdirSync(runtimeBase, { recursive: true });
   const root = mkdtempSync(join(runtimeBase, "explore-coordinator-"));
   const state = new StateStore({ dbPath: join(root, "control.db") });
   const evidence = new EvidenceStore({ runsRoot: join(root, "runs"), state, minFreeBytes: 0, minExternalEffectFreeBytes: 0 });
