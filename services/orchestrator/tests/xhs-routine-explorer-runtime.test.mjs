@@ -166,10 +166,19 @@ test("V3 production factory re-hashes the sealed provider and constructs one bou
   const configPath = join(root, "xhs-exploration-vision-provider.v1.json");
   writeFileSync(script, "# pinned analysis script\n", "utf8");
   writeFileSync(model, Buffer.from("pinned-model"));
-  const dataFiles = enumeratePythonRuntimeClosure({ python: process.execPath });
+  // Synthetic interpreter root: the real host runtime (node) ships symlinked
+  // bin entries on some platforms (corepack on Linux tarballs), which the
+  // fail-closed closure walker rejects. The navigator uses a fake analyzer
+  // factory, so the interpreter file is only hashed, never executed.
+  const runtimeRoot = join(root, "python-runtime");
+  mkdirSync(runtimeRoot, { recursive: true });
+  const interpreter = join(runtimeRoot, "python");
+  writeFileSync(interpreter, "# synthetic interpreter\n", "utf8");
+  writeFileSync(join(runtimeRoot, "runtime-note.txt"), "pinned runtime note");
+  const dataFiles = enumeratePythonRuntimeClosure({ python: interpreter });
   stageExplorationVisionProviderBundle({
     manifestPath,
-    python: process.execPath,
+    python: interpreter,
     script,
     model,
     dataFiles,
@@ -177,7 +186,7 @@ test("V3 production factory re-hashes the sealed provider and constructs one bou
     timeoutMs: 125,
   });
   const config = buildPinnedVisionConfig({
-    python: process.execPath,
+    python: interpreter,
     script,
     model,
     dataFiles,
