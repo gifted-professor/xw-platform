@@ -108,13 +108,17 @@ test("serial coordinator freezes five windows and builds only the exact successo
 
 test("fails closed on reordered, duplicate, or supplemental handoff requests", () => {
   const seen = new Set([H("1")]);
-  assert.throws(() => validateM64CoordinatorEvent({ kind: "RESOURCE_OBSERVATION", descriptors: { locator: { path: "C:\\audit\\request.json", sha256: H("3") } },
+  // Platform-neutral absolute fixture path: the descriptor shape gate uses
+  // path.isAbsolute, and a "C:\\..." literal is not absolute on POSIX, which
+  // would throw EVENT_INVALID before the ORDER check under test.
+  const requestPath = "/audit/request.json";
+  assert.throws(() => validateM64CoordinatorEvent({ kind: "RESOURCE_OBSERVATION", descriptors: { locator: { path: requestPath, sha256: H("3") } },
     purpose: "M6_4_SHADOW", requestHash: H("2") }, { purpose: "M6_4_SHADOW", phase: "OBSERVING", seenRequestHashes: seen }),
   { code: "M64_COORDINATOR_ORDER_INVALID" });
-  assert.throws(() => validateM64CoordinatorEvent({ kind: "OBSERVATION", descriptors: { ticket: { path: "C:\\audit\\request.json", sha256: H("3") } },
+  assert.throws(() => validateM64CoordinatorEvent({ kind: "OBSERVATION", descriptors: { ticket: { path: requestPath, sha256: H("3") } },
     purpose: "M6_4_SHADOW", requestHash: H("1") }, { purpose: "M6_4_SHADOW", phase: "OBSERVING", seenRequestHashes: seen }),
   { code: "M64_COORDINATOR_REPLAY_FORBIDDEN" });
-  assert.throws(() => validateM64CoordinatorEvent({ kind: "OBSERVATION", descriptors: { ticket: { path: "C:\\audit\\request.json", sha256: H("3") } },
+  assert.throws(() => validateM64CoordinatorEvent({ kind: "OBSERVATION", descriptors: { ticket: { path: requestPath, sha256: H("3") } },
     purpose: "M6_4_HOT_CLOSE", requestHash: H("4") }, { purpose: "M6_4_SHADOW", phase: "OBSERVING", seenRequestHashes: seen }),
   { code: "M64_COORDINATOR_EVENT_INVALID" });
 });
@@ -198,14 +202,14 @@ test("production config binds every injected helper/root and rejects path drift"
     initialWindow: f.initial,
     observationTicketRoot: join(f.root, "tickets"),
     pipeline: { buildResponseRoot: join(f.root, "builds"), inventoryBuilderPath: join(f.root, "builder.mjs"),
-      nodePath: "C:\\Program Files\\nodejs\\node.exe", stageToolPath: join(f.root, "stage.mjs"),
+      nodePath: join(f.root, "node.exe"), stageToolPath: join(f.root, "stage.mjs"),
       stagePaths: { finalBindingPath: join(f.root, "binding.json"), gateIssuerAllowlistPath: join(f.root, "gate.json"),
         liveIssuerAllowlistPath: join(f.root, "live.json"), runtimeSnapshotPath: join(f.root, "snapshot.json") } },
     pollMs: 50,
     signer: { invokePath: join(f.root, "invoke.ps1"), pipeName: "xw-m6-gate-f-signer-release-12345678",
-      powershellPath: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" },
+      powershellPath: join(f.root, "powershell.exe") },
     statePath: join(f.root, "state.json"),
-    statusHelper: { executable: "C:\\Program Files\\nodejs\\node.exe", args: [join(f.root, "status.mjs")] },
+    statusHelper: { executable: join(f.root, "node.exe"), args: [join(f.root, "status.mjs")] },
     timeoutMs: 60_000,
     windowInboxRoot: join(f.root, "windows"),
   };

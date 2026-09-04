@@ -1,0 +1,109 @@
+{
+  "aliases": [
+    "飞书发草稿",
+    "飞书拉图发小红书草稿",
+    "feishu to xhs draft",
+    "小红书草稿飞书素材"
+  ],
+  "checkpointPolicy": {
+    "dedupe": false,
+    "enabled": false
+  },
+  "description": "已验证整链（2026-09-03 04 号机 live PASS）：飞书发布表 --as user 拉附件（reverse 保序）→ 01-/02- 前缀下载 → 倒序 push+touch 推相册 → 编辑页 UI 流存草稿。绝不点最终「发布」（W6 红线：存草稿=完成）。文案硬限制 fail-closed：title≤20、body≤300（含 tags 拼接）、tags≤10×30、图 1–9。",
+  "effectPolicy": {
+    "confirmation": "human_only",
+    "kind": "external_write"
+  },
+  "fixedConstraints": {
+    "appId": "xhs",
+    "entryScripts": [
+      "ops/feishu-to-xhs-draft.mjs --record-id <rec> --alias 04",
+      "ops/feishu-to-xhs-draft.mjs --record-id <rec> --alias 04 --push-only"
+    ],
+    "formalCapability": "xhs.publish.edit_dry_run",
+    "feishuIdentity": "user",
+    "neverPublish": true,
+    "neverSaveDraftUnlessAuthorized": true,
+    "pilotActorRequired": "claude-pilot-20260809",
+    "resultMode": "draft_saved_never_publish",
+    "stagingModule": "scripts/lib/device-album-staging.mjs",
+    "unknownExternalCommit": "stop"
+  },
+  "name": "飞书发布表→小红书存草稿",
+  "originRunId": "run_feishu-draft-20260903-recvu8izT9L7jm",
+  "parameterSchema": {
+    "properties": {
+      "recordId": {
+        "prompt": "飞书发布表记录 ID（rec 开头）？",
+        "promptPolicy": "if_missing",
+        "type": "string"
+      },
+      "alias": {
+        "default": "04",
+        "prompt": "用哪台设备？（默认 04）",
+        "promptPolicy": "if_missing",
+        "type": "string"
+      },
+      "select": {
+        "default": 2,
+        "maximum": 9,
+        "minimum": 1,
+        "prompt": "选前几张图？（1-9）",
+        "promptPolicy": "if_missing",
+        "type": "integer"
+      },
+      "caption": {
+        "default": "",
+        "prompt": "文案（默认取飞书正文描述）",
+        "promptPolicy": "if_missing",
+        "type": "string"
+      },
+      "pushOnly": {
+        "default": false,
+        "prompt": "是否只推相册不碰 UI？",
+        "promptPolicy": "effect_summary",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "recordId"
+    ],
+    "type": "object"
+  },
+  "revision": 1,
+  "schemaId": "xhs.task-template.v1",
+  "schemaVersion": 1,
+  "status": "implemented",
+  "steps": [
+    {
+      "id": "preflight_content_gate",
+      "intent": "离线预检：对 xhs.publish.edit_dry_run inputSchema 校验 title/body/tags/imageCount，超限 fail-closed 不截断；附件数须 1–9",
+      "kind": "workflow"
+    },
+    {
+      "dependsOn": [
+        "preflight_content_gate"
+      ],
+      "id": "feishu_fetch_stage",
+      "intent": "node ops/feishu-to-xhs-draft.mjs --record-id {{recordId}} --alias {{alias}} [--push-only]：真人身份拉图→reverse 保序→倒序 push+touch 推相册",
+      "kind": "workflow"
+    },
+    {
+      "dependsOn": [
+        "feishu_fetch_stage"
+      ],
+      "id": "draft_save_ui",
+      "intent": "pushOnly=false 时进入编辑页 UI 流填文案并存草稿（adb tap 存草稿→确定）；绝不点最终发布",
+      "kind": "workflow"
+    },
+    {
+      "dependsOn": [
+        "draft_save_ui"
+      ],
+      "id": "human_verify_gate",
+      "intent": "只读复查：草稿箱计数/截图确认草稿落位；飞书状态回写「待发布」（无「已存草稿」选项）",
+      "kind": "human"
+    }
+  ],
+  "templateId": "task.xhs.feishu-draft"
+}

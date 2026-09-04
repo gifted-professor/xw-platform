@@ -18,7 +18,7 @@
 //   - the recovery append is ABORTED only, never SUCCESS.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
@@ -68,6 +68,9 @@ function compiledMission({ budgetOverrides = {} } = {}) {
 // --- real-CP fixture ---------------------------------------------------------
 
 function fixture({ laneTimeoutMs = 60_000, releaseTimeoutMs = 5_000 } = {}) {
+  // CI checkouts are fresh: the gitignored control-plane runtime dir does not
+  // exist yet, so seed it before mkdtemp.
+  mkdirSync(runtimeBase, { recursive: true });
   const root = mkdtempSync(join(runtimeBase, "explore-coordinator-"));
   const state = new StateStore({ dbPath: join(root, "control.db") });
   const evidence = new EvidenceStore({ runsRoot: join(root, "runs"), state, minFreeBytes: 0, minExternalEffectFreeBytes: 0 });
@@ -487,7 +490,14 @@ test("P3-F lane crash: peer stops at its checkpoint, ABORTED appended, verdict B
 });
 
 test("P3-G lane hang: wall-clock guard fires, lane marked HANG, ABORTED appended", async () => {
-  const f = fixture({ laneTimeoutMs: 80 });
+  // The guard must fire while 04 is pending and BEFORE anything cancels the
+  // shared channel. Lane 03 runs the real CP (journal + commit), which can
+  // take >80ms on loaded runners; a too-tight guard then fires for 03 first,
+  // its catch cancels the channel, and the microtask resolution of 04's
+  // never-promise beats 04's own timer — misclassifying 04 as FAILED
+  // (LANE_RECEIPT_MISSING). A 2s guard gives 03 (≈50-100ms) ample room to
+  // settle COMPLETED (no cancel), so 04's guard is deterministic.
+  const f = fixture({ laneTimeoutMs: 2000 });
   try {
     const log = { aliases: [] };
     let abortSeen = false;
