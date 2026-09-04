@@ -1,5 +1,15 @@
 # xw-platform
 
+## 主线定位（2026-09-04 定调）
+
+> **主线 = XHS 业务链路**：飞书任务 → 采集 → 提取 → 发布 → receipts 沉淀（orchestrator + recipes + receipts）。
+> M6-4 正式部署链（Gate F / TCB freeze / owner lock / control-plane 套件）= 封存的可选基础设施，**不在关键路径上**，对应 CI 步骤已降级为非阻断（a5e3bbf）。
+
+- **日常迭代节奏**：改业务代码 →（若新增/修改导入边界文件：`node tools/fusion/cli.mjs verify`，把 drift 抄进 `docs/fusion/post-import-allowlist.v1.json`）→ push main → CI 绿即完成。
+- **必须绿的测试门**：`npm run test:orchestrator`（业务离线回归）+ fusion:verify / TCB freeze（防导入树漂移，低频成本）。
+- **live 红线不变**：每轮写传输 ≤2 次、动作间隔数分钟、发布内容先给操作者过目、04 号机正式发布前需解除账号限制（安全验证，或走 03）。
+- M6 的测试/部署机器不再喂：posix 失真基线不修、部署链不解封，除非操作者明确要求。
+
 统一源码项目。2026-08-19 起也是**唯一生产运行来源**：17920/17930 由本仓 release（`xw-20260819-f337079`）驱动，两个旧仓已 archive。
 
 **新 agent 先读 [`docs/handoffs/HANDOFF-2026-08-20-post-m3r-m4-first-live.md`](docs/handoffs/HANDOFF-2026-08-20-post-m3r-m4-first-live.md)**。根 [`HANDOFF.md`](HANDOFF.md) 只做索引，过程段可能过时。
@@ -14,7 +24,8 @@
 ## 不要误解为
 
 - ❌ 双跑期还没结束（没有双跑，旧系统已退役）
-- ❌ Agent 已可直接控制手机（Open Action live / DSH / Multi-Agent 仍 CLOSED，支付仍人工硬闸）
+- ❌ M6-4 正式部署链已启用（封存中，业务不经此链路）
+- ❌ 正式发布已无人审（草稿→正式发布仍需操作者过目内容 + 04 账号限制解除/走 03）
 
 ## 治理门
 
