@@ -490,7 +490,14 @@ test("P3-F lane crash: peer stops at its checkpoint, ABORTED appended, verdict B
 });
 
 test("P3-G lane hang: wall-clock guard fires, lane marked HANG, ABORTED appended", async () => {
-  const f = fixture({ laneTimeoutMs: 80 });
+  // The guard must fire while 04 is pending and BEFORE anything cancels the
+  // shared channel. Lane 03 runs the real CP (journal + commit), which can
+  // take >80ms on loaded runners; a too-tight guard then fires for 03 first,
+  // its catch cancels the channel, and the microtask resolution of 04's
+  // never-promise beats 04's own timer — misclassifying 04 as FAILED
+  // (LANE_RECEIPT_MISSING). A 2s guard gives 03 (≈50-100ms) ample room to
+  // settle COMPLETED (no cancel), so 04's guard is deterministic.
+  const f = fixture({ laneTimeoutMs: 2000 });
   try {
     const log = { aliases: [] };
     let abortSeen = false;
@@ -500,11 +507,7 @@ test("P3-G lane hang: wall-clock guard fires, lane marked HANG, ABORTED appended
         resolve(undefined);
       }, { once: true });
     });
-    // BOTH lanes hang: a completing peer can beat the 80ms guard on fast
-    // runners and cancel the shared channel first, which resolves `never`
-    // and misclassifies 04 as FAILED (LANE_RECEIPT_MISSING). With no lane
-    // able to settle, the guard order is deterministic.
-    f.setStartLane(laneRunner({ control: f.control, log, overrides: { "03": never, "04": never } }));
+    f.setStartLane(laneRunner({ control: f.control, log, overrides: { "04": never } }));
     const aggregate = await f.coordinator.startExplorationRun({ mission: f.mission(), planHash: PLAN_HASH });
 
     assert.equal(aggregate.ok, false);
