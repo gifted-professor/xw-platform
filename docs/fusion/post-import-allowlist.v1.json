@@ -48,7 +48,10 @@
         "tests/xw-mission-cli.test.mjs",
         "tests/xw-start.test.mjs",
         "tests/xw-task-cli.test.mjs",
-        "PROGRESS.md"
+        "PROGRESS.md",
+        "ops/_xhs-parse.mjs",
+        "ops/feishu-to-xhs-publish.mjs",
+        "skills/xhs/xhs-publish/SKILL.md"
       ],
       "allowedModeModified": [],
       "allowedExtra": [
@@ -207,7 +210,26 @@
         "tests/xhs-rpa-task-bootstrap.test.mjs",
         "tests/xhs-rpa-trigger-pacing.test.mjs",
         "tests/xhs-v3-rpa-closeout.test.mjs",
-        "tests/xhs-v3-task-bootstrap.test.mjs"
+        "tests/xhs-v3-task-bootstrap.test.mjs",
+        "ops/feishu-to-xhs-draft.mjs",
+        "ops/xhs-collect-loop.mjs",
+        "ops/xhs-notes-extract.mjs",
+        "ops/xw-xhs-note-extract.mjs",
+        "scripts/lib/device-album-staging.mjs",
+        "scripts/lib/feishu-attachment-loader.mjs",
+        "scripts/lib/xhs-collect-loop.mjs",
+        "scripts/lib/xhs-feishu-sync.mjs",
+        "scripts/lib/xhs-note-extract.mjs",
+        "scripts/lib/xhs-publish-preflight.mjs",
+        "task-templates/task.xhs.feishu-draft@1.json",
+        "tests/feishu-attachment-staging.test.mjs",
+        "tests/fixtures/xhs-note-comments-c1-live-04.xml",
+        "tests/fixtures/xhs-note-comments-c2-live-04.xml",
+        "tests/fixtures/xhs-note-detail-live-04.xml",
+        "tests/fixtures/xhs-note-detail-top-live-04.xml",
+        "tests/xhs-collect-loop.test.mjs",
+        "tests/xhs-note-extract.test.mjs",
+        "tests/xhs-publish-preflight.test.mjs"
       ]
     },
     "control-plane": {
@@ -434,7 +456,13 @@
         "tests/xhs-v3-task-router.test.mjs",
         "lab/lab-readonly-gateway.mjs",
         "lab/lab-readonly-client.mjs",
-        "tests/lab-readonly-gateway.test.mjs"
+        "tests/lab-readonly-gateway.test.mjs",
+        "config/recipes/xhs.note.read.fixed@1.json",
+        "control-plane/lib/xhs-feed-card-select.mjs",
+        "ops/xw-xhs-reseal-alias-overlay.mjs",
+        "tests/xhs-feed-card-select.test.mjs",
+        "tests/xhs-note-read-recipe.test.mjs",
+        "tests/xhs-tap-feed-card-handler.test.mjs"
       ]
     }
   }
